@@ -19,12 +19,12 @@ export function Sidebar() {
   const { role } = useAppContext();
 
   const navItems = [
-    { name: 'Dashboard', path: '/', icon: LayoutDashboard, roles: ['Executive', 'Warehouse', 'Logistics', 'Agent', 'Finance', 'Procurement'] },
-    { name: 'Orders', path: '/orders', icon: ShoppingCart, roles: ['Executive', 'Agent', 'Warehouse', 'Logistics', 'Finance'] },
+    { name: 'Dashboard', path: '/', icon: LayoutDashboard, roles: ['Executive', 'Warehouse', 'Logistics', 'Agent'] },
+    { name: 'Orders', path: '/orders', icon: ShoppingCart, roles: ['Executive', 'Agent', 'Warehouse', 'Logistics'] },
     { name: 'Products', path: '/products', icon: Package, roles: ['Executive', 'Warehouse', 'Agent'] },
-    { name: 'Raw Materials', path: '/materials', icon: Box, roles: ['Executive', 'Warehouse', 'Procurement'] },
+    { name: 'Raw Materials', path: '/materials', icon: Box, roles: ['Executive', 'Warehouse', 'Agent'] },
     { name: 'Logistics', path: '/logistics', icon: Truck, roles: ['Executive', 'Logistics'] },
-    { name: 'Customers', path: '/customers', icon: Users, roles: ['Executive', 'Agent', 'Finance'] },
+    { name: 'Customers', path: '/customers', icon: Users, roles: ['Executive', 'Agent'] },
     { name: 'Suppliers', path: '/suppliers', icon: Truck, roles: ['Executive', 'Procurement'] },
     { name: 'Invoices & Payments', path: '/finance', icon: CreditCard, roles: ['Executive', 'Finance', 'Agent'] },
     { name: 'Reports', path: '/reports', icon: BarChart3, roles: ['Executive', 'Finance'] },

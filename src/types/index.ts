@@ -2,9 +2,9 @@ export type UserRole =
   | 'Executive' 
   | 'Warehouse' 
   | 'Logistics' 
-  | 'Agent' 
-  | 'Finance'
-  | 'Procurement';export type Branch = 'All' | 'Branch A' | 'Branch B' | 'Branch C';
+  | 'Agent';
+
+export type Branch = 'All' | 'Branch A' | 'Branch B' | 'Branch C';
 
 export interface AuditLog {
   id: string;

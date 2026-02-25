@@ -10,7 +10,7 @@ export function Topbar() {
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState(getNotificationsByBranch(branch));
 
-  const roles: UserRole[] = ['Executive', 'Warehouse', 'Logistics', 'Agent', 'Finance', 'Procurement'];
+  const roles: UserRole[] = ['Executive', 'Warehouse', 'Logistics', 'Agent'];
   const branches: Branch[] = ['All', 'Branch A', 'Branch B', 'Branch C'];
 
   // Update notifications when branch changes
