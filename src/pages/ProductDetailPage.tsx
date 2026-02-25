@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
+import { VariantModal } from '@/src/components/products/VariantModal';
 import {
   Package,
   ArrowLeft,
@@ -37,6 +38,7 @@ export function ProductDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'variants' | 'performance' | 'specs'>('variants');
+  const [isVariantModalOpen, setIsVariantModalOpen] = useState(false);
 
   const product = getProductById(id || '');
   const variants = getVariantsByProductId(id || '');
@@ -100,11 +102,11 @@ export function ProductDetailPage() {
           </div>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline">
+          <Button variant="outline" onClick={() => navigate(`/products/${id}/edit`)}>
             <Edit className="w-4 h-4 mr-2" />
             Edit Product
           </Button>
-          <Button variant="primary" onClick={() => navigate(`/products/${id}/variant/new`)}>
+          <Button variant="primary" onClick={() => setIsVariantModalOpen(true)}>
             <Plus className="w-4 h-4 mr-2" />
             Add Variant
           </Button>
@@ -438,6 +440,15 @@ export function ProductDetailPage() {
           </CardContent>
         </Card>
       )}
+
+      {/* Variant Modal */}
+      <VariantModal
+        isOpen={isVariantModalOpen}
+        onClose={() => setIsVariantModalOpen(false)}
+        productId={id || ''}
+        productName={product?.name || ''}
+        variant={null}
+      />
     </div>
   );
 }
