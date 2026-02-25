@@ -5,6 +5,7 @@ import { AppLayout } from './components/layout/AppLayout';
 import { Dashboard } from './pages/Dashboard';
 import { OrdersPage } from './pages/OrdersPage';
 import { ProductsPage } from './pages/ProductsPage';
+import { ProductDetailPage } from './pages/ProductDetailPage';
 import { AuditLogsPage } from './pages/AuditLogsPage';
 import { PlaceholderPage } from './pages/PlaceholderPage';
 
@@ -17,6 +18,7 @@ export default function App() {
             <Route index element={<Dashboard />} />
             <Route path="orders" element={<OrdersPage />} />
             <Route path="products" element={<ProductsPage />} />
+            <Route path="products/:id" element={<ProductDetailPage />} />
             <Route path="materials" element={<PlaceholderPage />} />
             <Route path="logistics" element={<PlaceholderPage />} />
             <Route path="customers" element={<PlaceholderPage />} />
