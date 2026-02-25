@@ -11,7 +11,7 @@ import { RawMaterialsPage } from './pages/RawMaterialsPage';
 import { MaterialDetailPage } from './pages/MaterialDetailPage';
 import { MaterialFormPage } from './pages/MaterialFormPage';
 import { LogisticsPage } from './pages/LogisticsPage';
-import { CustomersPage } from './pages/CustomersPage';
+import { CustomersPage } from './pages/CustomersPageNew';
 import { SuppliersPage } from './pages/SuppliersPage';
 import { FinancePage } from './pages/FinancePage';
 import { ReportsPage } from './pages/ReportsPage';
