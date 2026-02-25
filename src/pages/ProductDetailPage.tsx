@@ -87,6 +87,21 @@ export function ProductDetailPage() {
 
   const COLORS = ['#EF4444', '#F59E0B', '#10B981', '#3B82F6', '#8B5CF6', '#EC4899', '#14B8A6', '#F97316'];
 
+  // Safely recreate sortedByRevenue if undefined
+  const sortedByRevenue = [...(variants ?? [])]
+    .map(v => ({ ...v, revenue: v.revenueYTD ?? 0 }))
+    .sort((a, b) => b.revenue - a.revenue);
+
+  // Derived constants for Forecast Rollup
+  const totalUnits = product.totalUnitsSold || 0;
+  const totalRevenue = product.totalRevenue || 0;
+  const forecastUnits = Number(totalUnits ?? 0) * 1.12;
+  const forecastRevenue = Number(totalRevenue ?? 0) * 1.10;
+  const growthRatePercent = totalRevenue > 0 ? 10 : 0;
+  const priorityVariants = sortedByRevenue?.slice(0, 2) ?? [];
+  const previousRevenue = Number(totalRevenue ?? 0) * 0.9;
+  const maxTrendValue = Math.max(previousRevenue, totalRevenue, forecastRevenue, 1);
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -385,34 +400,147 @@ export function ProductDetailPage() {
             </Card>
           )}
 
-          {/* Top Customers */}
-          {performance.length > 0 && performance[0].topCustomers && (
+          {/* Variant Performance Summary */}
+          {activeTab === 'performance' && (
             <Card>
               <CardHeader>
-                <CardTitle className="text-base">Top Customers</CardTitle>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <TrendingUp className="w-4 h-4" />
+                  Variant Performance Summary
+                </CardTitle>
               </CardHeader>
-              <CardContent className="p-0">
-                <table className="w-full text-sm">
-                  <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b">
-                    <tr>
-                      <th className="px-6 py-3 text-left font-medium">Customer</th>
-                      <th className="px-6 py-3 text-left font-medium">Units Purchased</th>
-                      <th className="px-6 py-3 text-left font-medium">Revenue</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-200">
-                    {performance[0].topCustomers.map((customer, idx) => (
-                      <tr key={idx} className="hover:bg-gray-50">
-                        <td className="px-6 py-4 font-medium text-gray-900">{customer.customerName}</td>
-                        <td className="px-6 py-4 text-gray-900">{customer.unitsPurchased.toLocaleString()}</td>
-                        <td className="px-6 py-4 font-medium text-gray-900">₱{customer.revenue.toLocaleString()}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <CardContent>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {variantSalesData.map((variant, index) => (
+                    <div key={index} className="p-4 border rounded-lg">
+                      <h3 className="text-lg font-bold text-gray-900">{variant.name}</h3>
+                      <p className="text-sm text-gray-500">Units Sold: {variant.sales.toLocaleString()}</p>
+                      <p className="text-sm text-gray-500">Revenue: ₱{variant.revenue.toLocaleString()}</p>
+                    </div>
+                  ))}
+                </div>
               </CardContent>
             </Card>
           )}
+
+          {/* Forecast Rollup Section */}
+          <div className="mt-12">
+            <h2 className="text-xl font-semibold mb-4">Forecast Rollup</h2>
+
+            {/* Forecast KPI Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <Card>
+                <CardContent className="p-4">
+                  <p className="text-sm text-gray-500">Forecast Units (Next 30 Days)</p>
+                  <p className="text-2xl font-bold text-gray-900">{forecastUnits.toLocaleString()}</p>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="p-4">
+                  <p className="text-sm text-gray-500">Forecast Revenue (Next 30 Days)</p>
+                  <p className="text-2xl font-bold text-gray-900">₱{forecastRevenue.toLocaleString()}</p>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="p-4">
+                  <p className="text-sm text-gray-500">Projected Growth %</p>
+                  <p className="text-2xl font-bold text-gray-900">{growthRatePercent}%</p>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="p-4">
+                  <p className="text-sm text-gray-500">Priority Variants Count</p>
+                  <p className="text-2xl font-bold text-gray-900">{priorityVariants.length}</p>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Priority Variants Section */}
+            <div className="mt-8">
+              <h3 className="text-lg font-semibold mb-4">Recommended Variants to Prioritize</h3>
+              {priorityVariants.length === 0 ? (
+                <p className="text-gray-500">No variant data available for forecasting</p>
+              ) : (
+                <ul className="space-y-4">
+                  {priorityVariants.map((variant, index) => {
+                    const forecastContribution = totalRevenue > 0
+                      ? (variant.revenue / totalRevenue) * forecastRevenue
+                      : 0;
+                    return (
+                      <li key={index} className="p-4 border rounded-lg">
+                        <h4 className="text-lg font-bold text-gray-900">{variant.size}</h4>
+                        <p className="text-sm text-gray-500">Current Revenue: ₱{variant.revenue.toLocaleString()}</p>
+                        <p className="text-sm text-gray-500">Forecast Contribution: ₱{forecastContribution.toLocaleString()}</p>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+
+            {/* Revenue Trend Projection */}
+            <div className="mt-8">
+              <h3 className="text-lg font-semibold mb-4">Revenue Trend Projection</h3>
+
+              <div className="space-y-4">
+
+                {/* Previous */}
+                <div>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="text-gray-600">Previous Month</span>
+                    <span className="font-medium text-gray-900">
+                      ₱{previousRevenue.toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="w-full bg-gray-200 h-3 rounded">
+                    <div
+                      className="h-3 bg-gray-400 rounded"
+                      style={{
+                        width: `${(previousRevenue / maxTrendValue) * 100}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {/* Current */}
+                <div>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="text-gray-600">Current Month</span>
+                    <span className="font-medium text-gray-900">
+                      ₱{totalRevenue.toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="w-full bg-gray-200 h-3 rounded">
+                    <div
+                      className="h-3 bg-red-500 rounded"
+                      style={{
+                        width: `${(totalRevenue / maxTrendValue) * 100}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {/* Forecast */}
+                <div>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="text-gray-600">Forecast (Next 30 Days)</span>
+                    <span className="font-medium text-gray-900">
+                      ₱{forecastRevenue.toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="w-full bg-gray-200 h-3 rounded">
+                    <div
+                      className="h-3 bg-green-600 rounded"
+                      style={{
+                        width: `${(forecastRevenue / maxTrendValue) * 100}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
