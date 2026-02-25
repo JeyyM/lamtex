@@ -15,8 +15,25 @@ import {
   XCircle,
   Settings,
   ArrowRight,
-  Activity
+  Activity,
+  BarChart3,
+  PieChart as PieChartIcon,
 } from 'lucide-react';
+import {
+  ComposedChart,
+  Line,
+  Bar,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+} from 'recharts';
 import {
   getWarehouseKPIsByBranch,
   getFinishedGoodsByBranch,
@@ -102,6 +119,183 @@ export function WarehouseDashboard() {
             onClick={() => console.log(`Navigating to ${kpi.label}`)}
           />
         ))}
+      </div>
+
+      {/* WAREHOUSE ANALYTICS CHARTS */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Stock Levels by Category */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <BarChart3 className="w-5 h-5 text-red-600" />
+              Stock Levels - Top Products
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={300}>
+              <ComposedChart 
+                data={finishedGoods.map(fg => ({
+                  product: fg.productName.length > 15 ? fg.productName.substring(0, 15) + '...' : fg.productName,
+                  stock: fg.currentStock,
+                  reserved: fg.reservedStock,
+                  available: fg.availableStock,
+                }))}
+                layout="vertical"
+              >
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis type="number" />
+                <YAxis dataKey="product" type="category" width={120} />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="available" stackId="a" fill="#10B981" name="Available" />
+                <Bar dataKey="reserved" stackId="a" fill="#F59E0B" name="Reserved" />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+
+        {/* Fulfillment Queue Progress */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Activity className="w-5 h-5 text-red-600" />
+              Order Fulfillment Pipeline
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={300}>
+              <PieChart>
+                <Pie
+                  data={[
+                    { name: 'Ready', value: orderFulfillment.filter(o => o.fulfillmentStatus === 'Ready').length },
+                    { name: 'Picking', value: orderFulfillment.filter(o => o.fulfillmentStatus === 'Picking').length },
+                    { name: 'Packing', value: orderFulfillment.filter(o => o.fulfillmentStatus === 'Packing').length },
+                    { name: 'Blocked', value: orderFulfillment.filter(o => o.fulfillmentStatus === 'Blocked').length },
+                  ].filter(item => item.value > 0)}
+                  cx="50%"
+                  cy="50%"
+                  labelLine={false}
+                  label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                  outerRadius={80}
+                  fill="#8884d8"
+                  dataKey="value"
+                >
+                  <Cell fill="#10B981" />
+                  <Cell fill="#F59E0B" />
+                  <Cell fill="#3B82F6" />
+                  <Cell fill="#EF4444" />
+                </Pie>
+                <Tooltip />
+              </PieChart>
+            </ResponsiveContainer>
+            <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-green-500"></div>
+                <span>Ready ({orderFulfillment.filter(o => o.fulfillmentStatus === 'Ready').length})</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
+                <span>Picking ({orderFulfillment.filter(o => o.fulfillmentStatus === 'Picking').length})</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-blue-500"></div>
+                <span>Packing ({orderFulfillment.filter(o => o.fulfillmentStatus === 'Packing').length})</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-red-500"></div>
+                <span>Blocked ({orderFulfillment.filter(o => o.fulfillmentStatus === 'Blocked').length})</span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Production Efficiency */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Settings className="w-5 h-5 text-red-600" />
+              Production Batches Status
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={300}>
+              <ComposedChart
+                data={productionBatches.map(pb => ({
+                  batch: pb.batchNumber.substring(0, 8),
+                  produced: pb.actualQty || 0,
+                  target: pb.plannedQty,
+                  efficiency: pb.actualQty ? Math.round((pb.actualQty / pb.plannedQty) * 100) : 0,
+                }))}
+              >
+                <defs>
+                  <linearGradient id="colorProduced" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#EF4444" stopOpacity={0.3}/>
+                    <stop offset="95%" stopColor="#EF4444" stopOpacity={0.05}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+                <XAxis dataKey="batch" stroke="#9CA3AF" />
+                <YAxis yAxisId="left" stroke="#9CA3AF" />
+                <YAxis yAxisId="right" orientation="right" stroke="#9CA3AF" />
+                <Tooltip contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.95)', borderRadius: '8px', border: '1px solid #E5E7EB' }} />
+                <Legend />
+                <Bar yAxisId="left" dataKey="target" fill="#D1D5DB" name="Target" />
+                <Area yAxisId="left" type="monotone" dataKey="produced" stroke="#EF4444" strokeWidth={3} fill="url(#colorProduced)" name="Produced" />
+                <Line yAxisId="right" type="monotone" dataKey="efficiency" stroke="#10B981" strokeWidth={3} name="Efficiency %" dot={{ r: 4 }} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+
+        {/* Machine Uptime */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <PieChartIcon className="w-5 h-5 text-red-600" />
+              Machine Status Overview
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={300}>
+              <PieChart>
+                <Pie
+                  data={[
+                    { name: 'Running', value: machines.filter(m => m.status === 'Running').length },
+                    { name: 'Idle', value: machines.filter(m => m.status === 'Idle').length },
+                    { name: 'Maintenance', value: machines.filter(m => m.status === 'Maintenance').length },
+                    { name: 'Error', value: machines.filter(m => m.status === 'Error').length },
+                  ].filter(item => item.value > 0)}
+                  cx="50%"
+                  cy="50%"
+                  labelLine={false}
+                  label={({ name, value }) => `${name}: ${value}`}
+                  outerRadius={80}
+                  fill="#8884d8"
+                  dataKey="value"
+                >
+                  <Cell fill="#10B981" />
+                  <Cell fill="#F59E0B" />
+                  <Cell fill="#3B82F6" />
+                  <Cell fill="#EF4444" />
+                </Pie>
+                <Tooltip />
+              </PieChart>
+            </ResponsiveContainer>
+            <div className="mt-4 space-y-2">
+              {machines.map((machine, idx) => (
+                <div key={idx} className="flex items-center justify-between text-sm">
+                  <span className="text-gray-700">{machine.machineName}</span>
+                  <div className="flex items-center gap-2">
+                    <Badge variant={getMachineStatusColor(machine.status)}>
+                      {machine.status}
+                    </Badge>
+                    <span className="text-gray-900 font-medium">{machine.utilizationPercent}%</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
       {/* Alerts Panel */}

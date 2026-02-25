@@ -23,7 +23,24 @@ import {
   Package,
   ArrowRight,
   Star,
+  BarChart3,
+  PieChart as PieChartIcon,
 } from 'lucide-react';
+import {
+  ComposedChart,
+  Line,
+  Bar,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+} from 'recharts';
 import {
   getAgentKPIsByBranch,
   getAgentCustomersByBranch,
@@ -116,6 +133,197 @@ export function AgentDashboard() {
             onClick={() => console.log(`Navigating to ${kpi.label}`)}
           />
         ))}
+      </div>
+
+      {/* AGENT ANALYTICS CHARTS */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Sales Performance Trend */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <TrendingUp className="w-5 h-5 text-red-600" />
+              Monthly Performance Trend
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={300}>
+              <ComposedChart
+                data={performance.map(p => ({
+                  period: p.period.replace('this-', '').replace('ytd', 'Year'),
+                  current: p.current,
+                  target: p.target,
+                  percentage: p.percentage,
+                }))}
+              >
+                <defs>
+                  <linearGradient id="colorSales" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.3}/>
+                    <stop offset="95%" stopColor="#3B82F6" stopOpacity={0.05}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+                <XAxis dataKey="period" stroke="#9CA3AF" />
+                <YAxis yAxisId="left" stroke="#9CA3AF" />
+                <YAxis yAxisId="right" orientation="right" stroke="#9CA3AF" />
+                <Tooltip
+                  formatter={(value: number, name: string) => {
+                    if (name === 'Current' || name === 'Target') return value.toLocaleString();
+                    if (name === 'Achievement (%)') return `${value}%`;
+                    return value;
+                  }}
+                  contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.95)', borderRadius: '8px', border: '1px solid #E5E7EB' }}
+                />
+                <Legend />
+                <Area yAxisId="left" type="monotone" dataKey="current" stroke="#3B82F6" strokeWidth={3} fill="url(#colorSales)" name="Current" />
+                <Line yAxisId="right" type="monotone" dataKey="percentage" stroke="#10B981" strokeWidth={3} name="Achievement (%)" dot={{ r: 5 }} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+
+        {/* Commission Breakdown */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <DollarSign className="w-5 h-5 text-red-600" />
+              Commission Earnings
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={300}>
+              <ComposedChart
+                data={commissions.map(c => ({
+                  period: c.period.replace('2026-', ''),
+                  sales: c.salesAmount / 1000,
+                  commission: c.commissionEarned / 1000,
+                  rate: c.commissionRate * 100,
+                }))}
+              >
+                <defs>
+                  <linearGradient id="colorCommission" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#10B981" stopOpacity={0.3}/>
+                    <stop offset="95%" stopColor="#10B981" stopOpacity={0.05}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+                <XAxis dataKey="period" stroke="#9CA3AF" />
+                <YAxis stroke="#9CA3AF" />
+                <Tooltip 
+                  formatter={(value: number) => `₱${value.toFixed(1)}K`}
+                  contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.95)', borderRadius: '8px', border: '1px solid #E5E7EB' }}
+                />
+                <Legend />
+                <Area type="monotone" dataKey="commission" stroke="#10B981" strokeWidth={3} fill="url(#colorCommission)" name="Commission (₱K)" />
+                <Line type="monotone" dataKey="rate" stroke="#F59E0B" strokeWidth={2} name="Rate (%)" dot={{ r: 4 }} strokeDasharray="5 5" />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+
+        {/* Customer Type Distribution */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <User className="w-5 h-5 text-red-600" />
+              Customer Portfolio
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={300}>
+              <PieChart>
+                <Pie
+                  data={[
+                    { name: 'Excellent', value: customers.filter(c => c.healthScore === 'Excellent').length },
+                    { name: 'Good', value: customers.filter(c => c.healthScore === 'Good').length },
+                    { name: 'Fair', value: customers.filter(c => c.healthScore === 'Fair').length },
+                    { name: 'Poor', value: customers.filter(c => c.healthScore === 'Poor').length },
+                  ].filter(item => item.value > 0)}
+                  cx="50%"
+                  cy="50%"
+                  labelLine={false}
+                  label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                  outerRadius={80}
+                  fill="#8884d8"
+                  dataKey="value"
+                >
+                  <Cell fill="#10B981" />
+                  <Cell fill="#3B82F6" />
+                  <Cell fill="#F59E0B" />
+                  <Cell fill="#EF4444" />
+                </Pie>
+                <Tooltip />
+              </PieChart>
+            </ResponsiveContainer>
+            <div className="mt-4 space-y-2">
+              {customers.slice(0, 4).map((customer, idx) => (
+                <div key={idx} className="flex items-center justify-between text-sm">
+                  <span className="text-gray-700">{customer.customerName}</span>
+                  <div className="flex items-center gap-2">
+                    <Badge variant={getHealthScoreColor(customer.healthScore)}>
+                      {customer.healthScore}
+                    </Badge>
+                    <span className="text-gray-500 text-xs">₱{(customer.totalRevenueYTD / 1000000).toFixed(1)}M</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Payment Collection Status */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <FileText className="w-5 h-5 text-red-600" />
+              Payment Collection Status
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={300}>
+              <PieChart>
+                <Pie
+                  data={[
+                    { name: 'Paid', value: payments.filter(p => p.paymentStatus === 'Paid').length },
+                    { name: 'Pending', value: payments.filter(p => p.paymentStatus === 'Pending').length },
+                    { name: 'Overdue', value: payments.filter(p => p.paymentStatus === 'Overdue').length },
+                    { name: 'Partial', value: payments.filter(p => p.paymentStatus === 'Partial').length },
+                  ].filter(item => item.value > 0)}
+                  cx="50%"
+                  cy="50%"
+                  labelLine={false}
+                  label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                  outerRadius={80}
+                  fill="#8884d8"
+                  dataKey="value"
+                >
+                  <Cell fill="#10B981" />
+                  <Cell fill="#3B82F6" />
+                  <Cell fill="#EF4444" />
+                  <Cell fill="#F59E0B" />
+                </Pie>
+                <Tooltip />
+              </PieChart>
+            </ResponsiveContainer>
+            <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-green-500"></div>
+                <span>Paid ({payments.filter(p => p.paymentStatus === 'Paid').length})</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-blue-500"></div>
+                <span>Pending ({payments.filter(p => p.paymentStatus === 'Pending').length})</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-red-500"></div>
+                <span>Overdue ({payments.filter(p => p.paymentStatus === 'Overdue').length})</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
+                <span>Partial ({payments.filter(p => p.paymentStatus === 'Partial').length})</span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
       {/* Alerts Panel */}

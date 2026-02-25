@@ -18,7 +18,24 @@ import {
   ArrowRight,
   Ship,
   Activity,
+  BarChart3,
+  PieChart as PieChartIcon,
 } from 'lucide-react';
+import {
+  ComposedChart,
+  Line,
+  Bar,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+} from 'recharts';
 import {
   getLogisticsKPIsByBranch,
   getOrdersReadyByBranch,
@@ -92,6 +109,189 @@ export function LogisticsDashboard() {
             onClick={() => console.log(`Navigating to ${kpi.label}`)}
           />
         ))}
+      </div>
+
+      {/* LOGISTICS ANALYTICS CHARTS */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Fleet Utilization Trend */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Truck className="w-5 h-5 text-red-600" />
+              Fleet Utilization Trend
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={300}>
+              <ComposedChart data={vehicles.slice(0, 6).map((v, idx) => ({
+                vehicle: v.vehicleName.replace('Truck ', 'T').replace('Container Van ', 'CV'),
+                utilization: v.utilizationPercent,
+                trips: v.tripsToday,
+              }))}>
+                <defs>
+                  <linearGradient id="colorUtilization" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#F59E0B" stopOpacity={0.3}/>
+                    <stop offset="95%" stopColor="#F59E0B" stopOpacity={0.05}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+                <XAxis dataKey="vehicle" stroke="#9CA3AF" />
+                <YAxis stroke="#9CA3AF" />
+                <Tooltip contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.95)', borderRadius: '8px', border: '1px solid #E5E7EB' }} />
+                <Legend />
+                <Area
+                  type="monotone"
+                  dataKey="utilization"
+                  stroke="#F59E0B"
+                  strokeWidth={3}
+                  fill="url(#colorUtilization)"
+                  name="Utilization %"
+                />
+              </ComposedChart>
+            </ResponsiveContainer>
+            <div className="mt-4 space-y-2">
+              {vehicles.slice(0, 4).map((vehicle, idx) => (
+                <div key={idx} className="flex items-center justify-between text-sm">
+                  <span className="text-gray-700">{vehicle.vehicleName}</span>
+                  <div className="flex items-center gap-2">
+                    <Badge variant={getVehicleStatusColor(vehicle.status)}>
+                      {vehicle.status}
+                    </Badge>
+                    <span className="text-gray-500 text-xs">{vehicle.utilizationPercent}%</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Delivery Performance Metrics */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Activity className="w-5 h-5 text-red-600" />
+              Key Performance Metrics
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={300}>
+              <ComposedChart
+                data={performance.map(p => ({
+                  metric: p.metric.replace(' Delivery', '').replace(' Lead Time', '').replace(' Per Truck', ''),
+                  value: p.value,
+                  target: p.target || p.value,
+                }))}
+                layout="vertical"
+              >
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis type="number" />
+                <YAxis dataKey="metric" type="category" width={100} />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="value" fill="#EF4444" name="Actual" />
+                <Bar dataKey="target" fill="#D1D5DB" name="Target" />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+
+        {/* Delay Reasons Breakdown */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-red-600" />
+              Delay Types Distribution
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={300}>
+              <PieChart>
+                <Pie
+                  data={delays.map(d => ({
+                    name: d.type,
+                    value: d.daysLate,
+                  }))}
+                  cx="50%"
+                  cy="50%"
+                  labelLine={false}
+                  label={({ name }) => name.length > 15 ? name.substring(0, 15) + '...' : name}
+                  outerRadius={80}
+                  fill="#8884d8"
+                  dataKey="value"
+                >
+                  {delays.map((_, index) => (
+                    <Cell key={`cell-${index}`} fill={['#EF4444', '#F59E0B', '#3B82F6'][index % 3]} />
+                  ))}
+                </Pie>
+                <Tooltip formatter={(value: number) => `${value} days late`} />
+              </PieChart>
+            </ResponsiveContainer>
+            <div className="mt-4 space-y-2">
+              {delays.map((delay, idx) => (
+                <div key={idx} className="flex items-center justify-between text-sm">
+                  <span className="text-gray-700">{delay.type}</span>
+                  <div className="flex items-center gap-2">
+                    <Badge variant={delay.status === 'Resolved' ? 'success' : 'danger'}>
+                      {delay.status}
+                    </Badge>
+                    <span className="text-gray-500">{delay.daysLate}d</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Warehouse Loading Status */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Package className="w-5 h-5 text-red-600" />
+              Order Loading Status
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={300}>
+              <PieChart>
+                <Pie
+                  data={[
+                    { name: 'Ready', value: warehouseReadiness.filter(wr => wr.loadingStatus === 'Ready').length },
+                    { name: 'Partial', value: warehouseReadiness.filter(wr => wr.loadingStatus === 'Partial').length },
+                    { name: 'Blocked', value: warehouseReadiness.filter(wr => wr.loadingStatus === 'Blocked').length },
+                    { name: 'Not Started', value: warehouseReadiness.filter(wr => wr.loadingStatus === 'Not Started').length },
+                  ].filter(item => item.value > 0)}
+                  cx="50%"
+                  cy="50%"
+                  labelLine={false}
+                  label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                  outerRadius={80}
+                  fill="#8884d8"
+                  dataKey="value"
+                >
+                  <Cell fill="#10B981" />
+                  <Cell fill="#F59E0B" />
+                  <Cell fill="#EF4444" />
+                  <Cell fill="#9CA3AF" />
+                </Pie>
+                <Tooltip />
+              </PieChart>
+            </ResponsiveContainer>
+            <div className="mt-4 space-y-2">
+              {warehouseReadiness.map((wr, idx) => (
+                <div key={idx} className="flex items-center justify-between text-sm">
+                  <span className="text-gray-700">{wr.orderNumber}</span>
+                  <Badge variant={
+                    wr.loadingStatus === 'Ready' ? 'success' : 
+                    wr.loadingStatus === 'Blocked' ? 'danger' : 
+                    'warning'
+                  }>
+                    {wr.loadingStatus}
+                  </Badge>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
       {/* Alerts Panel */}
