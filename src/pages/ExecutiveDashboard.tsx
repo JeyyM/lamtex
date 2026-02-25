@@ -1,31 +1,50 @@
 import React from 'react';
+import { useAppContext } from '@/src/store/AppContext';
 import { KpiTile } from '@/src/components/dashboard/KpiTile';
 import { ApprovalsTable } from '@/src/components/dashboard/ApprovalsTable';
 import { InventoryAlerts } from '@/src/components/dashboard/InventoryAlerts';
 import { SalesPerformance } from '@/src/components/dashboard/SalesPerformance';
 import { OverviewCalendar } from '@/src/components/dashboard/OverviewCalendar';
 import { 
-  MOCK_KPIS, 
-  MOCK_APPROVALS, 
-  MOCK_FINISHED_GOODS_ALERTS, 
-  MOCK_RAW_MATERIAL_ALERTS,
-  MOCK_TOP_PRODUCTS,
-  MOCK_TOP_STORES,
-  MOCK_AGENT_PERFORMANCE,
-  MOCK_BRANCH_PERFORMANCE,
-  MOCK_CALENDAR_EVENTS
+  getKPIsByBranch,
+  getApprovalsByBranch,
+  getSortedApprovals,
+  getFinishedGoodsAlertsByBranch,
+  getRawMaterialAlertsByBranch,
+  getTopProductsByBranch,
+  getTopStoresByBranch,
+  getAgentPerformanceByBranch,
+  BRANCH_PERFORMANCE,
+  getCalendarEventsByBranch,
 } from '@/src/mock/executiveDashboard';
 
 export function ExecutiveDashboard() {
+  const { branch } = useAppContext();
+
+  // Get branch-specific data (limited for dashboard preview)
+  const kpis = getKPIsByBranch(branch);
+  const approvals = getSortedApprovals(getApprovalsByBranch(branch)).slice(0, 5); // Show top 5 only
+  const finishedGoodsAlerts = getFinishedGoodsAlertsByBranch(branch).slice(0, 3); // Show top 3
+  const rawMaterialAlerts = getRawMaterialAlertsByBranch(branch).slice(0, 2); // Show top 2
+  const topProducts = getTopProductsByBranch(branch).slice(0, 5); // Show top 5
+  const topStores = getTopStoresByBranch(branch).slice(0, 5); // Show top 5
+  const agentPerformance = getAgentPerformanceByBranch(branch).slice(0, 5); // Show top 5
+  const calendarEvents = getCalendarEventsByBranch(branch);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">Executive Overview</h1>
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Executive Overview</h1>
+          <p className="text-sm text-gray-500 mt-1">
+            Viewing data for: <span className="font-medium text-gray-700">{branch}</span>
+          </p>
+        </div>
       </div>
 
       {/* KPI Strip */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {MOCK_KPIS.map((kpi) => (
+        {kpis.map((kpi) => (
           <KpiTile 
             key={kpi.id}
             label={kpi.label}
@@ -34,33 +53,33 @@ export function ExecutiveDashboard() {
             trendUp={kpi.trendUp}
             subtitle={kpi.subtitle}
             status={kpi.status}
+            previousValue={kpi.previousValue}
             onClick={() => console.log(`Navigating to details for ${kpi.label}`)}
           />
         ))}
       </div>
 
       {/* Priority Action Center: Approvals */}
-      <ApprovalsTable orders={MOCK_APPROVALS} />
+      <ApprovalsTable orders={approvals} showViewAll={true} />
 
       {/* Inventory Health Alerts */}
       <InventoryAlerts 
-        finishedGoods={MOCK_FINISHED_GOODS_ALERTS}
-        rawMaterials={MOCK_RAW_MATERIAL_ALERTS}
+        finishedGoods={finishedGoodsAlerts}
+        rawMaterials={rawMaterialAlerts}
+        showViewAll={true}
       />
 
       {/* Sales Performance Section */}
       <SalesPerformance 
-        topProducts={MOCK_TOP_PRODUCTS}
-        topStores={MOCK_TOP_STORES}
-        agentPerformance={MOCK_AGENT_PERFORMANCE}
-        branchPerformance={MOCK_BRANCH_PERFORMANCE}
+        topProducts={topProducts}
+        topStores={topStores}
+        agentPerformance={agentPerformance}
+        branchPerformance={BRANCH_PERFORMANCE}
+        showViewAll={true}
       />
 
-      {/* Overview Calendar */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <OverviewCalendar events={MOCK_CALENDAR_EVENTS} />
-        {/* Empty space or additional widget can go here */}
-      </div>
+      {/* Overview Calendar - Full Width */}
+      <OverviewCalendar events={calendarEvents} />
     </div>
   );
 }

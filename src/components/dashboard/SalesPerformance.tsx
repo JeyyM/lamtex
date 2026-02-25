@@ -1,23 +1,40 @@
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
+import { Button } from '@/src/components/ui/Button';
 import { TopProduct, TopHardwareStore, AgentPerformance, BranchPerformance } from '@/src/types/executive';
-import { TrendingUp, Users, MapPin, Package } from 'lucide-react';
+import { TrendingUp, Users, MapPin, Package, ArrowRight } from 'lucide-react';
 
 interface SalesPerformanceProps {
   topProducts: TopProduct[];
   topStores: TopHardwareStore[];
   agentPerformance: AgentPerformance[];
   branchPerformance: BranchPerformance[];
+  showViewAll?: boolean;
 }
 
-export function SalesPerformance({ topProducts, topStores, agentPerformance, branchPerformance }: SalesPerformanceProps) {
+export function SalesPerformance({ topProducts, topStores, agentPerformance, branchPerformance, showViewAll = false }: SalesPerformanceProps) {
+  const navigate = useNavigate();
+
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
       <Card>
         <CardHeader className="flex flex-row items-center justify-between pb-2">
           <CardTitle className="text-sm font-medium text-gray-500">Top Products (MTD)</CardTitle>
-          <Package className="w-4 h-4 text-gray-400" />
+          <div className="flex items-center gap-2">
+            {showViewAll && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => navigate('/products')}
+                className="h-8 px-2 text-xs"
+              >
+                View All <ArrowRight className="w-3 h-3 ml-1" />
+              </Button>
+            )}
+            <Package className="w-4 h-4 text-gray-400" />
+          </div>
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
@@ -42,7 +59,19 @@ export function SalesPerformance({ topProducts, topStores, agentPerformance, bra
       <Card>
         <CardHeader className="flex flex-row items-center justify-between pb-2">
           <CardTitle className="text-sm font-medium text-gray-500">Top Hardware Stores</CardTitle>
-          <Users className="w-4 h-4 text-gray-400" />
+          <div className="flex items-center gap-2">
+            {showViewAll && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => navigate('/placeholder')}
+                className="h-8 px-2 text-xs"
+              >
+                View All <ArrowRight className="w-3 h-3 ml-1" />
+              </Button>
+            )}
+            <Users className="w-4 h-4 text-gray-400" />
+          </div>
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
@@ -64,7 +93,19 @@ export function SalesPerformance({ topProducts, topStores, agentPerformance, bra
       <Card>
         <CardHeader className="flex flex-row items-center justify-between pb-2">
           <CardTitle className="text-sm font-medium text-gray-500">Agent Leaderboard</CardTitle>
-          <TrendingUp className="w-4 h-4 text-gray-400" />
+          <div className="flex items-center gap-2">
+            {showViewAll && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => navigate('/placeholder')}
+                className="h-8 px-2 text-xs"
+              >
+                View All <ArrowRight className="w-3 h-3 ml-1" />
+              </Button>
+            )}
+            <TrendingUp className="w-4 h-4 text-gray-400" />
+          </div>
         </CardHeader>
         <CardContent>
           <div className="space-y-4">

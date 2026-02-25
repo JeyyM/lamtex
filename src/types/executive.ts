@@ -6,6 +6,7 @@ export interface ExecutiveKPI {
   trendUp?: boolean;
   subtitle?: string;
   status?: 'good' | 'warning' | 'danger' | 'neutral';
+  previousValue?: string; // For comparison with previous period
 }
 
 export interface ApprovalOrder {
@@ -13,6 +14,7 @@ export interface ApprovalOrder {
   status: 'Pending' | 'Scheduled' | 'Shipping' | 'Delivered' | 'Complete' | 'Late';
   orderNumber: string;
   customer: string;
+  customerLocation?: string; // Coordinates for Google Maps
   agent: string;
   branch: string;
   productsSummary: string;
@@ -20,6 +22,7 @@ export interface ApprovalOrder {
   requestedDiscount: number;
   marginImpact: 'Green' | 'Yellow' | 'Red';
   requestedDeliveryDate: string;
+  urgencyScore?: number; // For sorting priority (0-100)
 }
 
 export interface FinishedGoodsAlert {
@@ -29,6 +32,8 @@ export interface FinishedGoodsAlert {
   forecastNext30Days: number;
   stockoutInDays: number;
   riskLevel: 'High' | 'Medium' | 'Low';
+  branch?: string; // Which branch this alert is for
+  currentStock?: number; // Current stock level
 }
 
 export interface RawMaterialAlert {
@@ -41,6 +46,7 @@ export interface RawMaterialAlert {
   suggestedReorderDate: string;
   linkedProductsAffected: string[];
   riskLevel: 'High' | 'Medium' | 'Low';
+  branch?: string; // Which branch this alert is for
 }
 
 export interface TopProduct {
@@ -49,6 +55,7 @@ export interface TopProduct {
   unitsSold: number;
   revenue: number;
   trendUp: boolean;
+  grossMargin?: number; // Margin percentage
 }
 
 export interface TopHardwareStore {
@@ -56,6 +63,8 @@ export interface TopHardwareStore {
   name: string;
   revenue: number;
   paymentBehavior: 'Good' | 'Watchlist' | 'Risk';
+  trendUp?: boolean; // Trend indicator
+  previousRevenue?: number; // For trend calculation
 }
 
 export interface AgentPerformance {
@@ -64,6 +73,8 @@ export interface AgentPerformance {
   sales: number;
   quota: number;
   collections: number;
+  activeAccounts?: number; // Number of active customer accounts
+  underperformingStreak?: number; // Number of consecutive months below quota
 }
 
 export interface BranchPerformance {
@@ -76,20 +87,23 @@ export interface BranchPerformance {
   overdueReceivables: number;
 }
 
-export interface NotificationItem {
-  id: string;
-  category: 'Approvals' | 'Inventory' | 'Delivery' | 'Payment';
-  message: string;
-  time: string;
-  read: boolean;
-  urgent: boolean;
-}
-
 export interface CalendarEvent {
   id: string;
   title: string;
   date: string;
-  type: 'Outgoing' | 'Incoming';
+  type: 'Outgoing' | 'Incoming' | 'Transfer'; // Added Transfer for branch transfers
   atRisk: boolean;
   details: string;
+  branch?: string; // Which branch this event belongs to
+}
+
+export interface NotificationItem {
+  id: string;
+  category: 'Approvals' | 'Inventory' | 'Delivery' | 'Payment' | 'System';
+  message: string;
+  time: string;
+  read: boolean;
+  urgent: boolean;
+  actionUrl?: string; // URL to navigate when clicked
+  actionLabel?: string; // Label for action button
 }

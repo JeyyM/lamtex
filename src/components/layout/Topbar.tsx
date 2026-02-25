@@ -1,17 +1,22 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAppContext } from '@/src/store/AppContext';
 import { Bell, Search, Menu, Calendar } from 'lucide-react';
 import { UserRole, Branch } from '@/src/types';
 import { NotificationsDrawer } from '../dashboard/NotificationsDrawer';
-import { MOCK_NOTIFICATIONS } from '@/src/mock/executiveDashboard';
+import { getNotificationsByBranch } from '@/src/mock/executiveDashboard';
 
 export function Topbar() {
   const { role, setRole, branch, setBranch } = useAppContext();
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
-  const [notifications, setNotifications] = useState(MOCK_NOTIFICATIONS);
+  const [notifications, setNotifications] = useState(getNotificationsByBranch(branch));
 
   const roles: UserRole[] = ['Executive', 'Warehouse', 'Logistics', 'Agent', 'Finance', 'Procurement'];
   const branches: Branch[] = ['All', 'Branch A', 'Branch B', 'Branch C'];
+
+  // Update notifications when branch changes
+  useEffect(() => {
+    setNotifications(getNotificationsByBranch(branch));
+  }, [branch]);
 
   const unreadCount = notifications.filter(n => !n.read).length;
 

@@ -10,11 +10,12 @@ export interface KpiTileProps {
   trendUp?: boolean;
   subtitle?: string;
   status?: 'good' | 'warning' | 'danger' | 'neutral';
+  previousValue?: string; // Previous period value for comparison
   className?: string;
   onClick?: () => void;
 }
 
-export const KpiTile: React.FC<KpiTileProps> = ({ label, value, trend, trendUp, subtitle, status = 'neutral', onClick, className }) => {
+export const KpiTile: React.FC<KpiTileProps> = ({ label, value, trend, trendUp, subtitle, status = 'neutral', previousValue, onClick, className }) => {
   const statusColors = {
     good: 'text-green-600 bg-green-50',
     warning: 'text-yellow-600 bg-yellow-50',
@@ -33,6 +34,7 @@ export const KpiTile: React.FC<KpiTileProps> = ({ label, value, trend, trendUp, 
     <Card 
       className={cn("hover:shadow-md transition-shadow cursor-pointer", statusBorder[status], className)} 
       onClick={onClick}
+      title={previousValue ? `Previous: ${previousValue}` : undefined}
     >
       <CardContent className="p-4">
         <div className="flex justify-between items-start">
@@ -46,6 +48,9 @@ export const KpiTile: React.FC<KpiTileProps> = ({ label, value, trend, trendUp, 
         </div>
         <div className="mt-2 flex items-baseline gap-2">
           <h3 className="text-2xl font-bold text-gray-900">{value}</h3>
+          {previousValue && (
+            <span className="text-xs text-gray-400">vs {previousValue}</span>
+          )}
         </div>
         {subtitle && (
           <p className={cn("text-xs mt-1 font-medium", statusColors[status].split(' ')[0])}>
