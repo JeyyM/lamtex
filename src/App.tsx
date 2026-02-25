@@ -12,6 +12,7 @@ import { MaterialDetailPage } from './pages/MaterialDetailPage';
 import { MaterialFormPage } from './pages/MaterialFormPage';
 import { LogisticsPage } from './pages/LogisticsPage';
 import { CustomersPage } from './pages/CustomersPageNew';
+import { CustomerDetailPage } from './pages/CustomerDetailPage';
 import { SuppliersPage } from './pages/SuppliersPage';
 import { FinancePage } from './pages/FinancePage';
 import { ReportsPage } from './pages/ReportsPage';
@@ -37,6 +38,7 @@ export default function App() {
             <Route path="materials/:id/edit" element={<MaterialFormPage />} />
             <Route path="logistics" element={<LogisticsPage />} />
             <Route path="customers" element={<CustomersPage />} />
+            <Route path="customers/:id" element={<CustomerDetailPage />} />
             <Route path="suppliers" element={<SuppliersPage />} />
             <Route path="finance" element={<FinancePage />} />
             <Route path="reports" element={<ReportsPage />} />
