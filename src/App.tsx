@@ -12,6 +12,8 @@ import { RawMaterialsPage } from './pages/RawMaterialsPage';
 import { MaterialDetailPage } from './pages/MaterialDetailPage';
 import { MaterialFormPage } from './pages/MaterialFormPage';
 import MaterialCategoryPage from './pages/MaterialCategoryPage';
+import ProductCategoryPage from './pages/ProductCategoryPage';
+import ProductFamilyPage from './pages/ProductFamilyPage';
 import { LogisticsPage } from './pages/LogisticsPage';
 import { CustomersPage } from './pages/CustomersPageNew';
 import { CustomerDetailPage } from './pages/CustomerDetailPage';
@@ -51,6 +53,8 @@ export default function App() {
             <Route path="orders/:id" element={<OrderDetailPage />} />
             <Route path="products" element={<ProductsPage />} />
             <Route path="products/new" element={<ProductFormPage />} />
+            <Route path="products/category/:categoryName" element={<ProductCategoryPage />} />
+            <Route path="products/category/:categoryName/family/:familyId" element={<ProductFamilyPage />} />
             <Route path="products/:id" element={<ProductDetailPage />} />
             <Route path="products/:id/edit" element={<ProductFormPage />} />
             <Route path="materials" element={<RawMaterialsPage />} />

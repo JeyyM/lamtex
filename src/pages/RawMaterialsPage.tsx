@@ -152,6 +152,11 @@ export function RawMaterialsPage() {
           <p className="text-sm text-gray-500 mt-1">Browse materials by category</p>
         </div>
         <div className="flex gap-2 flex-wrap">
+          <Button variant="outline" onClick={() => {/* TODO: Export materials data */}}>
+            <Download className="w-4 h-4 mr-2" />
+            Export
+          </Button>
+
           <Button variant="outline" onClick={() => setShowReceiveModal(true)}>
             <Truck className="w-4 h-4 mr-2" />
             Receive

@@ -1,10 +1,11 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { KpiTile } from '@/src/components/dashboard/KpiTile';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
+import { CreateOrderModal } from '@/src/components/orders/CreateOrderModal';
 import {
   User,
   ShoppingCart,
@@ -55,8 +56,9 @@ import {
 } from '@/src/mock/agentDashboard';
 
 export function AgentDashboard() {
-  const { branch } = useAppContext();
+  const { branch, addAuditLog } = useAppContext();
   const navigate = useNavigate();
+  const [showCreateModal, setShowCreateModal] = useState(false);
 
   // Get branch-specific data (limited for dashboard preview)
   const kpis = getAgentKPIsByBranch(branch);
@@ -108,6 +110,7 @@ export function AgentDashboard() {
 
   return (
     <div className="space-y-6">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">My Agent Dashboard</h1>
@@ -115,27 +118,209 @@ export function AgentDashboard() {
             Viewing data for: <span className="font-medium text-gray-700">{branch}</span>
           </p>
         </div>
-        <Button variant="primary" onClick={() => navigate('/orders')}>
-          <ShoppingCart className="w-4 h-4 mr-2" />
-          Create New Order
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => navigate('/customers')}>
+            <User className="w-4 h-4 mr-2" />
+            My Customers
+          </Button>
+          <Button variant="primary" onClick={() => setShowCreateModal(true)}>
+            <ShoppingCart className="w-4 h-4 mr-2" />
+            Create Order
+          </Button>
+        </div>
       </div>
 
-      {/* KPI Strip */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {kpis.map((kpi) => (
-          <KpiTile
-            key={kpi.id}
-            label={kpi.label}
-            value={kpi.value}
-            subtitle={kpi.subtitle}
-            status={mapKpiStatus(kpi.status)}
-            onClick={() => console.log(`Navigating to ${kpi.label}`)}
-          />
-        ))}
+      {/* TODAY'S WORK & QUICK ACTIONS */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Today's Tasks */}
+        <Card className="border-blue-200">
+          <CardHeader className="bg-gradient-to-r from-blue-50 to-white">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base flex items-center gap-2">
+                <CheckCircle className="w-5 h-5 text-blue-600" />
+                Today's Tasks ({activities.length})
+              </CardTitle>
+              <Button variant="outline" size="sm" onClick={() => navigate('/tasks')}>
+                View All
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="p-4">
+            <div className="space-y-2">
+              {activities.slice(0, 4).map((task, index) => (
+                <div key={index} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
+                  <input 
+                    type="checkbox" 
+                    className="w-4 h-4 text-blue-600 rounded"
+                  />
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-gray-900">{task.description}</p>
+                    <p className="text-xs text-gray-500">{task.timestamp}</p>
+                  </div>
+                  <Badge 
+                    variant={
+                      task.type === 'Order Created' ? 'default' :
+                      task.type === 'Customer Visit' ? 'warning' :
+                      task.type === 'Payment Collected' ? 'success' :
+                      'default'
+                    } 
+                    size="sm"
+                  >
+                    {task.type}
+                  </Badge>
+                </div>
+              ))}
+              {activities.length === 0 && (
+                <div className="text-center py-8 text-gray-500">
+                  <CheckCircle className="w-12 h-12 mx-auto mb-2 text-gray-300" />
+                  <p className="text-sm">No tasks scheduled for today</p>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Quick Actions */}
+        <Card className="border-green-200">
+          <CardHeader className="bg-gradient-to-r from-green-50 to-white">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Package className="w-5 h-5 text-green-600" />
+              Quick Actions
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-4">
+            <div className="grid grid-cols-2 gap-3">
+              <Button 
+                variant="outline" 
+                className="h-auto py-4 flex flex-col items-center gap-2 hover:bg-red-50 hover:border-red-300"
+                onClick={() => setShowCreateModal(true)}
+              >
+                <div className="p-2 bg-red-100 rounded-lg">
+                  <ShoppingCart className="w-6 h-6 text-red-600" />
+                </div>
+                <span className="text-sm font-medium">Create Order</span>
+              </Button>
+
+              <Button 
+                variant="outline" 
+                className="h-auto py-4 flex flex-col items-center gap-2 hover:bg-green-50 hover:border-green-300"
+                onClick={() => navigate('/finance')}
+              >
+                <div className="p-2 bg-green-100 rounded-lg">
+                  <DollarSign className="w-6 h-6 text-green-600" />
+                </div>
+                <span className="text-sm font-medium">Record Collection</span>
+              </Button>
+
+              <Button 
+                variant="outline" 
+                className="h-auto py-4 flex flex-col items-center gap-2 hover:bg-blue-50 hover:border-blue-300"
+                onClick={() => navigate('/customers')}
+              >
+                <div className="p-2 bg-blue-100 rounded-lg">
+                  <User className="w-6 h-6 text-blue-600" />
+                </div>
+                <span className="text-sm font-medium">My Customers</span>
+              </Button>
+
+              <Button 
+                variant="outline" 
+                className="h-auto py-4 flex flex-col items-center gap-2 hover:bg-purple-50 hover:border-purple-300"
+                onClick={() => navigate('/logistics')}
+              >
+                <div className="p-2 bg-purple-100 rounded-lg">
+                  <Package className="w-6 h-6 text-purple-600" />
+                </div>
+                <span className="text-sm font-medium">Track Deliveries</span>
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       </div>
+
+      {/* KPI Strip - Performance Metrics */}
+      <div>
+        <h2 className="text-lg font-semibold text-gray-900 mb-3">📊 My Performance</h2>
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+          {kpis.map((kpi) => (
+            <KpiTile
+              key={kpi.id}
+              label={kpi.label}
+              value={kpi.value}
+              subtitle={kpi.subtitle}
+              status={mapKpiStatus(kpi.status)}
+              onClick={() => console.log(`Navigating to ${kpi.label}`)}
+            />
+          ))}
+        </div>
+      </div>
+
+      {/* CUSTOMERS AT RISK */}
+      <Card className="border-yellow-200 bg-gradient-to-r from-yellow-50 to-white">
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-yellow-600" />
+              Customers At Risk ({customers.filter(c => c.healthScore === 'Fair' || c.healthScore === 'Poor').length})
+            </CardTitle>
+            <Button variant="outline" size="sm" onClick={() => navigate('/customers')}>
+              View All Customers
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="p-4">
+          <div className="space-y-3">
+            {customers.filter(c => c.healthScore === 'Fair' || c.healthScore === 'Poor').slice(0, 3).map((customer) => (
+              <div 
+                key={customer.id} 
+                className="flex items-center justify-between p-4 bg-white rounded-lg border border-yellow-200 hover:border-yellow-300 transition-colors cursor-pointer"
+                onClick={() => navigate(`/customers/${customer.id}`)}
+              >
+                <div className="flex items-center gap-4">
+                  <div className="p-2 bg-yellow-100 rounded-lg">
+                    <User className="w-5 h-5 text-yellow-600" />
+                  </div>
+                  <div>
+                    <p className="font-medium text-gray-900">{customer.customerName}</p>
+                    <div className="flex items-center gap-3 mt-1">
+                      <span className="text-sm text-gray-600">
+                        {customer.outstandingBalance > 0 && customer.paymentStatus !== 'Current'
+                          ? `₱${customer.outstandingBalance.toLocaleString()} overdue` 
+                          : 'No outstanding balance'}
+                      </span>
+                      {customer.daysOverdue && customer.daysOverdue > 0 && (
+                        <span className="text-xs text-gray-500">
+                          • {customer.daysOverdue} days overdue
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <Badge variant={customer.healthScore === 'Poor' ? 'destructive' : 'warning'} size="sm">
+                    {customer.healthScore}
+                  </Badge>
+                  <Button variant="outline" size="sm">
+                    <Phone className="w-3 h-3 mr-1" />
+                    Call
+                  </Button>
+                </div>
+              </div>
+            ))}
+            {customers.filter(c => c.healthScore === 'Fair' || c.healthScore === 'Poor').length === 0 && (
+              <div className="text-center py-8 text-gray-500">
+                <CheckCircle className="w-12 h-12 mx-auto mb-2 text-green-300" />
+                <p className="text-sm">All customers are in good health! 🎉</p>
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
 
       {/* AGENT ANALYTICS CHARTS */}
+      <div>
+        <h2 className="text-lg font-semibold text-gray-900 mb-3">📈 Performance Analytics</h2>
+      </div>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Sales Performance Trend */}
         <Card>
@@ -148,12 +333,14 @@ export function AgentDashboard() {
           <CardContent>
             <ResponsiveContainer width="100%" height={300}>
               <ComposedChart
-                data={performance.map(p => ({
-                  period: p.period.replace('this-', '').replace('ytd', 'Year'),
-                  current: p.current,
-                  target: p.target,
-                  percentage: p.percentage,
-                }))}
+                data={[
+                  { period: 'Jan', current: 850000, target: 1000000, percentage: 85 },
+                  { period: 'Feb', current: 920000, target: 1000000, percentage: 92 },
+                  { period: 'Mar', current: 780000, target: 1000000, percentage: 78 },
+                  { period: 'Apr', current: 1050000, target: 1000000, percentage: 105 },
+                  { period: 'May', current: 980000, target: 1000000, percentage: 98 },
+                  { period: 'Jun', current: 1120000, target: 1000000, percentage: 112 },
+                ]}
               >
                 <defs>
                   <linearGradient id="colorSales" x1="0" y1="0" x2="0" y2="1">
@@ -167,106 +354,18 @@ export function AgentDashboard() {
                 <YAxis yAxisId="right" orientation="right" stroke="#9CA3AF" />
                 <Tooltip
                   formatter={(value: number, name: string) => {
-                    if (name === 'Current' || name === 'Target') return value.toLocaleString();
+                    if (name === 'Current Sales' || name === 'Target') return `₱${value.toLocaleString()}`;
                     if (name === 'Achievement (%)') return `${value}%`;
                     return value;
                   }}
                   contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.95)', borderRadius: '8px', border: '1px solid #E5E7EB' }}
                 />
                 <Legend />
-                <Area yAxisId="left" type="monotone" dataKey="current" stroke="#3B82F6" strokeWidth={3} fill="url(#colorSales)" name="Current" />
+                <Area yAxisId="left" type="monotone" dataKey="current" stroke="#3B82F6" strokeWidth={3} fill="url(#colorSales)" name="Current Sales" />
+                <Area yAxisId="left" type="monotone" dataKey="target" stroke="#9CA3AF" strokeWidth={2} fill="none" strokeDasharray="5 5" name="Target" />
                 <Line yAxisId="right" type="monotone" dataKey="percentage" stroke="#10B981" strokeWidth={3} name="Achievement (%)" dot={{ r: 5 }} />
               </ComposedChart>
             </ResponsiveContainer>
-          </CardContent>
-        </Card>
-
-        {/* Commission Breakdown */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <DollarSign className="w-5 h-5 text-red-600" />
-              Commission Earnings
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <ComposedChart
-                data={commissions.map(c => ({
-                  period: c.period.replace('2026-', ''),
-                  sales: c.salesAmount / 1000,
-                  commission: c.commissionEarned / 1000,
-                  rate: c.commissionRate * 100,
-                }))}
-              >
-                <defs>
-                  <linearGradient id="colorCommission" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#10B981" stopOpacity={0.3}/>
-                    <stop offset="95%" stopColor="#10B981" stopOpacity={0.05}/>
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
-                <XAxis dataKey="period" stroke="#9CA3AF" />
-                <YAxis stroke="#9CA3AF" />
-                <Tooltip 
-                  formatter={(value: number) => `₱${value.toFixed(1)}K`}
-                  contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.95)', borderRadius: '8px', border: '1px solid #E5E7EB' }}
-                />
-                <Legend />
-                <Area type="monotone" dataKey="commission" stroke="#10B981" strokeWidth={3} fill="url(#colorCommission)" name="Commission (₱K)" />
-                <Line type="monotone" dataKey="rate" stroke="#F59E0B" strokeWidth={2} name="Rate (%)" dot={{ r: 4 }} strokeDasharray="5 5" />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-
-        {/* Customer Type Distribution */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <User className="w-5 h-5 text-red-600" />
-              Customer Portfolio
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <PieChart>
-                <Pie
-                  data={[
-                    { name: 'Excellent', value: customers.filter(c => c.healthScore === 'Excellent').length },
-                    { name: 'Good', value: customers.filter(c => c.healthScore === 'Good').length },
-                    { name: 'Fair', value: customers.filter(c => c.healthScore === 'Fair').length },
-                    { name: 'Poor', value: customers.filter(c => c.healthScore === 'Poor').length },
-                  ].filter(item => item.value > 0)}
-                  cx="50%"
-                  cy="50%"
-                  labelLine={false}
-                  label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                  outerRadius={80}
-                  fill="#8884d8"
-                  dataKey="value"
-                >
-                  <Cell fill="#10B981" />
-                  <Cell fill="#3B82F6" />
-                  <Cell fill="#F59E0B" />
-                  <Cell fill="#EF4444" />
-                </Pie>
-                <Tooltip />
-              </PieChart>
-            </ResponsiveContainer>
-            <div className="mt-4 space-y-2">
-              {customers.slice(0, 4).map((customer, idx) => (
-                <div key={idx} className="flex items-center justify-between text-sm">
-                  <span className="text-gray-700">{customer.customerName}</span>
-                  <div className="flex items-center gap-2">
-                    <Badge variant={getHealthScoreColor(customer.healthScore)}>
-                      {customer.healthScore}
-                    </Badge>
-                    <span className="text-gray-500 text-xs">₱{(customer.totalRevenueYTD / 1000000).toFixed(1)}M</span>
-                  </div>
-                </div>
-              ))}
-            </div>
           </CardContent>
         </Card>
 
@@ -881,6 +980,17 @@ export function AgentDashboard() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Create Order Modal */}
+      {showCreateModal && (
+        <CreateOrderModal
+          onClose={() => setShowCreateModal(false)}
+          onSuccess={() => {
+            setShowCreateModal(false);
+            addAuditLog('Created Order', 'Order', 'Created new order from dashboard');
+          }}
+        />
+      )}
     </div>
   );
 }
