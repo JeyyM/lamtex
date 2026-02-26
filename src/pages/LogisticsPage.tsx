@@ -46,14 +46,20 @@ import {
   getOrdersReadyByBranch,
   getShipmentsByBranch,
 } from '@/src/mock/logisticsDashboard';
+import { RoutePlanningView } from '@/src/components/logistics/RoutePlanningView';
+import { TripDetailsModal } from '@/src/components/logistics/TripDetailsModal';
+import { EditTripModal } from '@/src/components/logistics/EditTripModal';
+import { Trip } from '@/src/types/logistics';
 
-type ViewMode = 'dispatch' | 'fleet' | 'routes' | 'shipments' | 'tracking';
+type ViewMode = 'dispatch' | 'fleet' | 'routes' | 'shipments';
 
 export function LogisticsPage() {
   const { branch } = useAppContext();
   const navigate = useNavigate();
   const [viewMode, setViewMode] = useState<ViewMode>('dispatch');
-  const [selectedTrip, setSelectedTrip] = useState<string | null>(null);
+  const [selectedTrip, setSelectedTrip] = useState<Trip | null>(null);
+  const [showTripDetails, setShowTripDetails] = useState(false);
+  const [showEditTrip, setShowEditTrip] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('All');
 
@@ -94,16 +100,9 @@ export function LogisticsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Logistics Management</h1>
-          <p className="text-sm text-gray-500 mt-1">
-            Full dispatch control & fleet operations for <span className="font-medium text-gray-700">{branch}</span>
-          </p>
         </div>
         <div className="flex items-center gap-3">
-          <Button variant="outline" onClick={() => navigate('/logistics-dashboard')}>
-            <BarChart3 className="w-4 h-4 mr-2" />
-            Dashboard View
-          </Button>
-          <Button variant="primary">
+          <Button variant="primary" onClick={() => setViewMode('routes')}>
             <Plus className="w-4 h-4 mr-2" />
             Create New Trip
           </Button>
@@ -118,7 +117,6 @@ export function LogisticsPage() {
             { id: 'fleet', label: 'Fleet Management', icon: <Truck className="w-4 h-4" /> },
             { id: 'routes', label: 'Route Planning', icon: <Map className="w-4 h-4" /> },
             { id: 'shipments', label: 'Inter-Island Shipments', icon: <Ship className="w-4 h-4" /> },
-            { id: 'tracking', label: 'Live Tracking', icon: <Navigation className="w-4 h-4" /> },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -245,16 +243,6 @@ export function LogisticsPage() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle>Dispatch Queue</CardTitle>
-              <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm">
-                  <Upload className="w-4 h-4 mr-2" />
-                  Bulk Upload
-                </Button>
-                <Button variant="outline" size="sm">
-                  <Settings className="w-4 h-4 mr-2" />
-                  Auto-Assign
-                </Button>
-              </div>
             </CardHeader>
             <CardContent className="p-0">
               <div className="overflow-x-auto">
@@ -349,7 +337,10 @@ export function LogisticsPage() {
                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm">
                           <div className="flex items-center justify-end gap-2">
                             <button
-                              onClick={() => setSelectedTrip(trip.id)}
+                              onClick={() => {
+                                setSelectedTrip(trip);
+                                setShowTripDetails(true);
+                              }}
                               className="text-blue-600 hover:text-blue-800"
                               title="View Details"
                             >
@@ -357,21 +348,9 @@ export function LogisticsPage() {
                             </button>
                             <button
                               className="text-gray-600 hover:text-gray-800"
-                              title="Track Location"
-                            >
-                              <Navigation className="w-4 h-4" />
-                            </button>
-                            <button
-                              className="text-gray-600 hover:text-gray-800"
                               title="Contact Driver"
                             >
                               <Phone className="w-4 h-4" />
-                            </button>
-                            <button
-                              className="text-gray-600 hover:text-gray-800"
-                              title="Edit Trip"
-                            >
-                              <Edit className="w-4 h-4" />
                             </button>
                           </div>
                         </td>
@@ -464,13 +443,13 @@ export function LogisticsPage() {
                         )}
 
                         <div className="mt-4 flex items-center gap-2">
-                          <Button variant="outline" size="sm" className="flex-1">
-                            <Navigation className="w-3 h-3 mr-1" />
-                            Track
-                          </Button>
-                          <Button variant="outline" size="sm" className="flex-1">
-                            <Settings className="w-3 h-3 mr-1" />
-                            Manage
+                          <Button 
+                            variant="primary" 
+                            size="sm" 
+                            className="flex-1"
+                            onClick={() => navigate(`/logistics/${vehicle.id}`)}
+                          >
+                            View Details
                           </Button>
                         </div>
                       </div>
@@ -585,24 +564,15 @@ export function LogisticsPage() {
 
       {/* ROUTE PLANNING VIEW */}
       {viewMode === 'routes' && (
-        <div className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Route Optimization</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-center py-12 text-gray-500">
-                <Map className="w-16 h-16 mx-auto mb-4 text-gray-400" />
-                <p className="text-lg font-medium mb-2">Route Planning Module</p>
-                <p className="text-sm">Interactive map with route optimization, distance calculation, and multi-stop planning</p>
-                <Button variant="primary" className="mt-4">
-                  <Route className="w-4 h-4 mr-2" />
-                  Open Route Planner
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+        <RoutePlanningView
+          ordersReady={ordersReady}
+          vehicles={vehicles}
+          onCreateTrip={(selectedOrders, vehicleId) => {
+            console.log('Creating trip with orders:', selectedOrders, 'for vehicle:', vehicleId);
+            // In real implementation, would create trip and update state
+            alert(`Trip created with ${selectedOrders.length} orders for vehicle ${vehicleId}`);
+          }}
+        />
       )}
 
       {/* SHIPMENTS VIEW */}
@@ -684,26 +654,38 @@ export function LogisticsPage() {
         </div>
       )}
 
-      {/* LIVE TRACKING VIEW */}
-      {viewMode === 'tracking' && (
-        <div className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Real-Time Fleet Tracking</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-center py-12 text-gray-500">
-                <Navigation className="w-16 h-16 mx-auto mb-4 text-gray-400" />
-                <p className="text-lg font-medium mb-2">Live GPS Tracking</p>
-                <p className="text-sm">Real-time vehicle location monitoring with map integration</p>
-                <Button variant="primary" className="mt-4">
-                  <Map className="w-4 h-4 mr-2" />
-                  Open Live Map
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+      {/* Trip Details Modal */}
+      {selectedTrip && (
+        <TripDetailsModal
+          isOpen={showTripDetails}
+          onClose={() => {
+            setShowTripDetails(false);
+            setSelectedTrip(null);
+          }}
+          trip={selectedTrip}
+          onEdit={() => {
+            setShowTripDetails(false);
+            setShowEditTrip(true);
+          }}
+        />
+      )}
+
+      {/* Edit Trip Modal */}
+      {selectedTrip && (
+        <EditTripModal
+          isOpen={showEditTrip}
+          onClose={() => {
+            setShowEditTrip(false);
+            setSelectedTrip(null);
+          }}
+          trip={selectedTrip}
+          onSave={(updatedTrip) => {
+            console.log('Trip updated:', updatedTrip);
+            // TODO: Save to backend
+            setShowEditTrip(false);
+            setSelectedTrip(null);
+          }}
+        />
       )}
     </div>
   );
