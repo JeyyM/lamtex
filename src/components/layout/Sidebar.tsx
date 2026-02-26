@@ -16,24 +16,25 @@ import {
   Warehouse
 } from 'lucide-react';
 import { cn } from '@/src/lib/utils';
+import lamtexLogo from '../../assets/images.png';
 
 export function Sidebar() {
   const { role } = useAppContext();
 
   const navItems = [
-    { name: 'Dashboard', path: '/', icon: LayoutDashboard, roles: ['Executive', 'Warehouse', 'Logistics', 'Agent'] },
-    { name: 'Orders', path: '/orders', icon: ShoppingCart, roles: ['Executive', 'Agent', 'Warehouse', 'Logistics'] },
-    { name: 'Products', path: '/products', icon: Package, roles: ['Executive', 'Warehouse', 'Agent'] },
-    { name: 'Raw Materials', path: '/materials', icon: Box, roles: ['Executive', 'Warehouse', 'Agent'] },
-    { name: 'Warehouse', path: '/warehouse', icon: Warehouse, roles: ['Executive', 'Warehouse'] },
-    { name: 'Logistics', path: '/logistics', icon: Truck, roles: ['Executive', 'Logistics'] },
-    { name: 'Customers', path: '/customers', icon: Users, roles: ['Executive', 'Agent'] },
-    { name: 'Suppliers', path: '/suppliers', icon: Truck, roles: ['Executive', 'Procurement'] },
-    { name: 'Invoices & Payments', path: '/finance', icon: CreditCard, roles: ['Executive', 'Finance', 'Agent'] },
-    { name: 'Employees', path: '/employees', icon: Users, roles: ['Executive', 'Logistics', 'Warehouse'] },
-    { name: 'Agent Analytics', path: '/agents', icon: UserCheck, roles: ['Executive'] },
-    { name: 'Reports', path: '/reports', icon: BarChart3, roles: ['Executive', 'Finance'] },
-    { name: 'Settings', path: '/settings', icon: Settings, roles: ['Executive'] },
+    { name: 'Dashboard', path: '/', icon: LayoutDashboard, roles: ['Executive', 'Warehouse', 'Logistics', 'Agent', 'Finance', 'Production', 'Manager'] },
+    { name: 'Orders', path: '/orders', icon: ShoppingCart, roles: ['Executive', 'Agent', 'Warehouse', 'Logistics', 'Finance', 'Manager'] },
+    { name: 'Products', path: '/products', icon: Package, roles: ['Executive', 'Warehouse', 'Agent', 'Production', 'Manager'] },
+    { name: 'Raw Materials', path: '/materials', icon: Box, roles: ['Executive', 'Warehouse', 'Production', 'Manager'] },
+    { name: 'Warehouse', path: '/warehouse', icon: Warehouse, roles: ['Executive', 'Warehouse', 'Manager'] },
+    { name: 'Logistics', path: '/logistics', icon: Truck, roles: ['Executive', 'Logistics', 'Manager'] },
+    { name: 'Customers', path: '/customers', icon: Users, roles: ['Executive', 'Agent', 'Manager'] },
+    { name: 'Suppliers', path: '/suppliers', icon: Truck, roles: ['Executive', 'Warehouse', 'Procurement', 'Manager'] },
+    { name: 'Invoices & Payments', path: '/finance', icon: CreditCard, roles: ['Executive', 'Finance', 'Agent', 'Manager'] },
+    { name: 'Employees', path: '/employees', icon: Users, roles: ['Executive', 'Manager'] },
+    { name: 'Agent Analytics', path: '/agents', icon: UserCheck, roles: ['Executive', 'Manager'] },
+    { name: 'Reports', path: '/reports', icon: BarChart3, roles: ['Executive', 'Finance', 'Manager'] },
+    { name: 'Settings', path: '/settings', icon: Settings, roles: ['Executive', 'Manager'] },
   ];
 
   const filteredNav = navItems.filter(item => item.roles.includes(role));
@@ -41,11 +42,8 @@ export function Sidebar() {
   return (
     <div className="w-64 bg-white border-r border-gray-200 h-screen flex flex-col fixed left-0 top-0">
       <div className="h-16 flex items-center px-6 border-b border-gray-200">
-        <div className="flex items-center gap-2 text-red-600 font-bold text-xl tracking-tight">
-          <div className="w-8 h-8 bg-red-600 rounded flex items-center justify-center text-white">
-            L
-          </div>
-          LAMTEX
+        <div className="flex items-center gap-2">
+          <img src={lamtexLogo} alt="LAMTEX Logo" className="h-10 w-auto" />
         </div>
       </div>
       

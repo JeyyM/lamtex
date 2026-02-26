@@ -1850,7 +1850,6 @@ export default function WarehousePage() {
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase">Weight/Volume</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase">Required</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase">Urgency</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
@@ -1907,14 +1906,6 @@ export default function WarehousePage() {
                       </td>
                       <td className="px-4 py-3">
                         <span className="px-2 py-1 bg-red-50 text-red-700 rounded text-xs font-medium">High</span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <button 
-                          className="text-blue-600 hover:text-blue-700 text-sm font-medium"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          View Details
-                        </button>
                       </td>
                     </tr>
 
@@ -1974,14 +1965,6 @@ export default function WarehousePage() {
                       <td className="px-4 py-3">
                         <span className="px-2 py-1 bg-yellow-50 text-yellow-700 rounded text-xs font-medium">Medium</span>
                       </td>
-                      <td className="px-4 py-3">
-                        <button 
-                          className="text-blue-600 hover:text-blue-700 text-sm font-medium"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          View Details
-                        </button>
-                      </td>
                     </tr>
 
                     {/* Order 3 - All Available */}
@@ -2037,14 +2020,6 @@ export default function WarehousePage() {
                       </td>
                       <td className="px-4 py-3">
                         <span className="px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs font-medium">Low</span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <button 
-                          className="text-blue-600 hover:text-blue-700 text-sm font-medium"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          View Details
-                        </button>
                       </td>
                     </tr>
 
@@ -2106,14 +2081,6 @@ export default function WarehousePage() {
                       </td>
                       <td className="px-4 py-3">
                         <span className="px-2 py-1 bg-red-50 text-red-700 rounded text-xs font-medium">High</span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <button 
-                          className="text-blue-600 hover:text-blue-700 text-sm font-medium"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          View Details
-                        </button>
                       </td>
                     </tr>
                   </tbody>

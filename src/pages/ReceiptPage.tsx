@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import { Button } from '@/src/components/ui/Button';
 import { Badge } from '@/src/components/ui/Badge';
 import { CheckCircle, Download, Printer } from 'lucide-react';
+import lamtexLogo from '../assets/images.png';
 
 export function ReceiptPage() {
   const { id } = useParams<{ id: string }>();
@@ -76,13 +77,7 @@ export function ReceiptPage() {
             <div className="flex items-start justify-between">
               <div>
                 <div className="flex items-center gap-3 mb-2">
-                  <div className="w-16 h-16 bg-red-600 rounded-lg flex items-center justify-center">
-                    <span className="text-white font-bold text-2xl">L</span>
-                  </div>
-                  <div>
-                    <h1 className="text-3xl font-bold text-gray-900">{mockReceipt.companyName}</h1>
-                    <p className="text-sm text-gray-600">Construction Supplies</p>
-                  </div>
+                  <img src={lamtexLogo} alt="LAMTEX Logo" className="h-16 w-auto" />
                 </div>
                 <p className="text-sm text-gray-600">{mockReceipt.companyAddress}</p>
                 <p className="text-sm text-gray-600">{mockReceipt.companyPhone} • {mockReceipt.companyEmail}</p>

@@ -17,6 +17,7 @@ import {
   Wallet,
   Info,
 } from 'lucide-react';
+import lamtexLogo from '../assets/images.png';
 
 export function PaymentPage() {
   const { token } = useParams<{ token: string }>();
@@ -107,12 +108,8 @@ export function PaymentPage() {
         {/* Header */}
         <div className="text-center mb-8">
           <div className="flex items-center justify-center gap-2 mb-3">
-            <div className="w-12 h-12 bg-red-600 rounded-lg flex items-center justify-center">
-              <span className="text-white font-bold text-xl">L</span>
-            </div>
-            <h1 className="text-3xl font-bold text-gray-900">LAMTEX</h1>
+            <img src={lamtexLogo} alt="LAMTEX Logo" className="h-16 w-auto" />
           </div>
-          <p className="text-gray-600">Construction Supplies</p>
         </div>
 
         {/* Invoice Details Card */}

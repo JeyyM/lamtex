@@ -4,6 +4,7 @@ import { Button } from '@/src/components/ui/Button';
 import { Badge } from '@/src/components/ui/Badge';
 import { getOrderById } from '@/src/mock/orders';
 import { Download, Printer, Send, Mail, MessageSquare, ExternalLink } from 'lucide-react';
+import lamtexLogo from '../assets/images.png';
 
 export function InvoicePreviewPage() {
   const { orderId } = useParams<{ orderId: string }>();
@@ -83,13 +84,7 @@ export function InvoicePreviewPage() {
             <div className="flex items-start justify-between border-b-4 border-red-600 pb-8 mb-8">
               <div>
                 <div className="flex items-center gap-3 mb-3">
-                  <div className="w-16 h-16 bg-red-600 rounded-lg flex items-center justify-center">
-                    <span className="text-white font-bold text-2xl">L</span>
-                  </div>
-                  <div>
-                    <h1 className="text-3xl font-bold text-gray-900">LAMTEX</h1>
-                    <p className="text-sm text-gray-600">Construction Supplies</p>
-                  </div>
+                  <img src={lamtexLogo} alt="LAMTEX Logo" className="h-16 w-auto" />
                 </div>
                 <div className="text-sm text-gray-600 space-y-1">
                   <p>456 Industrial Avenue</p>
