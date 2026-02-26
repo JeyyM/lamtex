@@ -11,7 +11,8 @@ import {
   Settings,
   Box,
   CreditCard,
-  BarChart3
+  BarChart3,
+  UserCheck
 } from 'lucide-react';
 import { cn } from '@/src/lib/utils';
 
@@ -27,6 +28,7 @@ export function Sidebar() {
     { name: 'Customers', path: '/customers', icon: Users, roles: ['Executive', 'Agent'] },
     { name: 'Suppliers', path: '/suppliers', icon: Truck, roles: ['Executive', 'Procurement'] },
     { name: 'Invoices & Payments', path: '/finance', icon: CreditCard, roles: ['Executive', 'Finance', 'Agent'] },
+    { name: 'Agent Analytics', path: '/agents', icon: UserCheck, roles: ['Executive'] },
     { name: 'Reports', path: '/reports', icon: BarChart3, roles: ['Executive', 'Finance'] },
     { name: 'Audit Logs', path: '/audit', icon: FileText, roles: ['Executive'] },
     { name: 'Settings', path: '/settings', icon: Settings, roles: ['Executive'] },
