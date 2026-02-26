@@ -12,7 +12,8 @@ import {
   Box,
   CreditCard,
   BarChart3,
-  UserCheck
+  UserCheck,
+  Warehouse
 } from 'lucide-react';
 import { cn } from '@/src/lib/utils';
 
@@ -24,13 +25,14 @@ export function Sidebar() {
     { name: 'Orders', path: '/orders', icon: ShoppingCart, roles: ['Executive', 'Agent', 'Warehouse', 'Logistics'] },
     { name: 'Products', path: '/products', icon: Package, roles: ['Executive', 'Warehouse', 'Agent'] },
     { name: 'Raw Materials', path: '/materials', icon: Box, roles: ['Executive', 'Warehouse', 'Agent'] },
+    { name: 'Warehouse', path: '/warehouse', icon: Warehouse, roles: ['Executive', 'Warehouse'] },
     { name: 'Logistics', path: '/logistics', icon: Truck, roles: ['Executive', 'Logistics'] },
     { name: 'Customers', path: '/customers', icon: Users, roles: ['Executive', 'Agent'] },
     { name: 'Suppliers', path: '/suppliers', icon: Truck, roles: ['Executive', 'Procurement'] },
     { name: 'Invoices & Payments', path: '/finance', icon: CreditCard, roles: ['Executive', 'Finance', 'Agent'] },
+    { name: 'Employees', path: '/employees', icon: Users, roles: ['Executive', 'Logistics', 'Warehouse'] },
     { name: 'Agent Analytics', path: '/agents', icon: UserCheck, roles: ['Executive'] },
     { name: 'Reports', path: '/reports', icon: BarChart3, roles: ['Executive', 'Finance'] },
-    { name: 'Audit Logs', path: '/audit', icon: FileText, roles: ['Executive'] },
     { name: 'Settings', path: '/settings', icon: Settings, roles: ['Executive'] },
   ];
 

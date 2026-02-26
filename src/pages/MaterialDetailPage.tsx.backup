@@ -39,6 +39,7 @@ import {
 import {
   getRawMaterialById,
   getBatchesByMaterialId,
+  getStockMovementsByMaterialId,
 } from '@/src/mock/rawMaterials';
 import type { MaterialStatus } from '@/src/types/materials';
 
@@ -46,10 +47,11 @@ export function MaterialDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { selectedBranch } = useAppContext();
-  const [activeTab, setActiveTab] = useState<'overview' | 'batches' | 'analytics'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'batches' | 'movements' | 'analytics'>('overview');
 
   const material = getRawMaterialById(id || '');
   const batches = getBatchesByMaterialId(id || '');
+  const movements = getStockMovementsByMaterialId(id || '').slice(0, 10);
 
   if (!material) {
     return (
@@ -313,6 +315,16 @@ export function MaterialDetailPage() {
             Batches ({batches.length})
           </button>
           <button
+            onClick={() => setActiveTab('movements')}
+            className={`py-2 px-1 border-b-2 font-medium text-sm ${
+              activeTab === 'movements'
+                ? 'border-red-500 text-red-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            Stock Movements
+          </button>
+          <button
             onClick={() => setActiveTab('analytics')}
             className={`py-2 px-1 border-b-2 font-medium text-sm ${
               activeTab === 'analytics'
@@ -450,128 +462,127 @@ export function MaterialDetailPage() {
 
       {/* Tab Content - Batches */}
       {activeTab === 'batches' && (
-        <div className="space-y-6">
-          {/* Current Batches */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <ClipboardList className="w-5 h-5" />
-                Current Batches
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-0">
-              {batches.length > 0 ? (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b">
-                      <tr>
-                        <th className="px-6 py-3 text-left font-medium">Batch Number</th>
-                        <th className="px-6 py-3 text-left font-medium">Lot Number</th>
-                        <th className="px-6 py-3 text-left font-medium">Received</th>
-                        <th className="px-6 py-3 text-left font-medium">Available</th>
-                        <th className="px-6 py-3 text-left font-medium">Issued</th>
-                        <th className="px-6 py-3 text-left font-medium">Branch</th>
-                        <th className="px-6 py-3 text-left font-medium">Quality Status</th>
-                        <th className="px-6 py-3 text-left font-medium">Received Date</th>
-                        <th className="px-6 py-3 text-left font-medium">Expiry Date</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-200">
-                      {batches.map((batch) => (
-                        <tr key={batch.id} className="hover:bg-gray-50">
-                          <td className="px-6 py-4 font-mono text-xs text-gray-900">{batch.batchNumber}</td>
-                          <td className="px-6 py-4 font-mono text-xs text-gray-600">{batch.lotNumber}</td>
-                          <td className="px-6 py-4 text-gray-900">{batch.quantityReceived.toLocaleString()}</td>
-                          <td className="px-6 py-4 font-medium text-gray-900">{batch.quantityAvailable.toLocaleString()}</td>
-                          <td className="px-6 py-4 text-gray-600">{batch.quantityIssued.toLocaleString()}</td>
-                          <td className="px-6 py-4">
-                            <Badge variant="outline">Branch {batch.branch}</Badge>
-                          </td>
-                          <td className="px-6 py-4">
-                            <Badge variant={getQualityStatusColor(batch.qualityStatus)}>
-                              {batch.qualityStatus}
-                            </Badge>
-                          </td>
-                          <td className="px-6 py-4 text-gray-600">{batch.receivedDate}</td>
-                          <td className="px-6 py-4 text-gray-600">{batch.expiryDate || '-'}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className="flex flex-col items-center justify-center py-12">
-                  <ClipboardList className="w-12 h-12 text-gray-300 mb-4" />
-                  <p className="text-gray-500 text-sm">No batches recorded for this material</p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Scheduled Batches */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Calendar className="w-5 h-5" />
-                Scheduled Incoming Batches
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-0">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <ClipboardList className="w-5 h-5" />
+              Material Batches
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            {batches.length > 0 ? (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b">
                     <tr>
-                      <th className="px-6 py-3 text-left font-medium">PO Number</th>
-                      <th className="px-6 py-3 text-left font-medium">Supplier</th>
-                      <th className="px-6 py-3 text-left font-medium">Expected Quantity</th>
-                      <th className="px-6 py-3 text-left font-medium">Expected Delivery</th>
-                      <th className="px-6 py-3 text-left font-medium">Destination Branch</th>
-                      <th className="px-6 py-3 text-left font-medium">Status</th>
+                      <th className="px-6 py-3 text-left font-medium">Batch Number</th>
+                      <th className="px-6 py-3 text-left font-medium">Lot Number</th>
+                      <th className="px-6 py-3 text-left font-medium">Received</th>
+                      <th className="px-6 py-3 text-left font-medium">Available</th>
+                      <th className="px-6 py-3 text-left font-medium">Issued</th>
+                      <th className="px-6 py-3 text-left font-medium">Branch</th>
+                      <th className="px-6 py-3 text-left font-medium">Quality Status</th>
+                      <th className="px-6 py-3 text-left font-medium">Received Date</th>
+                      <th className="px-6 py-3 text-left font-medium">Expiry Date</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
-                    <tr className="hover:bg-gray-50">
-                      <td className="px-6 py-4 font-mono text-xs text-blue-600 font-medium">PO-2024-0847</td>
-                      <td className="px-6 py-4 text-gray-900">ChemCorp Philippines</td>
-                      <td className="px-6 py-4 font-medium text-gray-900">5,000 kg</td>
-                      <td className="px-6 py-4 text-gray-600">March 15, 2026</td>
-                      <td className="px-6 py-4">
-                        <Badge variant="outline">Branch A</Badge>
-                      </td>
-                      <td className="px-6 py-4">
-                        <Badge variant="default">In Transit</Badge>
-                      </td>
-                    </tr>
-                    <tr className="hover:bg-gray-50">
-                      <td className="px-6 py-4 font-mono text-xs text-blue-600 font-medium">PO-2024-0892</td>
-                      <td className="px-6 py-4 text-gray-900">Global Materials Inc.</td>
-                      <td className="px-6 py-4 font-medium text-gray-900">3,500 kg</td>
-                      <td className="px-6 py-4 text-gray-600">March 22, 2026</td>
-                      <td className="px-6 py-4">
-                        <Badge variant="outline">Branch B</Badge>
-                      </td>
-                      <td className="px-6 py-4">
-                        <Badge variant="warning">Pending Shipment</Badge>
-                      </td>
-                    </tr>
-                    <tr className="hover:bg-gray-50">
-                      <td className="px-6 py-4 font-mono text-xs text-blue-600 font-medium">PO-2024-0915</td>
-                      <td className="px-6 py-4 text-gray-900">ChemCorp Philippines</td>
-                      <td className="px-6 py-4 font-medium text-gray-900">4,000 kg</td>
-                      <td className="px-6 py-4 text-gray-600">April 5, 2026</td>
-                      <td className="px-6 py-4">
-                        <Badge variant="outline">Branch A</Badge>
-                      </td>
-                      <td className="px-6 py-4">
-                        <Badge variant="default">Confirmed</Badge>
-                      </td>
-                    </tr>
+                    {batches.map((batch) => (
+                      <tr key={batch.id} className="hover:bg-gray-50">
+                        <td className="px-6 py-4 font-mono text-xs text-gray-900">{batch.batchNumber}</td>
+                        <td className="px-6 py-4 font-mono text-xs text-gray-600">{batch.lotNumber}</td>
+                        <td className="px-6 py-4 text-gray-900">{batch.quantityReceived.toLocaleString()}</td>
+                        <td className="px-6 py-4 font-medium text-gray-900">{batch.quantityAvailable.toLocaleString()}</td>
+                        <td className="px-6 py-4 text-gray-600">{batch.quantityIssued.toLocaleString()}</td>
+                        <td className="px-6 py-4">
+                          <Badge variant="outline">Branch {batch.branch}</Badge>
+                        </td>
+                        <td className="px-6 py-4">
+                          <Badge variant={getQualityStatusColor(batch.qualityStatus)}>
+                            {batch.qualityStatus}
+                          </Badge>
+                        </td>
+                        <td className="px-6 py-4 text-gray-600">{batch.receivedDate}</td>
+                        <td className="px-6 py-4 text-gray-600">{batch.expiryDate || '-'}</td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>
-            </CardContent>
-          </Card>
-        </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-12">
+                <ClipboardList className="w-12 h-12 text-gray-300 mb-4" />
+                <p className="text-gray-500 text-sm">No batches recorded for this material</p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Tab Content - Stock Movements */}
+      {activeTab === 'movements' && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Truck className="w-5 h-5" />
+              Recent Stock Movements
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            {movements.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b">
+                    <tr>
+                      <th className="px-6 py-3 text-left font-medium">Date</th>
+                      <th className="px-6 py-3 text-left font-medium">Type</th>
+                      <th className="px-6 py-3 text-left font-medium">Quantity</th>
+                      <th className="px-6 py-3 text-left font-medium">From/To</th>
+                      <th className="px-6 py-3 text-left font-medium">Reference</th>
+                      <th className="px-6 py-3 text-left font-medium">Reason</th>
+                      <th className="px-6 py-3 text-left font-medium">Processed By</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {movements.map((movement) => (
+                      <tr key={movement.id} className="hover:bg-gray-50">
+                        <td className="px-6 py-4 text-gray-900">{movement.movementDate}</td>
+                        <td className="px-6 py-4">
+                          <Badge 
+                            variant={
+                              movement.movementType === 'Receipt' ? 'success' :
+                              movement.movementType === 'Issue' ? 'warning' :
+                              movement.movementType === 'Transfer' ? 'default' : 'danger'
+                            }
+                          >
+                            {movement.movementType}
+                          </Badge>
+                        </td>
+                        <td className="px-6 py-4 font-medium text-gray-900">
+                          {movement.quantity.toLocaleString()} {movement.unitOfMeasure}
+                        </td>
+                        <td className="px-6 py-4 text-gray-600 text-xs">
+                          {movement.fromBranch && `From: ${movement.fromBranch}`}
+                          {movement.toBranch && `To: ${movement.toBranch}`}
+                        </td>
+                        <td className="px-6 py-4 font-mono text-xs text-gray-600">
+                          {movement.referenceNumber || '-'}
+                        </td>
+                        <td className="px-6 py-4 text-gray-600 text-xs">{movement.reason}</td>
+                        <td className="px-6 py-4 text-gray-600">{movement.processedBy}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-12">
+                <Truck className="w-12 h-12 text-gray-300 mb-4" />
+                <p className="text-gray-500 text-sm">No stock movements recorded</p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
       )}
 
       {/* Tab Content - Analytics */}

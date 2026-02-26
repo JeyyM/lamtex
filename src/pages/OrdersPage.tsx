@@ -74,16 +74,7 @@ export function OrdersPage() {
   };
 
   const handleCreateOrder = () => {
-    const customerName = prompt('Enter customer name to create an order for:');
-    if (!customerName) return;
-    
-    const customer = customers.find(c => c.name.toLowerCase().includes(customerName.toLowerCase()));
-    if (customer) {
-      setSelectedCustomer({ id: customer.id, name: customer.name });
-      setShowCreateModal(true);
-    } else {
-      alert('Customer not found. Please check the name and try again.');
-    }
+    setShowCreateModal(true);
   };
 
   const tabCounts = {
@@ -107,20 +98,7 @@ export function OrdersPage() {
         <Button 
           variant="primary" 
           className="gap-2" 
-          onClick={() => {
-            // For now, show customer selection prompt
-            const customerName = prompt('Enter customer name (or select from dropdown in production):');
-            if (customerName) {
-              // Find customer or create mock
-              const customer = customers.find(c => c.name.toLowerCase().includes(customerName.toLowerCase()));
-              if (customer) {
-                setSelectedCustomer({ id: customer.id, name: customer.name });
-                setShowCreateModal(true);
-              } else {
-                alert('Customer not found. Please select a valid customer.');
-              }
-            }
-          }}
+          onClick={handleCreateOrder}
         >
           <Plus className="w-4 h-4" />
           Create Order
@@ -251,10 +229,10 @@ export function OrdersPage() {
       </Card>
 
       {/* Create Order Modal */}
-      {showCreateModal && selectedCustomer && (
+      {showCreateModal && (
         <CreateOrderModal
-          customerId={selectedCustomer.id}
-          customerName={selectedCustomer.name}
+          customerId={selectedCustomer?.id}
+          customerName={selectedCustomer?.name}
           onClose={() => {
             setShowCreateModal(false);
             setSelectedCustomer(null);
@@ -262,7 +240,7 @@ export function OrdersPage() {
           onSuccess={() => {
             setShowCreateModal(false);
             setSelectedCustomer(null);
-            addAuditLog('Created Order', 'Order', `Created new order for ${selectedCustomer.name}`);
+            addAuditLog('Created Order', 'Order', 'Created new order');
           }}
         />
       )}

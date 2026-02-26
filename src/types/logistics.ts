@@ -82,6 +82,7 @@ export interface Vehicle {
   id: string;
   vehicleId: string;
   vehicleName: string;
+  plateNumber?: string;
   type: 'Truck' | 'Container Van' | 'Motorcycle';
   status: 'Available' | 'On Trip' | 'Loading' | 'Maintenance' | 'Out of Service';
   currentTrip?: string;
@@ -90,6 +91,8 @@ export interface Vehicle {
   utilizationPercent: number; // weekly
   maxWeight: number; // kg
   maxVolume: number; // cubic meters
+  maxCapacityKg?: number; // alias for maxWeight (for compatibility)
+  maxCapacityCbm?: number; // alias for maxVolume (for compatibility)
   maintenanceDue?: string;
   alerts?: string[];
   branch?: string;

@@ -3,6 +3,7 @@ import { useAppContext } from '@/src/store/AppContext';
 import { Button } from '@/src/components/ui/Button';
 import { Badge } from '@/src/components/ui/Badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
+import { getCustomersByBranch } from '@/src/mock/customers';
 import {
   X,
   Plus,
@@ -16,6 +17,9 @@ import {
   ChevronDown,
   Check,
   ArrowUp,
+  User,
+  MapPin,
+  Phone,
 } from 'lucide-react';
 
 // Batch pricing tiers for bulk orders
@@ -259,8 +263,8 @@ const MOCK_PIPE_PRODUCTS = [
 ];
 
 interface CreateOrderModalProps {
-  customerId: string;
-  customerName: string;
+  customerId?: string;
+  customerName?: string;
   onClose: () => void;
   onSuccess: () => void;
 }
@@ -279,16 +283,48 @@ interface OrderItem {
   stockAvailable: number;
 }
 
-export function CreateOrderModal({ customerId, customerName, onClose, onSuccess }: CreateOrderModalProps) {
-  const { selectedBranch, addAuditLog } = useAppContext();
+export function CreateOrderModal({ customerId: initialCustomerId, customerName: initialCustomerName, onClose, onSuccess }: CreateOrderModalProps) {
+  const { branch, addAuditLog } = useAppContext();
+  const allCustomers = getCustomersByBranch(branch);
+  
+  // Customer selection state
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string>(initialCustomerId || '');
+  const [selectedCustomerName, setSelectedCustomerName] = useState<string>(initialCustomerName || '');
+  const [customerSearchQuery, setCustomerSearchQuery] = useState('');
+  const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
+  
+  // Order state
   const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedProduct, setSelectedProduct] = useState<typeof MOCK_PIPE_PRODUCTS[0] | null>(null);
   const [selectedVariant, setSelectedVariant] = useState<typeof MOCK_PIPE_PRODUCTS[0]['variants'][0] | null>(null);
   const [variantQuantity, setVariantQuantity] = useState(1);
   const [deliveryDate, setDeliveryDate] = useState('');
+  const [deliveryAddress, setDeliveryAddress] = useState('');
+  const [contactPerson, setContactPerson] = useState('');
+  const [contactPhone, setContactPhone] = useState('');
   const [notes, setNotes] = useState('');
+  const [priority, setPriority] = useState<'Normal' | 'High' | 'Urgent'>('Normal');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  
+  // Filter customers based on search
+  const filteredCustomers = customerSearchQuery.trim() === ''
+    ? allCustomers.slice(0, 10) // Show first 10 if no search
+    : allCustomers.filter(customer =>
+        customer.name.toLowerCase().includes(customerSearchQuery.toLowerCase()) ||
+        customer.email?.toLowerCase().includes(customerSearchQuery.toLowerCase())
+      ).slice(0, 10);
+  
+  // Select customer handler
+  const handleSelectCustomer = (customer: typeof allCustomers[0]) => {
+    setSelectedCustomerId(customer.id);
+    setSelectedCustomerName(customer.name);
+    setDeliveryAddress(customer.address || '');
+    setContactPerson(customer.name);
+    setContactPhone(customer.phone || '');
+    setShowCustomerDropdown(false);
+    setCustomerSearchQuery('');
+  };
 
   // Calculate best price tier based on quantity
   const getBestPriceTier = (variant: typeof MOCK_PIPE_PRODUCTS[0]['variants'][0], quantity: number): PriceTier | null => {
@@ -410,6 +446,11 @@ export function CreateOrderModal({ customerId, customerName, onClose, onSuccess 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
+    if (!selectedCustomerId || !selectedCustomerName) {
+      alert('Please select a customer for this order');
+      return;
+    }
+    
     if (orderItems.length === 0) {
       alert('Please add at least one item to the order');
       return;
@@ -429,10 +470,10 @@ export function CreateOrderModal({ customerId, customerName, onClose, onSuccess 
       addAuditLog(
         'Order Created',
         'Order',
-        `Created order ${orderId} for ${customerName} with ${orderItems.length} items, total ₱${calculateTotal().toLocaleString()}`
+        `Created order ${orderId} for ${selectedCustomerName} with ${orderItems.length} items, total ₱${calculateTotal().toLocaleString()}`
       );
 
-      alert(`Order ${orderId} created successfully!\n\nStatus: Pending\nCustomer: ${customerName}\nItems: ${orderItems.length}\nTotal: ₱${calculateTotal().toLocaleString()}\nScheduled Delivery: ${deliveryDate}\n\nThe order is now pending executive approval.`);
+      alert(`Order ${orderId} created successfully!\n\nStatus: Pending\nCustomer: ${selectedCustomerName}\nItems: ${orderItems.length}\nTotal: ₱${calculateTotal().toLocaleString()}\nScheduled Delivery: ${deliveryDate}\n\nThe order is now pending executive approval.`);
       
       setIsSubmitting(false);
       onSuccess();
@@ -459,7 +500,9 @@ export function CreateOrderModal({ customerId, customerName, onClose, onSuccess 
               <ShoppingCart className="w-6 h-6 text-red-600" />
               Create Order
             </h2>
-            <p className="text-sm text-gray-500 mt-1">Customer: {customerName}</p>
+            <p className="text-sm text-gray-500 mt-1">
+              {selectedCustomerName ? `Customer: ${selectedCustomerName}` : 'Select a customer to begin'}
+            </p>
           </div>
           <button
             onClick={onClose}
@@ -472,6 +515,100 @@ export function CreateOrderModal({ customerId, customerName, onClose, onSuccess 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6">
           <form onSubmit={handleSubmit} className="space-y-6">
+            {/* Customer Selection - Only show if no customer pre-selected */}
+            {!initialCustomerId && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <User className="w-5 h-5" />
+                    Select Customer
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                    <input
+                      type="text"
+                      placeholder="Search customers by name or email..."
+                      value={customerSearchQuery}
+                      onChange={(e) => {
+                        setCustomerSearchQuery(e.target.value);
+                        setShowCustomerDropdown(true);
+                      }}
+                      onFocus={() => setShowCustomerDropdown(true)}
+                      className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 text-base"
+                    />
+                    
+                    {/* Customer Dropdown */}
+                    {showCustomerDropdown && (
+                      <div className="absolute z-10 w-full mt-2 bg-white border border-gray-200 rounded-lg shadow-lg max-h-64 overflow-y-auto">
+                        {filteredCustomers.length > 0 ? (
+                          filteredCustomers.map((customer) => (
+                            <button
+                              key={customer.id}
+                              type="button"
+                              onClick={() => handleSelectCustomer(customer)}
+                              className="w-full text-left px-4 py-3 hover:bg-gray-50 border-b border-gray-100 last:border-b-0 transition-colors"
+                            >
+                              <div className="flex items-start justify-between">
+                                <div className="flex-1">
+                                  <div className="font-medium text-gray-900">{customer.name}</div>
+                                  {customer.email && (
+                                    <div className="text-sm text-gray-500 mt-1">{customer.email}</div>
+                                  )}
+                                  {customer.phone && (
+                                    <div className="text-sm text-gray-500 flex items-center gap-1 mt-1">
+                                      <Phone className="w-3 h-3" />
+                                      {customer.phone}
+                                    </div>
+                                  )}
+                                </div>
+                                {customer.id === selectedCustomerId && (
+                                  <Check className="w-5 h-5 text-green-600" />
+                                )}
+                              </div>
+                            </button>
+                          ))
+                        ) : (
+                          <div className="px-4 py-8 text-center text-gray-500">
+                            <User className="w-8 h-8 mx-auto mb-2 text-gray-300" />
+                            <p className="text-sm">No customers found</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  
+                  {/* Selected Customer Display */}
+                  {selectedCustomerId && selectedCustomerName && (
+                    <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center">
+                          <User className="w-5 h-5 text-green-600" />
+                        </div>
+                        <div className="flex-1">
+                          <div className="font-semibold text-gray-900">{selectedCustomerName}</div>
+                          <div className="text-sm text-gray-600">Customer selected</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedCustomerId('');
+                            setSelectedCustomerName('');
+                            setDeliveryAddress('');
+                            setContactPerson('');
+                            setContactPhone('');
+                          }}
+                          className="text-sm text-red-600 hover:text-red-700 font-medium"
+                        >
+                          Change
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
             {/* Add Items Section */}
             <Card>
               <CardHeader>
@@ -794,7 +931,7 @@ export function CreateOrderModal({ customerId, customerName, onClose, onSuccess 
                   <div className="bg-green-50 border border-green-200 rounded-lg p-3">
                     <div className="flex items-center gap-2 text-green-700">
                       <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                      <span className="text-sm font-medium">In Stock - {selectedBranch}</span>
+                      <span className="text-sm font-medium">In Stock - Branch {branch}</span>
                     </div>
                   </div>
                 </div>
