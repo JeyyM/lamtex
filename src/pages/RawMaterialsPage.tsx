@@ -168,13 +168,8 @@ export function RawMaterialsPage() {
         </div>
       </div>
 
-      <div className="flex flex-col lg:flex-row gap-6 w-full overflow-hidden">
-
-        {/* LEFT SIDE */}
-        <div className="flex-1 min-w-0 space-y-6">
-
-          {/* Summary Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* Summary Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <Card>
               <CardContent className="p-4">
                 <div className="flex items-center gap-3">
@@ -277,6 +272,112 @@ export function RawMaterialsPage() {
               </div>
             </CardContent>
           </Card>
+
+          {/* Stock Alerts - Positioned Above Materials Table */}
+          {(criticalAlerts.length > 0 || warningAlerts.length > 0) && (
+            <Card className="border-l-4 border-l-orange-500 shadow-sm">
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  <AlertTriangle className="w-5 h-5 text-orange-600" />
+                  Stock Alerts
+                  <Badge variant="danger" className="ml-2">
+                    {criticalAlerts.length + warningAlerts.length}
+                  </Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {/* Critical Alerts Column */}
+                  {criticalAlerts.length > 0 && (
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-2 mb-3">
+                        <div className="h-2 w-2 rounded-full bg-red-500"></div>
+                        <h4 className="text-sm font-semibold text-red-700 uppercase tracking-wide">
+                          Critical ({criticalAlerts.length})
+                        </h4>
+                      </div>
+                      <div className="space-y-2">
+                        {criticalAlerts.map((m) => (
+                          <div
+                            key={m.id}
+                            className="border border-red-200 rounded-lg p-3 bg-red-50 hover:bg-red-100 transition-colors"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium text-gray-900 truncate">
+                                  {m.name}
+                                </p>
+                                <p className="text-xs text-red-600 font-medium mt-1">
+                                  ⚠ {m.daysOfCover.toFixed(1)} days remaining
+                                </p>
+                                {m.projectedStockOutDate && (
+                                  <p className="text-xs text-gray-500 mt-0.5">
+                                    Stock-out: {m.projectedStockOutDate.toLocaleDateString()}
+                                  </p>
+                                )}
+                              </div>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => navigate(`/materials/${m.id}`)}
+                                className="flex-shrink-0 text-xs"
+                              >
+                                View
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Warning Alerts Column */}
+                  {warningAlerts.length > 0 && (
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-2 mb-3">
+                        <div className="h-2 w-2 rounded-full bg-yellow-500"></div>
+                        <h4 className="text-sm font-semibold text-yellow-700 uppercase tracking-wide">
+                          Warning ({warningAlerts.length})
+                        </h4>
+                      </div>
+                      <div className="space-y-2">
+                        {warningAlerts.map((m) => (
+                          <div
+                            key={m.id}
+                            className="border border-yellow-200 rounded-lg p-3 bg-yellow-50 hover:bg-yellow-100 transition-colors"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium text-gray-900 truncate">
+                                  {m.name}
+                                </p>
+                                <p className="text-xs text-yellow-600 font-medium mt-1">
+                                  {m.daysOfCover.toFixed(1)} days remaining
+                                </p>
+                                {m.projectedStockOutDate && (
+                                  <p className="text-xs text-gray-500 mt-0.5">
+                                    Stock-out: {m.projectedStockOutDate.toLocaleDateString()}
+                                  </p>
+                                )}
+                              </div>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => navigate(`/materials/${m.id}`)}
+                                className="flex-shrink-0 text-xs"
+                              >
+                                Review
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           {/* Materials Table */}
           <Card>
@@ -392,87 +493,6 @@ export function RawMaterialsPage() {
               )}
             </CardContent>
           </Card>
-        </div>
-
-        {/* RIGHT SIDE: Alerts Panel */}
-        <div className="w-full lg:w-80 flex-shrink-0 space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Alerts</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {criticalAlerts.length === 0 && warningAlerts.length === 0 && (
-                <p className="text-sm text-gray-500">
-                  No immediate stock risks detected.
-                </p>
-              )}
-
-              {criticalAlerts.length > 0 && (
-                <div>
-                  <h4 className="text-sm font-semibold text-red-600 mb-2">
-                    Critical ({criticalAlerts.length})
-                  </h4>
-                  <div className="space-y-3">
-                    {criticalAlerts.map((m) => (
-                      <div
-                        key={m.id}
-                        className="border rounded-md p-3 bg-red-50"
-                      >
-                        <p className="text-sm font-medium">
-                          {m.name}
-                        </p>
-                        <p className="text-xs text-gray-600">
-                          {m.daysOfCover.toFixed(1)} days remaining
-                        </p>
-                        <div className="mt-2 flex gap-2">
-                          <Button
-                            size="sm"
-                            onClick={() => navigate(`/materials/${m.id}`)}
-                          >
-                            View
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {warningAlerts.length > 0 && (
-                <div>
-                  <h4 className="text-sm font-semibold text-yellow-600 mb-2">
-                    Warning ({warningAlerts.length})
-                  </h4>
-                  <div className="space-y-3">
-                    {warningAlerts.map((m) => (
-                      <div
-                        key={m.id}
-                        className="border rounded-md p-3 bg-yellow-50"
-                      >
-                        <p className="text-sm font-medium">
-                          {m.name}
-                        </p>
-                        <p className="text-xs text-gray-600">
-                          {m.daysOfCover.toFixed(1)} days remaining
-                        </p>
-                        <div className="mt-2 flex gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => navigate(`/materials/${m.id}`)}
-                          >
-                            Review
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-      </div>
     </div>
   );
 }
