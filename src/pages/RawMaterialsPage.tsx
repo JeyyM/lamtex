@@ -22,13 +22,13 @@ import {
   getTotalInventoryValue,
   getMaterialsRequiringReorder,
 } from '@/src/mock/rawMaterials';
-import type { MaterialCategory, MaterialStatus } from '@/src/types/materials';
+import type { MaterialCategory, StockOutRisk, getStockOutRisk } from '@/src/types/materials';
 
 export function RawMaterialsPage() {
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('All');
-  const [statusFilter, setStatusFilter] = useState<string>('All');
+  const [riskFilter, setRiskFilter] = useState<string>('All');
   const { role } = useAppContext();
 
   const allMaterials = getAllRawMaterials();
@@ -36,24 +36,29 @@ export function RawMaterialsPage() {
   const totalValue = getTotalInventoryValue();
   const materialsRequiringReorder = getMaterialsRequiringReorder();
 
-  // Apply filters
-  const filteredMaterials = allMaterials.filter(material => {
+  // Apply search and category filters first
+  const filteredBySearchAndCategory = allMaterials.filter(material => {
     const matchesSearch = 
       material.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       material.sku.toLowerCase().includes(searchQuery.toLowerCase()) ||
       material.description.toLowerCase().includes(searchQuery.toLowerCase());
     
     const matchesCategory = categoryFilter === 'All' || material.category === categoryFilter;
-    const matchesStatus = statusFilter === 'All' || material.status === statusFilter;
     
-    return matchesSearch && matchesCategory && matchesStatus;
+    return matchesSearch && matchesCategory;
   });
 
-  const getStatusColor = (status: MaterialStatus): 'success' | 'warning' | 'danger' | 'default' => {
+  const getStatusColor = (status: string): 'success' | 'warning' | 'danger' | 'default' => {
     if (status === 'Active') return 'success';
     if (status === 'Low Stock') return 'warning';
     if (status === 'Out of Stock' || status === 'Discontinued' || status === 'Expired') return 'danger';
     return 'default';
+  };
+
+  const getRiskBadgeVariant = (risk: StockOutRisk): 'success' | 'warning' | 'danger' => {
+    if (risk === 'Critical') return 'danger';
+    if (risk === 'Risky') return 'warning';
+    return 'success';
   };
 
   const categories: (MaterialCategory | 'All')[] = [
@@ -70,13 +75,13 @@ export function RawMaterialsPage() {
     'Other',
   ];
 
-  const statuses: (MaterialStatus | 'All')[] = ['All', 'Active', 'Discontinued', 'Low Stock', 'Out of Stock', 'Expired'];
+  const riskLevels: (StockOutRisk | 'All')[] = ['All', 'OK', 'Risky', 'Critical'];
 
-  // Derived calculations for enhanced materials
-  const enhancedMaterials = filteredMaterials.map((material) => {
-    // ⚠ DEMO MODE: Simulating high consumption to trigger alert
-    // Force the first material into high consumption for demo purposes
-    const isDemoMaterial = material.id === filteredMaterials[0]?.id;
+  // Derived calculations for enhanced materials (immutable operations)
+  const enhancedMaterials = filteredBySearchAndCategory.map((material) => {
+    // ⚠ DEMO MODE: Simulating high consumption for specific material
+    // Use stable material ID instead of array position to avoid mutation on filter changes
+    const isDemoMaterial = material.id === 'MAT-001';
 
     const adjustedMonthlyConsumption = isDemoMaterial
       ? (material.monthlyConsumption || 0) * 8
@@ -99,10 +104,10 @@ export function RawMaterialsPage() {
     const daysOfCover =
       avgDailyUsage > 0 ? totalStock / avgDailyUsage : Infinity;
 
-    let stockRisk: 'OK' | 'Low' | 'Critical' = 'OK';
-
-    if (daysOfCover < 15) stockRisk = 'Critical';
-    else if (daysOfCover < 30) stockRisk = 'Low';
+    // Use operationally-focused risk thresholds
+    let stockRisk: StockOutRisk = 'OK';
+    if (daysOfCover <= 30) stockRisk = 'Critical';
+    else if (daysOfCover <= 90) stockRisk = 'Risky';
 
     const projectedStockOutDate =
       avgDailyUsage > 0
@@ -119,18 +124,24 @@ export function RawMaterialsPage() {
     };
   });
 
-  // KPI: Estimated Stock-Out Count
+  // Apply risk filter (immutable operation)
+  const filteredMaterials = enhancedMaterials.filter(material => {
+    const matchesRisk = riskFilter === 'All' || material.stockRisk === riskFilter;
+    return matchesRisk;
+  });
+
+  // KPI: Estimated Stock-Out Count (immutable filter)
   const estimatedStockOutCount = enhancedMaterials.filter(
-    (m) => m.daysOfCover < 15
+    (m) => m.daysOfCover <= 30
   ).length;
 
-  // Derive Alerts
-  const criticalAlerts = enhancedMaterials
-    .filter((m) => m.daysOfCover < 15)
+  // Derive Alerts (immutable operations)
+  const criticalAlerts = [...enhancedMaterials]
+    .filter((m) => m.daysOfCover <= 30)
     .sort((a, b) => a.daysOfCover - b.daysOfCover);
 
-  const warningAlerts = enhancedMaterials
-    .filter((m) => m.daysOfCover >= 15 && m.daysOfCover < 30)
+  const warningAlerts = [...enhancedMaterials]
+    .filter((m) => m.daysOfCover > 30 && m.daysOfCover <= 90)
     .sort((a, b) => a.daysOfCover - b.daysOfCover);
 
   return (
@@ -260,12 +271,12 @@ export function RawMaterialsPage() {
                 <div className="relative">
                   <Filter className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4 pointer-events-none" />
                   <select
-                    value={statusFilter}
-                    onChange={(e) => setStatusFilter(e.target.value)}
+                    value={riskFilter}
+                    onChange={(e) => setRiskFilter(e.target.value)}
                     className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent appearance-none bg-white"
                   >
-                    {statuses.map(status => (
-                      <option key={status} value={status}>{status}</option>
+                    {riskLevels.map(risk => (
+                      <option key={risk} value={risk}>{risk === 'All' ? 'All Risk Levels' : `${risk} Risk`}</option>
                     ))}
                   </select>
                 </div>
@@ -393,32 +404,32 @@ export function RawMaterialsPage() {
             <CardContent className="p-0">
               {filteredMaterials.length > 0 ? (
                 <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
+                  <table className="w-full text-sm table-fixed">
                     <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b">
                       <tr>
-                        <th className="px-6 py-3 text-left font-medium">Material</th>
-                        <th className="px-6 py-3 text-left font-medium">SKU</th>
-                        <th className="px-6 py-3 text-left font-medium">Category</th>
-                        <th className="px-6 py-3 text-left font-medium">Stock (Branch A/B/C)</th>
-                        <th className="px-6 py-3 text-left font-medium">Total Stock</th>
-                        <th className="px-6 py-3 text-left font-medium">UOM</th>
-                        <th className="px-6 py-3 text-left font-medium">Cost/Unit</th>
-                        <th className="px-6 py-3 text-left font-medium">Total Value</th>
-                        <th className="px-6 py-3 text-left font-medium">Monthly Usage</th>
-                        <th className="px-6 py-3 text-left font-medium">Avg Daily Usage</th>
-                        <th className="px-6 py-3 text-left font-medium">Days of Cover</th>
-                        <th className="px-6 py-3 text-left font-medium">Stock-Out Risk</th>
+                        <th className="px-6 py-3 text-left font-medium w-[280px]">Material</th>
+                        <th className="px-6 py-3 text-left font-medium w-[130px]">SKU</th>
+                        <th className="px-6 py-3 text-left font-medium w-[140px]">Category</th>
+                        <th className="px-6 py-3 text-left font-medium w-[140px]">Stock (Branch A/B/C)</th>
+                        <th className="px-6 py-3 text-left font-medium w-[110px]">Total Stock</th>
+                        <th className="px-6 py-3 text-left font-medium w-[70px]">UOM</th>
+                        <th className="px-6 py-3 text-left font-medium w-[100px]">Cost/Unit</th>
+                        <th className="px-6 py-3 text-left font-medium w-[110px]">Total Value</th>
+                        <th className="px-6 py-3 text-left font-medium w-[120px]">Monthly Usage</th>
+                        <th className="px-6 py-3 text-left font-medium w-[130px]">Avg Daily Usage</th>
+                        <th className="px-6 py-3 text-left font-medium w-[120px]">Days of Cover</th>
+                        <th className="px-6 py-3 text-left font-medium w-[130px]">Stock-Out Risk</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-200">
-                      {enhancedMaterials.map((material) => (
+                      {filteredMaterials.map((material) => (
                         <tr key={material.id} className="hover:bg-gray-50">
                           <td className="px-6 py-4">
                             <div className="flex items-center gap-3">
-                              <div className="p-2 bg-gray-100 rounded">
+                              <div className="p-2 bg-gray-100 rounded flex-shrink-0">
                                 <Package className="w-4 h-4 text-gray-600" />
                               </div>
-                              <div>
+                              <div className="min-w-0 flex-1">
                                 <div
                                   role="button"
                                   tabIndex={0}
@@ -428,23 +439,23 @@ export function RawMaterialsPage() {
                                       navigate(`/materials/${material.id}`);
                                     }
                                   }}
-                                  className="font-medium text-blue-600 hover:underline cursor-pointer"
+                                  className="font-medium text-blue-600 hover:underline cursor-pointer truncate"
                                 >
                                   {material.name}
                                 </div>
-                                <div className="text-xs text-gray-500">{material.description.substring(0, 40)}...</div>
+                                <div className="text-xs text-gray-500 truncate">{material.description.substring(0, 50)}...</div>
                               </div>
                             </div>
                           </td>
-                          <td className="px-6 py-4 font-mono text-xs text-gray-600">{material.sku}</td>
+                          <td className="px-6 py-4 font-mono text-xs text-gray-600 truncate">{material.sku}</td>
                           <td className="px-6 py-4">
-                            <Badge variant="outline">{material.category}</Badge>
+                            <Badge variant="outline" className="truncate block">{material.category}</Badge>
                           </td>
                           <td className="px-6 py-4 text-gray-600">
                             <div className="text-xs space-y-1">
-                              <div>A: {material.stockBranchA.toLocaleString()}</div>
-                              <div>B: {material.stockBranchB.toLocaleString()}</div>
-                              <div>C: {material.stockBranchC.toLocaleString()}</div>
+                              <div className="truncate">A: {material.stockBranchA.toLocaleString()}</div>
+                              <div className="truncate">B: {material.stockBranchB.toLocaleString()}</div>
+                              <div className="truncate">C: {material.stockBranchC.toLocaleString()}</div>
                             </div>
                           </td>
                           <td className="px-6 py-4">
@@ -468,15 +479,7 @@ export function RawMaterialsPage() {
                             {material.daysOfCover === Infinity ? 'No usage' : material.daysOfCover.toFixed(1)}
                           </td>
                           <td className="px-6 py-4">
-                            <Badge
-                              variant={
-                                material.stockRisk === 'Critical'
-                                  ? 'danger'
-                                  : material.stockRisk === 'Low'
-                                  ? 'warning'
-                                  : 'success'
-                              }
-                            >
+                            <Badge variant={getRiskBadgeVariant(material.stockRisk)}>
                               {material.stockRisk}
                             </Badge>
                           </td>
