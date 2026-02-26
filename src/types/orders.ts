@@ -115,7 +115,10 @@ export type OrderLogAction =
   | 'cancelled'
   | 'payment_received'
   | 'invoice_generated'
-  | 'note_added';
+  | 'note_added'
+  | 'proof_uploaded'
+  | 'proof_verified'
+  | 'proof_rejected';
 
 export interface OrderLog {
   id: string;
@@ -147,4 +150,64 @@ export interface ApprovalRule {
   type: 'discount' | 'minPrice' | 'paymentTerms' | 'creditLimit';
   threshold: number;
   description: string;
+}
+
+export type ProofType = 'delivery' | 'payment' | 'receipt';
+
+export type ProofStatus = 'pending' | 'verified' | 'rejected';
+
+export interface ProofDocument {
+  id: string;
+  orderId: string;
+  type: ProofType;
+  fileName: string;
+  fileUrl: string;
+  fileSize: number;
+  uploadedBy: string;
+  uploadedByRole: 'Agent' | 'Customer' | 'Logistics';
+  uploadedAt: string;
+  status: ProofStatus;
+  verifiedBy?: string;
+  verifiedAt?: string;
+  rejectionReason?: string;
+  notes?: string;
+}
+
+export interface Invoice {
+  id: string;
+  orderId: string;
+  invoiceNumber: string;
+  issueDate: string;
+  dueDate: string;
+  
+  // Billing details
+  billTo: {
+    name: string;
+    address: string;
+    contactPerson: string;
+    phone: string;
+    email?: string;
+  };
+  
+  // Items
+  items: OrderLineItem[];
+  
+  // Amounts
+  subtotal: number;
+  discountAmount: number;
+  taxAmount: number;
+  totalAmount: number;
+  amountPaid: number;
+  balanceDue: number;
+  
+  // Payment info
+  paymentTerms: PaymentTerms;
+  paymentMethod: 'Online' | 'Offline';
+  paymentStatus: PaymentStatus;
+  
+  // Metadata
+  notes?: string;
+  generatedBy: string;
+  generatedAt: string;
+  pdfUrl?: string;
 }

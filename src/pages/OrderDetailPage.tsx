@@ -5,7 +5,9 @@ import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { getOrderById, getOrderLogs } from '@/src/mock/orders';
 import { useAppContext } from '@/src/store/AppContext';
-import { OrderDetail, OrderStatus, OrderLineItem, OrderLog } from '@/src/types/orders';
+import { OrderDetail, OrderStatus, OrderLineItem, OrderLog, ProofDocument } from '@/src/types/orders';
+import { PaymentLink } from '@/src/types/payments';
+import { PaymentLinkModal } from '@/src/components/payments/PaymentLinkModal';
 import {
   ArrowLeft,
   Edit,
@@ -31,6 +33,13 @@ import {
   Minus,
   Check,
   ArrowUp,
+  Download,
+  Upload,
+  Image,
+  CheckCircle2,
+  XCircle,
+  Link as LinkIcon,
+  Copy,
 } from 'lucide-react';
 
 // Batch pricing tiers for bulk orders
@@ -145,6 +154,18 @@ export function OrderDetailPage() {
   const [selectedProduct, setSelectedProduct] = useState<typeof MOCK_PIPE_PRODUCTS[0] | null>(null);
   const [selectedVariant, setSelectedVariant] = useState<typeof MOCK_PIPE_PRODUCTS[0]['variants'][0] | null>(null);
   const [quantity, setQuantity] = useState(1);
+  
+  // Invoice and Proof states
+  const [showInvoiceModal, setShowInvoiceModal] = useState(false);
+  const [showProofModal, setShowProofModal] = useState(false);
+  const [proofType, setProofType] = useState<'delivery' | 'payment' | 'receipt'>('delivery');
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [proofNotes, setProofNotes] = useState('');
+  const [proofs, setProofs] = useState<ProofDocument[]>([]);
+  
+  // Payment link state
+  const [showPaymentLinkModal, setShowPaymentLinkModal] = useState(false);
+  const [paymentLinks, setPaymentLinks] = useState<PaymentLink[]>([]);
   
   // Load the specific order and its audit logs
   const order = getOrderById(id || '');
@@ -314,6 +335,75 @@ export function OrderDetailPage() {
     });
 
     handleCloseProductModal();
+  };
+
+  // Invoice Generation
+  const handleGenerateInvoice = () => {
+    if (!order) return;
+    
+    // Simulate invoice generation
+    const invoiceNumber = `INV-2026-${Math.floor(1000 + Math.random() * 9000)}`;
+    const today = new Date();
+    const dueDate = new Date(today);
+    dueDate.setDate(dueDate.getDate() + (order.paymentTerms === 'COD' ? 0 : parseInt(order.paymentTerms) || 30));
+    
+    alert(`Invoice ${invoiceNumber} generated successfully!\n\nInvoice Date: ${today.toLocaleDateString()}\nDue Date: ${dueDate.toLocaleDateString()}\nTotal Amount: ₱${order.totalAmount.toLocaleString()}\n\n(PDF generation would happen here)`);
+    
+    // In a real app, this would call an API to generate the PDF
+    setShowInvoiceModal(false);
+  };
+
+  const handleDownloadInvoice = () => {
+    if (!order || !order.invoiceId) return;
+    alert(`Downloading invoice ${order.invoiceId}...\n\n(PDF download would happen here)`);
+  };
+
+  // Proof of Delivery/Payment Upload
+  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      // Validate file size (max 10MB)
+      if (file.size > 10 * 1024 * 1024) {
+        alert('File size must be less than 10MB');
+        return;
+      }
+      
+      // Validate file type (images and PDFs only)
+      const validTypes = ['image/jpeg', 'image/png', 'image/jpg', 'application/pdf'];
+      if (!validTypes.includes(file.type)) {
+        alert('Only JPG, PNG, and PDF files are allowed');
+        return;
+      }
+      
+      setSelectedFile(file);
+    }
+  };
+
+  const handleUploadProof = () => {
+    if (!order || !selectedFile) return;
+    
+    const newProof: ProofDocument = {
+      id: `proof-${Date.now()}`,
+      orderId: order.id,
+      type: proofType,
+      fileName: selectedFile.name,
+      fileUrl: URL.createObjectURL(selectedFile), // In real app, this would be uploaded to server
+      fileSize: selectedFile.size,
+      uploadedBy: order.agent,
+      uploadedByRole: 'Agent',
+      uploadedAt: new Date().toISOString(),
+      status: 'pending',
+      notes: proofNotes
+    };
+    
+    setProofs([...proofs, newProof]);
+    
+    alert(`${proofType === 'delivery' ? 'Proof of Delivery' : proofType === 'payment' ? 'Proof of Payment' : 'Receipt'} uploaded successfully!\n\nFile: ${selectedFile.name}\nStatus: Pending Verification\n\n(In a real system, this would be uploaded to a server and notify the verification team)`);
+    
+    // Reset form
+    setSelectedFile(null);
+    setProofNotes('');
+    setShowProofModal(false);
   };
 
   const filteredProducts = productSearch
@@ -762,6 +852,183 @@ export function OrderDetailPage() {
         </Card>
       )}
 
+      {/* Invoice & Proof Management */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <FileText className="w-5 h-5" />
+              Documents & Proofs
+            </div>
+            <div className="flex gap-2">
+              {/* Show all buttons for illustration */}
+              {order.invoiceId ? (
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={() => window.open(`/invoice/${order.id}`, '_blank')}
+                  className="gap-2"
+                >
+                  <FileText className="w-4 h-4" />
+                  View Invoice
+                </Button>
+              ) : (
+                <Button 
+                  variant="primary" 
+                  size="sm" 
+                  onClick={() => window.open(`/invoice/${order.id}`, '_blank')}
+                  className="gap-2"
+                >
+                  <FileText className="w-4 h-4" />
+                  Generate Invoice
+                </Button>
+              )}
+              <Button variant="outline" size="sm" onClick={() => setShowProofModal(true)} className="gap-2">
+                <Upload className="w-4 h-4" />
+                Upload Proof
+              </Button>
+            </div>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {/* Payment Links Status */}
+          {paymentLinks.length > 0 && (
+            <div className="mb-6">
+              <h4 className="text-sm font-semibold text-gray-700 mb-3">Payment Links</h4>
+              <div className="space-y-2">
+                {paymentLinks.map((link) => (
+                  <div key={link.id} className="flex items-center justify-between p-3 bg-blue-50 rounded-lg border border-blue-200">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
+                        <LinkIcon className="w-5 h-5 text-blue-600" />
+                      </div>
+                      <div>
+                        <p className="font-medium text-gray-900">
+                          Payment Link - ₱{link.invoiceAmount.toLocaleString()}
+                        </p>
+                        <div className="flex items-center gap-2 mt-1">
+                          {link.status === 'pending' && (
+                            <Badge variant="warning" className="text-xs">
+                              <Clock className="w-3 h-3 mr-1" />
+                              Awaiting Payment
+                            </Badge>
+                          )}
+                          {link.status === 'paid' && (
+                            <Badge variant="success" className="text-xs">
+                              <CheckCircle2 className="w-3 h-3 mr-1" />
+                              Paid
+                            </Badge>
+                          )}
+                          <span className="text-xs text-gray-500">
+                            Created {new Date(link.createdAt).toLocaleString('en-US', {
+                              month: 'short',
+                              day: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit'
+                            })}
+                          </span>
+                          <span className="text-xs text-gray-500">
+                            • Expires {new Date(link.expiresAt).toLocaleDateString()}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {link.status === 'pending' && (
+                        <Button 
+                          variant="outline" 
+                          size="sm"
+                          onClick={() => {
+                            navigator.clipboard.writeText(link.link);
+                            alert('Payment link copied!');
+                          }}
+                        >
+                          <Copy className="w-4 h-4" />
+                        </Button>
+                      )}
+                      <Button 
+                        variant="outline" 
+                        size="sm"
+                        onClick={() => window.open(link.link, '_blank')}
+                      >
+                        Open Link
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          
+          {/* Proofs List */}
+          {proofs.length > 0 ? (
+            <div className="space-y-3">
+              <h4 className="text-sm font-semibold text-gray-700 mb-3">Uploaded Proofs</h4>
+              {proofs.map((proof) => (
+                <div key={proof.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+                      proof.type === 'delivery' ? 'bg-blue-100' : proof.type === 'payment' ? 'bg-green-100' : 'bg-purple-100'
+                    }`}>
+                      {proof.fileName.toLowerCase().endsWith('.pdf') ? (
+                        <FileText className={`w-5 h-5 ${
+                          proof.type === 'delivery' ? 'text-blue-600' : proof.type === 'payment' ? 'text-green-600' : 'text-purple-600'
+                        }`} />
+                      ) : (
+                        <Image className={`w-5 h-5 ${
+                          proof.type === 'delivery' ? 'text-blue-600' : proof.type === 'payment' ? 'text-green-600' : 'text-purple-600'
+                        }`} />
+                      )}
+                    </div>
+                    <div>
+                      <p className="font-medium text-gray-900">{proof.fileName}</p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <Badge className="text-xs">
+                          {proof.type === 'delivery' ? 'Proof of Delivery' : proof.type === 'payment' ? 'Proof of Payment' : 'Receipt'}
+                        </Badge>
+                        <span className="text-xs text-gray-500">
+                          {new Date(proof.uploadedAt).toLocaleString('en-US', {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    {proof.status === 'pending' && (
+                      <Badge className="bg-yellow-100 text-yellow-700">
+                        <Clock className="w-3 h-3 mr-1" />
+                        Pending
+                      </Badge>
+                    )}
+                    {proof.status === 'verified' && (
+                      <Badge className="bg-green-100 text-green-700">
+                        <CheckCircle2 className="w-3 h-3 mr-1" />
+                        Verified
+                      </Badge>
+                    )}
+                    {proof.status === 'rejected' && (
+                      <Badge className="bg-red-100 text-red-700">
+                        <XCircle className="w-3 h-3 mr-1" />
+                        Rejected
+                      </Badge>
+                    )}
+                    <Button variant="outline" size="sm" onClick={() => window.open(proof.fileUrl, '_blank')}>
+                      View
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-gray-500 text-center py-8">No proofs uploaded yet</p>
+          )}
+        </CardContent>
+      </Card>
+
       {/* Order Audit Log */}
       <Card>
         <CardHeader>
@@ -797,6 +1064,9 @@ export function OrderDetailPage() {
                     case 'payment_received': return <CreditCard className="w-4 h-4" />;
                     case 'invoice_generated': return <FileText className="w-4 h-4" />;
                     case 'note_added': return <FileText className="w-4 h-4" />;
+                    case 'proof_uploaded': return <Upload className="w-4 h-4" />;
+                    case 'proof_verified': return <CheckCircle2 className="w-4 h-4" />;
+                    case 'proof_rejected': return <XCircle className="w-4 h-4" />;
                     default: return <Clock className="w-4 h-4" />;
                   }
                 };
@@ -806,12 +1076,15 @@ export function OrderDetailPage() {
                     case 'created': return 'text-blue-600 bg-blue-50';
                     case 'approved': return 'text-green-600 bg-green-50';
                     case 'rejected': 
-                    case 'cancelled': return 'text-red-600 bg-red-50';
+                    case 'cancelled': 
+                    case 'proof_rejected': return 'text-red-600 bg-red-50';
                     case 'item_removed': return 'text-orange-600 bg-orange-50';
                     case 'shipped':
-                    case 'delivered': return 'text-green-600 bg-green-50';
+                    case 'delivered':
+                    case 'proof_verified': return 'text-green-600 bg-green-50';
                     case 'payment_received':
                     case 'invoice_generated': return 'text-purple-600 bg-purple-50';
+                    case 'proof_uploaded': return 'text-blue-600 bg-blue-50';
                     default: return 'text-gray-600 bg-gray-50';
                   }
                 };
@@ -1191,6 +1464,225 @@ export function OrderDetailPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Invoice Generation Modal */}
+      {showInvoiceModal && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-lg w-full">
+            <div className="border-b border-gray-200 px-6 py-4 flex items-center justify-between">
+              <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                <FileText className="w-6 h-6 text-red-600" />
+                Generate Invoice
+              </h2>
+              <button onClick={() => setShowInvoiceModal(false)} className="text-gray-400 hover:text-gray-600">
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            
+            <div className="p-6">
+              <div className="mb-6">
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                  <p className="text-sm text-blue-900 font-medium">Order Summary</p>
+                  <div className="mt-2 space-y-1 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-blue-700">Order ID:</span>
+                      <span className="font-medium text-blue-900">{order?.id}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-blue-700">Customer:</span>
+                      <span className="font-medium text-blue-900">{order?.customer}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-blue-700">Total Amount:</span>
+                      <span className="font-bold text-blue-900">₱{order?.totalAmount.toLocaleString()}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-blue-700">Payment Terms:</span>
+                      <span className="font-medium text-blue-900">{order?.paymentTerms}</span>
+                    </div>
+                  </div>
+                </div>
+                
+                <p className="text-sm text-gray-600">
+                  This will generate an invoice PDF for this order. The invoice will include all order details, line items, and payment information.
+                </p>
+              </div>
+              
+              <div className="flex gap-3">
+                <Button variant="outline" onClick={() => setShowInvoiceModal(false)} className="flex-1">
+                  Cancel
+                </Button>
+                <Button variant="primary" onClick={handleGenerateInvoice} className="flex-1 gap-2">
+                  <FileText className="w-4 h-4" />
+                  Generate Invoice
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Proof Upload Modal */}
+      {showProofModal && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-lg w-full">
+            <div className="border-b border-gray-200 px-6 py-4 flex items-center justify-between">
+              <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                <Upload className="w-6 h-6 text-red-600" />
+                Upload Proof Document
+              </h2>
+              <button onClick={() => setShowProofModal(false)} className="text-gray-400 hover:text-gray-600">
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            
+            <div className="p-6">
+              <div className="space-y-4">
+                {/* Proof Type Selection */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Document Type
+                  </label>
+                  <div className="grid grid-cols-3 gap-3">
+                    <button
+                      onClick={() => setProofType('delivery')}
+                      className={`p-3 border-2 rounded-lg text-center transition-colors ${
+                        proofType === 'delivery'
+                          ? 'border-blue-500 bg-blue-50 text-blue-700'
+                          : 'border-gray-200 hover:border-gray-300'
+                      }`}
+                    >
+                      <Truck className="w-5 h-5 mx-auto mb-1" />
+                      <span className="text-xs font-medium">Delivery</span>
+                    </button>
+                    <button
+                      onClick={() => setProofType('payment')}
+                      className={`p-3 border-2 rounded-lg text-center transition-colors ${
+                        proofType === 'payment'
+                          ? 'border-green-500 bg-green-50 text-green-700'
+                          : 'border-gray-200 hover:border-gray-300'
+                      }`}
+                    >
+                      <CreditCard className="w-5 h-5 mx-auto mb-1" />
+                      <span className="text-xs font-medium">Payment</span>
+                    </button>
+                    <button
+                      onClick={() => setProofType('receipt')}
+                      className={`p-3 border-2 rounded-lg text-center transition-colors ${
+                        proofType === 'receipt'
+                          ? 'border-purple-500 bg-purple-50 text-purple-700'
+                          : 'border-gray-200 hover:border-gray-300'
+                      }`}
+                    >
+                      <FileText className="w-5 h-5 mx-auto mb-1" />
+                      <span className="text-xs font-medium">Receipt</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* File Upload */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Upload File (JPG, PNG, PDF - Max 10MB)
+                  </label>
+                  <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-gray-400 transition-colors">
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/jpg,application/pdf"
+                      onChange={handleFileSelect}
+                      className="hidden"
+                      id="proof-file-input"
+                    />
+                    <label htmlFor="proof-file-input" className="cursor-pointer">
+                      <Upload className="w-8 h-8 mx-auto mb-2 text-gray-400" />
+                      {selectedFile ? (
+                        <div>
+                          <p className="text-sm font-medium text-gray-900">{selectedFile.name}</p>
+                          <p className="text-xs text-gray-500 mt-1">
+                            {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
+                          </p>
+                        </div>
+                      ) : (
+                        <div>
+                          <p className="text-sm text-gray-600">Click to select a file</p>
+                          <p className="text-xs text-gray-500 mt-1">or drag and drop</p>
+                        </div>
+                      )}
+                    </label>
+                  </div>
+                </div>
+
+                {/* Notes */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Notes (Optional)
+                  </label>
+                  <textarea
+                    value={proofNotes}
+                    onChange={(e) => setProofNotes(e.target.value)}
+                    rows={3}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none"
+                    placeholder="Add any additional information..."
+                  />
+                </div>
+              </div>
+              
+              <div className="flex gap-3 mt-6">
+                <Button variant="outline" onClick={() => setShowProofModal(false)} className="flex-1">
+                  Cancel
+                </Button>
+                <Button 
+                  variant="primary" 
+                  onClick={handleUploadProof} 
+                  disabled={!selectedFile}
+                  className="flex-1 gap-2"
+                >
+                  <Upload className="w-4 h-4" />
+                  Upload Proof
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Payment Link Modal */}
+      {showPaymentLinkModal && order.invoiceId && (
+        <PaymentLinkModal
+          invoice={{
+            id: order.invoiceId,
+            invoiceNumber: order.invoiceId,
+            orderId: order.id,
+            issueDate: order.invoiceDate || order.createdAt,
+            dueDate: order.dueDate,
+            billTo: {
+              name: order.customer,
+              address: '123 Business Street, Manila',
+              contactPerson: 'Contact Person',
+              phone: '(02) 123-4567',
+              email: `${order.customer.toLowerCase().replace(/\s/g, '')}@example.com`,
+            },
+            items: order.items,
+            subtotal: order.subtotal,
+            discountAmount: order.discountAmount,
+            taxAmount: 0,
+            totalAmount: order.totalAmount,
+            amountPaid: order.amountPaid,
+            balanceDue: order.balanceDue,
+            paymentTerms: order.paymentTerms,
+            paymentMethod: order.paymentMethod,
+            paymentStatus: order.paymentStatus,
+            notes: order.orderNotes,
+            generatedBy: order.agent,
+            generatedAt: order.invoiceDate || order.createdAt,
+          }}
+          onClose={() => setShowPaymentLinkModal(false)}
+          onGenerate={(paymentLink) => {
+            setPaymentLinks([...paymentLinks, paymentLink]);
+            alert(`✅ Payment link generated!\n\nLink: ${paymentLink.link}\n\nCustomers can now pay online with various methods.`);
+          }}
+        />
       )}
     </div>
   );

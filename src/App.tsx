@@ -15,17 +15,28 @@ import { LogisticsPage } from './pages/LogisticsPage';
 import { CustomersPage } from './pages/CustomersPageNew';
 import { CustomerDetailPage } from './pages/CustomerDetailPage';
 import { SuppliersPage } from './pages/SuppliersPage';
-import { FinancePage } from './pages/FinancePage';
+import { FinancePageNew } from './pages/FinancePageNew';
 import { ReportsPage } from './pages/ReportsPage';
 import SettingsPage from './pages/SettingsPage';
 import { AuditLogsPage } from './pages/AuditLogsPage';
 import { PlaceholderPage } from './pages/PlaceholderPage';
+import { PaymentPage } from './pages/PaymentPage';
+import { PaymentSuccessPage } from './pages/PaymentSuccessPage';
+import { ReceiptPage } from './pages/ReceiptPage';
+import { InvoicePreviewPage } from './pages/InvoicePreviewPage';
 
 export default function App() {
   return (
     <AppProvider>
       <BrowserRouter>
         <Routes>
+          {/* Public Routes - No Auth Required */}
+          <Route path="/pay/:token" element={<PaymentPage />} />
+          <Route path="/payment-success/:token" element={<PaymentSuccessPage />} />
+          <Route path="/receipt/:id" element={<ReceiptPage />} />
+          <Route path="/invoice/:orderId" element={<InvoicePreviewPage />} />
+          
+          {/* Protected Routes - Require Auth */}
           <Route path="/" element={<AppLayout />}>
             <Route index element={<Dashboard />} />
             <Route path="orders" element={<OrdersPage />} />
@@ -42,7 +53,7 @@ export default function App() {
             <Route path="customers" element={<CustomersPage />} />
             <Route path="customers/:id" element={<CustomerDetailPage />} />
             <Route path="suppliers" element={<SuppliersPage />} />
-            <Route path="finance" element={<FinancePage />} />
+            <Route path="finance" element={<FinancePageNew />} />
             <Route path="reports" element={<ReportsPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="audit" element={<AuditLogsPage />} />
