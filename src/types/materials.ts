@@ -14,6 +14,24 @@ export type MaterialCategory =
 
 export type MaterialStatus = 'Active' | 'Discontinued' | 'Low Stock' | 'Out of Stock' | 'Expired';
 
+export type StockOutRisk = 'OK' | 'Risky' | 'Critical';
+
+/**
+ * Calculate stock-out risk based on days of cover (operationally-focused)
+ * @param daysOfCover - Number of days until stock runs out
+ * @returns StockOutRisk classification
+ * 
+ * Thresholds:
+ * - 0-30 days: Critical (< 1 month = immediate procurement needed)
+ * - 31-90 days: Risky (1-3 months = plan reorder soon)
+ * - 91+ days: OK (> 3 months = operationally safe)
+ */
+export function getStockOutRisk(daysOfCover: number): StockOutRisk {
+  if (daysOfCover <= 30) return 'Critical';
+  if (daysOfCover <= 90) return 'Risky';
+  return 'OK';
+}
+
 export type UnitOfMeasure = 'kg' | 'ton' | 'liter' | 'pieces' | 'bags' | 'drums';
 
 export type MovementType = 'Receipt' | 'Issue' | 'Transfer' | 'Adjustment' | 'Return';

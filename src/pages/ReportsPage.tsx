@@ -337,8 +337,8 @@ export function ReportsPage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <ResponsiveContainer width="100%" height={350}>
-                <ComposedChart data={MOCK_SALES_REPORT}>
+              <ResponsiveContainer width="100%" height={400}>
+                <ComposedChart data={MOCK_SALES_REPORT} margin={{ bottom: 40, top: 10, left: 10, right: 10 }}>
                   <defs>
                     <linearGradient id="colorSales" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor="#10B981" stopOpacity={0.3}/>
@@ -346,7 +346,7 @@ export function ReportsPage() {
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
-                  <XAxis dataKey="period" stroke="#9CA3AF" angle={-45} textAnchor="end" height={80} />
+                  <XAxis dataKey="period" stroke="#9CA3AF" angle={-30} textAnchor="end" height={80} tick={{ fontSize: 11 }} />
                   <YAxis yAxisId="left" stroke="#9CA3AF" />
                   <YAxis yAxisId="right" orientation="right" stroke="#9CA3AF" />
                   <Tooltip
@@ -540,14 +540,12 @@ export function ReportsPage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <ResponsiveContainer width="100%" height={350}>
-                <BarChart data={MOCK_AGENT_PERFORMANCE}>
+              <ResponsiveContainer width="100%" height={400}>
+                <BarChart data={MOCK_AGENT_PERFORMANCE} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
-                  <XAxis dataKey="name" stroke="#9CA3AF" angle={-45} textAnchor="end" height={100} />
+                  <XAxis dataKey="name" stroke="#9CA3AF" angle={-30} textAnchor="end" height={90} tickMargin={8} tick={{ fontSize: 13, fill: "#374151" }} />
                   <YAxis stroke="#9CA3AF" />
-                  <Tooltip
-                    contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.95)', borderRadius: '8px', border: '1px solid #E5E7EB' }}
-                  />
+                  <Tooltip contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.95)', borderRadius: '8px', border: '1px solid #E5E7EB' }}/>
                   <Bar dataKey="performance" fill="#10B981" name="Achievement %" />
                   <ReferenceLine y={100} stroke="#EF4444" strokeDasharray="3 3" label="Target" />
                 </BarChart>
@@ -698,10 +696,10 @@ export function ReportsPage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <ResponsiveContainer width="100%" height={350}>
-                <BarChart data={MOCK_PRODUCT_PERFORMANCE}>
+              <ResponsiveContainer width="100%" height={400}>
+                <BarChart data={MOCK_PRODUCT_PERFORMANCE} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
-                  <XAxis dataKey="product" stroke="#9CA3AF" angle={-45} textAnchor="end" height={120} />
+                  <XAxis dataKey="product" stroke="#9CA3AF" angle={-30} textAnchor="end" height={90} tickMargin={8} tick={{ fontSize: 13, fill: "#374151" }} />
                   <YAxis stroke="#9CA3AF" />
                   <Tooltip
                     formatter={(value: number) => `${value.toFixed(1)}%`}
@@ -1014,8 +1012,8 @@ export function ReportsPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <ResponsiveContainer width="100%" height={350}>
-                  <ComposedChart data={MOCK_SALES_REPORT}>
+                <ResponsiveContainer width="100%" height={400}>
+                  <ComposedChart data={MOCK_SALES_REPORT} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
                     <defs>
                       <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.3}/>
@@ -1023,7 +1021,7 @@ export function ReportsPage() {
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
-                    <XAxis dataKey="period" stroke="#9CA3AF" angle={-45} textAnchor="end" height={80} />
+                    <XAxis dataKey="period" stroke="#9CA3AF" angle={-30} textAnchor="end" height={90} tickMargin={8} tick={{ fontSize: 13, fill: "#374151" }} />
                     <YAxis stroke="#9CA3AF" />
                     <Tooltip
                       formatter={(value: number, name: string) => {
@@ -1099,9 +1097,9 @@ export function ReportsPage() {
                     { name: 'Financial Statement', icon: <FileText className="w-4 h-4" />, color: 'red' },
                     { name: 'Production Report', icon: <Factory className="w-4 h-4" />, color: 'yellow' },
                   ].map((report, index) => (
-                    <button
+                    <div
                       key={index}
-                      className="w-full flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+                      className="w-full flex items-center justify-between p-3 border border-gray-200 rounded-lg"
                     >
                       <div className="flex items-center gap-3">
                         <div className={`p-2 bg-${report.color}-100 rounded-lg`}>
@@ -1118,7 +1116,7 @@ export function ReportsPage() {
                           <Download className="w-3 h-3" />
                         </Button>
                       </div>
-                    </button>
+                    </div>
                   ))}
                 </div>
               </CardContent>
@@ -1140,8 +1138,8 @@ export function ReportsPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <ResponsiveContainer width="100%" height={350}>
-                  <ComposedChart data={MOCK_SALES_REPORT}>
+                <ResponsiveContainer width="100%" height={400}>
+                  <ComposedChart data={MOCK_SALES_REPORT} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
                     <defs>
                       <linearGradient id="colorSales" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="5%" stopColor="#10B981" stopOpacity={0.3}/>
@@ -1149,7 +1147,7 @@ export function ReportsPage() {
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
-                    <XAxis dataKey="period" stroke="#9CA3AF" angle={-45} textAnchor="end" height={80} />
+                    <XAxis dataKey="period" stroke="#9CA3AF" angle={-30} textAnchor="end" height={90} tickMargin={8} tick={{ fontSize: 13, fill: "#374151" }} />
                     <YAxis yAxisId="left" stroke="#9CA3AF" />
                     <YAxis yAxisId="right" orientation="right" stroke="#9CA3AF" />
                     <Tooltip
@@ -1376,7 +1374,7 @@ export function ReportsPage() {
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
-                  {MOCK_AGENT_PERFORMANCE
+                  {[...MOCK_AGENT_PERFORMANCE]
                     .sort((a, b) => b.performance - a.performance)
                     .map((agent, index) => (
                       <div key={index} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
@@ -1502,11 +1500,11 @@ export function ReportsPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <ResponsiveContainer width="100%" height={350}>
-                  <BarChart data={MOCK_PRODUCT_PERFORMANCE.slice(0, 6)} layout="vertical">
+                <ResponsiveContainer width="100%" height={400}>
+                  <BarChart data={MOCK_PRODUCT_PERFORMANCE.slice(0, 6)} layout="vertical" margin={{ left: 10, right: 10, top: 10, bottom: 10 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
                     <XAxis type="number" stroke="#9CA3AF" />
-                    <YAxis dataKey="product" type="category" stroke="#9CA3AF" width={180} />
+                    <YAxis dataKey="product" type="category" stroke="#9CA3AF" width={180} tick={{ fontSize: 11 }} />
                     <Tooltip
                       formatter={(value: number, name: string) => {
                         if (name === 'Revenue') return formatCurrency(value);
@@ -1566,10 +1564,10 @@ export function ReportsPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={MOCK_PRODUCT_PERFORMANCE.slice(0, 5)}>
+                <ResponsiveContainer width="100%" height={350}>
+                  <BarChart data={MOCK_PRODUCT_PERFORMANCE.slice(0, 5)} margin={{ bottom: 60, top: 10, left: 10, right: 10 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
-                    <XAxis dataKey="product" stroke="#9CA3AF" angle={-45} textAnchor="end" height={100} />
+                    <XAxis dataKey="product" stroke="#9CA3AF" angle={-30} textAnchor="end" height={100} tick={{ fontSize: 11 }} />
                     <YAxis stroke="#9CA3AF" />
                     <Tooltip
                       formatter={(value: number) => `${value}%`}
