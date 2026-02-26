@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
@@ -28,6 +29,7 @@ export function RawMaterialsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('All');
   const [statusFilter, setStatusFilter] = useState<string>('All');
+  const { role } = useAppContext();
 
   const allMaterials = getAllRawMaterials();
   const lowStockMaterials = getLowStockMaterials();
@@ -140,14 +142,25 @@ export function RawMaterialsPage() {
           <p className="text-sm text-gray-500 mt-1">Inventory management for production materials</p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline">
-            <Download className="w-4 h-4 mr-2" />
-            Export
-          </Button>
+          {role && role.toString().toLowerCase() === 'executive' && (
+            <Button
+              variant="outline"
+              onClick={() => navigate('/purchase-requests')}
+            >
+              Purchase Requests
+            </Button>
+          )}
+
           <Button variant="outline">
             <FileText className="w-4 h-4 mr-2" />
             Reports
           </Button>
+
+          <Button variant="outline">
+            <Download className="w-4 h-4 mr-2" />
+            Export
+          </Button>
+
           <Button variant="primary" onClick={() => navigate('/materials/new')}>
             <Plus className="w-4 h-4 mr-2" />
             Add Material
@@ -155,9 +168,11 @@ export function RawMaterialsPage() {
         </div>
       </div>
 
-      <div className="flex flex-col lg:flex-row gap-6">
+      <div className="flex flex-col lg:flex-row gap-6 w-full overflow-hidden">
+
         {/* LEFT SIDE */}
-        <div className="flex-1">
+        <div className="flex-1 min-w-0 space-y-6">
+
           {/* Summary Cards */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <Card>
@@ -292,7 +307,6 @@ export function RawMaterialsPage() {
                         <th className="px-6 py-3 text-left font-medium">Avg Daily Usage</th>
                         <th className="px-6 py-3 text-left font-medium">Days of Cover</th>
                         <th className="px-6 py-3 text-left font-medium">Stock-Out Risk</th>
-                        <th className="px-6 py-3 text-left font-medium">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-200">
@@ -304,7 +318,19 @@ export function RawMaterialsPage() {
                                 <Package className="w-4 h-4 text-gray-600" />
                               </div>
                               <div>
-                                <div className="font-medium text-gray-900">{material.name}</div>
+                                <div
+                                  role="button"
+                                  tabIndex={0}
+                                  onClick={() => navigate(`/materials/${material.id}`)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                      navigate(`/materials/${material.id}`);
+                                    }
+                                  }}
+                                  className="font-medium text-blue-600 hover:underline cursor-pointer"
+                                >
+                                  {material.name}
+                                </div>
                                 <div className="text-xs text-gray-500">{material.description.substring(0, 40)}...</div>
                               </div>
                             </div>
@@ -353,15 +379,6 @@ export function RawMaterialsPage() {
                               {material.stockRisk}
                             </Badge>
                           </td>
-                          <td className="px-6 py-4">
-                            <Button 
-                              variant="ghost" 
-                              size="sm"
-                              onClick={() => navigate(`/materials/${material.id}`)}
-                            >
-                              View Details
-                            </Button>
-                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -378,7 +395,7 @@ export function RawMaterialsPage() {
         </div>
 
         {/* RIGHT SIDE: Alerts Panel */}
-        <div className="w-full lg:w-80 space-y-4">
+        <div className="w-full lg:w-80 flex-shrink-0 space-y-4">
           <Card>
             <CardHeader>
               <CardTitle>Alerts</CardTitle>

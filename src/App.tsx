@@ -25,6 +25,7 @@ import { PaymentSuccessPage } from './pages/PaymentSuccessPage';
 import { ReceiptPage } from './pages/ReceiptPage';
 import { InvoicePreviewPage } from './pages/InvoicePreviewPage';
 import AgentAnalyticsPage from './pages/AgentAnalyticsPage';
+import { PurchaseRequestsPage } from './pages/PurchaseRequestsPage';
 
 export default function App() {
   return (
@@ -60,6 +61,8 @@ export default function App() {
             <Route path="settings" element={<SettingsPage />} />
             <Route path="audit" element={<AuditLogsPage />} />
             <Route path="*" element={<PlaceholderPage />} />
+            <Route path="/purchase-requests" element={<PurchaseRequestsPage />} />
+            <Route path="/purchase-requests/new/:materialId" element={<PurchaseRequestsPage />} />
           </Route>
         </Routes>
       </BrowserRouter>
