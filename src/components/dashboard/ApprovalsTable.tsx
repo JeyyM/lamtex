@@ -210,7 +210,7 @@ export function ApprovalsTable({ orders, showViewAll = false }: ApprovalsTablePr
 
       {/* Approve Confirmation Modal */}
       {approvingOrder && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
             <div className="p-6">
               <div className="flex items-center gap-3 mb-4">
@@ -265,7 +265,7 @@ export function ApprovalsTable({ orders, showViewAll = false }: ApprovalsTablePr
 
       {/* Reject Modal with Reason */}
       {rejectingOrder && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
             <div className="p-6">
               <div className="flex items-center gap-3 mb-4">
@@ -318,7 +318,7 @@ export function ApprovalsTable({ orders, showViewAll = false }: ApprovalsTablePr
 
       {/* Edit Order Modal */}
       {editingOrder && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
             <div className="sticky top-0 bg-white border-b border-gray-200 p-4 flex items-center justify-between">
               <h3 className="text-lg font-bold text-gray-900">Edit Order</h3>

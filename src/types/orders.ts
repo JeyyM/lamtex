@@ -2,7 +2,7 @@
 
 export type OrderStatus = 
   | 'Draft' 
-  | 'Pending Approval' 
+  | 'Pending' 
   | 'Approved' 
   | 'Picking' 
   | 'Packed' 
@@ -89,11 +89,45 @@ export interface OrderLineItem {
   variantDescription: string;
   quantity: number;
   unitPrice: number;
+  originalPrice?: number; // Price before any discounts (for negotiation tracking)
+  negotiatedPrice?: number; // Final price after agent negotiation
   discountPercent: number;
   discountAmount: number;
   lineTotal: number;
   stockHint: StockHint;
   availableStock?: number;
+  batchDiscount?: number; // Batch/bulk pricing discount percentage
+}
+
+export type OrderLogAction = 
+  | 'created'
+  | 'status_changed'
+  | 'payment_status_changed'
+  | 'item_added'
+  | 'item_removed'
+  | 'item_quantity_changed'
+  | 'item_price_changed'
+  | 'discount_applied'
+  | 'approved'
+  | 'rejected'
+  | 'shipped'
+  | 'delivered'
+  | 'cancelled'
+  | 'payment_received'
+  | 'invoice_generated'
+  | 'note_added';
+
+export interface OrderLog {
+  id: string;
+  orderId: string;
+  timestamp: string;
+  action: OrderLogAction;
+  performedBy: string;
+  performedByRole: 'Agent' | 'Warehouse Staff' | 'Manager' | 'Admin' | 'System' | 'Logistics';
+  description: string;
+  oldValue?: any;
+  newValue?: any;
+  metadata?: Record<string, any>;
 }
 
 export interface OrderFilter {

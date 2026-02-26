@@ -42,7 +42,7 @@ export interface Order {
   orderDate: string;
   requiredDate: string;
   totalAmount: number;
-  status: 'Draft' | 'Pending Approval' | 'Approved' | 'Picking' | 'Packed' | 'Ready' | 'Scheduled' | 'In Transit' | 'Delivered' | 'Completed' | 'Cancelled' | 'Rejected';
+  status: 'Draft' | 'Pending' | 'Approved' | 'Picking' | 'Packed' | 'Ready' | 'Scheduled' | 'In Transit' | 'Delivered' | 'Completed' | 'Cancelled' | 'Rejected';
   paymentStatus: 'Unbilled' | 'Invoiced' | 'Partially Paid' | 'Paid' | 'Overdue';
   paymentMethod: 'Online' | 'Offline';
 }

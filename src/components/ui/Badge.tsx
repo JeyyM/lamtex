@@ -2,7 +2,7 @@ import React from 'react';
 import { cn } from '@/src/lib/utils';
 
 export type BadgeProps = React.HTMLAttributes<HTMLSpanElement> & {
-  variant?: 'default' | 'success' | 'warning' | 'danger' | 'neutral';
+  variant?: 'default' | 'success' | 'warning' | 'danger' | 'neutral' | 'info' | 'outline' | 'destructive';
   className?: string;
   children?: React.ReactNode;
 };
@@ -14,6 +14,9 @@ export function Badge({ className, variant = 'default', children, ...props }: Ba
     warning: 'bg-yellow-100 text-yellow-800',
     danger: 'bg-red-100 text-red-800',
     neutral: 'bg-gray-100 text-gray-800',
+    info: 'bg-blue-100 text-blue-800',
+    outline: 'border border-gray-300 text-gray-700',
+    destructive: 'bg-red-100 text-red-800',
   };
 
   return (

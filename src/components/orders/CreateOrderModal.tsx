@@ -432,7 +432,7 @@ export function CreateOrderModal({ customerId, customerName, onClose, onSuccess 
         `Created order ${orderId} for ${customerName} with ${orderItems.length} items, total ₱${calculateTotal().toLocaleString()}`
       );
 
-      alert(`Order ${orderId} created successfully!\n\nStatus: Pending Approval\nCustomer: ${customerName}\nItems: ${orderItems.length}\nTotal: ₱${calculateTotal().toLocaleString()}\nScheduled Delivery: ${deliveryDate}\n\nThe order is now pending executive approval.`);
+      alert(`Order ${orderId} created successfully!\n\nStatus: Pending\nCustomer: ${customerName}\nItems: ${orderItems.length}\nTotal: ₱${calculateTotal().toLocaleString()}\nScheduled Delivery: ${deliveryDate}\n\nThe order is now pending executive approval.`);
       
       setIsSubmitting(false);
       onSuccess();
@@ -445,7 +445,7 @@ export function CreateOrderModal({ customerId, customerName, onClose, onSuccess 
 
   return (
     <div 
-      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+      className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4"
       onClick={onClose}
     >
       <div 
@@ -725,7 +725,7 @@ export function CreateOrderModal({ customerId, customerName, onClose, onSuccess 
               <div className="text-sm text-blue-900">
                 <p className="font-medium">Order Approval Required</p>
                 <p className="text-blue-700 mt-1">
-                  This order will be created with <strong>Pending Approval</strong> status and must be reviewed and approved by an executive before processing.
+                  This order will be created with <strong>Pending</strong> status and must be reviewed and approved by an executive before processing.
                 </p>
               </div>
             </div>
@@ -767,7 +767,7 @@ export function CreateOrderModal({ customerId, customerName, onClose, onSuccess 
 
       {/* Product Detail Modal - E-commerce Style */}
       {selectedProduct && selectedVariant && (
-        <div className="absolute inset-0 bg-black/60 flex items-center justify-center z-10 p-4">
+        <div className="absolute inset-0 bg-black/70 flex items-center justify-center z-10 p-4">
           <div className="bg-white rounded-lg shadow-2xl w-full max-w-4xl max-h-[85vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
             
             {/* Close Button */}
