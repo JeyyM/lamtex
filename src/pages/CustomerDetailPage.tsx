@@ -31,6 +31,7 @@ import {
   TrendingUp,
 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { CreateOrderModal } from '@/src/components/orders/CreateOrderModal';
 
 export function CustomerDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -38,6 +39,7 @@ export function CustomerDetailPage() {
   const { addAuditLog } = useAppContext();
   const [activeTab, setActiveTab] = useState<'overview' | 'orders' | 'notes' | 'tasks'>('overview');
   const [expandedProduct, setExpandedProduct] = useState<number | null>(null);
+  const [showCreateOrder, setShowCreateOrder] = useState(false);
 
   // For simplicity, always show CUS-001 (Mega Hardware Center) regardless of ID
   const customer = getCustomerById('CUS-001');
@@ -62,9 +64,8 @@ export function CustomerDetailPage() {
   const topProducts = getCustomerTopProducts(customer.id);
 
   const handleCreateOrder = () => {
-    alert(`Creating order for ${customer.name} (Coming soon)`);
+    setShowCreateOrder(true);
     addAuditLog('Initiated Order Creation', 'Order', `Started creating order for ${customer.name}`);
-    navigate('/orders');
   };
 
   const handleAddNote = () => {
@@ -557,6 +558,19 @@ export function CustomerDetailPage() {
           </div>
         )}
       </div>
+
+      {/* Create Order Modal */}
+      {showCreateOrder && (
+        <CreateOrderModal
+          customerId={customer.id}
+          customerName={customer.name}
+          onClose={() => setShowCreateOrder(false)}
+          onSuccess={() => {
+            // Refresh page or show success message
+            alert('Order created successfully and is now pending approval!');
+          }}
+        />
+      )}
     </div>
   );
 }
