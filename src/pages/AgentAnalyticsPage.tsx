@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { 
   Users, TrendingUp, Award, Target, DollarSign, ShoppingCart,
   UserCheck, Clock, Package, MapPin, Star, Trophy, Zap,
@@ -9,6 +10,7 @@ import { mockAgentAnalytics, mockBranchAnalytics } from '../mock/agentAnalytics'
 import { AgentAnalytics, TimePeriod, SortField } from '../types/agentAnalytics';
 
 const AgentAnalyticsPage: React.FC = () => {
+  const navigate = useNavigate();
   const [selectedAgent, setSelectedAgent] = useState<AgentAnalytics | null>(null);
   const [viewMode, setViewMode] = useState<'overview' | 'detailed'>('overview');
   const [sortBy, setSortBy] = useState<SortField>('revenue');
@@ -229,7 +231,7 @@ const AgentAnalyticsPage: React.FC = () => {
             <div
               key={agent.agentId}
               className="bg-white rounded-xl border border-gray-200 p-6 hover:shadow-lg transition-shadow cursor-pointer"
-              onClick={() => setSelectedAgent(agent)}
+              onClick={() => navigate(`/agents/${agent.agentId}`)}
             >
               {/* Agent Header */}
               <div className="flex items-start justify-between mb-4">
@@ -316,9 +318,9 @@ const AgentAnalyticsPage: React.FC = () => {
                     {Math.abs(agent.salesPerformance.salesGrowthRate).toFixed(1)}% MoM
                   </span>
                 </div>
-                <button className="text-blue-600 text-sm font-medium hover:text-blue-700">
-                  View Details →
-                </button>
+                <span className="text-blue-600 text-sm font-medium hover:text-blue-700">
+                  View Profile →
+                </span>
               </div>
             </div>
           ))}
@@ -369,7 +371,7 @@ const AgentAnalyticsPage: React.FC = () => {
                   <tr
                     key={agent.agentId}
                     className="hover:bg-gray-50 cursor-pointer transition-colors"
-                    onClick={() => setSelectedAgent(agent)}
+                    onClick={() => navigate(`/agents/${agent.agentId}`)}
                   >
                     <td className="px-4 py-2.5">
                       <div>
