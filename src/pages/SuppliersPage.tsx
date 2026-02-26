@@ -750,10 +750,10 @@ export function SuppliersPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <ResponsiveContainer width="100%" height={350}>
-                  <BarChart data={supplierPerformance}>
+                <ResponsiveContainer width="100%" height={400}>
+                  <BarChart data={supplierPerformance} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
-                    <XAxis dataKey="supplier" stroke="#9CA3AF" angle={-45} textAnchor="end" height={120} />
+                    <XAxis dataKey="supplier" stroke="#9CA3AF" angle={-30} textAnchor="end" height={90} tickMargin={8} tick={{ fontSize: 13, fill: "#374151" }} />
                     <YAxis stroke="#9CA3AF" />
                     <Tooltip
                       contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.95)', borderRadius: '8px', border: '1px solid #E5E7EB' }}
