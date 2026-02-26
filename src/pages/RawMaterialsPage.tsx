@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
@@ -28,6 +29,7 @@ export function RawMaterialsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('All');
   const [statusFilter, setStatusFilter] = useState<string>('All');
+  const { role } = useAppContext();
 
   const allMaterials = getAllRawMaterials();
   const lowStockMaterials = getLowStockMaterials();
@@ -140,14 +142,25 @@ export function RawMaterialsPage() {
           <p className="text-sm text-gray-500 mt-1">Inventory management for production materials</p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline">
-            <Download className="w-4 h-4 mr-2" />
-            Export
-          </Button>
+          {role && role.toString().toLowerCase() === 'executive' && (
+            <Button
+              variant="outline"
+              onClick={() => navigate('/purchase-requests')}
+            >
+              Purchase Requests
+            </Button>
+          )}
+
           <Button variant="outline">
             <FileText className="w-4 h-4 mr-2" />
             Reports
           </Button>
+
+          <Button variant="outline">
+            <Download className="w-4 h-4 mr-2" />
+            Export
+          </Button>
+
           <Button variant="primary" onClick={() => navigate('/materials/new')}>
             <Plus className="w-4 h-4 mr-2" />
             Add Material
@@ -158,7 +171,7 @@ export function RawMaterialsPage() {
       <div className="flex flex-col lg:flex-row gap-6 w-full overflow-hidden">
 
         {/* LEFT SIDE */}
-        <div className="flex-1 min-w-0">
+        <div className="flex-1 min-w-0 space-y-6">
 
           {/* Summary Cards */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

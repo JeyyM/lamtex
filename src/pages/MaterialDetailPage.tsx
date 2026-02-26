@@ -105,7 +105,7 @@ export function MaterialDetailPage() {
           </div>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline">
+          <Button variant="outline" onClick={() => navigate(`/purchase-requests/new/${material.id}`)}>
             <FileText className="w-4 h-4 mr-2" />
             Create PR
           </Button>
