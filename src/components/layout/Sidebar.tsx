@@ -13,7 +13,8 @@ import {
   CreditCard,
   BarChart3,
   UserCheck,
-  Warehouse
+  Warehouse,
+  MessageCircle
 } from 'lucide-react';
 import { cn } from '@/src/lib/utils';
 import lamtexLogo from '../../assets/images.png';
@@ -23,6 +24,7 @@ export function Sidebar() {
 
   const navItems = [
     { name: 'Dashboard', path: '/', icon: LayoutDashboard, roles: ['Executive', 'Warehouse', 'Logistics', 'Agent', 'Finance', 'Production', 'Manager'] },
+    { name: 'Chats', path: '/chats', icon: MessageCircle, roles: ['Executive', 'Warehouse', 'Logistics', 'Agent', 'Finance', 'Production', 'Manager'] },
     { name: 'Orders', path: '/orders', icon: ShoppingCart, roles: ['Executive', 'Agent', 'Warehouse', 'Logistics', 'Finance', 'Manager'] },
     { name: 'Products', path: '/products', icon: Package, roles: ['Executive', 'Warehouse', 'Agent', 'Production', 'Manager'] },
     { name: 'Raw Materials', path: '/materials', icon: Box, roles: ['Executive', 'Warehouse', 'Production', 'Manager'] },

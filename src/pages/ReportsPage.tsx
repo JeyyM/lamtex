@@ -130,11 +130,11 @@ const MOCK_SALES_REPORT: SalesReport[] = [
 ];
 
 const MOCK_AGENT_PERFORMANCE: AgentPerformance[] = [
-  { name: 'Pedro Reyes', sales: 28500000, orders: 142, customers: 38, commission: 855000, performance: 114, target: 25000000 },
-  { name: 'Juan Dela Cruz', sales: 32100000, orders: 156, customers: 42, commission: 963000, performance: 107, target: 30000000 },
-  { name: 'Rosa Martinez', sales: 19800000, orders: 98, customers: 28, commission: 594000, performance: 99, target: 20000000 },
-  { name: 'Maria Santos', sales: 24200000, orders: 124, customers: 35, commission: 726000, performance: 121, target: 20000000 },
   { name: 'Carlos Reyes', sales: 15600000, orders: 82, customers: 24, commission: 468000, performance: 78, target: 20000000 },
+  { name: 'Maria Santos', sales: 24200000, orders: 124, customers: 35, commission: 726000, performance: 121, target: 20000000 },
+  { name: 'Rosa Martinez', sales: 19800000, orders: 98, customers: 28, commission: 594000, performance: 99, target: 20000000 },
+  { name: 'Juan Dela Cruz', sales: 32100000, orders: 156, customers: 42, commission: 963000, performance: 107, target: 30000000 },
+  { name: 'Pedro Reyes', sales: 28500000, orders: 142, customers: 38, commission: 855000, performance: 114, target: 25000000 },
 ];
 
 const MOCK_PRODUCT_PERFORMANCE: ProductPerformance[] = [
@@ -338,7 +338,7 @@ export function ReportsPage() {
             </CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={400}>
-                <ComposedChart data={MOCK_SALES_REPORT} margin={{ bottom: 40, top: 10, left: 10, right: 10 }}>
+                <ComposedChart data={MOCK_SALES_REPORT} margin={{ bottom: 40, top: 10, left: 10, right: 50 }}>
                   <defs>
                     <linearGradient id="colorSales" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor="#10B981" stopOpacity={0.3}/>
@@ -347,12 +347,14 @@ export function ReportsPage() {
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
                   <XAxis dataKey="period" stroke="#9CA3AF" angle={-30} textAnchor="end" height={80} tick={{ fontSize: 11 }} />
-                  <YAxis yAxisId="left" stroke="#9CA3AF" />
-                  <YAxis yAxisId="right" orientation="right" stroke="#9CA3AF" />
+                  <YAxis yAxisId="left" stroke="#9CA3AF" label={{ value: 'Revenue (₱)', angle: -90, position: 'insideLeft' }} />
+                  <YAxis yAxisId="center" stroke="#9CA3AF" label={{ value: 'Orders', angle: -90, position: 'insideRight', offset: 10 }} />
+                  <YAxis yAxisId="right" orientation="right" stroke="#9CA3AF" label={{ value: 'Growth %', angle: 90, position: 'insideRight' }} />
                   <Tooltip
                     formatter={(value: number, name: string) => {
                       if (name === 'Revenue') return formatCurrency(value);
                       if (name === 'Growth %') return `${value.toFixed(1)}%`;
+                      if (name === 'Orders') return value.toLocaleString();
                       return value;
                     }}
                     contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.95)', borderRadius: '8px', border: '1px solid #E5E7EB' }}
@@ -366,6 +368,15 @@ export function ReportsPage() {
                     strokeWidth={3}
                     fill="url(#colorSales)"
                     name="Revenue"
+                  />
+                  <Line
+                    yAxisId="center"
+                    type="monotone"
+                    dataKey="orders"
+                    stroke="#3B82F6"
+                    strokeWidth={2}
+                    dot={{ r: 4 }}
+                    name="Orders"
                   />
                   <Bar
                     yAxisId="right"
@@ -433,10 +444,11 @@ export function ReportsPage() {
                   />
                   <Area
                     type="monotone"
-                    dataKey="aov"
+                    dataKey="avgOrderValue"
                     stroke="#8B5CF6"
                     strokeWidth={3}
                     fill="url(#colorAOV)"
+                    name="Avg Order Value"
                   />
                 </ComposedChart>
               </ResponsiveContainer>

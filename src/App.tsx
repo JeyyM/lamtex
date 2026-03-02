@@ -34,6 +34,7 @@ import { PurchaseRequestsPage } from './pages/PurchaseRequestsPage';
 import { PurchaseOrdersPage } from './pages/PurchaseOrdersPage';
 import { TruckDetailPage } from './pages/TruckDetailPage';
 import WarehousePage from './pages/WarehousePage';
+import ChatsPage from './pages/ChatsPage';
 
 export default function App() {
   return (
@@ -49,6 +50,7 @@ export default function App() {
           {/* Protected Routes - Require Auth */}
           <Route path="/" element={<AppLayout />}>
             <Route index element={<Dashboard />} />
+            <Route path="chats" element={<ChatsPage />} />
             <Route path="orders" element={<OrdersPage />} />
             <Route path="orders/:id" element={<OrderDetailPage />} />
             <Route path="products" element={<ProductsPage />} />
