@@ -347,9 +347,9 @@ export function ReportsPage() {
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
                   <XAxis dataKey="period" stroke="#9CA3AF" angle={-30} textAnchor="end" height={80} tick={{ fontSize: 11 }} />
-                  <YAxis yAxisId="left" stroke="#9CA3AF" label={{ value: 'Revenue (₱)', angle: -90, position: 'insideLeft' }} />
-                  <YAxis yAxisId="center" stroke="#9CA3AF" label={{ value: 'Orders', angle: -90, position: 'insideRight', offset: 10 }} />
-                  <YAxis yAxisId="right" orientation="right" stroke="#9CA3AF" label={{ value: 'Growth %', angle: 90, position: 'insideRight' }} />
+                  <YAxis yAxisId="left" stroke="#9CA3AF" tick={{ fontSize: 12 }} width={65} tickMargin={5} tickFormatter={(value) => `₱${(value / 1000000).toFixed(0)}M`} label={{ value: 'Revenue (₱)', angle: -90, position: 'insideLeft' }} />
+                  <YAxis yAxisId="center" stroke="#9CA3AF" tick={{ fontSize: 12 }} width={50} tickMargin={5} label={{ value: 'Orders', angle: -90, position: 'insideRight', offset: 10 }} />
+                  <YAxis yAxisId="right" orientation="right" stroke="#9CA3AF" tick={{ fontSize: 12 }} width={45} tickMargin={5} label={{ value: 'Growth %', angle: 90, position: 'insideRight' }} />
                   <Tooltip
                     formatter={(value: number, name: string) => {
                       if (name === 'Revenue') return formatCurrency(value);
@@ -437,7 +437,7 @@ export function ReportsPage() {
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
                   <XAxis dataKey="period" stroke="#9CA3AF" />
-                  <YAxis stroke="#9CA3AF" />
+                  <YAxis stroke="#9CA3AF" tick={{ fontSize: 12 }} width={60} tickMargin={5} tickFormatter={(value) => `₱${value.toLocaleString()}`} />
                   <Tooltip
                     formatter={(value: number) => `₱${value.toLocaleString()}`}
                     contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.95)', borderRadius: '8px', border: '1px solid #E5E7EB' }}
@@ -556,7 +556,7 @@ export function ReportsPage() {
                 <BarChart data={MOCK_AGENT_PERFORMANCE} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
                   <XAxis dataKey="name" stroke="#9CA3AF" angle={-30} textAnchor="end" height={90} tickMargin={8} tick={{ fontSize: 13, fill: "#374151" }} />
-                  <YAxis stroke="#9CA3AF" />
+                  <YAxis stroke="#9CA3AF" tick={{ fontSize: 12 }} width={45} tickMargin={5} />
                   <Tooltip contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.95)', borderRadius: '8px', border: '1px solid #E5E7EB' }}/>
                   <Bar dataKey="performance" fill="#10B981" name="Achievement %" />
                   <ReferenceLine y={100} stroke="#EF4444" strokeDasharray="3 3" label="Target" />
@@ -574,10 +574,10 @@ export function ReportsPage() {
             </CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={350}>
-                <BarChart data={MOCK_AGENT_PERFORMANCE} layout="horizontal">
+                <BarChart data={MOCK_AGENT_PERFORMANCE} layout="vertical">
                   <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
-                  <XAxis type="number" stroke="#9CA3AF" />
-                  <YAxis dataKey="name" type="category" stroke="#9CA3AF" width={100} />
+                  <XAxis type="number" stroke="#9CA3AF" tickFormatter={(value) => `₱${(value / 1000000).toFixed(0)}M`} tick={{ fontSize: 12 }} />
+                  <YAxis dataKey="name" type="category" stroke="#9CA3AF" width={140} tick={{ fontSize: 11 }} tickMargin={5} />
                   <Tooltip
                     formatter={(value: number) => formatCurrency(value)}
                     contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.95)', borderRadius: '8px', border: '1px solid #E5E7EB' }}
@@ -686,10 +686,10 @@ export function ReportsPage() {
             </CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={350}>
-                <BarChart data={MOCK_PRODUCT_PERFORMANCE.slice(0, 5)} layout="horizontal">
+                <BarChart data={MOCK_PRODUCT_PERFORMANCE.slice(0, 5)} layout="vertical">
                   <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
-                  <XAxis type="number" stroke="#9CA3AF" />
-                  <YAxis dataKey="product" type="category" stroke="#9CA3AF" width={120} />
+                  <XAxis type="number" stroke="#9CA3AF" tickFormatter={(value) => `₱${(value / 1000000).toFixed(0)}M`} tick={{ fontSize: 12 }} />
+                  <YAxis dataKey="product" type="category" stroke="#9CA3AF" width={190} tick={{ fontSize: 10 }} tickMargin={5} />
                   <Tooltip
                     formatter={(value: number) => formatCurrency(value)}
                     contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.95)', borderRadius: '8px', border: '1px solid #E5E7EB' }}
@@ -712,7 +712,7 @@ export function ReportsPage() {
                 <BarChart data={MOCK_PRODUCT_PERFORMANCE} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
                   <XAxis dataKey="product" stroke="#9CA3AF" angle={-30} textAnchor="end" height={90} tickMargin={8} tick={{ fontSize: 13, fill: "#374151" }} />
-                  <YAxis stroke="#9CA3AF" />
+                  <YAxis stroke="#9CA3AF" tick={{ fontSize: 12 }} width={45} tickMargin={5} tickFormatter={(value) => `${value.toFixed(1)}%`} />
                   <Tooltip
                     formatter={(value: number) => `${value.toFixed(1)}%`}
                     contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.95)', borderRadius: '8px', border: '1px solid #E5E7EB' }}
@@ -823,10 +823,10 @@ export function ReportsPage() {
             </CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={350}>
-                <BarChart data={MOCK_STOCK_PREDICTIONS.slice(0, 7)} layout="horizontal">
+                <BarChart data={MOCK_STOCK_PREDICTIONS.slice(0, 7)} layout="vertical">
                   <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
-                  <XAxis type="number" stroke="#9CA3AF" />
-                  <YAxis dataKey="material" type="category" stroke="#9CA3AF" width={100} />
+                  <XAxis type="number" stroke="#9CA3AF" tick={{ fontSize: 12 }} tickFormatter={(value) => value >= 1000 ? `${(value / 1000).toFixed(0)}K` : value} />
+                  <YAxis dataKey="material" type="category" stroke="#9CA3AF" width={145} tick={{ fontSize: 10 }} tickMargin={5} />
                   <Tooltip
                     contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.95)', borderRadius: '8px', border: '1px solid #E5E7EB' }}
                   />
@@ -945,7 +945,7 @@ export function ReportsPage() {
                 <BarChart data={MOCK_BRANCH_PERFORMANCE}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
                   <XAxis dataKey="branch" stroke="#9CA3AF" />
-                  <YAxis stroke="#9CA3AF" />
+                  <YAxis stroke="#9CA3AF" tick={{ fontSize: 12 }} width={65} tickMargin={5} tickFormatter={(value) => `₱${(value / 1000000).toFixed(0)}M`} />
                   <Tooltip
                     formatter={(value: number) => formatCurrency(value)}
                     contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.95)', borderRadius: '8px', border: '1px solid #E5E7EB' }}
@@ -968,7 +968,7 @@ export function ReportsPage() {
                 <BarChart data={MOCK_BRANCH_PERFORMANCE}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
                   <XAxis dataKey="branch" stroke="#9CA3AF" />
-                  <YAxis stroke="#9CA3AF" />
+                  <YAxis stroke="#9CA3AF" tick={{ fontSize: 12 }} width={45} tickMargin={5} />
                   <Tooltip
                     contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.95)', borderRadius: '8px', border: '1px solid #E5E7EB' }}
                   />
@@ -1034,7 +1034,7 @@ export function ReportsPage() {
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
                     <XAxis dataKey="period" stroke="#9CA3AF" angle={-30} textAnchor="end" height={90} tickMargin={8} tick={{ fontSize: 13, fill: "#374151" }} />
-                    <YAxis stroke="#9CA3AF" />
+                    <YAxis stroke="#9CA3AF" tick={{ fontSize: 12 }} width={65} tickMargin={5} tickFormatter={(value) => `₱${(value / 1000000).toFixed(0)}M`} />
                     <Tooltip
                       formatter={(value: number, name: string) => {
                         if (name === 'Revenue') return formatCurrency(value);
@@ -1078,7 +1078,7 @@ export function ReportsPage() {
                   <BarChart data={MOCK_BRANCH_PERFORMANCE}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
                     <XAxis dataKey="branch" stroke="#9CA3AF" />
-                    <YAxis stroke="#9CA3AF" />
+                    <YAxis stroke="#9CA3AF" tick={{ fontSize: 12 }} width={65} tickMargin={5} tickFormatter={(value) => `₱${(value / 1000000).toFixed(0)}M`} />
                     <Tooltip
                       formatter={(value: number, name: string) => {
                         if (name === 'Revenue') return formatCurrency(value);
@@ -1160,8 +1160,8 @@ export function ReportsPage() {
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
                     <XAxis dataKey="period" stroke="#9CA3AF" angle={-30} textAnchor="end" height={90} tickMargin={8} tick={{ fontSize: 13, fill: "#374151" }} />
-                    <YAxis yAxisId="left" stroke="#9CA3AF" />
-                    <YAxis yAxisId="right" orientation="right" stroke="#9CA3AF" />
+                    <YAxis yAxisId="left" stroke="#9CA3AF" tick={{ fontSize: 12 }} width={65} tickMargin={5} tickFormatter={(value) => `₱${(value / 1000000).toFixed(0)}M`} />
+                    <YAxis yAxisId="right" orientation="right" stroke="#9CA3AF" tick={{ fontSize: 12 }} width={45} tickMargin={5} />
                     <Tooltip
                       formatter={(value: number, name: string) => {
                         if (name === 'Revenue') return formatCurrency(value);
@@ -1241,7 +1241,7 @@ export function ReportsPage() {
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
                     <XAxis dataKey="period" stroke="#9CA3AF" />
-                    <YAxis stroke="#9CA3AF" />
+                    <YAxis stroke="#9CA3AF" tick={{ fontSize: 12 }} width={60} tickMargin={5} tickFormatter={(value) => `₱${value.toLocaleString()}`} />
                     <Tooltip
                       formatter={(value: number) => `₱${value.toLocaleString()}`}
                       contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.95)', borderRadius: '8px', border: '1px solid #E5E7EB' }}
@@ -1328,7 +1328,7 @@ export function ReportsPage() {
                   <BarChart data={MOCK_AGENT_PERFORMANCE}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
                     <XAxis dataKey="name" stroke="#9CA3AF" />
-                    <YAxis stroke="#9CA3AF" />
+                    <YAxis stroke="#9CA3AF" tick={{ fontSize: 12 }} width={65} tickMargin={5} tickFormatter={(value) => `₱${(value / 1000000).toFixed(0)}M`} />
                     <Tooltip
                       formatter={(value: number, name: string) => {
                         if (name === 'Sales' || name === 'Target') return formatCurrency(value);
@@ -1515,8 +1515,8 @@ export function ReportsPage() {
                 <ResponsiveContainer width="100%" height={400}>
                   <BarChart data={MOCK_PRODUCT_PERFORMANCE.slice(0, 6)} layout="vertical" margin={{ left: 10, right: 10, top: 10, bottom: 10 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
-                    <XAxis type="number" stroke="#9CA3AF" />
-                    <YAxis dataKey="product" type="category" stroke="#9CA3AF" width={180} tick={{ fontSize: 11 }} />
+                    <XAxis type="number" stroke="#9CA3AF" tick={{ fontSize: 12 }} tickFormatter={(value) => `₱${(value / 1000000).toFixed(0)}M`} />
+                    <YAxis dataKey="product" type="category" stroke="#9CA3AF" width={190} tick={{ fontSize: 10 }} tickMargin={5} />
                     <Tooltip
                       formatter={(value: number, name: string) => {
                         if (name === 'Revenue') return formatCurrency(value);
@@ -1580,7 +1580,7 @@ export function ReportsPage() {
                   <BarChart data={MOCK_PRODUCT_PERFORMANCE.slice(0, 5)} margin={{ bottom: 60, top: 10, left: 10, right: 10 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
                     <XAxis dataKey="product" stroke="#9CA3AF" angle={-30} textAnchor="end" height={100} tick={{ fontSize: 11 }} />
-                    <YAxis stroke="#9CA3AF" />
+                    <YAxis stroke="#9CA3AF" tick={{ fontSize: 12 }} width={45} tickMargin={5} />
                     <Tooltip
                       formatter={(value: number) => `${value}%`}
                       contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.95)', borderRadius: '8px', border: '1px solid #E5E7EB' }}
@@ -1805,7 +1805,7 @@ export function ReportsPage() {
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
                   <XAxis dataKey="month" stroke="#9CA3AF" />
-                  <YAxis stroke="#9CA3AF" />
+                  <YAxis stroke="#9CA3AF" tick={{ fontSize: 12 }} width={65} tickMargin={5} tickFormatter={(value) => `₱${(value / 1000000).toFixed(0)}M`} />
                   <Tooltip
                     formatter={(value: number, name: string) => {
                         if (name === 'Actual' || name === 'Predicted') return formatCurrency(value);
