@@ -8,6 +8,8 @@ interface AppContextType {
   setBranch: (branch: Branch) => void;
   auditLogs: AuditLog[];
   addAuditLog: (action: string, entity: string, details: string) => void;
+  isSidebarCollapsed: boolean;
+  setIsSidebarCollapsed: (collapsed: boolean) => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -15,6 +17,7 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [role, setRole] = useState<UserRole>('Executive');
   const [branch, setBranch] = useState<Branch>('All');
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([
     {
       id: '1',
@@ -41,7 +44,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   return (
-    <AppContext.Provider value={{ role, setRole, branch, setBranch, auditLogs, addAuditLog }}>
+    <AppContext.Provider value={{ role, setRole, branch, setBranch, auditLogs, addAuditLog, isSidebarCollapsed, setIsSidebarCollapsed }}>
       {children}
     </AppContext.Provider>
   );
