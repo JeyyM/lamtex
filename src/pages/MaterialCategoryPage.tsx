@@ -239,25 +239,27 @@ export default function MaterialCategoryPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Button variant="ghost" onClick={() => navigate('/materials')}>
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex items-center gap-3 md:gap-4 min-w-0">
+          <Button variant="ghost" onClick={() => navigate('/materials')} className="flex-shrink-0">
             <ArrowLeft className="w-5 h-5" />
           </Button>
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">{categoryTitle}</h1>
-            <p className="text-sm text-gray-500 mt-1">
+          <div className="min-w-0">
+            <h1 className="text-xl md:text-2xl font-bold text-gray-900 truncate">{categoryTitle}</h1>
+            <p className="text-sm text-gray-500 mt-1 truncate">
               {totalItems} materials • ₱{(totalValue / 1000000).toFixed(2)}M total value
             </p>
           </div>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline">
+        <div className="flex gap-2 flex-wrap">
+          <Button variant="outline" className="flex-1 sm:flex-none">
             <ShoppingCart className="w-4 h-4 mr-2" />
-            Create Purchase Order
+            <span className="hidden sm:inline">Create Purchase Order</span>
+            <span className="sm:hidden">Purchase Order</span>
           </Button>
           <Button 
             variant="primary"
+            className="flex-1 sm:flex-none"
             onClick={() => {
               setEditingMaterial(null);
               setIsEditMode(false);
@@ -274,13 +276,14 @@ export default function MaterialCategoryPage() {
             }}
           >
             <Plus className="w-4 h-4 mr-2" />
-            Add Material
+            <span className="hidden sm:inline">Add Material</span>
+            <span className="sm:hidden">Add</span>
           </Button>
         </div>
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 md:gap-4">
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center gap-3">

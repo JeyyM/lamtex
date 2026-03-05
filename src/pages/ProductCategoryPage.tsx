@@ -180,14 +180,14 @@ export default function ProductCategoryPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Button variant="ghost" onClick={() => navigate('/products')}>
-            <ArrowLeft className="w-5 h-5" />
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex items-center gap-3 md:gap-4 min-w-0">
+          <Button variant="ghost" onClick={() => navigate('/products')} className="flex-shrink-0">
+            <ArrowLeft className="w-4 h-4 md:w-5 md:h-5" />
           </Button>
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">{categoryTitle}</h1>
-            <p className="text-sm text-gray-500 mt-1">
+          <div className="min-w-0 flex-1">
+            <h1 className="text-xl md:text-2xl font-bold text-gray-900 truncate">{categoryTitle}</h1>
+            <p className="text-xs md:text-sm text-gray-500 mt-1 truncate">
               {totalFamilies} product families • ₱{(totalValue / 1000000).toFixed(2)}M total revenue
             </p>
           </div>
@@ -195,14 +195,16 @@ export default function ProductCategoryPage() {
         <Button 
           variant="primary"
           onClick={() => setShowAddProductModal(true)}
+          className="w-full md:w-auto flex-shrink-0"
         >
           <Plus className="w-4 h-4 mr-2" />
-          Add Product Family
+          <span className="hidden sm:inline">Add Product Family</span>
+          <span className="sm:hidden">Add Family</span>
         </Button>
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 md:gap-4">
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center gap-3">

@@ -161,16 +161,16 @@ const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
 
   return (
     <>
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-        <div className="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] flex flex-col shadow-xl">
+      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-0 md:p-4">
+        <div className="bg-white w-full h-full md:w-auto md:h-auto md:rounded-xl md:max-w-2xl md:max-h-[90vh] flex flex-col shadow-xl">
           {/* Header */}
-          <div className="p-6 border-b border-gray-200">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-2xl font-bold text-gray-900">
+          <div className="px-4 md:px-6 py-4 md:py-6 border-b border-gray-200">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <h2 className="text-xl md:text-2xl font-bold text-gray-900 truncate">
                   {isEditMode ? 'Edit Category' : 'Add New Category'}
                 </h2>
-                <p className="text-sm text-gray-500 mt-1">
+                <p className="text-xs md:text-sm text-gray-500 mt-1">
                   {isEditMode 
                     ? 'Update the category information below' 
                     : 'Create a new product category for your catalog'
@@ -179,15 +179,15 @@ const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
               </div>
               <button
                 onClick={handleClose}
-                className="h-10 w-10 rounded-lg hover:bg-gray-100 flex items-center justify-center text-gray-500 transition-colors"
+                className="h-9 w-9 md:h-10 md:w-10 flex-shrink-0 rounded-lg hover:bg-gray-100 flex items-center justify-center text-gray-500 transition-colors"
               >
-                <X className="w-5 h-5" />
+                <X className="w-4 h-4 md:w-5 md:h-5" />
               </button>
             </div>
           </div>
 
           {/* Form Content */}
-          <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 md:space-y-6">
             {/* Category Name */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -330,31 +330,31 @@ const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
           </div>
 
           {/* Footer */}
-          <div className="p-6 border-t border-gray-200 bg-gray-50 flex items-center justify-between rounded-b-xl">
-            <div className="flex items-center gap-4">
-              <div className="text-sm text-gray-600">
+          <div className="px-4 md:px-6 py-4 md:py-6 border-t border-gray-200 bg-gray-50 flex flex-col sm:flex-row sm:items-center justify-between gap-3 md:rounded-b-xl">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3 md:gap-4">
+              <div className="text-xs md:text-sm text-gray-600">
                 <span className="text-red-600">*</span> Required fields
               </div>
               {isEditMode && onDelete && (
                 <button
                   onClick={handleDelete}
-                  className="px-5 py-2.5 rounded-lg border-2 border-red-600 bg-white font-medium text-red-600 hover:bg-red-50 transition-all flex items-center gap-2"
+                  className="px-4 md:px-5 py-2 md:py-2.5 rounded-lg border-2 border-red-600 bg-white font-medium text-sm md:text-base text-red-600 hover:bg-red-50 transition-all flex items-center justify-center gap-2"
                 >
                   <Trash2 className="w-4 h-4" />
                   Delete Category
                 </button>
               )}
             </div>
-            <div className="flex gap-3">
+            <div className="flex gap-2 md:gap-3">
               <button
                 onClick={handleClose}
-                className="px-5 py-2.5 rounded-lg border border-gray-300 bg-white font-medium text-gray-700 hover:bg-gray-50 transition-all"
+                className="flex-1 sm:flex-none px-4 md:px-5 py-2 md:py-2.5 rounded-lg border border-gray-300 bg-white font-medium text-sm md:text-base text-gray-700 hover:bg-gray-50 transition-all"
               >
                 Cancel
               </button>
               <button
                 onClick={handleSubmit}
-                className="px-5 py-2.5 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 transition-all"
+                className="flex-1 sm:flex-none px-4 md:px-5 py-2 md:py-2.5 bg-red-600 text-white rounded-lg font-medium text-sm md:text-base hover:bg-red-700 transition-all"
               >
                 {isEditMode ? 'Update Category' : 'Create Category'}
               </button>

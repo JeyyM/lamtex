@@ -462,27 +462,28 @@ export default function ProductFamilyPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Button variant="ghost" onClick={() => navigate(`/products/category/${categoryName}`)}>
-            <ArrowLeft className="w-5 h-5" />
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex items-center gap-3 md:gap-4 min-w-0">
+          <Button variant="ghost" onClick={() => navigate(`/products/category/${categoryName}`)} className="flex-shrink-0">
+            <ArrowLeft className="w-4 h-4 md:w-5 md:h-5" />
           </Button>
-          <div>
-            <div className="flex items-center gap-3">
-              <h1 className="text-2xl font-bold text-gray-900">{familyInfo.name}</h1>
-              <Badge variant="default">{familyInfo.category}</Badge>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 md:gap-3 flex-wrap">
+              <h1 className="text-xl md:text-2xl font-bold text-gray-900 truncate">{familyInfo.name}</h1>
+              <Badge variant="default" size="sm">{familyInfo.category}</Badge>
             </div>
-            <p className="text-sm text-gray-500 mt-1">
+            <p className="text-xs md:text-sm text-gray-500 mt-1 truncate">
               {familyInfo.familyCode} • {mockVariants.length} size variants available
             </p>
           </div>
         </div>
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-2 flex-shrink-0">
           {isEditingVariant ? (
             <>
               <Button 
                 variant="outline"
                 onClick={handleCancelEdit}
+                className="flex-1 sm:flex-none"
               >
                 <X className="w-4 h-4 mr-2" />
                 Cancel
@@ -490,9 +491,11 @@ export default function ProductFamilyPage() {
               <Button 
                 variant="primary"
                 onClick={handleSaveEdit}
+                className="flex-1 sm:flex-none"
               >
                 <Save className="w-4 h-4 mr-2" />
-                Save Changes
+                <span className="hidden sm:inline">Save Changes</span>
+                <span className="sm:hidden">Save</span>
               </Button>
             </>
           ) : (
@@ -500,13 +503,16 @@ export default function ProductFamilyPage() {
               <Button 
                 variant="outline"
                 onClick={handleEditClick}
+                className="flex-1 sm:flex-none"
               >
                 <Edit className="w-4 h-4 mr-2" />
-                Edit {displayVariant.variantName}
+                <span className="hidden sm:inline">Edit {displayVariant.variantName}</span>
+                <span className="sm:hidden">Edit</span>
               </Button>
-              <Button variant="primary">
+              <Button variant="primary" className="flex-1 sm:flex-none">
                 <Package className="w-4 h-4 mr-2" />
-                Request Production
+                <span className="hidden sm:inline">Request Production</span>
+                <span className="sm:hidden">Request</span>
               </Button>
             </>
           )}
@@ -522,9 +528,9 @@ export default function ProductFamilyPage() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6">
             {/* Image Carousel */}
-            <div className="md:col-span-1">
+            <div className="lg:col-span-1">
               <div className="relative group">
                 <div className="aspect-square rounded-lg overflow-hidden bg-gray-100 border-2 border-gray-200">
                   <img
@@ -575,8 +581,8 @@ export default function ProductFamilyPage() {
             </div>
 
             {/* Product Information */}
-            <div className="md:col-span-2">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 h-full">
+            <div className="lg:col-span-2">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6 h-full">
                 <div>
                   <p className="text-sm text-gray-500 mb-2">Description</p>
                   <p className="text-sm text-gray-700 leading-relaxed">{familyInfo.description}</p>

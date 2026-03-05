@@ -1,0 +1,7 @@
+Known Issues:
+1. Agent Dashboard is not fixed
+2. Product Catalog tab Add Category button is too wide
+3. Product detail (/products/category/category-name/product-ID) has a lot of side scroll (might be because of images)
+4. 2 Orders with ID 2026-1003
+5. Material specific detail has some side scroll
+6. Need more fixes to do in warehouse page

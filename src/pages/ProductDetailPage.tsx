@@ -242,23 +242,23 @@ export function ProductDetailPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Button variant="ghost" size="sm" onClick={() => navigate('/products')}>
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex items-center gap-3 md:gap-4 min-w-0">
+          <Button variant="ghost" size="sm" onClick={() => navigate('/products')} className="flex-shrink-0">
             <ArrowLeft className="w-4 h-4 mr-2" />
-            Back
+            <span className="hidden sm:inline">Back</span>
           </Button>
-          <div>
+          <div className="min-w-0 flex-1">
             {isEditing ? (
               <input
                 type="text"
                 value={editedProduct.name}
                 onChange={(e) => handleInputChange('name', e.target.value)}
-                className="text-2xl font-bold text-gray-900 border-b-2 border-red-500 focus:outline-none bg-transparent"
+                className="text-xl md:text-2xl font-bold text-gray-900 border-b-2 border-red-500 focus:outline-none bg-transparent w-full"
                 placeholder="Product name"
               />
             ) : (
-              <h1 className="text-2xl font-bold text-gray-900">{displayProduct.name}</h1>
+              <h1 className="text-xl md:text-2xl font-bold text-gray-900 truncate">{displayProduct.name}</h1>
             )}
             {isEditing ? (
               <select
@@ -284,27 +284,31 @@ export function ProductDetailPage() {
             )}
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2 flex-shrink-0">
           {isEditing ? (
             <>
-              <Button variant="outline" onClick={handleCancelEdit}>
+              <Button variant="outline" onClick={handleCancelEdit} className="flex-1 sm:flex-none">
                 <X className="w-4 h-4 mr-2" />
-                Cancel
+                <span className="hidden sm:inline">Cancel</span>
+                <span className="sm:hidden">Cancel</span>
               </Button>
-              <Button variant="primary" onClick={handleSaveEdit}>
+              <Button variant="primary" onClick={handleSaveEdit} className="flex-1 sm:flex-none">
                 <Save className="w-4 h-4 mr-2" />
-                Save Changes
+                <span className="hidden sm:inline">Save Changes</span>
+                <span className="sm:hidden">Save</span>
               </Button>
             </>
           ) : (
             <>
-              <Button variant="outline" onClick={handleEdit}>
+              <Button variant="outline" onClick={handleEdit} className="flex-1 sm:flex-none">
                 <Edit className="w-4 h-4 mr-2" />
-                Edit Product
+                <span className="hidden sm:inline">Edit Product</span>
+                <span className="sm:hidden">Edit</span>
               </Button>
-              <Button variant="primary" onClick={() => setIsVariantModalOpen(true)}>
+              <Button variant="primary" onClick={() => setIsVariantModalOpen(true)} className="flex-1 sm:flex-none">
                 <Plus className="w-4 h-4 mr-2" />
-                Add Variant
+                <span className="hidden sm:inline">Add Variant</span>
+                <span className="sm:hidden">Add</span>
               </Button>
             </>
           )}
@@ -312,7 +316,7 @@ export function ProductDetailPage() {
       </div>
 
       {/* Product Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center gap-3">
@@ -466,7 +470,8 @@ export function ProductDetailPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="p-0">
-            <div className="overflow-x-auto">
+            {/* Desktop: Table View */}
+            <div className="hidden md:block overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b">
                   <tr>
@@ -616,6 +621,171 @@ export function ProductDetailPage() {
                 </tbody>
               </table>
             </div>
+
+            {/* Mobile: Card View */}
+            <div className="md:hidden divide-y divide-gray-200">
+              {variants.map((variant) => {
+                const isEditingThisVariant = editingVariantId === variant.id;
+                const displayVariant = isEditingThisVariant ? editedVariant : variant;
+                
+                return (
+                  <div key={variant.id} className={`p-4 ${isEditingThisVariant ? 'bg-blue-50' : ''}`}>
+                    <div className="space-y-3">
+                      {/* SKU and Size */}
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs text-gray-500 mb-1">SKU</p>
+                          {isEditingThisVariant ? (
+                            <input
+                              type="text"
+                              value={displayVariant.sku}
+                              onChange={(e) => handleVariantInputChange('sku', e.target.value)}
+                              className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-red-500 focus:outline-none"
+                            />
+                          ) : (
+                            <p className="text-sm font-medium text-gray-900 truncate">{displayVariant.sku}</p>
+                          )}
+                        </div>
+                        <div className="flex-shrink-0">
+                          {isEditingThisVariant ? (
+                            <select
+                              value={displayVariant.status}
+                              onChange={(e) => handleVariantInputChange('status', e.target.value)}
+                              className="px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-red-500 focus:outline-none text-xs"
+                            >
+                              <option value="Active">Active</option>
+                              <option value="Low Stock">Low Stock</option>
+                              <option value="Out of Stock">Out of Stock</option>
+                              <option value="Discontinued">Discontinued</option>
+                            </select>
+                          ) : (
+                            <Badge variant={getStatusColor(displayVariant.status)} size="sm">
+                              {displayVariant.status}
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Size */}
+                      <div>
+                        <p className="text-xs text-gray-500 mb-1">Size</p>
+                        {isEditingThisVariant ? (
+                          <input
+                            type="text"
+                            value={displayVariant.size}
+                            onChange={(e) => handleVariantInputChange('size', e.target.value)}
+                            className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-red-500 focus:outline-none"
+                          />
+                        ) : (
+                          <p className="text-sm font-medium text-gray-900">{displayVariant.size}</p>
+                        )}
+                      </div>
+
+                      {/* Price and Stock */}
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <p className="text-xs text-gray-500 mb-1">Price</p>
+                          {isEditingThisVariant ? (
+                            <input
+                              type="number"
+                              value={displayVariant.unitPrice}
+                              onChange={(e) => handleVariantInputChange('unitPrice', parseFloat(e.target.value) || 0)}
+                              className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-red-500 focus:outline-none"
+                            />
+                          ) : (
+                            <p className="text-sm font-medium text-gray-900">₱{displayVariant.unitPrice.toLocaleString()}</p>
+                          )}
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500 mb-1">Total Stock</p>
+                          <div className="flex items-center gap-2">
+                            <span className={`text-sm font-medium ${displayVariant.totalStock <= displayVariant.reorderPoint ? 'text-orange-600' : 'text-gray-900'}`}>
+                              {displayVariant.totalStock}
+                            </span>
+                            {displayVariant.totalStock <= displayVariant.reorderPoint && (
+                              <AlertTriangle className="w-3 h-3 text-orange-500" />
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Branch Stock (Expandable) */}
+                      <div className="grid grid-cols-3 gap-2 pt-2 border-t">
+                        <div>
+                          <p className="text-xs text-gray-500 mb-1">Branch A</p>
+                          {isEditingThisVariant ? (
+                            <input
+                              type="number"
+                              value={displayVariant.stockBranchA}
+                              onChange={(e) => handleVariantInputChange('stockBranchA', parseInt(e.target.value) || 0)}
+                              className="w-full px-2 py-1 text-xs border border-gray-300 rounded focus:ring-2 focus:ring-red-500 focus:outline-none"
+                            />
+                          ) : (
+                            <p className="text-xs text-gray-600">{displayVariant.stockBranchA}</p>
+                          )}
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500 mb-1">Branch B</p>
+                          {isEditingThisVariant ? (
+                            <input
+                              type="number"
+                              value={displayVariant.stockBranchB}
+                              onChange={(e) => handleVariantInputChange('stockBranchB', parseInt(e.target.value) || 0)}
+                              className="w-full px-2 py-1 text-xs border border-gray-300 rounded focus:ring-2 focus:ring-red-500 focus:outline-none"
+                            />
+                          ) : (
+                            <p className="text-xs text-gray-600">{displayVariant.stockBranchB}</p>
+                          )}
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500 mb-1">Branch C</p>
+                          {isEditingThisVariant ? (
+                            <input
+                              type="number"
+                              value={displayVariant.stockBranchC}
+                              onChange={(e) => handleVariantInputChange('stockBranchC', parseInt(e.target.value) || 0)}
+                              className="w-full px-2 py-1 text-xs border border-gray-300 rounded focus:ring-2 focus:ring-red-500 focus:outline-none"
+                            />
+                          ) : (
+                            <p className="text-xs text-gray-600">{displayVariant.stockBranchC}</p>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Sales Info */}
+                      <div className="grid grid-cols-2 gap-3 pt-2 border-t">
+                        <div>
+                          <p className="text-xs text-gray-500 mb-1">Sold YTD</p>
+                          <p className="text-sm text-gray-900">{displayVariant.unitsSoldYTD.toLocaleString()}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500 mb-1">Revenue YTD</p>
+                          <p className="text-sm font-medium text-gray-900">₱{(displayVariant.revenueYTD / 1000).toFixed(0)}K</p>
+                        </div>
+                      </div>
+
+                      {/* Edit Button */}
+                      <div className="pt-2">
+                        <button 
+                          type="button"
+                          className="w-full px-3 py-2 text-sm bg-blue-500 text-white hover:bg-blue-600 rounded cursor-pointer"
+                          onClick={() => {
+                            console.log('=== BUTTON CLICKED ===');
+                            console.log('Variant Data:', variant);
+                            console.log('Variant ID:', variant.id);
+                            console.log('Variant SKU:', variant.sku);
+                            console.log('Variant Size:', variant.size);
+                            alert(`Clicked Edit for: ${variant.size}`);
+                          }}
+                        >
+                          Edit Variant
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </CardContent>
         </Card>
       )}
@@ -729,7 +899,7 @@ export function ProductDetailPage() {
             <h2 className="text-xl font-semibold mb-4">Forecast Rollup</h2>
 
             {/* Forecast KPI Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
               <Card>
                 <CardContent className="p-4">
                   <p className="text-sm text-gray-500">Forecast Units (Next 30 Days)</p>
