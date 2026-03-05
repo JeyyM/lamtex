@@ -109,31 +109,34 @@ export function ProductsPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Product Catalog</h1>
           <p className="text-sm text-gray-500 mt-1">Browse products by category</p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={() => {/* TODO: Export products data */}}>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" className="flex-1 sm:flex-none" onClick={() => {/* TODO: Export products data */}}>
             <Download className="w-4 h-4 mr-2" />
-            Export
+            <span className="hidden sm:inline">Export</span>
+            <span className="sm:hidden">Export</span>
           </Button>
           
-          <Button variant="outline" onClick={() => setShowReceiveModal(true)}>
+          <Button variant="outline" className="flex-1 sm:flex-none" onClick={() => setShowReceiveModal(true)}>
             <Truck className="w-4 h-4 mr-2" />
-            Receive
+            <span className="hidden sm:inline">Receive</span>
+            <span className="sm:hidden">Receive</span>
           </Button>
 
-          <Button variant="outline" onClick={() => setShowTransferModal(true)}>
+          <Button variant="outline" className="flex-1 sm:flex-none" onClick={() => setShowTransferModal(true)}>
             <ArrowRightLeft className="w-4 h-4 mr-2" />
-            Transfer
+            <span className="hidden sm:inline">Transfer</span>
+            <span className="sm:hidden">Transfer</span>
           </Button>
         </div>
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center gap-3">
@@ -228,7 +231,7 @@ export function ProductsPage() {
           </div>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
             {filteredCategories.map((category) => {
               const categoryProducts = allProducts.filter(p => p.category === category.name);
               const categoryCount = categoryProducts.length;
@@ -257,7 +260,7 @@ export function ProductsPage() {
                     className="w-full text-left"
                   >
                     {/* Category Image */}
-                    <div className="aspect-video w-full overflow-hidden bg-gray-100">
+                    <div className="aspect-video w-full min-h-[120px] overflow-hidden bg-gray-100">
                       <img 
                         src={category.image} 
                         alt={category.name}
@@ -266,7 +269,7 @@ export function ProductsPage() {
                     </div>
                     
                     {/* Category Info */}
-                    <div className="p-4">
+                    <div className="p-3 sm:p-4">
                       <h3 className="font-semibold text-gray-900 group-hover:text-red-600 transition-colors">
                         {category.name}
                       </h3>

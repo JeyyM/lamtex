@@ -133,40 +133,40 @@ export function TransferProductModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <Card className="w-full max-w-4xl max-h-[85vh] flex flex-col">
-        <CardHeader className="border-b bg-gradient-to-r from-orange-50 to-white flex-shrink-0">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-orange-600 rounded-lg">
-                <ArrowRightLeft className="w-6 h-6 text-white" />
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-0 md:p-4">
+      <Card className="w-full h-full md:w-auto md:h-auto md:max-w-4xl md:max-h-[85vh] flex flex-col md:rounded-xl">
+        <CardHeader className="border-b bg-gradient-to-r from-orange-50 to-white flex-shrink-0 px-4 md:px-6 py-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 md:gap-3 min-w-0 flex-1">
+              <div className="p-1.5 md:p-2 bg-orange-600 rounded-lg flex-shrink-0">
+                <ArrowRightLeft className="w-5 h-5 md:w-6 md:h-6 text-white" />
               </div>
-              <div>
-                <CardTitle className="text-xl">Transfer Products to Branch</CardTitle>
-                <p className="text-sm text-gray-500 mt-1">Transfer No: {transferNumber}</p>
+              <div className="min-w-0 flex-1">
+                <CardTitle className="text-base md:text-xl truncate">Transfer Products to Branch</CardTitle>
+                <p className="text-xs md:text-sm text-gray-500 mt-0.5 md:mt-1 truncate">Transfer No: {transferNumber}</p>
               </div>
             </div>
-            <Button variant="ghost" size="sm" onClick={onClose}>
-              <X className="w-5 h-5" />
+            <Button variant="ghost" size="sm" onClick={onClose} className="flex-shrink-0">
+              <X className="w-4 h-4 md:w-5 md:h-5" />
             </Button>
           </div>
         </CardHeader>
 
-        <CardContent className="p-6 overflow-y-auto flex-1">
-          <form onSubmit={handleSubmit} className="space-y-6">
+        <CardContent className="p-4 md:p-6 overflow-y-auto flex-1">
+          <form onSubmit={handleSubmit} className="space-y-4 md:space-y-6">
             {/* Info Alert */}
-            <div className="p-4 bg-orange-50 border border-orange-200 rounded-lg flex items-start gap-3">
-              <Info className="w-5 h-5 text-orange-600 mt-0.5 flex-shrink-0" />
+            <div className="p-3 md:p-4 bg-orange-50 border border-orange-200 rounded-lg flex items-start gap-2 md:gap-3">
+              <Info className="w-4 h-4 md:w-5 md:h-5 text-orange-600 mt-0.5 flex-shrink-0" />
               <div>
-                <p className="text-sm font-medium text-orange-900">Inter-Branch Transfer Only</p>
-                <p className="text-sm text-orange-700 mt-1">
+                <p className="text-xs md:text-sm font-medium text-orange-900">Inter-Branch Transfer Only</p>
+                <p className="text-xs md:text-sm text-orange-700 mt-0.5 md:mt-1">
                   This transfers products from your current branch to another branch location.
                 </p>
               </div>
             </div>
 
             {/* Transfer Details */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   <Calendar className="w-4 h-4 inline mr-1" />
@@ -270,9 +270,9 @@ export function TransferProductModal({
 
             {/* Items */}
             <div>
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-semibold text-gray-900 uppercase">Products to Transfer</h3>
-                <Button type="button" variant="outline" size="sm" onClick={handleAddItem}>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 md:gap-3 mb-3">
+                <h3 className="text-xs md:text-sm font-semibold text-gray-900 uppercase">Products to Transfer</h3>
+                <Button type="button" variant="outline" size="sm" onClick={handleAddItem} className="w-full sm:w-auto">
                   <Plus className="w-4 h-4 mr-1" />
                   Add Product
                 </Button>
@@ -280,10 +280,10 @@ export function TransferProductModal({
 
               <div className="space-y-3">
                 {items.map((item, index) => (
-                  <div key={item.id} className="p-4 border border-gray-200 rounded-lg bg-gray-50">
-                    <div className="flex items-start gap-3">
-                      <div className="flex-1 grid grid-cols-1 md:grid-cols-4 gap-3">
-                        <div className="md:col-span-2">
+                  <div key={item.id} className="p-3 md:p-4 border border-gray-200 rounded-lg bg-gray-50">
+                    <div className="flex flex-col md:flex-row md:items-start gap-3">
+                      <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                        <div className="sm:col-span-2 md:col-span-2">
                           <label className="block text-xs font-medium text-gray-600 mb-1">
                             Product *
                           </label>
@@ -327,7 +327,7 @@ export function TransferProductModal({
                           </select>
                         </div>
 
-                        <div className="md:col-span-4">
+                        <div className="sm:col-span-2 md:col-span-4">
                           <label className="block text-xs font-medium text-gray-600 mb-1">
                             Remarks
                           </label>
@@ -347,7 +347,7 @@ export function TransferProductModal({
                           variant="ghost"
                           size="sm"
                           onClick={() => handleRemoveItem(item.id)}
-                          className="text-red-600 hover:text-red-700 hover:bg-red-50 mt-6"
+                          className="text-red-600 hover:text-red-700 hover:bg-red-50 md:mt-6 w-full md:w-auto"
                         >
                           <X className="w-4 h-4" />
                         </Button>
@@ -373,11 +373,11 @@ export function TransferProductModal({
             </div>
 
             {/* Actions */}
-            <div className="flex justify-end gap-3 pt-4 border-t">
-              <Button type="button" variant="outline" onClick={onClose}>
+            <div className="flex flex-col sm:flex-row justify-end gap-2 md:gap-3 pt-3 md:pt-4 border-t">
+              <Button type="button" variant="outline" onClick={onClose} className="w-full sm:w-auto">
                 Cancel
               </Button>
-              <Button type="submit" variant="primary">
+              <Button type="submit" variant="primary" className="w-full sm:w-auto">
                 <CheckCircle className="w-4 h-4 mr-2" />
                 Initiate Transfer
               </Button>

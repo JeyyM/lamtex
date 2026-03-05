@@ -185,7 +185,7 @@ export function LogisticsDashboard() {
       )}
 
       {/* KPI STRIP */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
@@ -769,7 +769,7 @@ export function LogisticsDashboard() {
         <h2 className="text-lg font-semibold text-gray-900 mb-4">📊 Performance Metrics</h2>
       </div>
       
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {performance.map((metric) => (
           <Card key={metric.id}>
             <CardContent className="p-4">

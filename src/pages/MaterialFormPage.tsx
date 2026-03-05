@@ -96,14 +96,15 @@ export function MaterialFormPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Button variant="ghost" size="sm" onClick={() => navigate('/materials')}>
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex items-center gap-3 md:gap-4 min-w-0">
+          <Button variant="ghost" size="sm" onClick={() => navigate('/materials')} className="flex-shrink-0">
             <ArrowLeft className="w-4 h-4 mr-2" />
-            Back
+            <span className="hidden sm:inline">Back</span>
+            <span className="sm:hidden">Back</span>
           </Button>
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">
+          <div className="min-w-0">
+            <h1 className="text-xl md:text-2xl font-bold text-gray-900 truncate">
               {isEditMode ? 'Edit Material' : 'Create New Material'}
             </h1>
             <p className="text-sm text-gray-500 mt-1">
@@ -495,16 +496,17 @@ export function MaterialFormPage() {
         </Card>
 
         {/* Action Buttons */}
-        <div className="flex justify-end gap-3">
+        <div className="flex flex-col sm:flex-row justify-end gap-3">
           <Button 
             type="button" 
             variant="outline" 
             onClick={() => navigate('/materials')}
+            className="w-full sm:w-auto"
           >
             <X className="w-4 h-4 mr-2" />
             Cancel
           </Button>
-          <Button type="submit" variant="primary">
+          <Button type="submit" variant="primary" className="w-full sm:w-auto">
             <Save className="w-4 h-4 mr-2" />
             {isEditMode ? 'Update Material' : 'Create Material'}
           </Button>

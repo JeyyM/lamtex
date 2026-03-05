@@ -486,15 +486,15 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
 
   return (
     <div 
-      className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4"
+      className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-0 md:p-4"
       onClick={onClose}
     >
       <div 
-        className="bg-white rounded-lg shadow-xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col"
+        className="bg-white md:rounded-lg shadow-xl w-full h-full md:h-auto md:max-w-5xl md:max-h-[90vh] overflow-hidden flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+        <div className="px-4 md:px-6 py-4 border-b border-gray-200 flex items-center justify-between">
           <div>
             <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
               <ShoppingCart className="w-6 h-6 text-red-600" />
@@ -513,7 +513,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-4 md:p-6">
           <form onSubmit={handleSubmit} className="space-y-6">
             {/* Customer Selection - Only show if no customer pre-selected */}
             {!initialCustomerId && (
@@ -631,7 +631,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                 </div>
 
                 {/* Product Grid */}
-                <div className="grid grid-cols-5 gap-3 max-h-48 overflow-y-auto p-1">
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 max-h-48 overflow-y-auto p-1">
                   {filteredProducts.map((product) => (
                     <button
                       key={product.id}
@@ -870,8 +870,8 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-between bg-gray-50">
-          <div className="text-sm text-gray-600">
+        <div className="px-4 md:px-6 py-4 border-t border-gray-200 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-gray-50">
+          <div className="text-sm text-gray-600 text-center sm:text-left">
             {orderItems.length} item{orderItems.length !== 1 ? 's' : ''} • Total: ₱{calculateTotal().toLocaleString()}
           </div>
           <div className="flex gap-3">
@@ -921,7 +921,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
 
             {/* Product Content */}
             <div className="flex-1 overflow-y-auto">
-              <div className="grid grid-cols-2 gap-8 p-8">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 lg:gap-8 p-4 md:p-8">
                 
                 {/* Left: Product Image */}
                 <div className="space-y-4">

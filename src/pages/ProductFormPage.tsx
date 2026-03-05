@@ -72,17 +72,17 @@ export function ProductFormPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Button variant="ghost" size="sm" onClick={() => navigate('/products')}>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex items-center gap-3 md:gap-4 min-w-0">
+          <Button variant="ghost" size="sm" onClick={() => navigate('/products')} className="flex-shrink-0">
             <ArrowLeft className="w-4 h-4 mr-2" />
-            Back
+            <span className="hidden sm:inline">Back</span>
           </Button>
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">
+          <div className="min-w-0 flex-1">
+            <h1 className="text-xl md:text-2xl font-bold text-gray-900 truncate">
               {isEditMode ? 'Edit Product' : 'Create New Product'}
             </h1>
-            <p className="text-sm text-gray-500 mt-1">
+            <p className="text-xs md:text-sm text-gray-500 mt-1">
               {isEditMode ? 'Update product information' : 'Add a new product to the catalog'}
             </p>
           </div>
@@ -266,16 +266,17 @@ export function ProductFormPage() {
         </Card>
 
         {/* Action Buttons */}
-        <div className="flex justify-end gap-3">
+        <div className="flex flex-col sm:flex-row justify-end gap-2 md:gap-3">
           <Button 
             type="button" 
             variant="outline" 
             onClick={() => navigate('/products')}
+            className="w-full sm:w-auto"
           >
             <X className="w-4 h-4 mr-2" />
             Cancel
           </Button>
-          <Button type="submit" variant="primary">
+          <Button type="submit" variant="primary" className="w-full sm:w-auto">
             <Save className="w-4 h-4 mr-2" />
             {isEditMode ? 'Update Product' : 'Create Product'}
           </Button>

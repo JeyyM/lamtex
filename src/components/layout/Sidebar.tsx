@@ -16,13 +16,14 @@ import {
   Warehouse,
   MessageCircle,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  X
 } from 'lucide-react';
 import { cn } from '@/src/lib/utils';
 import lamtexLogo from '../../assets/images.png';
 
 export function Sidebar() {
-  const { role, isSidebarCollapsed, setIsSidebarCollapsed } = useAppContext();
+  const { role, isSidebarCollapsed, setIsSidebarCollapsed, isMobileMenuOpen, setIsMobileMenuOpen } = useAppContext();
 
   const navItems = [
     { name: 'Dashboard', path: '/', icon: LayoutDashboard, roles: ['Executive', 'Warehouse', 'Logistics', 'Agent', 'Finance', 'Production', 'Manager'] },
@@ -44,27 +45,59 @@ export function Sidebar() {
   const filteredNav = navItems.filter(item => item.roles.includes(role));
 
   return (
-    <div className={`bg-white border-r border-gray-200 h-screen flex flex-col fixed left-0 top-0 transition-all duration-300 ${
-      isSidebarCollapsed ? 'w-16' : 'w-64'
-    }`}>
-      <div className="h-16 flex items-center justify-between px-4 border-b border-gray-200">
-        {!isSidebarCollapsed && (
-          <div className="flex items-center gap-2">
+    <>
+      {/* Backdrop overlay for mobile drawer */}
+      {isMobileMenuOpen && (
+        <div 
+          className="lg:hidden fixed inset-0 bg-black/50 z-40"
+          onClick={() => setIsMobileMenuOpen(false)}
+        />
+      )}
+
+      {/* Sidebar / Mobile Drawer */}
+      <div className={cn(
+        "bg-white border-r border-gray-200 h-screen flex flex-col fixed left-0 top-0 z-40 transition-all duration-300",
+        // Mobile: slide-out drawer with transform
+        "w-64 max-w-[80vw] transform",
+        isMobileMenuOpen ? "translate-x-0" : "-translate-x-full",
+        // Desktop: fixed sidebar (always visible, no transform)
+        "lg:translate-x-0",
+        isSidebarCollapsed ? "lg:w-16" : "lg:w-64"
+      )}>
+        <div className="h-16 flex items-center justify-between px-4 border-b border-gray-200">
+          {/* Logo - always visible on mobile drawer, hidden when collapsed on desktop */}
+          <div className={cn(
+            "flex items-center gap-2",
+            isSidebarCollapsed && "lg:hidden"
+          )}>
             <img src={lamtexLogo} alt="LAMTEX Logo" className="h-10 w-auto" />
           </div>
-        )}
-        <button
-          onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-          className="p-2 hover:bg-gray-100 rounded-lg transition-colors ml-auto"
-          title={isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        >
-          {isSidebarCollapsed ? (
-            <ChevronRight className="w-5 h-5 text-gray-600" />
-          ) : (
-            <ChevronLeft className="w-5 h-5 text-gray-600" />
-          )}
-        </button>
-      </div>
+          
+          {/* Button group - pushed to right */}
+          <div className="ml-auto flex items-center">
+            {/* Close button (mobile only) - closes the drawer */}
+            <button
+              onClick={() => setIsMobileMenuOpen(false)}
+              className="lg:hidden p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              title="Close menu"
+            >
+              <X className="w-5 h-5 text-gray-600" />
+            </button>
+
+            {/* Collapse toggle (desktop only) - toggles sidebar width */}
+            <button
+              onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+              className="hidden lg:block p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              title={isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            >
+              {isSidebarCollapsed ? (
+                <ChevronRight className="w-5 h-5 text-gray-600" />
+              ) : (
+                <ChevronLeft className="w-5 h-5 text-gray-600" />
+              )}
+            </button>
+          </div>
+        </div>
       
       <div className="flex-1 overflow-y-auto py-4">
         <nav className="space-y-1 px-3">
@@ -73,34 +106,38 @@ export function Sidebar() {
               key={item.name}
               to={item.path}
               title={isSidebarCollapsed ? item.name : ''}
+              onClick={() => setIsMobileMenuOpen(false)}
               className={({ isActive }) => cn(
                 "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors",
                 isActive 
                   ? "bg-red-50 text-red-700" 
                   : "text-gray-600 hover:bg-gray-50 hover:text-gray-900",
-                isSidebarCollapsed && "justify-center"
+                isSidebarCollapsed && "lg:justify-center"
               )}
             >
               <item.icon className="w-5 h-5 flex-shrink-0" />
-              {!isSidebarCollapsed && <span>{item.name}</span>}
+              <span className={cn(
+                isSidebarCollapsed && "lg:hidden"
+              )}>{item.name}</span>
             </NavLink>
           ))}
         </nav>
       </div>
 
       <div className="p-4 border-t border-gray-200">
-        <div className={`flex items-center gap-3 ${isSidebarCollapsed && 'justify-center'}`}>
+        <div className={`flex items-center gap-3 ${isSidebarCollapsed && 'lg:justify-center'}`}>
           <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center text-gray-600 font-medium flex-shrink-0">
             {role.charAt(0)}
           </div>
-          {!isSidebarCollapsed && (
-            <div>
-              <p className="text-sm font-medium text-gray-900">{role} User</p>
-              <p className="text-xs text-gray-500">View Profile</p>
-            </div>
-          )}
+          <div className={cn(
+            isSidebarCollapsed && "lg:hidden"
+          )}>
+            <p className="text-sm font-medium text-gray-900">{role} User</p>
+            <p className="text-xs text-gray-500">View Profile</p>
+          </div>
         </div>
       </div>
     </div>
+    </>
   );
 }

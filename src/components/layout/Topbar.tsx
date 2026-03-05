@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { useAppContext } from '@/src/store/AppContext';
-import { Bell, Search, Menu, Calendar, X } from 'lucide-react';
+import { Bell, Search, Menu, Calendar, X, Settings } from 'lucide-react';
 import { UserRole, Branch } from '@/src/types';
 import { NotificationsDrawer } from '../dashboard/NotificationsDrawer';
 import { getNotificationsByBranch } from '@/src/mock/executiveDashboard';
 
 export function Topbar() {
-  const { role, setRole, branch, setBranch } = useAppContext();
+  const { role, setRole, branch, setBranch, isMobileMenuOpen, setIsMobileMenuOpen } = useAppContext();
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+  const [isMobileSettingsOpen, setIsMobileSettingsOpen] = useState(false);
   const [notifications, setNotifications] = useState(getNotificationsByBranch(branch));
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [dateFrom, setDateFrom] = useState('');
@@ -100,9 +101,19 @@ export function Topbar() {
 
   return (
     <>
-      <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-6 sticky top-0 z-10 ml-64">
-        <div className="flex items-center gap-4 flex-1">
-          <div className="relative w-96">
+      <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-4 md:px-6 sticky top-0 z-10 ml-0 lg:ml-64">
+        {/* Mobile: Hamburger Menu (Opens Sidebar Only) */}
+        <button
+          onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+          className="lg:hidden p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+          aria-label="Toggle menu"
+        >
+          <Menu className="w-5 h-5" />
+        </button>
+
+        {/* Search Bar */}
+        <div className="flex items-center gap-4 flex-1 max-w-2xl">
+          <div className="relative flex-1 max-w-md lg:max-w-lg">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input 
               type="text" 
@@ -112,7 +123,8 @@ export function Topbar() {
           </div>
         </div>
 
-        <div className="flex items-center gap-6">
+        {/* Desktop Controls */}
+        <div className="hidden md:flex items-center gap-4 lg:gap-6">
           {/* Date Range Selector */}
           <div className="relative">
             <button
@@ -124,7 +136,7 @@ export function Topbar() {
             </button>
 
             {showDatePicker && (
-              <div className="absolute top-full mt-2 right-0 bg-white rounded-lg shadow-lg border border-gray-200 p-4 z-50 min-w-[320px]">
+              <div className="absolute top-full mt-2 right-0 bg-white rounded-lg shadow-lg border border-gray-200 p-4 z-50 w-[calc(100vw-2rem)] max-w-[320px] md:w-auto md:min-w-[320px]">
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-sm font-semibold text-gray-900">Select Date Range</h3>
                   <button
@@ -186,7 +198,7 @@ export function Topbar() {
           </div>
 
           {/* Branch Switcher */}
-          <div className="flex items-center gap-2">
+          <div className="hidden lg:flex items-center gap-2">
             <span className="text-xs font-medium text-gray-500 uppercase tracking-wider">Branch:</span>
             <select 
               value={branch}
@@ -200,7 +212,7 @@ export function Topbar() {
           </div>
 
           {/* Role Switcher (For Prototype) */}
-          <div className="flex items-center gap-2 bg-red-50 px-3 py-1.5 rounded-lg border border-red-100">
+          <div className="hidden lg:flex items-center gap-2 bg-red-50 px-3 py-1.5 rounded-lg border border-red-100">
             <span className="text-xs font-medium text-red-800 uppercase tracking-wider">Simulate Role:</span>
             <select 
               value={role}
@@ -213,6 +225,30 @@ export function Topbar() {
             </select>
           </div>
 
+          {/* Notifications */}
+          <button 
+            className="relative p-2 text-gray-500 hover:bg-gray-100 rounded-full transition-colors"
+            onClick={() => setIsNotificationsOpen(true)}
+          >
+            <Bell className="w-5 h-5" />
+            {unreadCount > 0 && (
+              <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white"></span>
+            )}
+          </button>
+        </div>
+
+        {/* Mobile: Settings & Notifications */}
+        <div className="md:hidden flex items-center gap-2">
+          {/* Prototype Settings Button (Mobile Only) */}
+          <button 
+            className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+            onClick={() => setIsMobileSettingsOpen(!isMobileSettingsOpen)}
+            aria-label="Toggle settings"
+          >
+            <Settings className="w-5 h-5" />
+          </button>
+
+          {/* Notifications */}
           <button 
             className="relative p-2 text-gray-500 hover:bg-gray-100 rounded-full transition-colors"
             onClick={() => setIsNotificationsOpen(true)}
@@ -224,6 +260,118 @@ export function Topbar() {
           </button>
         </div>
       </header>
+
+      {/* Mobile Controls Menu (Settings Panel) */}
+      {isMobileSettingsOpen && (
+        <div className="lg:hidden fixed inset-0 z-40 bg-black/50" onClick={() => setIsMobileSettingsOpen(false)}>
+          <div 
+            className="absolute top-16 left-0 right-0 bg-white border-b border-gray-200 shadow-lg p-4 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Date Range Selector - Mobile */}
+            <div className="relative">
+              <button
+                onClick={() => setShowDatePicker(!showDatePicker)}
+                className="w-full flex items-center justify-between gap-2 text-sm text-gray-600 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200 hover:bg-gray-100 transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-gray-400" />
+                  <span className="font-medium">{formatDateRange()}</span>
+                </div>
+              </button>
+
+              {showDatePicker && (
+                <div className="mt-2 bg-white rounded-lg border border-gray-200 p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-semibold text-gray-900">Select Date Range</h3>
+                    <button
+                      onClick={() => setShowDatePicker(false)}
+                      className="text-gray-400 hover:text-gray-600"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">From Date</label>
+                      <input
+                        type="date"
+                        value={dateFrom}
+                        onChange={(e) => handleDateFromChange(e.target.value)}
+                        max={getTodayDate()}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">To Date</label>
+                      <input
+                        type="date"
+                        value={dateTo}
+                        onChange={(e) => handleDateToChange(e.target.value)}
+                        min={dateFrom || undefined}
+                        max={getTodayDate()}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                      />
+                    </div>
+
+                    {dateError && (
+                      <div className="text-xs text-red-600 bg-red-50 px-2 py-1 rounded">
+                        {dateError}
+                      </div>
+                    )}
+
+                    <div className="flex items-center gap-2 pt-2">
+                      <button
+                        onClick={applyDateRange}
+                        disabled={!dateFrom || !dateTo || !!dateError}
+                        className="flex-1 px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+                      >
+                        Apply
+                      </button>
+                      <button
+                        onClick={clearDateRange}
+                        className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Branch Switcher - Mobile */}
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Branch</label>
+              <select 
+                value={branch}
+                onChange={(e) => setBranch(e.target.value as Branch)}
+                className="w-full text-sm border-gray-300 rounded-lg shadow-sm focus:border-red-500 focus:ring-red-500 py-2 px-3"
+              >
+                {branches.map(b => (
+                  <option key={b} value={b}>{b}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Role Switcher - Mobile */}
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Simulate Role</label>
+              <select 
+                value={role}
+                onChange={(e) => setRole(e.target.value as UserRole)}
+                className="w-full text-sm border-gray-300 rounded-lg shadow-sm focus:border-red-500 focus:ring-red-500 py-2 px-3"
+              >
+                {roles.map(r => (
+                  <option key={r} value={r}>{r}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+      )}
 
       {isNotificationsOpen && (
         <NotificationsDrawer 

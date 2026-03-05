@@ -198,41 +198,46 @@ export function RawMaterialsPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Raw Materials</h1>
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="text-xl md:text-2xl font-bold text-gray-900 truncate">Raw Materials</h1>
           <p className="text-sm text-gray-500 mt-1">Browse materials by category</p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <Button variant="outline" onClick={() => {/* TODO: Export materials data */}}>
+          <Button variant="outline" onClick={() => {/* TODO: Export materials data */}} className="flex-1 sm:flex-none">
             <Download className="w-4 h-4 mr-2" />
-            Export
+            <span className="hidden sm:inline">Export</span>
+            <span className="sm:hidden">Export</span>
           </Button>
 
-          <Button variant="outline" onClick={() => setShowReceiveModal(true)}>
+          <Button variant="outline" onClick={() => setShowReceiveModal(true)} className="flex-1 sm:flex-none">
             <Truck className="w-4 h-4 mr-2" />
-            Receive
+            <span className="hidden sm:inline">Receive</span>
+            <span className="sm:hidden">Receive</span>
           </Button>
 
-          <Button variant="outline" onClick={() => setShowTransferModal(true)}>
+          <Button variant="outline" onClick={() => setShowTransferModal(true)} className="flex-1 sm:flex-none">
             <ArrowRightLeft className="w-4 h-4 mr-2" />
-            Transfer
+            <span className="hidden sm:inline">Transfer</span>
+            <span className="sm:hidden">Transfer</span>
           </Button>
 
-          <Button variant="outline" onClick={() => navigate('/purchase-orders')}>
+          <Button variant="outline" onClick={() => navigate('/purchase-orders')} className="flex-1 sm:flex-none">
             <ShoppingCart className="w-4 h-4 mr-2" />
-            Purchase Orders
+            <span className="hidden sm:inline">Purchase Orders</span>
+            <span className="sm:hidden">Orders</span>
           </Button>
 
-          <Button variant="outline" onClick={() => navigate('/suppliers')}>
+          <Button variant="outline" onClick={() => navigate('/suppliers')} className="flex-1 sm:flex-none">
             <Users className="w-4 h-4 mr-2" />
-            Suppliers
+            <span className="hidden sm:inline">Suppliers</span>
+            <span className="sm:hidden">Suppliers</span>
           </Button>
         </div>
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
             <Card>
               <CardContent className="p-4">
                 <div className="flex items-center gap-3">
@@ -407,7 +412,7 @@ export function RawMaterialsPage() {
           </div>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-4">
             {categories.map((category) => {
               const categoryMaterials = allMaterials.filter(m => m.category === category.name);
               const categoryCount = categoryMaterials.length;

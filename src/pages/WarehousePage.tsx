@@ -1207,28 +1207,28 @@ export default function WarehousePage() {
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
       <div className="bg-white border-b border-gray-200">
-        <div className="px-6 py-4">
-          <h1 className="text-2xl font-bold text-gray-900">Warehouse Management</h1>
+        <div className="px-4 md:px-6 py-4">
+          <h1 className="text-xl md:text-2xl font-bold text-gray-900">Warehouse Management</h1>
           <p className="text-sm text-gray-600 mt-1">Track inventory, manage requests, and coordinate logistics</p>
         </div>
 
         {/* Tabs */}
-        <div className="px-6">
-          <div className="flex gap-4 border-b border-gray-200">
+        <div className="px-4 md:px-6">
+          <div className="flex gap-2 md:gap-4 border-b border-gray-200 overflow-x-auto">
             {tabs.map(tab => {
               const Icon = tab.icon;
               return (
                 <button
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
-                  className={`flex items-center gap-2 px-4 py-3 border-b-2 transition-colors ${
+                  className={`flex items-center gap-2 px-3 md:px-4 py-3 border-b-2 transition-colors whitespace-nowrap flex-shrink-0 ${
                     activeTab === tab.id
                       ? 'border-blue-600 text-blue-600'
                       : 'border-transparent text-gray-600 hover:text-gray-900'
                   }`}
                 >
                   <Icon className="w-4 h-4" />
-                  <span className="font-medium">{tab.label}</span>
+                  <span className="font-medium text-sm md:text-base">{tab.label}</span>
                 </button>
               );
             })}
@@ -1237,18 +1237,18 @@ export default function WarehousePage() {
       </div>
 
       {/* Content */}
-      <div className="p-6">
+      <div className="p-4 md:p-6">
         {activeTab === 'inventory' && (
           <div className="space-y-4">
             {/* Controls */}
             <div className="bg-white rounded-lg border border-gray-200 p-4">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-4">
+              <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 mb-4">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 md:gap-4 w-full lg:w-auto">
                   {/* View Mode Toggle */}
-                  <div className="flex bg-gray-100 rounded-lg p-1">
+                  <div className="flex bg-gray-100 rounded-lg p-1 w-full sm:w-auto">
                     <button
                       onClick={() => setViewMode('finished')}
-                      className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                      className={`flex-1 sm:flex-none px-3 md:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-colors ${
                         viewMode === 'finished'
                           ? 'bg-white text-gray-900 shadow-sm'
                           : 'text-gray-600 hover:text-gray-900'
@@ -1258,7 +1258,7 @@ export default function WarehousePage() {
                     </button>
                     <button
                       onClick={() => setViewMode('raw')}
-                      className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                      className={`flex-1 sm:flex-none px-3 md:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-colors ${
                         viewMode === 'raw'
                           ? 'bg-white text-gray-900 shadow-sm'
                           : 'text-gray-600 hover:text-gray-900'
@@ -1269,26 +1269,26 @@ export default function WarehousePage() {
                   </div>
 
                   {/* Search */}
-                  <div className="relative">
+                  <div className="relative w-full sm:w-auto">
                     <Search className="w-4 h-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
                     <input
                       type="text"
                       placeholder="Search by name or code..."
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg w-80 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full sm:w-64 md:w-80 pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
                   </div>
                 </div>
 
-                <div className="flex items-center gap-3">
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full lg:w-auto">
                   {/* Category Filter */}
                   <div className="flex items-center gap-2">
-                    <Filter className="w-4 h-4 text-gray-500" />
+                    <Filter className="w-4 h-4 text-gray-500 flex-shrink-0" />
                     <select
                       value={categoryFilter}
                       onChange={(e) => setCategoryFilter(e.target.value)}
-                      className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="flex-1 sm:flex-none border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
                       {(viewMode === 'finished' ? finishedGoodsCategories : rawMaterialsCategories).map(cat => (
                         <option key={cat} value={cat}>
@@ -1302,7 +1302,7 @@ export default function WarehousePage() {
                   <select
                     value={statusFilter}
                     onChange={(e) => setStatusFilter(e.target.value as StockStatus | 'all')}
-                    className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="flex-1 sm:flex-none border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
                     <option value="all">All Status</option>
                     <option value="healthy">Healthy</option>
@@ -1313,7 +1313,7 @@ export default function WarehousePage() {
               </div>
 
               {/* Summary Stats */}
-              <div className="grid grid-cols-4 gap-4 pt-4 border-t border-gray-200">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 pt-4 border-t border-gray-200">
                 <div>
                   <p className="text-sm text-gray-600">Total Items</p>
                   <p className="text-2xl font-bold text-gray-900">
@@ -1354,7 +1354,8 @@ export default function WarehousePage() {
             {viewMode === 'finished' ? (
               /* Finished Goods Table */
               <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-                <div className="overflow-x-auto">
+                {/* Desktop Table */}
+                <div className="hidden md:block overflow-x-auto">
                   <table className="w-full">
                     <thead className="bg-gray-50 border-b border-gray-200">
                       <tr>
@@ -1409,11 +1410,67 @@ export default function WarehousePage() {
                     </tbody>
                   </table>
                 </div>
+
+                {/* Mobile Card View */}
+                <div className="md:hidden divide-y divide-gray-200">
+                  {filteredFinishedGoods.map(item => (
+                    <div key={item.id} className="p-4 space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <p className="font-medium text-gray-900 break-words">{item.name}</p>
+                          <p className="text-xs text-gray-600 mt-1">{item.sku} • {item.category}</p>
+                        </div>
+                        <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium border flex-shrink-0 ${getStatusColor(item.status)}`}>
+                          {getStatusIcon(item.status)}
+                          {getStatusText(item.status)}
+                        </span>
+                      </div>
+                      
+                      <div className="grid grid-cols-2 gap-3 text-sm">
+                        <div>
+                          <p className="text-xs text-gray-500">Current Stock</p>
+                          <p className="font-semibold text-gray-900">{item.currentStock} {item.unit}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500">Reorder Point</p>
+                          <p className="text-gray-900">{item.reorderPoint} {item.unit}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500">Location</p>
+                          <p className="font-mono text-xs text-gray-900">{item.location}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500">Last Restocked</p>
+                          <p className="text-gray-900">{item.lastRestocked}</p>
+                        </div>
+                      </div>
+                      
+                      <div>
+                        <p className="text-xs text-gray-500 mb-2">Capacity Usage</p>
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 bg-gray-200 rounded-full h-2">
+                            <div 
+                              className={`h-2 rounded-full ${
+                                (item.currentStock / item.maxCapacity) * 100 > 60 ? 'bg-green-500' :
+                                (item.currentStock / item.maxCapacity) * 100 > 30 ? 'bg-yellow-500' : 'bg-red-500'
+                              }`}
+                              style={{ width: `${(item.currentStock / item.maxCapacity) * 100}%` }}
+                            />
+                          </div>
+                          <span className="text-xs text-gray-600">
+                            {Math.round((item.currentStock / item.maxCapacity) * 100)}%
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             ) : (
               /* Raw Materials Table */
               <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-                <div className="overflow-x-auto">
+                {/* Desktop Table */}
+                <div className="hidden md:block overflow-x-auto">
                   <table className="w-full">
                     <thead className="bg-gray-50 border-b border-gray-200">
                       <tr>
@@ -1467,6 +1524,56 @@ export default function WarehousePage() {
                     </tbody>
                   </table>
                 </div>
+
+                {/* Mobile Card View */}
+                <div className="md:hidden divide-y divide-gray-200">
+                  {filteredRawMaterials.map(item => (
+                    <div key={item.id} className="p-4 space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <p className="font-medium text-gray-900 break-words">{item.name}</p>
+                          <p className="text-xs text-gray-600 mt-1">{item.code} • {item.category}</p>
+                        </div>
+                        <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium border flex-shrink-0 ${getStatusColor(item.status)}`}>
+                          {getStatusIcon(item.status)}
+                          {getStatusText(item.status)}
+                        </span>
+                      </div>
+                      
+                      <div className="grid grid-cols-2 gap-3 text-sm">
+                        <div>
+                          <p className="text-xs text-gray-500">Current Stock</p>
+                          <p className="font-semibold text-gray-900">{item.currentStock} {item.unit}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500">Reorder Point</p>
+                          <p className="text-gray-900">{item.reorderPoint} {item.unit}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500">Daily Usage</p>
+                          <p className="text-gray-900">{item.dailyConsumption} {item.unit}/day</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500">Days Remaining</p>
+                          <p className={`font-semibold ${
+                            item.daysRemaining > 10 ? 'text-green-600' :
+                            item.daysRemaining > 5 ? 'text-yellow-600' : 'text-red-600'
+                          }`}>
+                            {item.daysRemaining} days
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500">Supplier</p>
+                          <p className="text-gray-900 text-xs">{item.supplier}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500">Last Purchased</p>
+                          <p className="text-gray-900">{item.lastPurchased}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </div>
@@ -1476,13 +1583,13 @@ export default function WarehousePage() {
           <div className="space-y-4">
             {/* Controls Header */}
             <div className="bg-white rounded-lg border border-gray-200 p-4">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
                 <div className="flex items-center gap-4">
                   {/* Request Type Toggle */}
-                  <div className="flex bg-gray-100 rounded-lg p-1">
+                  <div className="flex bg-gray-100 rounded-lg p-1 w-full lg:w-auto">
                     <button
                       onClick={() => setRequestType('production')}
-                      className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                      className={`flex-1 lg:flex-initial flex items-center justify-center gap-2 px-3 md:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-colors ${
                         requestType === 'production'
                           ? 'bg-white text-gray-900 shadow-sm'
                           : 'text-gray-600 hover:text-gray-900'
@@ -1493,7 +1600,7 @@ export default function WarehousePage() {
                     </button>
                     <button
                       onClick={() => setRequestType('purchase')}
-                      className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                      className={`flex-1 lg:flex-initial flex items-center justify-center gap-2 px-3 md:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-colors ${
                         requestType === 'purchase'
                           ? 'bg-white text-gray-900 shadow-sm'
                           : 'text-gray-600 hover:text-gray-900'
@@ -1507,7 +1614,7 @@ export default function WarehousePage() {
 
                 <button
                   onClick={() => setShowCreateModal(true)}
-                  className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+                  className="w-full lg:w-auto flex items-center justify-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
                 >
                   <Plus className="w-4 h-4" />
                   New Request
@@ -1534,7 +1641,7 @@ export default function WarehousePage() {
                 </div>
 
                 {/* Calendar Grid */}
-                <div className="grid grid-cols-7 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2">
                   {(() => {
                     const today = new Date('2026-02-27');
                     const days: Date[] = [];
@@ -1639,7 +1746,7 @@ export default function WarehousePage() {
               </div>
 
               {/* Summary Stats */}
-              <div className="grid grid-cols-5 gap-4 mt-4 pt-4 border-t border-gray-200">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 md:gap-4 mt-4 pt-4 border-t border-gray-200">
                 <div>
                   <p className="text-sm text-gray-600">Total</p>
                   <p className="text-2xl font-bold text-gray-900">
@@ -1688,7 +1795,8 @@ export default function WarehousePage() {
             {/* Production Requests Table */}
             {requestType === 'production' && (
               <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-                <div className="overflow-x-auto">
+                {/* Desktop Table */}
+                <div className="hidden md:block overflow-x-auto">
                   <table className="w-full">
                     <thead className="bg-gray-50 border-b border-gray-200">
                       <tr>
@@ -1741,13 +1849,60 @@ export default function WarehousePage() {
                     </tbody>
                   </table>
                 </div>
+
+                {/* Mobile Card View */}
+                <div className="md:hidden divide-y divide-gray-200">
+                  {mockProductionRequests.map(request => (
+                    <div key={request.id} className="p-4 space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <p className="font-medium text-gray-900 break-words">{request.productName}</p>
+                          <p className="text-xs text-gray-600 mt-1">{request.requestNumber} • {request.productSku}</p>
+                        </div>
+                        <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border flex-shrink-0 ${getPriorityColor(request.priority)}`}>
+                          {request.priority.toUpperCase()}
+                        </span>
+                      </div>
+                      
+                      <div className="flex items-center gap-2">
+                        <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${getRequestStatusColor(request.status)}`}>
+                          {getRequestStatusText(request.status)}
+                        </span>
+                        <span className="font-semibold text-gray-900">{request.quantity} {request.unit}</span>
+                      </div>
+                      
+                      <div className="grid grid-cols-2 gap-3 text-sm">
+                        <div>
+                          <p className="text-xs text-gray-500">Scheduled Date</p>
+                          <p className="text-gray-900 flex items-center gap-1">
+                            <Clock className="w-3 h-3 text-gray-400" />
+                            {request.scheduledDate}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500">Est. Completion</p>
+                          <p className="text-gray-900">{request.estimatedCompletion}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500">Requested By</p>
+                          <p className="text-gray-900">{request.requestedBy}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500">Request Date</p>
+                          <p className="text-gray-900">{request.requestDate}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
             {/* Purchase Requests Table */}
             {requestType === 'purchase' && (
               <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-                <div className="overflow-x-auto">
+                {/* Desktop Table */}
+                <div className="hidden md:block overflow-x-auto">
                   <table className="w-full">
                     <thead className="bg-gray-50 border-b border-gray-200">
                       <tr>
@@ -1802,6 +1957,56 @@ export default function WarehousePage() {
                     </tbody>
                   </table>
                 </div>
+
+                {/* Mobile Card View */}
+                <div className="md:hidden divide-y divide-gray-200">
+                  {mockPurchaseRequests.map(request => (
+                    <div key={request.id} className="p-4 space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <p className="font-medium text-gray-900 break-words">{request.materialName}</p>
+                          <p className="text-xs text-gray-600 mt-1">{request.requestNumber} • {request.materialCode}</p>
+                        </div>
+                        <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border flex-shrink-0 ${getPriorityColor(request.priority)}`}>
+                          {request.priority.toUpperCase()}
+                        </span>
+                      </div>
+                      
+                      <div className="flex items-center gap-2">
+                        <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${getRequestStatusColor(request.status)}`}>
+                          {getRequestStatusText(request.status)}
+                        </span>
+                        <span className="font-semibold text-gray-900">{request.quantity} {request.unit}</span>
+                      </div>
+                      
+                      <div className="grid grid-cols-2 gap-3 text-sm">
+                        <div>
+                          <p className="text-xs text-gray-500">Supplier</p>
+                          <p className="text-gray-900">{request.supplier}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500">Est. Arrival</p>
+                          <p className="text-gray-900">{request.estimatedArrival}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500">Requested Delivery</p>
+                          <p className="text-gray-900 flex items-center gap-1">
+                            <Clock className="w-3 h-3 text-gray-400" />
+                            {request.requestedDelivery}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500">Requested By</p>
+                          <p className="text-gray-900">{request.requestedBy}</p>
+                        </div>
+                        <div className="col-span-2">
+                          <p className="text-xs text-gray-500">Request Date</p>
+                          <p className="text-gray-900">{request.requestDate}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </div>
@@ -1810,7 +2015,7 @@ export default function WarehousePage() {
         {activeTab === 'orders' && (
           <div className="space-y-6">
             {/* Header with Stats */}
-            <div className="grid grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
               <div className="bg-white rounded-lg border border-gray-200 p-4">
                 <p className="text-sm text-gray-600">Ready to Load</p>
                 <p className="text-2xl font-bold text-blue-600">8</p>
@@ -2610,7 +2815,8 @@ export default function WarehousePage() {
                 <p className="text-sm text-gray-600 mt-1">Actual stock movements for {selectedForecastItem.name}</p>
               </div>
 
-              <div className="overflow-x-auto">
+              {/* Desktop Table */}
+              <div className="hidden md:block overflow-x-auto">
                 <table className="w-full">
                   <thead className="bg-gray-50 border-b border-gray-200">
                     <tr>
@@ -2675,6 +2881,79 @@ export default function WarehousePage() {
                     </tr>
                   </tbody>
                 </table>
+              </div>
+
+              {/* Mobile Card View */}
+              <div className="md:hidden divide-y divide-gray-200">
+                <div className="p-4 space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1">
+                      <p className="text-sm text-gray-900 font-medium">Feb 27, 2:45 PM</p>
+                      <p className="text-xs text-gray-500 mt-1">ORD-2026-045 • J. Santos</p>
+                    </div>
+                    <span className="px-2 py-1 bg-red-100 text-red-800 rounded text-xs font-medium flex-shrink-0">Out</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-semibold text-red-600">-35 {selectedForecastItem.unit}</span>
+                    <span className="text-xs text-gray-600">Customer delivery</span>
+                  </div>
+                </div>
+
+                <div className="p-4 space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1">
+                      <p className="text-sm text-gray-900 font-medium">Feb 27, 10:30 AM</p>
+                      <p className="text-xs text-gray-500 mt-1">BATCH-2026-027 • System</p>
+                    </div>
+                    <span className="px-2 py-1 bg-green-100 text-green-800 rounded text-xs font-medium flex-shrink-0">Production</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-semibold text-green-600">+100 {selectedForecastItem.unit}</span>
+                    <span className="text-xs text-gray-600">Production completion</span>
+                  </div>
+                </div>
+
+                <div className="p-4 space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1">
+                      <p className="text-sm text-gray-900 font-medium">Feb 26, 4:15 PM</p>
+                      <p className="text-xs text-gray-500 mt-1">ORD-2026-044 • M. Cruz</p>
+                    </div>
+                    <span className="px-2 py-1 bg-red-100 text-red-800 rounded text-xs font-medium flex-shrink-0">Out</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-semibold text-red-600">-42 {selectedForecastItem.unit}</span>
+                    <span className="text-xs text-gray-600">Manila delivery</span>
+                  </div>
+                </div>
+
+                <div className="p-4 space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1">
+                      <p className="text-sm text-gray-900 font-medium">Feb 26, 11:00 AM</p>
+                      <p className="text-xs text-gray-500 mt-1">TRF-2026-012 • P. Garcia</p>
+                    </div>
+                    <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs font-medium flex-shrink-0">Transfer</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-semibold text-blue-600">+25 {selectedForecastItem.unit}</span>
+                    <span className="text-xs text-gray-600">From Branch B</span>
+                  </div>
+                </div>
+
+                <div className="p-4 space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1">
+                      <p className="text-sm text-gray-900 font-medium">Feb 25, 3:20 PM</p>
+                      <p className="text-xs text-gray-500 mt-1">ORD-2026-043 • R. Santos</p>
+                    </div>
+                    <span className="px-2 py-1 bg-red-100 text-red-800 rounded text-xs font-medium flex-shrink-0">Out</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-semibold text-red-600">-38 {selectedForecastItem.unit}</span>
+                    <span className="text-xs text-gray-600">Urgent order</span>
+                  </div>
+                </div>
               </div>
 
               <div className="p-4 border-t border-gray-200 text-center">
