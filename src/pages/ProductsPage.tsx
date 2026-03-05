@@ -15,39 +15,90 @@ import {
   Download,
   Truck,
   ArrowRightLeft,
+  Edit,
 } from 'lucide-react';
 import { getAllProducts } from '@/src/mock/products';
 import type { ProductCategory, ProductStatus } from '@/src/types/product';
 import { ReceiveProductModal } from '@/src/components/products/ReceiveProductModal';
 import { TransferProductModal } from '@/src/components/products/TransferProductModal';
+import AddCategoryModal, { CategoryFormData } from '@/src/components/products/AddCategoryModal';
+
+// Import category images
+import hdpePipeImg from '@/src/assets/product-images/HDPE Pipe.webp';
+import elbowPipeImg from '@/src/assets/product-images/Elbow Pipe.webp';
+import sanitaryPipeImg from '@/src/assets/product-images/Sanitary Pipe.webp';
+import electricConduitImg from '@/src/assets/product-images/Electric Conduit Pipe.webp';
+import inHousePipeImg from '@/src/assets/product-images/In House Pipe.webp';
+import pressureLineImg from '@/src/assets/product-images/Pressure Line Pipe.webp';
+import pipesImg from '@/src/assets/product-images/Pipes.webp';
+import teePipeImg from '@/src/assets/product-images/Tee Pipe.webp';
+import gardenHoseImg from '@/src/assets/product-images/Garden Hose.webp';
+import couplingImg from '@/src/assets/product-images/Coupling.webp';
+import ballValveImg from '@/src/assets/product-images/Ball Valve.webp';
+import pvcCementImg from '@/src/assets/product-images/PVC Cement.webp';
 
 export function ProductsPage() {
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState('');
   const [showReceiveModal, setShowReceiveModal] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
+  const [showAddCategoryModal, setShowAddCategoryModal] = useState(false);
+  const [editingCategory, setEditingCategory] = useState<CategoryFormData | null>(null);
+  const [isEditMode, setIsEditMode] = useState(false);
 
   const allProducts = getAllProducts();
 
-  const categories: ProductCategory[] = [
-    'HDPE Pipes',
-    'HDPE Fittings',
-    'UPVC Sanitary',
-    'UPVC Electrical',
-    'UPVC Potable Water',
-    'UPVC Pressurized',
-    'PPR Pipes',
-    'PPR Fittings',
-    'Telecom Pipes',
-    'Garden Hoses',
-    'Flexible Hoses',
-    'Others',
+  // Categories with images for illustration
+  const categories: Array<{ name: ProductCategory; image: string }> = [
+    { name: 'HDPE Pipes', image: hdpePipeImg },
+    { name: 'HDPE Fittings', image: elbowPipeImg },
+    { name: 'UPVC Sanitary', image: sanitaryPipeImg },
+    { name: 'UPVC Electrical', image: electricConduitImg },
+    { name: 'UPVC Potable Water', image: inHousePipeImg },
+    { name: 'UPVC Pressurized', image: pressureLineImg },
+    { name: 'PPR Pipes', image: pipesImg },
+    { name: 'PPR Fittings', image: teePipeImg },
+    { name: 'Telecom Pipes', image: gardenHoseImg },
+    { name: 'Garden Hoses', image: gardenHoseImg },
+    { name: 'Flexible Hoses', image: couplingImg },
+    { name: 'Others', image: pvcCementImg },
   ];
 
   // Filter categories by search
   const filteredCategories = categories.filter(cat =>
-    cat.toLowerCase().includes(searchQuery.toLowerCase())
+    cat.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  // Handle edit category
+  const handleEditCategory = (category: { name: ProductCategory; image: string }) => {
+    setEditingCategory({
+      name: category.name,
+      description: `Description for ${category.name}`, // Mock description
+      imageUrl: category.image,
+      icon: 'category' // Default icon
+    });
+    setIsEditMode(true);
+    setShowAddCategoryModal(true);
+  };
+
+  // Handle close modal
+  const handleCloseModal = () => {
+    setShowAddCategoryModal(false);
+    setIsEditMode(false);
+    setEditingCategory(null);
+  };
+
+  // Handle save
+  const handleSaveCategory = (categoryData: CategoryFormData) => {
+    console.log(isEditMode ? 'Updating category:' : 'Creating category:', categoryData);
+    handleCloseModal();
+  };
+
+  // Handle delete
+  const handleDeleteCategory = () => {
+    console.log('Deleting category:', editingCategory?.name);
+    handleCloseModal();
+  };
 
   // Summary stats
   const totalProducts = allProducts.length;
@@ -120,25 +171,6 @@ export function ProductsPage() {
               <div>
                 <p className="text-sm text-gray-500">Low/Out of Stock</p>
                 <p className="text-2xl font-bold text-gray-900">{lowStockProducts}</p>
-                <TrendingUp className="w-6 h-6 text-green-600" />
-              </div>
-              <div>
-                <p className="text-sm text-gray-500">Active Products</p>
-                <p className="text-2xl font-bold text-gray-900">{activeProducts}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-orange-100 rounded-lg">
-                <AlertTriangle className="w-6 h-6 text-orange-600" />
-              </div>
-              <div>
-                <p className="text-sm text-gray-500">Low Stock Items</p>
-                <p className="text-2xl font-bold text-gray-900">{lowStockProducts}</p>
               </div>
             </div>
           </CardContent>
@@ -180,28 +212,63 @@ export function ProductsPage() {
       {/* Categories Grid */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-xl">Browse by Category</CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-xl">Browse by Category</CardTitle>
+            <Button 
+              variant="primary"
+              onClick={() => {
+                setEditingCategory(null);
+                setIsEditMode(false);
+                setShowAddCategoryModal(true);
+              }}
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              Add Category
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
             {filteredCategories.map((category) => {
-              const categoryProducts = allProducts.filter(p => p.category === category);
+              const categoryProducts = allProducts.filter(p => p.category === category.name);
               const categoryCount = categoryProducts.length;
               const lowStockCount = categoryProducts.filter(p => p.status === 'Low Stock' || p.totalStock === 0).length;
               
               return (
-                <button
-                  key={category}
-                  onClick={() => navigate(`/products/category/${category.toLowerCase().replace(/\s+/g, '-')}`)}
-                  className="group relative p-6 border-2 border-gray-200 rounded-lg hover:border-red-500 hover:shadow-lg transition-all duration-200 text-left"
+                <div
+                  key={category.name}
+                  className="group relative overflow-hidden border-2 border-gray-200 rounded-lg hover:border-red-500 hover:shadow-lg transition-all duration-200"
                 >
-                  <div className="flex flex-col items-center text-center space-y-3">
-                    <div className="p-4 bg-gray-100 rounded-full group-hover:bg-red-50 transition-colors">
-                      <Package className="w-8 h-8 text-gray-600 group-hover:text-red-600 transition-colors" />
+                  {/* Edit Button - Top Right - Always visible, more prominent on hover */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleEditCategory(category);
+                    }}
+                    className="absolute top-2 right-2 z-10 p-2.5 bg-white hover:bg-red-600 text-gray-700 hover:text-white rounded-lg shadow-lg border border-gray-300 group-hover:border-red-600 transition-all duration-200 hover:scale-110"
+                    title="Edit category"
+                  >
+                    <Edit className="w-4 h-4" />
+                  </button>
+
+                  {/* Category Card - Clickable Area */}
+                  <button
+                    onClick={() => navigate(`/products/category/${category.name.toLowerCase().replace(/\s+/g, '-')}`)}
+                    className="w-full text-left"
+                  >
+                    {/* Category Image */}
+                    <div className="aspect-video w-full overflow-hidden bg-gray-100">
+                      <img 
+                        src={category.image} 
+                        alt={category.name}
+                        className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
+                      />
                     </div>
-                    <div>
+                    
+                    {/* Category Info */}
+                    <div className="p-4">
                       <h3 className="font-semibold text-gray-900 group-hover:text-red-600 transition-colors">
-                        {category}
+                        {category.name}
                       </h3>
                       <p className="text-sm text-gray-500 mt-1">
                         {categoryCount} {categoryCount === 1 ? 'product' : 'products'}
@@ -212,8 +279,8 @@ export function ProductsPage() {
                         </Badge>
                       )}
                     </div>
-                  </div>
-                </button>
+                  </button>
+                </div>
               );
             })}
           </div>
@@ -238,6 +305,17 @@ export function ProductsPage() {
             setShowTransferModal(false);
             // Refresh data in real implementation
           }}
+        />
+      )}
+
+      {showAddCategoryModal && (
+        <AddCategoryModal
+          isOpen={showAddCategoryModal}
+          onClose={handleCloseModal}
+          onSave={handleSaveCategory}
+          onDelete={handleDeleteCategory}
+          initialData={editingCategory || undefined}
+          isEditMode={isEditMode}
         />
       )}
     </div>

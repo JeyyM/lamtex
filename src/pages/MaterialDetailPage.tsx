@@ -183,111 +183,141 @@ export function MaterialDetailPage() {
         </div>
       </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-blue-100 rounded-lg">
-                <Box className="w-6 h-6 text-blue-600" />
+      {/* Material Image, Summary Cards & Info */}
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+        {/* Material Image - Spans full height */}
+        <div className="lg:row-span-2">
+          <Card className="h-full">
+            <CardContent className="p-4 h-full flex flex-col">
+              {material.imageUrl ? (
+                <div className="flex-1 rounded-lg overflow-hidden">
+                  <img
+                    src={material.imageUrl}
+                    alt={material.name}
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+              ) : (
+                <div className="flex-1 rounded-lg bg-gray-100 flex items-center justify-center">
+                  <Package className="w-16 h-16 text-gray-400" />
+                </div>
+              )}
+              <div className="mt-4">
+                <h3 className="text-sm font-medium text-gray-500 mb-1">Material Image</h3>
+                <p className="text-xs text-gray-400">SKU: {material.sku}</p>
               </div>
-              <div>
-                <p className="text-sm text-gray-500">Total Stock</p>
-                <p className="text-2xl font-bold text-gray-900">
-                  {material.totalStock.toLocaleString()} <span className="text-sm font-normal uppercase">{material.unitOfMeasure}</span>
-                </p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        </div>
 
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-green-100 rounded-lg">
-                <DollarSign className="w-6 h-6 text-green-600" />
-              </div>
-              <div>
-                <p className="text-sm text-gray-500">Inventory Value</p>
-                <p className="text-2xl font-bold text-gray-900">
-                  ₱{(material.totalValue / 1000).toFixed(0)}K
-                </p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        {/* Summary Cards - Right side, 2 rows of 2 cards */}
+        <div className="lg:col-span-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-3 bg-blue-100 rounded-lg">
+                    <Box className="w-6 h-6 text-blue-600" />
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-500">Total Stock</p>
+                    <p className="text-2xl font-bold text-gray-900">
+                      {material.totalStock.toLocaleString()} <span className="text-sm font-normal uppercase">{material.unitOfMeasure}</span>
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
 
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-purple-100 rounded-lg">
-                <TrendingUp className="w-6 h-6 text-purple-600" />
-              </div>
-              <div>
-                <p className="text-sm text-gray-500">Monthly Consumption</p>
-                <p className="text-2xl font-bold text-gray-900">
-                  {material.monthlyConsumption.toLocaleString()}
-                </p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-3 bg-green-100 rounded-lg">
+                    <DollarSign className="w-6 h-6 text-green-600" />
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-500">Inventory Value</p>
+                    <p className="text-2xl font-bold text-gray-900">
+                      ₱{(material.totalValue / 1000).toFixed(0)}K
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
 
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className={`p-3 rounded-lg ${material.totalStock <= material.reorderPoint ? 'bg-orange-100' : 'bg-gray-100'}`}>
-                <AlertTriangle className={`w-6 h-6 ${material.totalStock <= material.reorderPoint ? 'text-orange-600' : 'text-gray-600'}`} />
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-3 bg-purple-100 rounded-lg">
+                    <TrendingUp className="w-6 h-6 text-purple-600" />
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-500">Monthly Consumption</p>
+                    <p className="text-2xl font-bold text-gray-900">
+                      {material.monthlyConsumption.toLocaleString()}
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center gap-3">
+                  <div className={`p-3 rounded-lg ${material.totalStock <= material.reorderPoint ? 'bg-orange-100' : 'bg-gray-100'}`}>
+                    <AlertTriangle className={`w-6 h-6 ${material.totalStock <= material.reorderPoint ? 'text-orange-600' : 'text-gray-600'}`} />
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-500">Reorder Point</p>
+                    <p className="text-2xl font-bold text-gray-900">
+                      {material.reorderPoint.toLocaleString()}
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+
+        {/* Material Info & Status - Right side, below KPI cards */}
+        <Card className="lg:col-span-3">
+          <CardHeader>
+            <CardTitle>Material Information</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div>
+                <h3 className="text-sm font-medium text-gray-500 mb-2">Description</h3>
+                <p className="text-gray-900">{material.description}</p>
               </div>
               <div>
-                <p className="text-sm text-gray-500">Reorder Point</p>
-                <p className="text-2xl font-bold text-gray-900">
-                  {material.reorderPoint.toLocaleString()}
-                </p>
+                <h3 className="text-sm font-medium text-gray-500 mb-2">Status & Supplier</h3>
+                <div className="space-y-2">
+                  <div>
+                    <Badge variant={getStatusColor(material.status)} className="text-sm">
+                      {material.status}
+                    </Badge>
+                  </div>
+                  <p className="text-sm text-gray-900">
+                    <span className="text-gray-500">Supplier:</span> {material.primarySupplier}
+                  </p>
+                  <p className="text-sm text-gray-900">
+                    <span className="text-gray-500">Lead Time:</span> {material.leadTimeDays} days
+                  </p>
+                </div>
+              </div>
+              <div>
+                <h3 className="text-sm font-medium text-gray-500 mb-2">Last Activity</h3>
+                <div className="space-y-1">
+                  <p className="text-xs text-gray-500">Last Restock: {material.lastRestockDate}</p>
+                  <p className="text-xs text-gray-500">Last Issued: {material.lastIssuedDate}</p>
+                  <p className="text-xs text-gray-500">Created: {material.createdDate}</p>
+                </div>
               </div>
             </div>
           </CardContent>
         </Card>
       </div>
-
-      {/* Material Info & Status */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Material Information</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div>
-              <h3 className="text-sm font-medium text-gray-500 mb-2">Description</h3>
-              <p className="text-gray-900">{material.description}</p>
-            </div>
-            <div>
-              <h3 className="text-sm font-medium text-gray-500 mb-2">Status & Supplier</h3>
-              <div className="space-y-2">
-                <div>
-                  <Badge variant={getStatusColor(material.status)} className="text-sm">
-                    {material.status}
-                  </Badge>
-                </div>
-                <p className="text-sm text-gray-900">
-                  <span className="text-gray-500">Supplier:</span> {material.primarySupplier}
-                </p>
-                <p className="text-sm text-gray-900">
-                  <span className="text-gray-500">Lead Time:</span> {material.leadTimeDays} days
-                </p>
-              </div>
-            </div>
-            <div>
-              <h3 className="text-sm font-medium text-gray-500 mb-2">Last Activity</h3>
-              <div className="space-y-1">
-                <p className="text-xs text-gray-500">Last Restock: {material.lastRestockDate}</p>
-                <p className="text-xs text-gray-500">Last Issued: {material.lastIssuedDate}</p>
-                <p className="text-xs text-gray-500">Created: {material.createdDate}</p>
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
 
       {/* Tabs */}
       <div className="border-b border-gray-200">

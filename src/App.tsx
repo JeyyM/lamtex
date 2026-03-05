@@ -17,6 +17,7 @@ import ProductFamilyPage from './pages/ProductFamilyPage';
 import { LogisticsPage } from './pages/LogisticsPage';
 import { CustomersPage } from './pages/CustomersPageNew';
 import { CustomerDetailPage } from './pages/CustomerDetailPage';
+import { CustomerFormPage } from './pages/CustomerFormPage';
 import { SuppliersPage } from './pages/SuppliersPage';
 import { FinancePageNew } from './pages/FinancePageNew';
 import { ReportsPage } from './pages/ReportsPage';
@@ -69,7 +70,9 @@ export default function App() {
             <Route path="logistics/:vehicleId" element={<TruckDetailPage />} />
             <Route path="warehouse" element={<WarehousePage />} />
             <Route path="customers" element={<CustomersPage />} />
+            <Route path="customers/new" element={<CustomerFormPage />} />
             <Route path="customers/:id" element={<CustomerDetailPage />} />
+            <Route path="customers/:id/edit" element={<CustomerFormPage />} />
             <Route path="suppliers" element={<SuppliersPage />} />
             <Route path="finance" element={<FinancePageNew />} />
             <Route path="employees" element={<EmployeesPage />} />

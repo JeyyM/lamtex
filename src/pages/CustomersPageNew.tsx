@@ -121,7 +121,7 @@ export function CustomersPage() {
           <h1 className="text-2xl font-bold text-gray-900">Customers</h1>
           <p className="text-sm text-gray-500 mt-1">Manage customer relationships and track sales performance</p>
         </div>
-        <Button variant="primary" className="gap-2">
+        <Button variant="primary" className="gap-2" onClick={() => navigate('/customers/new')}>
           <Plus className="w-4 h-4" />
           Add Customer
         </Button>
@@ -189,35 +189,50 @@ export function CustomersPage() {
                   <th className="px-6 py-3 text-right font-medium">Outstanding</th>
                   <th className="px-6 py-3 text-center font-medium">Risk</th>
                   <th className="px-6 py-3 text-left font-medium">Last Order</th>
+                  <th className="px-6 py-3 text-center font-medium">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
                 {filteredCustomers.map((customer) => (
                   <tr 
                     key={customer.id} 
-                    className="hover:bg-gray-50 cursor-pointer"
-                    onClick={() => handleViewCustomer(customer)}
+                    className="hover:bg-gray-50"
                   >
-                    <td className="px-6 py-4">
+                    <td 
+                      className="px-6 py-4 cursor-pointer"
+                      onClick={() => handleViewCustomer(customer)}
+                    >
                       <div>
                         <div className="font-medium text-gray-900">{customer.name}</div>
                         <div className="text-xs text-gray-500">{customer.id}</div>
                       </div>
                     </td>
-                    <td className="px-6 py-4">
+                    <td 
+                      className="px-6 py-4 cursor-pointer"
+                      onClick={() => handleViewCustomer(customer)}
+                    >
                       <Badge variant="default">{customer.type}</Badge>
                     </td>
-                    <td className="px-6 py-4">
+                    <td 
+                      className="px-6 py-4 cursor-pointer"
+                      onClick={() => handleViewCustomer(customer)}
+                    >
                       <div className="text-sm">
                         <div className="font-medium text-gray-900">{customer.contactPerson}</div>
                         <div className="text-xs text-gray-500">{customer.phone}</div>
                       </div>
                     </td>
-                    <td className="px-6 py-4 text-right">
+                    <td 
+                      className="px-6 py-4 text-right cursor-pointer"
+                      onClick={() => handleViewCustomer(customer)}
+                    >
                       <div className="font-medium text-gray-900">₱{(customer.totalPurchasesYTD / 1000000).toFixed(1)}M</div>
                       <div className="text-xs text-gray-500">{customer.orderCount} orders</div>
                     </td>
-                    <td className="px-6 py-4 text-right">
+                    <td 
+                      className="px-6 py-4 text-right cursor-pointer"
+                      onClick={() => handleViewCustomer(customer)}
+                    >
                       <div className={`font-medium ${customer.overdueAmount > 0 ? 'text-red-600' : 'text-gray-900'}`}>
                         ₱{(customer.outstandingBalance / 1000).toFixed(0)}K
                       </div>
@@ -225,17 +240,37 @@ export function CustomersPage() {
                         <div className="text-xs text-red-600">₱{(customer.overdueAmount / 1000).toFixed(0)}K overdue</div>
                       )}
                     </td>
-                    <td className="px-6 py-4 text-center">
+                    <td 
+                      className="px-6 py-4 text-center cursor-pointer"
+                      onClick={() => handleViewCustomer(customer)}
+                    >
                       <Badge variant={getRiskBadgeVariant(customer.riskLevel)}>
                         {customer.riskLevel}
                       </Badge>
                     </td>
-                    <td className="px-6 py-4 text-gray-600">{customer.lastOrderDate || 'Never'}</td>
+                    <td 
+                      className="px-6 py-4 text-gray-600 cursor-pointer"
+                      onClick={() => handleViewCustomer(customer)}
+                    >
+                      {customer.lastOrderDate || 'Never'}
+                    </td>
+                    <td className="px-6 py-4 text-center">
+                      <Button 
+                        variant="ghost" 
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigate(`/customers/${customer.id}/edit`);
+                        }}
+                      >
+                        <Edit className="w-4 h-4" />
+                      </Button>
+                    </td>
                   </tr>
                 ))}
                 {filteredCustomers.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="px-6 py-12 text-center text-gray-500">
+                    <td colSpan={8} className="px-6 py-12 text-center text-gray-500">
                       <Building2 className="w-12 h-12 mx-auto mb-3 text-gray-400" />
                       <p className="font-medium">No customers found</p>
                       <p className="text-sm mt-1">Try adjusting your search or filters</p>

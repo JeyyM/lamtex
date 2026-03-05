@@ -19,6 +19,7 @@ import {
   ArrowRightLeft,
   ShoppingCart,
   Users,
+  Edit,
 } from 'lucide-react';
 import {
   getAllRawMaterials,
@@ -26,9 +27,19 @@ import {
   getTotalInventoryValue,
   getMaterialsRequiringReorder,
 } from '@/src/mock/rawMaterials';
-import type { MaterialCategory, MaterialStatus } from '@/src/types/materials';
+import type { MaterialCategory, MaterialStatus, StockOutRisk } from '@/src/types/materials';
 import { ReceiveMaterialModal } from '@/src/components/materials/ReceiveMaterialModal';
 import { StockTransferModal } from '@/src/components/materials/StockTransferModal';
+import AddMaterialCategoryModal, { MaterialCategoryFormData } from '@/src/components/materials/AddMaterialCategoryModal';
+
+// Import raw material images
+import whitePelletsImg from '@/src/assets/raw-materials/White Pellets.webp';
+import resinPowderImg from '@/src/assets/raw-materials/Resin Powder.avif';
+import pvcImg from '@/src/assets/raw-materials/Polyvinyl-Chloride.avif';
+import polypropyleneImg from '@/src/assets/raw-materials/Polypropylene.jpg';
+import petImg from '@/src/assets/raw-materials/Polyethylene Terephthalate.jpg';
+import ldpeImg from '@/src/assets/raw-materials/Low Density Polyethylene.jpg';
+import j70Img from '@/src/assets/raw-materials/J-70.jfif';
 
 export function RawMaterialsPage() {
   const navigate = useNavigate();
@@ -40,6 +51,9 @@ export function RawMaterialsPage() {
   // Modal states
   const [showReceiveModal, setShowReceiveModal] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
+  const [showAddCategoryModal, setShowAddCategoryModal] = useState(false);
+  const [editingCategory, setEditingCategory] = useState<MaterialCategoryFormData | null>(null);
+  const [isEditMode, setIsEditMode] = useState(false);
 
   const allMaterials = getAllRawMaterials();
   const lowStockMaterials = getLowStockMaterials();
@@ -71,21 +85,48 @@ export function RawMaterialsPage() {
     return 'success';
   };
 
-  const categories: (MaterialCategory | 'All')[] = [
-    'All',
-    'PVC Resin',
-    'HDPE Resin',
-    'PPR Resin',
-    'Stabilizers',
-    'Plasticizers',
-    'Lubricants',
-    'Colorants',
-    'Additives',
-    'Packaging Materials',
-    'Other',
+  const categories = [
+    { name: 'PVC Resin', image: pvcImg, icon: 'science', description: 'Polyvinyl chloride resin for pipe manufacturing' },
+    { name: 'HDPE Resin', image: ldpeImg, icon: 'inventory_2', description: 'High-density polyethylene for durable products' },
+    { name: 'PPR Resin', image: polypropyleneImg, icon: 'layers', description: 'Polypropylene random copolymer resin' },
+    { name: 'Stabilizers', image: whitePelletsImg, icon: 'shield', description: 'Heat and UV stabilizers for material protection' },
+    { name: 'Plasticizers', image: j70Img, icon: 'water_drop', description: 'Additives for flexibility and workability' },
+    { name: 'Lubricants', image: resinPowderImg, icon: 'oil_barrel', description: 'Processing aids and lubricants' },
+    { name: 'Colorants', image: petImg, icon: 'palette', description: 'Pigments and color masterbatches' },
+    { name: 'Additives', image: whitePelletsImg, icon: 'add_circle', description: 'Performance-enhancing additives' },
+    { name: 'Packaging Materials', image: resinPowderImg, icon: 'package_2', description: 'Packaging supplies and materials' },
+    { name: 'Other', image: pvcImg, icon: 'category', description: 'Miscellaneous raw materials' },
   ];
 
   const riskLevels: (StockOutRisk | 'All')[] = ['All', 'OK', 'Risky', 'Critical'];
+
+  // Handler functions for category management
+  const handleEditCategory = (category: { name: string; image: string; icon?: string; description?: string }) => {
+    const categoryData: MaterialCategoryFormData = {
+      name: category.name,
+      description: category.description || '',
+      imageUrl: category.image,
+      icon: category.icon || 'inventory_2',
+    };
+    setEditingCategory(categoryData);
+    setIsEditMode(true);
+  };
+
+  const handleCloseModal = () => {
+    setShowAddCategoryModal(false);
+    setEditingCategory(null);
+    setIsEditMode(false);
+  };
+
+  const handleSaveCategory = (categoryData: MaterialCategoryFormData) => {
+    console.log('Material category saved:', categoryData);
+    handleCloseModal();
+  };
+
+  const handleDeleteCategory = () => {
+    console.log('Material category deleted');
+    handleCloseModal();
+  };
 
   // Derived calculations for enhanced materials (immutable operations)
   const enhancedMaterials = filteredBySearchAndCategory.map((material) => {
@@ -350,28 +391,63 @@ export function RawMaterialsPage() {
       {/* Categories Section */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-xl">Browse by Category</CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-xl">Browse by Category</CardTitle>
+            <Button 
+              variant="primary"
+              onClick={() => {
+                setEditingCategory(null);
+                setIsEditMode(false);
+                setShowAddCategoryModal(true);
+              }}
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              Add Category
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
-            {categories.filter(cat => cat !== 'All').map((category) => {
-              const categoryMaterials = allMaterials.filter(m => m.category === category);
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            {categories.map((category) => {
+              const categoryMaterials = allMaterials.filter(m => m.category === category.name);
               const categoryCount = categoryMaterials.length;
               const lowStockCount = categoryMaterials.filter(m => m.status === 'Low Stock' || m.status === 'Out of Stock').length;
               
               return (
-                <button
-                  key={category}
-                  onClick={() => navigate(`/materials/category/${category.toLowerCase().replace(/\s+/g, '-')}`)}
-                  className="group relative p-6 border-2 border-gray-200 rounded-lg hover:border-red-500 hover:shadow-lg transition-all duration-200 text-left"
+                <div
+                  key={category.name}
+                  className="group relative overflow-hidden border-2 border-gray-200 rounded-lg hover:border-red-500 hover:shadow-lg transition-all duration-200"
                 >
-                  <div className="flex flex-col items-center text-center space-y-3">
-                    <div className="p-4 bg-gray-100 rounded-full group-hover:bg-red-50 transition-colors">
-                      <Package className="w-8 h-8 text-gray-600 group-hover:text-red-600 transition-colors" />
+                  {/* Edit Button - Top Right - Always visible, more prominent on hover */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleEditCategory(category);
+                    }}
+                    className="absolute top-2 right-2 z-10 p-2.5 bg-white hover:bg-red-600 text-gray-700 hover:text-white rounded-lg shadow-lg border border-gray-300 group-hover:border-red-600 transition-all duration-200 hover:scale-110"
+                    title="Edit material category"
+                  >
+                    <Edit className="w-4 h-4" />
+                  </button>
+
+                  {/* Category Card - Clickable Area */}
+                  <button
+                    onClick={() => navigate(`/materials/category/${category.name.toLowerCase().replace(/\s+/g, '-')}`)}
+                    className="w-full text-left"
+                  >
+                    {/* Category Image */}
+                    <div className="aspect-video w-full overflow-hidden bg-gray-100">
+                      <img 
+                        src={category.image} 
+                        alt={category.name}
+                        className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
+                      />
                     </div>
-                    <div>
+                    
+                    {/* Category Info */}
+                    <div className="p-4">
                       <h3 className="font-semibold text-gray-900 group-hover:text-red-600 transition-colors">
-                        {category}
+                        {category.name}
                       </h3>
                       <p className="text-sm text-gray-500 mt-1">
                         {categoryCount} {categoryCount === 1 ? 'item' : 'items'}
@@ -382,8 +458,8 @@ export function RawMaterialsPage() {
                         </Badge>
                       )}
                     </div>
-                  </div>
-                </button>
+                  </button>
+                </div>
               );
             })}
           </div>
@@ -408,6 +484,18 @@ export function RawMaterialsPage() {
             setShowTransferModal(false);
             // Refresh data in real implementation
           }}
+        />
+      )}
+
+      {/* Add/Edit Material Category Modal */}
+      {(showAddCategoryModal || editingCategory) && (
+        <AddMaterialCategoryModal
+          isOpen={showAddCategoryModal || !!editingCategory}
+          onClose={handleCloseModal}
+          onSave={handleSaveCategory}
+          onDelete={isEditMode ? handleDeleteCategory : undefined}
+          initialData={editingCategory || undefined}
+          isEditMode={isEditMode}
         />
       )}
     </div>

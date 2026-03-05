@@ -12,8 +12,19 @@ import {
   Search,
   Filter,
   ShoppingCart,
-  Eye
+  Eye,
+  Edit,
+  Plus
 } from 'lucide-react';
+import AddMaterialModal, { MaterialFormData } from '../components/materials/AddMaterialModal';
+
+// Import raw material images
+import whitePelletsImg from '../assets/raw-materials/White Pellets.webp';
+import resinPowderImg from '../assets/raw-materials/Resin Powder.avif';
+import pvcImg from '../assets/raw-materials/Polyvinyl-Chloride.avif';
+import polypropyleneImg from '../assets/raw-materials/Polypropylene.jpg';
+import petImg from '../assets/raw-materials/Polyethylene Terephthalate.jpg';
+import ldpeImg from '../assets/raw-materials/Low Density Polyethylene.jpg';
 
 // Mock data for a single category (hardcoded for now)
 const mockCategoryMaterials = [
@@ -33,8 +44,8 @@ const mockCategoryMaterials = [
     monthlyConsumption: 800,
     avgDailyUsage: 26.67,
     status: 'In Stock',
-    stockPercentage: 62.5, // Percentage relative to max capacity
-    imageUrl: null,
+    stockPercentage: 62.5,
+    imageUrl: resinPowderImg,
   },
   {
     id: 'MAT-002',
@@ -53,7 +64,7 @@ const mockCategoryMaterials = [
     avgDailyUsage: 13.33,
     status: 'Low Stock',
     stockPercentage: 28.1,
-    imageUrl: null,
+    imageUrl: pvcImg,
   },
   {
     id: 'MAT-003',
@@ -72,7 +83,7 @@ const mockCategoryMaterials = [
     avgDailyUsage: 20,
     status: 'In Stock',
     stockPercentage: 75,
-    imageUrl: null,
+    imageUrl: whitePelletsImg,
   },
   {
     id: 'MAT-004',
@@ -91,7 +102,7 @@ const mockCategoryMaterials = [
     avgDailyUsage: 11.67,
     status: 'In Stock',
     stockPercentage: 55,
-    imageUrl: null,
+    imageUrl: polypropyleneImg,
   },
   {
     id: 'MAT-005',
@@ -110,7 +121,7 @@ const mockCategoryMaterials = [
     avgDailyUsage: 6.67,
     status: 'Critical',
     stockPercentage: 15,
-    imageUrl: null,
+    imageUrl: petImg,
   },
   {
     id: 'MAT-006',
@@ -129,7 +140,7 @@ const mockCategoryMaterials = [
     avgDailyUsage: 8.33,
     status: 'In Stock',
     stockPercentage: 68,
-    imageUrl: null,
+    imageUrl: ldpeImg,
   },
 ];
 
@@ -140,10 +151,50 @@ export default function MaterialCategoryPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'stock' | 'usage'>('name');
 
+  // Modal states for edit
+  const [editingMaterial, setEditingMaterial] = useState<MaterialFormData | null>(null);
+  const [isEditMode, setIsEditMode] = useState(false);
+
   // For now, always show the same hardcoded data regardless of category
   const categoryTitle = categoryName
     ? categoryName.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')
     : 'Resins';
+
+  // Handler functions for material management
+  const handleEditMaterial = (material: typeof mockCategoryMaterials[0]) => {
+    const materialData: MaterialFormData = {
+      id: material.id,
+      name: material.name,
+      sku: material.sku,
+      description: material.description,
+      imageUrl: material.imageUrl || '',
+      category: material.category,
+      unitOfMeasure: material.unitOfMeasure,
+      costPerUnit: material.costPerUnit,
+      reorderPoint: material.reorderPoint,
+    };
+    setEditingMaterial(materialData);
+    setIsEditMode(true);
+  };
+
+  const handleCloseModal = () => {
+    setEditingMaterial(null);
+    setIsEditMode(false);
+  };
+
+  const handleSaveMaterial = (materialData: MaterialFormData) => {
+    console.log('Material saved:', materialData);
+    handleCloseModal();
+  };
+
+  const handleDeleteMaterial = () => {
+    console.log('Material deleted');
+    handleCloseModal();
+  };
+
+  const handleMaterialClick = (material: typeof mockCategoryMaterials[0]) => {
+    navigate(`/materials/category/${categoryName}/details/${material.id}`);
+  };
 
   // Filter and sort materials
   const filteredMaterials = mockCategoryMaterials
@@ -204,6 +255,26 @@ export default function MaterialCategoryPage() {
           <Button variant="outline">
             <ShoppingCart className="w-4 h-4 mr-2" />
             Create Purchase Order
+          </Button>
+          <Button 
+            variant="primary"
+            onClick={() => {
+              setEditingMaterial(null);
+              setIsEditMode(false);
+              setEditingMaterial({
+                name: '',
+                sku: '',
+                description: '',
+                imageUrl: '',
+                category: categoryTitle,
+                unitOfMeasure: 'kg',
+                costPerUnit: 0,
+                reorderPoint: 0
+              });
+            }}
+          >
+            <Plus className="w-4 h-4 mr-2" />
+            Add Material
           </Button>
         </div>
       </div>
@@ -294,14 +365,40 @@ export default function MaterialCategoryPage() {
             : Infinity;
 
           return (
-            <Card 
-              key={material.id} 
-              className="group hover:shadow-xl transition-all duration-200 border-2 hover:border-red-500"
+            <div
+              key={material.id}
+              className="group relative"
             >
+              {/* Edit Button - Top Right */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleEditMaterial(material);
+                }}
+                className="absolute top-2 right-2 z-10 p-2.5 bg-white hover:bg-red-600 text-gray-700 hover:text-white rounded-lg shadow-lg border border-gray-300 group-hover:border-red-600 transition-all duration-200 hover:scale-110"
+                title="Edit material"
+              >
+                <Edit className="w-4 h-4" />
+              </button>
+
+              <Card 
+                className="group-hover:shadow-xl transition-all duration-200 border-2 group-hover:border-red-500 cursor-pointer"
+                onClick={() => handleMaterialClick(material)}
+              >
               <CardContent className="p-0">
-                {/* Image Placeholder */}
-                <div className="h-48 bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center border-b">
-                  <Package className="w-16 h-16 text-gray-400" />
+                {/* Image */}
+                <div className="h-48 bg-gray-100 overflow-hidden border-b relative">
+                  {material.imageUrl ? (
+                    <img 
+                      src={material.imageUrl} 
+                      alt={material.name}
+                      className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-100 to-gray-200">
+                      <Package className="w-16 h-16 text-gray-400" />
+                    </div>
+                  )}
                 </div>
 
                 {/* Content */}
@@ -401,7 +498,7 @@ export default function MaterialCategoryPage() {
 
                   {/* Price & Actions */}
                   <div className="pt-4 border-t">
-                    <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center justify-between">
                       <div>
                         <div className="text-xs text-gray-500">Cost per Unit</div>
                         <div className="text-xl font-bold text-gray-900">
@@ -415,19 +512,11 @@ export default function MaterialCategoryPage() {
                         </div>
                       </div>
                     </div>
-
-                    <Button 
-                      variant="primary" 
-                      className="w-full"
-                      onClick={() => navigate(`/materials/category/${categoryName}/details/${material.id}`)}
-                    >
-                      <Eye className="w-4 h-4 mr-2" />
-                      View Details
-                    </Button>
                   </div>
                 </div>
               </CardContent>
             </Card>
+            </div>
           );
         })}
       </div>
@@ -442,6 +531,19 @@ export default function MaterialCategoryPage() {
             </div>
           </CardContent>
         </Card>
+      )}
+
+      {/* Add/Edit Material Modal */}
+      {editingMaterial && (
+        <AddMaterialModal
+          isOpen={!!editingMaterial}
+          onClose={handleCloseModal}
+          onSave={handleSaveMaterial}
+          onDelete={isEditMode ? handleDeleteMaterial : undefined}
+          categoryName={categoryTitle}
+          initialData={editingMaterial}
+          isEditMode={isEditMode}
+        />
       )}
     </div>
   );

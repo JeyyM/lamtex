@@ -304,7 +304,7 @@ export function CustomersPage() {
             <BarChart3 className="w-4 h-4 mr-2" />
             Customer Reports
           </Button>
-          <Button variant="primary">
+          <Button variant="primary" onClick={() => navigate('/customers/new')}>
             <Plus className="w-4 h-4 mr-2" />
             Add New Customer
           </Button>
@@ -536,7 +536,11 @@ export function CustomersPage() {
                         <Eye className="w-4 h-4 mr-1" />
                         View Details
                       </Button>
-                      <Button variant="outline" size="sm">
+                      <Button 
+                        variant="outline" 
+                        size="sm"
+                        onClick={() => navigate(`/customers/${customer.id}/edit`)}
+                      >
                         <Edit className="w-4 h-4" />
                       </Button>
                     </div>

@@ -41,8 +41,8 @@ export function CustomerDetailPage() {
   const [expandedProduct, setExpandedProduct] = useState<number | null>(null);
   const [showCreateOrder, setShowCreateOrder] = useState(false);
 
-  // For simplicity, always show CUS-001 (Mega Hardware Center) regardless of ID
-  const customer = getCustomerById('CUS-001');
+  // Get customer by actual ID from URL
+  const customer = getCustomerById(id || '');
   
   if (!customer) {
     return (
@@ -146,7 +146,7 @@ export function CustomerDetailPage() {
           </div>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm">
+          <Button variant="outline" size="sm" onClick={() => navigate(`/customers/${customer.id}/edit`)}>
             <Edit className="w-4 h-4 mr-2" />
             Edit
           </Button>

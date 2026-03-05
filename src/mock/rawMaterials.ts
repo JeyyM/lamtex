@@ -229,6 +229,7 @@ export const rawMaterials: RawMaterial[] = [
     sku: 'STAB-TIN-001',
     category: 'Stabilizers',
     description: 'Organotin-based thermal stabilizer for high-performance PVC applications',
+    imageUrl: '/src/assets/raw-materials/White Pellets.webp',
     specifications: {
       grade: 'Methyltin Mercaptide',
       color: 'Transparent Liquid',

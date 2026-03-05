@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
 import { X, Link as LinkIcon, Mail, MessageSquare, QrCode, Copy, Check } from 'lucide-react';
 import { Button } from '@/src/components/ui/Button';
 import { Invoice } from '@/src/types/orders';
@@ -76,20 +75,8 @@ export function PaymentLinkModal({ invoice, onClose, onGenerate }: PaymentLinkMo
   });
 
   return (
-    <motion.div 
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.2 }}
-      className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4"
-    >
-      <motion.div 
-        initial={{ opacity: 0, scale: 0.95, y: 20 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.95, y: 20 }}
-        transition={{ duration: 0.2 }}
-        className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] flex flex-col"
-      >
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="border-b border-gray-200 px-6 py-4 flex items-center justify-between flex-shrink-0">
           <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
@@ -275,7 +262,7 @@ export function PaymentLinkModal({ invoice, onClose, onGenerate }: PaymentLinkMo
             </Button>
           )}
         </div>
-      </motion.div>
-    </motion.div>
+      </div>
+    </div>
   );
 }

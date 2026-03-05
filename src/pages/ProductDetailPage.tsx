@@ -16,6 +16,8 @@ import {
   BarChart3,
   PieChart,
   Activity,
+  Save,
+  X,
 } from 'lucide-react';
 import {
   BarChart,
@@ -40,10 +42,21 @@ export function ProductDetailPage() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'variants' | 'performance' | 'specs'>('variants');
   const [isVariantModalOpen, setIsVariantModalOpen] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedProduct, setEditedProduct] = useState<any>(null);
+  const [editingVariantId, setEditingVariantId] = useState<string | null>(null);
+  const [editedVariant, setEditedVariant] = useState<any>(null);
 
   const product = getProductById(id || '');
   const variants = getVariantsByProductId(id || '');
   const performance = getProductPerformance(id || '');
+
+  // Debug: Log variants on mount
+  React.useEffect(() => {
+    console.log('Variants loaded:', variants);
+    console.log('Editing variant ID:', editingVariantId);
+    console.log('Edited variant:', editedVariant);
+  }, [variants, editingVariantId, editedVariant]);
 
   if (!product) {
     return (
@@ -179,6 +192,53 @@ export function ProductDetailPage() {
   const avgAdditiveCost = averageCost(additives);
   const avgPackagingCost = averageCost(packaging);
 
+  const handleEdit = () => {
+    setIsEditing(true);
+    setEditedProduct({ ...product });
+  };
+
+  const handleCancelEdit = () => {
+    setIsEditing(false);
+    setEditedProduct(null);
+  };
+
+  const handleSaveEdit = () => {
+    // In a real app, this would call an API to save changes
+    alert(`Product updated successfully!\n\nProduct: ${editedProduct.name}\nCategory: ${editedProduct.category}\nDescription: ${editedProduct.description}`);
+    setIsEditing(false);
+    // In real implementation, would update the product data
+  };
+
+  const handleInputChange = (field: string, value: any) => {
+    setEditedProduct({ ...editedProduct, [field]: value });
+  };
+
+  const handleEditVariant = (variant: any) => {
+    console.log('Editing variant:', variant);
+    setEditingVariantId(variant.id);
+    setEditedVariant({ ...variant });
+  };
+
+  const handleCancelVariantEdit = () => {
+    console.log('Cancelling variant edit');
+    setEditingVariantId(null);
+    setEditedVariant(null);
+  };
+
+  const handleSaveVariant = () => {
+    console.log('Saving variant:', editedVariant);
+    alert(`Variant updated successfully!\n\nSKU: ${editedVariant.sku}\nSize: ${editedVariant.size}\nPrice: ₱${editedVariant.unitPrice}`);
+    setEditingVariantId(null);
+    setEditedVariant(null);
+    // In real implementation, would update the variant data
+  };
+
+  const handleVariantInputChange = (field: string, value: any) => {
+    setEditedVariant({ ...editedVariant, [field]: value });
+  };
+
+  const displayProduct = isEditing ? editedProduct : product;
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -189,19 +249,65 @@ export function ProductDetailPage() {
             Back
           </Button>
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">{product.name}</h1>
-            <p className="text-sm text-gray-500 mt-1">{product.category}</p>
+            {isEditing ? (
+              <input
+                type="text"
+                value={editedProduct.name}
+                onChange={(e) => handleInputChange('name', e.target.value)}
+                className="text-2xl font-bold text-gray-900 border-b-2 border-red-500 focus:outline-none bg-transparent"
+                placeholder="Product name"
+              />
+            ) : (
+              <h1 className="text-2xl font-bold text-gray-900">{displayProduct.name}</h1>
+            )}
+            {isEditing ? (
+              <select
+                value={editedProduct.category}
+                onChange={(e) => handleInputChange('category', e.target.value)}
+                className="text-sm text-gray-500 mt-1 border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-red-500"
+              >
+                <option value="HDPE Pipes">HDPE Pipes</option>
+                <option value="HDPE Fittings">HDPE Fittings</option>
+                <option value="UPVC Sanitary">UPVC Sanitary</option>
+                <option value="UPVC Electrical">UPVC Electrical</option>
+                <option value="UPVC Potable Water">UPVC Potable Water</option>
+                <option value="UPVC Pressurized">UPVC Pressurized</option>
+                <option value="PPR Pipes">PPR Pipes</option>
+                <option value="PPR Fittings">PPR Fittings</option>
+                <option value="Telecom Pipes">Telecom Pipes</option>
+                <option value="Garden Hoses">Garden Hoses</option>
+                <option value="Flexible Hoses">Flexible Hoses</option>
+                <option value="Others">Others</option>
+              </select>
+            ) : (
+              <p className="text-sm text-gray-500 mt-1">{displayProduct.category}</p>
+            )}
           </div>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={() => navigate(`/products/${id}/edit`)}>
-            <Edit className="w-4 h-4 mr-2" />
-            Edit Product
-          </Button>
-          <Button variant="primary" onClick={() => setIsVariantModalOpen(true)}>
-            <Plus className="w-4 h-4 mr-2" />
-            Add Variant
-          </Button>
+          {isEditing ? (
+            <>
+              <Button variant="outline" onClick={handleCancelEdit}>
+                <X className="w-4 h-4 mr-2" />
+                Cancel
+              </Button>
+              <Button variant="primary" onClick={handleSaveEdit}>
+                <Save className="w-4 h-4 mr-2" />
+                Save Changes
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant="outline" onClick={handleEdit}>
+                <Edit className="w-4 h-4 mr-2" />
+                Edit Product
+              </Button>
+              <Button variant="primary" onClick={() => setIsVariantModalOpen(true)}>
+                <Plus className="w-4 h-4 mr-2" />
+                Add Variant
+              </Button>
+            </>
+          )}
         </div>
       </div>
 
@@ -275,16 +381,39 @@ export function ProductDetailPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
               <h3 className="text-sm font-medium text-gray-500 mb-2">Description</h3>
-              <p className="text-gray-900">{product.description}</p>
+              {isEditing ? (
+                <textarea
+                  value={editedProduct.description}
+                  onChange={(e) => handleInputChange('description', e.target.value)}
+                  rows={4}
+                  className="w-full text-gray-900 border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-red-500"
+                  placeholder="Product description"
+                />
+              ) : (
+                <p className="text-gray-900">{displayProduct.description}</p>
+              )}
             </div>
             <div>
               <h3 className="text-sm font-medium text-gray-500 mb-2">Status</h3>
-              <Badge variant={getStatusColor(product.status)} className="text-sm">
-                {product.status}
-              </Badge>
+              {isEditing ? (
+                <select
+                  value={editedProduct.status}
+                  onChange={(e) => handleInputChange('status', e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-red-500"
+                >
+                  <option value="Active">Active</option>
+                  <option value="Low Stock">Low Stock</option>
+                  <option value="Out of Stock">Out of Stock</option>
+                  <option value="Discontinued">Discontinued</option>
+                </select>
+              ) : (
+                <Badge variant={getStatusColor(displayProduct.status)} className="text-sm">
+                  {displayProduct.status}
+                </Badge>
+              )}
               <div className="mt-4">
-                <p className="text-xs text-gray-500">Created: {product.createdDate}</p>
-                <p className="text-xs text-gray-500">Last Modified: {product.lastModified}</p>
+                <p className="text-xs text-gray-500">Created: {displayProduct.createdDate}</p>
+                <p className="text-xs text-gray-500">Last Modified: {displayProduct.lastModified}</p>
               </div>
             </div>
           </div>
@@ -355,40 +484,135 @@ export function ProductDetailPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
-                  {variants.map((variant) => (
-                    <tr key={variant.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 font-medium text-gray-900">{variant.sku}</td>
-                      <td className="px-6 py-4 font-medium text-gray-900">{variant.size}</td>
-                      <td className="px-6 py-4 text-gray-900">₱{variant.unitPrice.toLocaleString()}</td>
-                      <td className="px-6 py-4 text-gray-600">{variant.stockBranchA}</td>
-                      <td className="px-6 py-4 text-gray-600">{variant.stockBranchB}</td>
-                      <td className="px-6 py-4 text-gray-600">{variant.stockBranchC}</td>
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-2">
-                          <span className={`font-medium ${variant.totalStock <= variant.reorderPoint ? 'text-orange-600' : 'text-gray-900'}`}>
-                            {variant.totalStock}
-                          </span>
-                          {variant.totalStock <= variant.reorderPoint && (
-                            <AlertTriangle className="w-4 h-4 text-orange-500" />
+                  {variants.map((variant) => {
+                    const isEditingThisVariant = editingVariantId === variant.id;
+                    const displayVariant = isEditingThisVariant ? editedVariant : variant;
+                    
+                    return (
+                      <tr key={variant.id} className={isEditingThisVariant ? 'bg-blue-50' : 'hover:bg-gray-50'}>
+                        <td className="px-6 py-4 font-medium text-gray-900">
+                          {isEditingThisVariant ? (
+                            <input
+                              type="text"
+                              value={displayVariant.sku}
+                              onChange={(e) => handleVariantInputChange('sku', e.target.value)}
+                              className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-red-500 focus:outline-none"
+                            />
+                          ) : (
+                            displayVariant.sku
                           )}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 text-gray-900">{variant.unitsSoldYTD.toLocaleString()}</td>
-                      <td className="px-6 py-4 font-medium text-gray-900">
-                        ₱{(variant.revenueYTD / 1000).toFixed(0)}K
-                      </td>
-                      <td className="px-6 py-4">
-                        <Badge variant={getStatusColor(variant.status)}>
-                          {variant.status}
-                        </Badge>
-                      </td>
-                      <td className="px-6 py-4">
-                        <Button variant="ghost" size="sm">
-                          Edit
-                        </Button>
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                        <td className="px-6 py-4 font-medium text-gray-900">
+                          {isEditingThisVariant ? (
+                            <input
+                              type="text"
+                              value={displayVariant.size}
+                              onChange={(e) => handleVariantInputChange('size', e.target.value)}
+                              className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-red-500 focus:outline-none"
+                            />
+                          ) : (
+                            displayVariant.size
+                          )}
+                        </td>
+                        <td className="px-6 py-4 text-gray-900">
+                          {isEditingThisVariant ? (
+                            <input
+                              type="number"
+                              value={displayVariant.unitPrice}
+                              onChange={(e) => handleVariantInputChange('unitPrice', parseFloat(e.target.value) || 0)}
+                              className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-red-500 focus:outline-none"
+                            />
+                          ) : (
+                            `₱${displayVariant.unitPrice.toLocaleString()}`
+                          )}
+                        </td>
+                        <td className="px-6 py-4 text-gray-600">
+                          {isEditingThisVariant ? (
+                            <input
+                              type="number"
+                              value={displayVariant.stockBranchA}
+                              onChange={(e) => handleVariantInputChange('stockBranchA', parseInt(e.target.value) || 0)}
+                              className="w-20 px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-red-500 focus:outline-none"
+                            />
+                          ) : (
+                            displayVariant.stockBranchA
+                          )}
+                        </td>
+                        <td className="px-6 py-4 text-gray-600">
+                          {isEditingThisVariant ? (
+                            <input
+                              type="number"
+                              value={displayVariant.stockBranchB}
+                              onChange={(e) => handleVariantInputChange('stockBranchB', parseInt(e.target.value) || 0)}
+                              className="w-20 px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-red-500 focus:outline-none"
+                            />
+                          ) : (
+                            displayVariant.stockBranchB
+                          )}
+                        </td>
+                        <td className="px-6 py-4 text-gray-600">
+                          {isEditingThisVariant ? (
+                            <input
+                              type="number"
+                              value={displayVariant.stockBranchC}
+                              onChange={(e) => handleVariantInputChange('stockBranchC', parseInt(e.target.value) || 0)}
+                              className="w-20 px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-red-500 focus:outline-none"
+                            />
+                          ) : (
+                            displayVariant.stockBranchC
+                          )}
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-2">
+                            <span className={`font-medium ${displayVariant.totalStock <= displayVariant.reorderPoint ? 'text-orange-600' : 'text-gray-900'}`}>
+                              {displayVariant.totalStock}
+                            </span>
+                            {displayVariant.totalStock <= displayVariant.reorderPoint && (
+                              <AlertTriangle className="w-4 h-4 text-orange-500" />
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-gray-900">{displayVariant.unitsSoldYTD.toLocaleString()}</td>
+                        <td className="px-6 py-4 font-medium text-gray-900">
+                          ₱{(displayVariant.revenueYTD / 1000).toFixed(0)}K
+                        </td>
+                        <td className="px-6 py-4">
+                          {isEditingThisVariant ? (
+                            <select
+                              value={displayVariant.status}
+                              onChange={(e) => handleVariantInputChange('status', e.target.value)}
+                              className="px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-red-500 focus:outline-none text-sm"
+                            >
+                              <option value="Active">Active</option>
+                              <option value="Low Stock">Low Stock</option>
+                              <option value="Out of Stock">Out of Stock</option>
+                              <option value="Discontinued">Discontinued</option>
+                            </select>
+                          ) : (
+                            <Badge variant={getStatusColor(displayVariant.status)}>
+                              {displayVariant.status}
+                            </Badge>
+                          )}
+                        </td>
+                        <td className="px-6 py-4">
+                          <button 
+                            type="button"
+                            className="px-3 py-1 text-sm bg-blue-500 text-white hover:bg-blue-600 rounded cursor-pointer"
+                            onClick={() => {
+                              console.log('=== BUTTON CLICKED ===');
+                              console.log('Variant Data:', variant);
+                              console.log('Variant ID:', variant.id);
+                              console.log('Variant SKU:', variant.sku);
+                              console.log('Variant Size:', variant.size);
+                              alert(`Clicked Edit for: ${variant.size}`);
+                            }}
+                          >
+                            Edit
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

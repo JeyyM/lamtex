@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { useAppContext } from '../store/AppContext';
+import AddProductModal, { ProductFormData } from '../components/products/AddProductModal';
 import {
   Package,
   ArrowLeft,
@@ -11,9 +12,18 @@ import {
   TrendingUp,
   Search,
   Filter,
-  Eye,
   DollarSign,
+  Plus,
+  Edit,
 } from 'lucide-react';
+
+// Import product images
+import hdpePipeImg from '@/src/assets/product-images/HDPE Pipe.webp';
+import elbowPipeImg from '@/src/assets/product-images/Elbow Pipe.webp';
+import sanitaryPipeImg from '@/src/assets/product-images/Sanitary Pipe.webp';
+import pressureLineImg from '@/src/assets/product-images/Pressure Line Pipe.webp';
+import pipesImg from '@/src/assets/product-images/Pipes.webp';
+import inHousePipeImg from '@/src/assets/product-images/In House Pipe.webp';
 
 // Mock product families for a category (hardcoded)
 const mockProductFamilies = [
@@ -29,7 +39,7 @@ const mockProductFamilies = [
     unitsSold: 1245,
     revenue: 1058250,
     status: 'Active',
-    imageUrl: null,
+    imageUrl: hdpePipeImg,
   },
   {
     id: 'PROD-002',
@@ -43,7 +53,7 @@ const mockProductFamilies = [
     unitsSold: 3580,
     revenue: 1611000,
     status: 'Active',
-    imageUrl: null,
+    imageUrl: pipesImg,
   },
   {
     id: 'PROD-003',
@@ -57,7 +67,7 @@ const mockProductFamilies = [
     unitsSold: 2240,
     revenue: 851200,
     status: 'Active',
-    imageUrl: null,
+    imageUrl: inHousePipeImg,
   },
   {
     id: 'PROD-004',
@@ -71,7 +81,7 @@ const mockProductFamilies = [
     unitsSold: 680,
     revenue: 850000,
     status: 'Low Stock',
-    imageUrl: null,
+    imageUrl: pressureLineImg,
   },
   {
     id: 'PROD-005',
@@ -85,7 +95,7 @@ const mockProductFamilies = [
     unitsSold: 1450,
     revenue: 1377500,
     status: 'Active',
-    imageUrl: null,
+    imageUrl: elbowPipeImg,
   },
   {
     id: 'PROD-006',
@@ -99,7 +109,7 @@ const mockProductFamilies = [
     unitsSold: 4850,
     revenue: 1552000,
     status: 'Active',
-    imageUrl: null,
+    imageUrl: sanitaryPipeImg,
   },
 ];
 
@@ -109,10 +119,45 @@ export default function ProductCategoryPage() {
   const { selectedBranch } = useAppContext();
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'stock' | 'revenue'>('name');
+  const [showAddProductModal, setShowAddProductModal] = useState(false);
+  const [editingProduct, setEditingProduct] = useState<ProductFormData | null>(null);
+  const [isEditMode, setIsEditMode] = useState(false);
 
   const categoryTitle = categoryName
     ? categoryName.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')
     : 'HDPE Pipes';
+
+  // Handle edit product
+  const handleEditProduct = (family: typeof mockProductFamilies[0]) => {
+    setEditingProduct({
+      name: family.name,
+      familyCode: family.familyCode,
+      description: family.description,
+      imageUrl: family.imageUrl || '',
+      category: categoryTitle
+    });
+    setIsEditMode(true);
+    setShowAddProductModal(true);
+  };
+
+  // Handle close modal
+  const handleCloseModal = () => {
+    setShowAddProductModal(false);
+    setIsEditMode(false);
+    setEditingProduct(null);
+  };
+
+  // Handle save
+  const handleSaveProduct = (productData: ProductFormData) => {
+    console.log(isEditMode ? 'Updating product:' : 'Creating product:', productData);
+    handleCloseModal();
+  };
+
+  // Handle delete
+  const handleDeleteProduct = () => {
+    console.log('Deleting product:', editingProduct?.name);
+    handleCloseModal();
+  };
 
   // Filter and sort product families
   const filteredFamilies = mockProductFamilies
@@ -147,6 +192,13 @@ export default function ProductCategoryPage() {
             </p>
           </div>
         </div>
+        <Button 
+          variant="primary"
+          onClick={() => setShowAddProductModal(true)}
+        >
+          <Plus className="w-4 h-4 mr-2" />
+          Add Product Family
+        </Button>
       </div>
 
       {/* Summary Cards */}
@@ -231,14 +283,41 @@ export default function ProductCategoryPage() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {filteredFamilies.map((family) => {
           return (
-            <Card
+            <div
               key={family.id}
-              className="group hover:shadow-xl transition-all duration-200 border-2 hover:border-red-500"
+              className="group relative"
             >
+              {/* Edit Button - Top Right */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleEditProduct(family);
+                }}
+                className="absolute top-2 right-2 z-10 p-2.5 bg-white hover:bg-red-600 text-gray-700 hover:text-white rounded-lg shadow-lg border border-gray-300 group-hover:border-red-600 transition-all duration-200 hover:scale-110"
+                title="Edit product family"
+              >
+                <Edit className="w-4 h-4" />
+              </button>
+
+              {/* Product Card */}
+              <Card
+                className="hover:shadow-xl transition-all duration-200 border-2 hover:border-red-500 cursor-pointer h-full"
+                onClick={() => navigate(`/products/category/${categoryName}/family/${family.id}`)}
+              >
               <CardContent className="p-0">
-                {/* Image Placeholder */}
-                <div className="h-48 bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center border-b">
-                  <Package className="w-16 h-16 text-gray-400" />
+                {/* Product Image */}
+                <div className="h-48 bg-gray-100 overflow-hidden border-b">
+                  {family.imageUrl ? (
+                    <img 
+                      src={family.imageUrl} 
+                      alt={family.name}
+                      className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center">
+                      <Package className="w-16 h-16 text-gray-400" />
+                    </div>
+                  )}
                 </div>
 
                 {/* Content */}
@@ -316,21 +395,10 @@ export default function ProductCategoryPage() {
                       </div>
                     </div>
                   )}
-
-                  {/* Action Button */}
-                  <div className="pt-4 border-t">
-                    <Button
-                      variant="primary"
-                      className="w-full"
-                      onClick={() => navigate(`/products/category/${categoryName}/family/${family.id}`)}
-                    >
-                      <Eye className="w-4 h-4 mr-2" />
-                      View Variants
-                    </Button>
-                  </div>
                 </div>
               </CardContent>
             </Card>
+            </div>
           );
         })}
       </div>
@@ -345,6 +413,19 @@ export default function ProductCategoryPage() {
             </div>
           </CardContent>
         </Card>
+      )}
+
+      {/* Add/Edit Product Modal */}
+      {(showAddProductModal || editingProduct) && (
+        <AddProductModal
+          isOpen={showAddProductModal || !!editingProduct}
+          onClose={handleCloseModal}
+          onSave={handleSaveProduct}
+          onDelete={isEditMode ? handleDeleteProduct : undefined}
+          categoryName={categoryTitle}
+          initialData={editingProduct || undefined}
+          isEditMode={isEditMode}
+        />
       )}
     </div>
   );

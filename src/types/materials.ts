@@ -49,6 +49,7 @@ export interface RawMaterial {
   sku: string;
   category: MaterialCategory;
   description: string;
+  imageUrl?: string; // Material image
   specifications: {
     grade?: string;
     purity?: string;

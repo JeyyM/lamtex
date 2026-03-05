@@ -8,6 +8,7 @@ import { useAppContext } from '@/src/store/AppContext';
 import { OrderDetail, OrderStatus, OrderLineItem, OrderLog, ProofDocument } from '@/src/types/orders';
 import { PaymentLink } from '@/src/types/payments';
 import { PaymentLinkModal } from '@/src/components/payments/PaymentLinkModal';
+import { CancelOrderModal, CancellationData } from '@/src/components/orders/CancelOrderModal';
 import {
   ArrowLeft,
   Edit,
@@ -155,6 +156,9 @@ export function OrderDetailPage() {
   const [selectedVariant, setSelectedVariant] = useState<typeof MOCK_PIPE_PRODUCTS[0]['variants'][0] | null>(null);
   const [quantity, setQuantity] = useState(1);
   
+  // Cancel order state
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  
   // Invoice and Proof states
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
   const [showProofModal, setShowProofModal] = useState(false);
@@ -216,14 +220,30 @@ export function OrderDetailPage() {
   };
 
   const handleCancelOrder = () => {
-    if (confirm(`Are you sure you want to cancel order ${order.id}?`)) {
-      const reason = prompt('Please provide a cancellation reason:');
-      if (reason) {
-        alert(`Order ${order.id} cancelled. Reason: ${reason}`);
-        addAuditLog('Cancelled Order', 'Order', `Cancelled order ${order.id}: ${reason}`);
-        navigate('/orders');
-      }
-    }
+    setShowCancelModal(true);
+  };
+
+  const handleConfirmCancellation = (cancellationData: CancellationData) => {
+    // Log the cancellation with all details
+    const logMessage = `Cancelled order ${order.id}. Reason: ${cancellationData.reason}. ` +
+      `Refund: ${cancellationData.refundRequired ? `₱${cancellationData.refundAmount.toLocaleString()}` : 'No'}, ` +
+      `Restock: ${cancellationData.restockItems ? 'Yes' : 'No'}, ` +
+      `Notify Customer: ${cancellationData.notifyCustomer ? 'Yes' : 'No'}`;
+    
+    addAuditLog('Cancelled Order', 'Order', logMessage);
+    
+    // Show success message with details
+    alert(
+      `Order ${order.id} has been cancelled successfully.\n\n` +
+      `Reason: ${cancellationData.reason}\n` +
+      `Initiated by: ${cancellationData.initiatedBy}\n` +
+      `Refund Amount: ${cancellationData.refundRequired ? `₱${cancellationData.refundAmount.toLocaleString()}` : 'None'}\n` +
+      `Items returned to stock: ${cancellationData.restockItems ? 'Yes' : 'No'}\n` +
+      `Customer notified: ${cancellationData.notifyCustomer ? 'Yes' : 'No'}`
+    );
+    
+    setShowCancelModal(false);
+    navigate('/orders');
   };
 
   const handleResubmit = () => {
@@ -1682,6 +1702,18 @@ export function OrderDetailPage() {
             setPaymentLinks([...paymentLinks, paymentLink]);
             alert(`✅ Payment link generated!\n\nLink: ${paymentLink.link}\n\nCustomers can now pay online with various methods.`);
           }}
+        />
+      )}
+
+      {/* Cancel Order Modal */}
+      {showCancelModal && (
+        <CancelOrderModal
+          orderId={order.id}
+          orderNumber={order.id}
+          customerName={order.customer}
+          orderAmount={order.totalAmount}
+          onClose={() => setShowCancelModal(false)}
+          onConfirm={handleConfirmCancellation}
         />
       )}
     </div>

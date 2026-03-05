@@ -4,6 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { useAppContext } from '../store/AppContext';
+import BulkDiscountModal from '../components/products/BulkDiscountModal';
+import ImageGalleryModal from '../components/ImageGalleryModal';
 import {
   Package,
   ArrowLeft,
@@ -22,7 +24,18 @@ import {
   Percent,
   CheckCircle2,
   Lightbulb,
+  Save,
+  X,
+  Plus,
+  Trash2,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
+
+// Import product images
+import hdpePipeImg from '../assets/product-images/HDPE Pipe.webp';
+import pipesImg from '../assets/product-images/Pipes.webp';
+import pressureLineImg from '../assets/product-images/Pressure Line Pipe.webp';
 import {
   LineChart,
   Line,
@@ -43,6 +56,22 @@ const stringToColor = (str: string) => {
   const h = hash % 360;
   return `hsl(${h}, 70%, 50%)`;
 };
+
+// Mock available PVC raw materials
+const availablePVCMaterials = [
+  { id: 'MAT-001', name: 'HDPE Resin', unit: 'kg', avgCostPerUnit: 14.4 },
+  { id: 'MAT-002', name: 'PVC Resin (K-67)', unit: 'kg', avgCostPerUnit: 16.8 },
+  { id: 'MAT-003', name: 'PVC Resin (K-70)', unit: 'kg', avgCostPerUnit: 18.2 },
+  { id: 'MAT-004', name: 'UV Stabilizer', unit: 'kg', avgCostPerUnit: 56.25 },
+  { id: 'MAT-005', name: 'Carbon Black', unit: 'kg', avgCostPerUnit: 50.0 },
+  { id: 'MAT-006', name: 'Titanium Dioxide', unit: 'kg', avgCostPerUnit: 85.0 },
+  { id: 'MAT-007', name: 'Calcium Carbonate', unit: 'kg', avgCostPerUnit: 12.5 },
+  { id: 'MAT-008', name: 'Heat Stabilizer', unit: 'kg', avgCostPerUnit: 125.0 },
+  { id: 'MAT-009', name: 'Processing Aid', unit: 'kg', avgCostPerUnit: 95.0 },
+  { id: 'MAT-010', name: 'Impact Modifier', unit: 'kg', avgCostPerUnit: 110.0 },
+  { id: 'MAT-011', name: 'Lubricant (PE Wax)', unit: 'kg', avgCostPerUnit: 75.0 },
+  { id: 'MAT-012', name: 'Plasticizer', unit: 'kg', avgCostPerUnit: 45.0 },
+];
 
 // Mock product variants (sizes for HDPE Pipes)
 const mockVariants = [
@@ -288,20 +317,139 @@ export default function ProductFamilyPage() {
   const { selectedBranch } = useAppContext();
   const [selectedVariant, setSelectedVariant] = useState(mockVariants[2]); // Default to 1 inch
   const [comparisonView, setComparisonView] = useState<'table' | 'chart'>('table'); // Toggle between table and chart
+  const [isEditingVariant, setIsEditingVariant] = useState(false);
+  const [editedVariant, setEditedVariant] = useState<any>(null);
+  const [showBulkDiscountModal, setShowBulkDiscountModal] = useState(false);
+  const [showImageGalleryModal, setShowImageGalleryModal] = useState(false);
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
+
+  // Product images for carousel
+  const productImages = [hdpePipeImg, pipesImg, pressureLineImg];
+
+  const handlePreviousImage = () => {
+    setCurrentImageIndex((prev) => (prev === 0 ? productImages.length - 1 : prev - 1));
+  };
+
+  const handleNextImage = () => {
+    setCurrentImageIndex((prev) => (prev === productImages.length - 1 ? 0 : prev + 1));
+  };
+
+  const handleSelectImages = (imageUrls: string[]) => {
+    // This is just for illustration - in a real app, would update the product images
+    console.log('Selected images:', imageUrls);
+    alert(`Selected ${imageUrls.length} image(s) for the product family!\n\n(Demo mode - images not actually saved)`);
+  };
+
+  const handleEditClick = () => {
+    setIsEditingVariant(true);
+    setEditedVariant({ ...selectedVariant });
+  };
+
+  const handleCancelEdit = () => {
+    setIsEditingVariant(false);
+    setEditedVariant(null);
+  };
+
+  const handleSaveEdit = () => {
+    alert(`Variant saved successfully!\n\nVariant: ${editedVariant.variantName}\nSKU: ${editedVariant.sku}\nSize: ${editedVariant.size}\nPrice: ₱${editedVariant.price}\nStock: ${editedVariant.stock}`);
+    // In real implementation, would update the data
+    setSelectedVariant({ ...editedVariant });
+    setIsEditingVariant(false);
+    setEditedVariant(null);
+  };
+
+  const handleDeleteVariant = () => {
+    const confirmDelete = window.confirm(
+      `⚠️ DELETE VARIANT\n\n` +
+      `Are you sure you want to permanently delete this variant?\n\n` +
+      `Variant: ${selectedVariant.variantName} (${selectedVariant.size})\n` +
+      `SKU: ${selectedVariant.sku}\n\n` +
+      `WARNING: This action CANNOT be undone!\n` +
+      `• All historical data will be lost\n` +
+      `• Stock records will be removed\n` +
+      `• Sales data will be deleted\n` +
+      `• Associated orders may be affected\n\n` +
+      `Type confirmation is required in production systems.`
+    );
+
+    if (confirmDelete) {
+      alert(
+        `Variant "${selectedVariant.variantName}" has been deleted.\n\n` +
+        `In a real system, this would:\n` +
+        `• Remove the variant from the database\n` +
+        `• Archive all related records\n` +
+        `• Update inventory counts\n` +
+        `• Notify relevant departments`
+      );
+      // In real implementation, would delete from database and redirect
+      // navigate(`/products/category/${categoryName}`);
+    }
+  };
+
+  const handleInputChange = (field: string, value: any) => {
+    setEditedVariant({ ...editedVariant, [field]: value });
+  };
+
+  const handleRawMaterialChange = (index: number, field: string, value: any) => {
+    const updatedMaterials = [...editedVariant.rawMaterials];
+    updatedMaterials[index] = { ...updatedMaterials[index], [field]: value };
+    setEditedVariant({ ...editedVariant, rawMaterials: updatedMaterials });
+  };
+
+  const handleAddMaterial = () => {
+    const newMaterial = {
+      name: availablePVCMaterials[0].name,
+      quantity: 0,
+      unit: availablePVCMaterials[0].unit,
+      cost: 0,
+    };
+    setEditedVariant({
+      ...editedVariant,
+      rawMaterials: [...editedVariant.rawMaterials, newMaterial],
+    });
+  };
+
+  const handleRemoveMaterial = (index: number) => {
+    const updatedMaterials = editedVariant.rawMaterials.filter((_, i) => i !== index);
+    setEditedVariant({ ...editedVariant, rawMaterials: updatedMaterials });
+  };
+
+  const handleMaterialNameChange = (index: number, materialName: string) => {
+    const selectedMaterial = availablePVCMaterials.find(m => m.name === materialName);
+    if (selectedMaterial) {
+      const updatedMaterials = [...editedVariant.rawMaterials];
+      updatedMaterials[index] = {
+        ...updatedMaterials[index],
+        name: selectedMaterial.name,
+        unit: selectedMaterial.unit,
+      };
+      setEditedVariant({ ...editedVariant, rawMaterials: updatedMaterials });
+    }
+  };
+
+  const handleSaveBulkDiscounts = (discounts: any[]) => {
+    if (isEditingVariant) {
+      setEditedVariant({ ...editedVariant, bulkDiscounts: discounts });
+    } else {
+      setSelectedVariant({ ...selectedVariant, bulkDiscounts: discounts });
+    }
+  };
+
+  const displayVariant = isEditingVariant ? editedVariant : selectedVariant;
 
   const categoryTitle = categoryName
     ? categoryName.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')
     : 'HDPE Pipes';
 
-  // Calculate metrics for selected variant
-  const stockPercentage = (selectedVariant.stock / selectedVariant.reorderPoint) * 100;
-  const avgDailyUsage = selectedVariant.monthlyUsage / 30;
-  const daysOfCover = Math.floor(selectedVariant.stock / avgDailyUsage);
-  const margin = ((selectedVariant.price - selectedVariant.cost) / selectedVariant.price) * 100;
+  // Calculate metrics for display variant
+  const stockPercentage = (displayVariant.stock / displayVariant.reorderPoint) * 100;
+  const avgDailyUsage = displayVariant.monthlyUsage / 30;
+  const daysOfCover = Math.floor(displayVariant.stock / avgDailyUsage);
+  const margin = ((displayVariant.price - displayVariant.cost) / displayVariant.price) * 100;
 
   const getStockColor = () => {
-    if (selectedVariant.status === 'Critical') return 'red';
-    if (selectedVariant.status === 'Low Stock') return 'orange';
+    if (displayVariant.status === 'Critical') return 'red';
+    if (displayVariant.status === 'Low Stock') return 'orange';
     return 'green';
   };
 
@@ -330,14 +478,38 @@ export default function ProductFamilyPage() {
           </div>
         </div>
         <div className="flex gap-3">
-          <Button variant="outline">
-            <Edit className="w-4 h-4 mr-2" />
-            Edit {selectedVariant.variantName}
-          </Button>
-          <Button variant="primary">
-            <Package className="w-4 h-4 mr-2" />
-            Request Production
-          </Button>
+          {isEditingVariant ? (
+            <>
+              <Button 
+                variant="outline"
+                onClick={handleCancelEdit}
+              >
+                <X className="w-4 h-4 mr-2" />
+                Cancel
+              </Button>
+              <Button 
+                variant="primary"
+                onClick={handleSaveEdit}
+              >
+                <Save className="w-4 h-4 mr-2" />
+                Save Changes
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button 
+                variant="outline"
+                onClick={handleEditClick}
+              >
+                <Edit className="w-4 h-4 mr-2" />
+                Edit {displayVariant.variantName}
+              </Button>
+              <Button variant="primary">
+                <Package className="w-4 h-4 mr-2" />
+                Request Production
+              </Button>
+            </>
+          )}
         </div>
       </div>
 
@@ -350,28 +522,84 @@ export default function ProductFamilyPage() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div>
-              <p className="text-sm text-gray-500 mb-2">Description</p>
-              <p className="text-sm text-gray-700 leading-relaxed">{familyInfo.description}</p>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <p className="text-xs text-gray-500 mb-1">Manufacturer</p>
-                <p className="text-sm font-medium text-gray-900">{familyInfo.manufacturer}</p>
-              </div>
-              <div>
-                <p className="text-xs text-gray-500 mb-1">Warranty</p>
-                <p className="text-sm font-medium text-gray-900">{familyInfo.warranty}</p>
-              </div>
-              <div className="col-span-2">
-                <p className="text-xs text-gray-500 mb-1">Certifications</p>
-                <div className="flex gap-2">
-                  {familyInfo.certification.split(', ').map((cert) => (
-                    <Badge key={cert} variant="secondary" size="sm">
-                      {cert}
-                    </Badge>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {/* Image Carousel */}
+            <div className="md:col-span-1">
+              <div className="relative group">
+                <div className="aspect-square rounded-lg overflow-hidden bg-gray-100 border-2 border-gray-200">
+                  <img
+                    src={productImages[currentImageIndex]}
+                    alt={`${familyInfo.name} - Image ${currentImageIndex + 1}`}
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+                
+                {/* Edit Button - Top Right */}
+                <button
+                  onClick={() => setShowImageGalleryModal(true)}
+                  className="absolute top-3 right-3 bg-white/90 hover:bg-white p-2 rounded-lg shadow-lg transition-all hover:scale-105"
+                  title="Edit product images"
+                >
+                  <Edit className="w-4 h-4 text-gray-700" />
+                </button>
+
+                {/* Navigation Arrows */}
+                <button
+                  onClick={handlePreviousImage}
+                  className="absolute left-2 top-1/2 -translate-y-1/2 bg-white/90 hover:bg-white p-2 rounded-full shadow-lg opacity-0 group-hover:opacity-100 transition-opacity"
+                >
+                  <ChevronLeft className="w-5 h-5 text-gray-700" />
+                </button>
+                <button
+                  onClick={handleNextImage}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 bg-white/90 hover:bg-white p-2 rounded-full shadow-lg opacity-0 group-hover:opacity-100 transition-opacity"
+                >
+                  <ChevronRight className="w-5 h-5 text-gray-700" />
+                </button>
+
+                {/* Image Indicators */}
+                <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-2">
+                  {productImages.map((_, index) => (
+                    <button
+                      key={index}
+                      onClick={() => setCurrentImageIndex(index)}
+                      className={`w-2 h-2 rounded-full transition-all ${
+                        index === currentImageIndex
+                          ? 'bg-white w-6'
+                          : 'bg-white/50 hover:bg-white/75'
+                      }`}
+                    />
                   ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Product Information */}
+            <div className="md:col-span-2">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 h-full">
+                <div>
+                  <p className="text-sm text-gray-500 mb-2">Description</p>
+                  <p className="text-sm text-gray-700 leading-relaxed">{familyInfo.description}</p>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-xs text-gray-500 mb-1">Manufacturer</p>
+                    <p className="text-sm font-medium text-gray-900">{familyInfo.manufacturer}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 mb-1">Warranty</p>
+                    <p className="text-sm font-medium text-gray-900">{familyInfo.warranty}</p>
+                  </div>
+                  <div className="col-span-2">
+                    <p className="text-xs text-gray-500 mb-1">Certifications</p>
+                    <div className="flex gap-2">
+                      {familyInfo.certification.split(', ').map((cert) => (
+                        <Badge key={cert} variant="secondary" size="sm">
+                          {cert}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -382,7 +610,37 @@ export default function ProductFamilyPage() {
       {/* Variant Selector */}
       <Card>
         <CardHeader>
-          <CardTitle>Select Size Variant</CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle>Select Variant</CardTitle>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsEditingVariant(true);
+                setEditedVariant({
+                  id: `VAR-NEW-${Date.now()}`,
+                  variantName: '',
+                  sku: '',
+                  size: '',
+                  length: '',
+                  weight: '',
+                  thickness: '',
+                  pressure: '',
+                  stock: 0,
+                  reorderPoint: 0,
+                  price: 0,
+                  cost: 0,
+                  monthlyUsage: 0,
+                  unitsSold: 0,
+                  status: 'In Stock',
+                  rawMaterials: [],
+                  bulkDiscounts: [],
+                });
+              }}
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              Add New Variant
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           <div className="flex flex-wrap gap-3">
@@ -431,22 +689,52 @@ export default function ProductFamilyPage() {
           <CardContent className="space-y-3">
             <div>
               <p className="text-xs text-gray-500 uppercase mb-1">SKU</p>
-              <p className="font-mono text-sm text-gray-900">{selectedVariant.sku}</p>
+              {isEditingVariant ? (
+                <input
+                  type="text"
+                  value={editedVariant.sku}
+                  onChange={(e) => handleInputChange('sku', e.target.value)}
+                  className="w-full border rounded px-3 py-1.5 font-mono text-sm"
+                />
+              ) : (
+                <p className="font-mono text-sm text-gray-900">{displayVariant.sku}</p>
+              )}
             </div>
             <div>
-              <p className="text-xs text-gray-500 uppercase mb-1">Size</p>
-              <p className="text-sm font-semibold text-gray-900">{selectedVariant.size}</p>
+              <p className="text-xs text-gray-500 uppercase mb-1">Name</p>
+              {isEditingVariant ? (
+                <input
+                  type="text"
+                  value={editedVariant.size}
+                  onChange={(e) => handleInputChange('size', e.target.value)}
+                  className="w-full border rounded px-3 py-1.5 text-sm font-semibold"
+                />
+              ) : (
+                <p className="text-sm font-semibold text-gray-900">{displayVariant.size}</p>
+              )}
             </div>
             <div>
               <p className="text-xs text-gray-500 uppercase mb-1">Status</p>
-              <Badge
-                variant={
-                  selectedVariant.status === 'Critical' ? 'destructive' :
-                  selectedVariant.status === 'Low Stock' ? 'warning' : 'success'
-                }
-              >
-                {selectedVariant.status}
-              </Badge>
+              {isEditingVariant ? (
+                <select
+                  value={editedVariant.status}
+                  onChange={(e) => handleInputChange('status', e.target.value)}
+                  className="w-full border rounded px-3 py-1.5 text-sm"
+                >
+                  <option value="In Stock">In Stock</option>
+                  <option value="Low Stock">Low Stock</option>
+                  <option value="Critical">Critical</option>
+                </select>
+              ) : (
+                <Badge
+                  variant={
+                    displayVariant.status === 'Critical' ? 'destructive' :
+                    displayVariant.status === 'Low Stock' ? 'warning' : 'success'
+                  }
+                >
+                  {displayVariant.status}
+                </Badge>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -460,9 +748,18 @@ export default function ProductFamilyPage() {
             <div>
               <div className="flex items-center justify-between mb-2">
                 <p className="text-xs text-gray-500 uppercase">Current Stock</p>
-                <p className="text-lg font-bold text-gray-900">
-                  {selectedVariant.stock.toLocaleString()} units
-                </p>
+                {isEditingVariant ? (
+                  <input
+                    type="number"
+                    value={editedVariant.stock}
+                    onChange={(e) => handleInputChange('stock', parseInt(e.target.value) || 0)}
+                    className="border rounded px-3 py-1 text-lg font-bold w-32 text-right"
+                  />
+                ) : (
+                  <p className="text-lg font-bold text-gray-900">
+                    {displayVariant.stock.toLocaleString()} units
+                  </p>
+                )}
               </div>
               <div className="w-full bg-gray-200 rounded-full h-2 mb-1">
                 <div
@@ -470,9 +767,19 @@ export default function ProductFamilyPage() {
                   style={{ width: `${Math.min(stockPercentage, 100)}%` }}
                 ></div>
               </div>
-              <p className="text-xs text-gray-500">
-                Reorder Point: {selectedVariant.reorderPoint} units
-              </p>
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-gray-500">Reorder Point:</p>
+                {isEditingVariant ? (
+                  <input
+                    type="number"
+                    value={editedVariant.reorderPoint}
+                    onChange={(e) => handleInputChange('reorderPoint', parseInt(e.target.value) || 0)}
+                    className="border rounded px-2 py-1 text-xs w-24 text-right"
+                  />
+                ) : (
+                  <p className="text-xs text-gray-500">{displayVariant.reorderPoint} units</p>
+                )}
+              </div>
             </div>
             <div>
               <p className="text-xs text-gray-500 uppercase mb-1">Days of Cover</p>
@@ -480,17 +787,17 @@ export default function ProductFamilyPage() {
                 {daysOfCover} days
               </p>
             </div>
-            {(selectedVariant.status === 'Critical' || selectedVariant.status === 'Low Stock') && (
+            {(displayVariant.status === 'Critical' || displayVariant.status === 'Low Stock') && (
               <div className={`flex items-start gap-2 p-3 rounded-lg ${
-                selectedVariant.status === 'Critical' ? 'bg-red-50 border border-red-200' : 'bg-orange-50 border border-orange-200'
+                displayVariant.status === 'Critical' ? 'bg-red-50 border border-red-200' : 'bg-orange-50 border border-orange-200'
               }`}>
                 <AlertTriangle className={`w-4 h-4 flex-shrink-0 mt-0.5 ${
-                  selectedVariant.status === 'Critical' ? 'text-red-600' : 'text-orange-600'
+                  displayVariant.status === 'Critical' ? 'text-red-600' : 'text-orange-600'
                 }`} />
                 <div className={`text-xs ${
-                  selectedVariant.status === 'Critical' ? 'text-red-700' : 'text-orange-700'
+                  displayVariant.status === 'Critical' ? 'text-red-700' : 'text-orange-700'
                 }`}>
-                  <span className="font-semibold">{selectedVariant.status}!</span> Consider immediate production scheduling.
+                  <span className="font-semibold">{displayVariant.status}!</span> Consider immediate production scheduling.
                 </div>
               </div>
             )}
@@ -505,16 +812,38 @@ export default function ProductFamilyPage() {
           <CardContent className="space-y-3">
             <div>
               <p className="text-xs text-gray-500 uppercase mb-1">Selling Price</p>
-              <p className="text-2xl font-bold text-gray-900">
-                ₱{selectedVariant.price.toLocaleString()}
-              </p>
-              <p className="text-xs text-gray-500">per unit</p>
+              {isEditingVariant ? (
+                <input
+                  type="number"
+                  value={editedVariant.price}
+                  onChange={(e) => handleInputChange('price', parseFloat(e.target.value) || 0)}
+                  className="border rounded px-3 py-1.5 text-2xl font-bold w-full"
+                  placeholder="0.00"
+                />
+              ) : (
+                <>
+                  <p className="text-2xl font-bold text-gray-900">
+                    ₱{displayVariant.price.toLocaleString()}
+                  </p>
+                  <p className="text-xs text-gray-500">per unit</p>
+                </>
+              )}
             </div>
             <div>
               <p className="text-xs text-gray-500 uppercase mb-1">Production Cost</p>
-              <p className="text-lg font-semibold text-gray-600">
-                ₱{selectedVariant.cost.toLocaleString()}
-              </p>
+              {isEditingVariant ? (
+                <input
+                  type="number"
+                  value={editedVariant.cost}
+                  onChange={(e) => handleInputChange('cost', parseFloat(e.target.value) || 0)}
+                  className="border rounded px-3 py-1.5 text-lg font-semibold w-full"
+                  placeholder="0.00"
+                />
+              ) : (
+                <p className="text-lg font-semibold text-gray-600">
+                  ₱{displayVariant.cost.toLocaleString()}
+                </p>
+              )}
             </div>
             <div>
               <p className="text-xs text-gray-500 uppercase mb-1">Margin</p>
@@ -526,33 +855,96 @@ export default function ProductFamilyPage() {
         {/* Raw Material Consumption */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2">
-              <Factory className="w-4 h-4 text-blue-600" />
-              Raw Material Consumption (per unit)
-            </CardTitle>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base flex items-center gap-2">
+                <Factory className="w-4 h-4 text-blue-600" />
+                Raw Material Consumption (per unit)
+              </CardTitle>
+              {isEditingVariant && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleAddMaterial}
+                  className="h-8 px-3 py-2 text-xs"
+                >
+                  <Plus className="w-3 h-3 mr-1" />
+                  Add Material
+                </Button>
+              )}
+            </div>
           </CardHeader>
           <CardContent>
-            {selectedVariant.rawMaterials && selectedVariant.rawMaterials.length > 0 ? (
+            {displayVariant.rawMaterials && displayVariant.rawMaterials.length > 0 ? (
               <div className="space-y-3">
-                {selectedVariant.rawMaterials.map((material, index) => (
-                  <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                    <div>
-                      <p className="text-sm font-medium text-gray-900">{material.name}</p>
-                      <p className="text-xs text-gray-500 mt-0.5">
-                        {material.quantity} {material.unit}
-                      </p>
+                {displayVariant.rawMaterials.map((material, index) => (
+                  <div key={index} className="flex items-center gap-2 p-3 bg-gray-50 rounded-lg">
+                    <div className="flex-1">
+                      {isEditingVariant ? (
+                        <select
+                          value={editedVariant.rawMaterials[index].name}
+                          onChange={(e) => handleMaterialNameChange(index, e.target.value)}
+                          className="w-full border rounded px-2 py-1.5 text-sm font-medium mb-2"
+                        >
+                          {availablePVCMaterials.map((mat) => (
+                            <option key={mat.id} value={mat.name}>
+                              {mat.name}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <p className="text-sm font-medium text-gray-900 mb-1">{material.name}</p>
+                      )}
+                      <div className="flex items-center gap-2">
+                        {isEditingVariant ? (
+                          <>
+                            <input
+                              type="number"
+                              value={editedVariant.rawMaterials[index].quantity}
+                              onChange={(e) => handleRawMaterialChange(index, 'quantity', parseFloat(e.target.value) || 0)}
+                              className="border rounded px-2 py-1 text-xs w-20"
+                              placeholder="0"
+                            />
+                            <span className="text-xs text-gray-500">{material.unit}</span>
+                          </>
+                        ) : (
+                          <p className="text-xs text-gray-500">
+                            {material.quantity} {material.unit}
+                          </p>
+                        )}
+                      </div>
                     </div>
                     <div className="text-right">
-                      <p className="text-sm font-bold text-gray-900">₱{material.cost.toLocaleString()}</p>
-                      <p className="text-xs text-gray-500">cost</p>
+                      {isEditingVariant ? (
+                        <input
+                          type="number"
+                          value={editedVariant.rawMaterials[index].cost}
+                          onChange={(e) => handleRawMaterialChange(index, 'cost', parseFloat(e.target.value) || 0)}
+                          className="border rounded px-2 py-1 text-sm font-bold w-24 text-right"
+                          placeholder="0"
+                        />
+                      ) : (
+                        <>
+                          <p className="text-sm font-bold text-gray-900">₱{material.cost.toLocaleString()}</p>
+                          <p className="text-xs text-gray-500">cost</p>
+                        </>
+                      )}
                     </div>
+                    {isEditingVariant && (
+                      <button
+                        onClick={() => handleRemoveMaterial(index)}
+                        className="text-red-600 hover:text-red-700 hover:bg-red-50 p-1.5 rounded transition-colors"
+                        title="Remove material"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
                   </div>
                 ))}
                 <div className="pt-3 border-t">
                   <div className="flex items-center justify-between">
                     <span className="text-sm font-medium text-gray-700">Total Material Cost:</span>
                     <span className="text-lg font-bold text-blue-600">
-                      ₱{selectedVariant.rawMaterials.reduce((sum, m) => sum + m.cost, 0).toLocaleString()}
+                      ₱{displayVariant.rawMaterials.reduce((sum, m) => sum + m.cost, 0).toLocaleString()}
                     </span>
                   </div>
                 </div>
@@ -574,7 +966,7 @@ export default function ProductFamilyPage() {
               <Button 
                 variant="outline" 
                 className="text-xs h-7 px-2"
-                onClick={() => {/* TODO: Open bulk discount settings modal */}}
+                onClick={() => setShowBulkDiscountModal(true)}
               >
                 <Edit className="w-3 h-3 mr-1" />
                 Edit Rules
@@ -582,11 +974,11 @@ export default function ProductFamilyPage() {
             </div>
           </CardHeader>
           <CardContent>
-            {selectedVariant.bulkDiscounts && selectedVariant.bulkDiscounts.length > 0 ? (
+            {displayVariant.bulkDiscounts && displayVariant.bulkDiscounts.length > 0 ? (
               <div className="space-y-2">
-                {selectedVariant.bulkDiscounts.map((tier, index) => {
+                {displayVariant.bulkDiscounts.map((tier, index) => {
                   const savings = tier.discount > 0 
-                    ? selectedVariant.price - tier.pricePerUnit 
+                    ? displayVariant.price - tier.pricePerUnit 
                     : 0;
                   
                   return (
@@ -645,7 +1037,7 @@ export default function ProductFamilyPage() {
                 <p className="text-sm text-gray-500 mb-3">No bulk discount rules configured</p>
                 <Button 
                   variant="outline"
-                  onClick={() => {/* TODO: Open bulk discount settings modal */}}
+                  onClick={() => setShowBulkDiscountModal(true)}
                 >
                   <Percent className="w-4 h-4 mr-2" />
                   Set Up Discounts
@@ -666,19 +1058,55 @@ export default function ProductFamilyPage() {
           <CardContent className="space-y-3">
             <div>
               <p className="text-xs text-gray-500 uppercase mb-1">Length</p>
-              <p className="text-sm font-medium text-gray-900">{selectedVariant.length}</p>
+              {isEditingVariant ? (
+                <input
+                  type="text"
+                  value={editedVariant.length}
+                  onChange={(e) => handleInputChange('length', e.target.value)}
+                  className="w-full border rounded px-3 py-1.5 text-sm font-medium"
+                />
+              ) : (
+                <p className="text-sm font-medium text-gray-900">{displayVariant.length}</p>
+              )}
             </div>
             <div>
               <p className="text-xs text-gray-500 uppercase mb-1">Weight</p>
-              <p className="text-sm font-medium text-gray-900">{selectedVariant.weight}</p>
+              {isEditingVariant ? (
+                <input
+                  type="text"
+                  value={editedVariant.weight}
+                  onChange={(e) => handleInputChange('weight', e.target.value)}
+                  className="w-full border rounded px-3 py-1.5 text-sm font-medium"
+                />
+              ) : (
+                <p className="text-sm font-medium text-gray-900">{displayVariant.weight}</p>
+              )}
             </div>
             <div>
               <p className="text-xs text-gray-500 uppercase mb-1">Wall Thickness</p>
-              <p className="text-sm font-medium text-gray-900">{selectedVariant.thickness}</p>
+              {isEditingVariant ? (
+                <input
+                  type="text"
+                  value={editedVariant.thickness}
+                  onChange={(e) => handleInputChange('thickness', e.target.value)}
+                  className="w-full border rounded px-3 py-1.5 text-sm font-medium"
+                />
+              ) : (
+                <p className="text-sm font-medium text-gray-900">{displayVariant.thickness}</p>
+              )}
             </div>
             <div>
               <p className="text-xs text-gray-500 uppercase mb-1">Pressure Rating</p>
-              <p className="text-sm font-medium text-gray-900">{selectedVariant.pressure}</p>
+              {isEditingVariant ? (
+                <input
+                  type="text"
+                  value={editedVariant.pressure}
+                  onChange={(e) => handleInputChange('pressure', e.target.value)}
+                  className="w-full border rounded px-3 py-1.5 text-sm font-medium"
+                />
+              ) : (
+                <p className="text-sm font-medium text-gray-900">{displayVariant.pressure}</p>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -694,9 +1122,18 @@ export default function ProductFamilyPage() {
           <CardContent className="space-y-3">
             <div>
               <p className="text-xs text-gray-500 uppercase mb-1">Monthly Usage</p>
-              <p className="text-lg font-semibold text-gray-900">
-                {selectedVariant.monthlyUsage.toLocaleString()} units
-              </p>
+              {isEditingVariant ? (
+                <input
+                  type="number"
+                  value={editedVariant.monthlyUsage}
+                  onChange={(e) => handleInputChange('monthlyUsage', parseInt(e.target.value) || 0)}
+                  className="w-full border rounded px-3 py-1.5 text-lg font-semibold"
+                />
+              ) : (
+                <p className="text-lg font-semibold text-gray-900">
+                  {displayVariant.monthlyUsage.toLocaleString()} units
+                </p>
+              )}
             </div>
             <div>
               <p className="text-xs text-gray-500 uppercase mb-1">Avg. Daily Usage</p>
@@ -708,7 +1145,7 @@ export default function ProductFamilyPage() {
               <p className="text-xs text-gray-500 uppercase mb-1">Units Sold YTD</p>
               <div className="flex items-center gap-2">
                 <p className="text-lg font-bold text-green-600">
-                  {selectedVariant.unitsSold.toLocaleString()}
+                  {displayVariant.unitsSold.toLocaleString()}
                 </p>
                 <Badge variant="success" size="sm">+12%</Badge>
               </div>
@@ -917,6 +1354,58 @@ export default function ProductFamilyPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Delete Variant Section - Only visible in edit mode */}
+      {isEditingVariant && (
+        <Card className="border-red-200 bg-red-50">
+          <CardContent className="py-6">
+            <div className="flex items-start justify-between">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="w-5 h-5 text-red-600 mt-0.5 flex-shrink-0" />
+                <div>
+                  <h3 className="text-base font-semibold text-red-900 mb-1">Danger Zone</h3>
+                  <p className="text-sm text-red-700 mb-2">
+                    Permanently delete this variant from the system. This action cannot be undone.
+                  </p>
+                  <ul className="text-xs text-red-600 space-y-1 ml-4 list-disc">
+                    <li>All historical data will be permanently removed</li>
+                    <li>Stock records and inventory will be deleted</li>
+                    <li>Sales history and analytics will be lost</li>
+                    <li>Associated production orders may be affected</li>
+                  </ul>
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                onClick={handleDeleteVariant}
+                className="bg-red-600 text-white border-red-600 hover:bg-red-700 hover:border-red-700 px-6"
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                Delete Variant
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Bulk Discount Modal */}
+      <BulkDiscountModal
+        isOpen={showBulkDiscountModal}
+        onClose={() => setShowBulkDiscountModal(false)}
+        onSave={handleSaveBulkDiscounts}
+        currentDiscounts={displayVariant.bulkDiscounts || []}
+        basePrice={displayVariant.price || 0}
+        variantName={displayVariant.size || displayVariant.variantName || 'this variant'}
+      />
+
+      {/* Image Gallery Modal */}
+      <ImageGalleryModal
+        isOpen={showImageGalleryModal}
+        onClose={() => setShowImageGalleryModal(false)}
+        onSelectImages={handleSelectImages}
+        maxImages={999}
+        currentImages={productImages}
+      />
     </div>
   );
 }

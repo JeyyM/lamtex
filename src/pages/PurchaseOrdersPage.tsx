@@ -18,6 +18,8 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { useAppContext } from '@/src/store/AppContext';
+import CreateRequestModal from '@/src/components/logistics/CreateRequestModal';
+import { getFinishedGoodsByBranch, getRawMaterialsByBranch } from '@/src/mock/warehouseDashboard';
 
 interface PurchaseOrder {
   id: string;
@@ -33,9 +35,41 @@ interface PurchaseOrder {
 
 export function PurchaseOrdersPage() {
   const navigate = useNavigate();
-  const { branch } = useAppContext();
+  const { branch, selectedBranch } = useAppContext();
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('All');
+  const [isModalOpen, setIsModalOpen] = useState(false);
+
+  // Get finished goods and raw materials for the modal
+  const currentBranch = selectedBranch || branch || 'All';
+  const finishedGoods = getFinishedGoodsByBranch(currentBranch).map(fg => ({
+    id: fg.id,
+    sku: fg.sku,
+    name: fg.productName,
+    category: 'Finished Goods',
+    currentStock: fg.currentStock,
+    unit: 'units',
+    reorderPoint: fg.minLevel,
+    maxCapacity: fg.currentStock + 1000,
+    location: fg.branch || '',
+    lastRestocked: '2026-02-20',
+    status: fg.riskLevel === 'High' ? 'critical' : fg.riskLevel === 'Medium' ? 'warning' : 'healthy' as 'healthy' | 'warning' | 'critical'
+  }));
+
+  const rawMaterials = getRawMaterialsByBranch(currentBranch).map(rm => ({
+    id: rm.id,
+    code: rm.sku,
+    name: rm.materialName,
+    category: 'Raw Materials',
+    currentStock: rm.currentQty,
+    unit: rm.unit,
+    reorderPoint: rm.safetyLevel,
+    dailyConsumption: rm.avgDailyUse,
+    daysRemaining: rm.daysRemaining,
+    supplier: 'Primary Supplier',
+    lastPurchased: '2026-02-15',
+    status: rm.riskLevel === 'High' ? 'critical' : rm.riskLevel === 'Medium' ? 'warning' : 'healthy' as 'healthy' | 'warning' | 'critical'
+  }));
 
   // Mock data - hardcoded purchase orders
   const [purchaseOrders] = useState<PurchaseOrder[]>([
@@ -141,7 +175,7 @@ export function PurchaseOrdersPage() {
             <Download className="w-4 h-4 mr-2" />
             Export
           </Button>
-          <Button variant="primary" onClick={() => alert('Create PO modal would open here')}>
+          <Button variant="primary" onClick={() => setIsModalOpen(true)}>
             <Plus className="w-4 h-4 mr-2" />
             New Purchase Order
           </Button>
@@ -326,6 +360,15 @@ export function PurchaseOrdersPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Create Request Modal */}
+      <CreateRequestModal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        initialType="purchase"
+        finishedGoods={finishedGoods}
+        rawMaterials={rawMaterials}
+      />
     </div>
   );
 }

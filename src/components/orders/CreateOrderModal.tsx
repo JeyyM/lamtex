@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
 import { useAppContext } from '@/src/store/AppContext';
 import { Button } from '@/src/components/ui/Button';
 import { Badge } from '@/src/components/ui/Badge';
@@ -486,19 +485,11 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
   const today = new Date().toISOString().split('T')[0];
 
   return (
-    <motion.div 
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.2 }}
+    <div 
       className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4"
       onClick={onClose}
     >
-      <motion.div 
-        initial={{ opacity: 0, scale: 0.95, y: 20 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.95, y: 20 }}
-        transition={{ duration: 0.2 }}
+      <div 
         className="bg-white rounded-lg shadow-xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
@@ -909,7 +900,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
             </Button>
           </div>
         </div>
-      </motion.div>
+      </div>
 
       {/* Product Detail Modal - E-commerce Style */}
       {selectedProduct && selectedVariant && (
@@ -1174,6 +1165,6 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
           </div>
         </div>
       )}
-    </motion.div>
+    </div>
   );
 }
