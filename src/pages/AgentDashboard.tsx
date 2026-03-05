@@ -241,7 +241,7 @@ export function AgentDashboard() {
       {/* KPI Strip - Performance Metrics */}
       <div>
         <h2 className="text-lg font-semibold text-gray-900 mb-3">📊 My Performance</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-8 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-8 gap-4">
           {kpis.map((kpi) => (
             <KpiTile
               key={kpi.id}
@@ -637,8 +637,8 @@ export function AgentDashboard() {
               </thead>
               <tbody className="divide-y divide-gray-200">
                 {customers.map((customer) => (
-                  <>
-                    <tr key={customer.id} className="hover:bg-gray-50">
+                  <React.Fragment key={customer.id}>
+                    <tr className="hover:bg-gray-50">
                       <td className="px-4 py-3">
                         <div>
                           <p className="font-medium text-gray-900">{customer.customerName}</p>
@@ -715,7 +715,7 @@ export function AgentDashboard() {
                         </div>
                       </td>
                     </tr>
-                  </>
+                  </React.Fragment>
                 ))}
               </tbody>
             </table>
