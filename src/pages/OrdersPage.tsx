@@ -90,14 +90,14 @@ export function OrdersPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Orders Management</h1>
           <p className="text-sm text-gray-500 mt-1">Create, track, and manage customer orders</p>
         </div>
         <Button 
           variant="primary" 
-          className="gap-2" 
+          className="gap-2 w-full sm:w-auto" 
           onClick={handleCreateOrder}
         >
           <Plus className="w-4 h-4" />
@@ -105,8 +105,32 @@ export function OrdersPage() {
         </Button>
       </div>
 
-      {/* Tabs */}
-      <div className="border-b border-gray-200">
+      {/* Tabs - Mobile Dropdown */}
+      <div className="md:hidden">
+        <div className="relative">
+          <select
+            value={activeTab}
+            onChange={(e) => setActiveTab(e.target.value as OrderTab)}
+            className="w-full px-4 py-3 pr-10 border border-gray-300 rounded-lg text-sm font-medium focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none appearance-none bg-white"
+          >
+            <option value="all">All Orders ({tabCounts.all})</option>
+            <option value="draft">Drafts ({tabCounts.draft})</option>
+            <option value="pending">Pending ({tabCounts.pending})</option>
+            <option value="approved">Approved ({tabCounts.approved})</option>
+            <option value="intransit">In Transit ({tabCounts.intransit})</option>
+            <option value="delivered">Delivered ({tabCounts.delivered})</option>
+            <option value="rejected">Rejected ({tabCounts.rejected})</option>
+          </select>
+          <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
+            <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      {/* Tabs - Desktop Navigation */}
+      <div className="hidden md:block border-b border-gray-200">
         <nav className="flex gap-6">
           {[
             { key: 'all', label: 'All Orders', icon: FileText },
@@ -120,7 +144,7 @@ export function OrdersPage() {
             <button
               key={key}
               onClick={() => setActiveTab(key as OrderTab)}
-              className={`flex items-center gap-2 px-1 py-3 border-b-2 text-sm font-medium transition-colors ${
+              className={`flex items-center gap-2 px-1 py-3 border-b-2 text-sm font-medium transition-colors whitespace-nowrap ${
                 activeTab === key
                   ? 'border-red-600 text-red-600'
                   : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
@@ -141,8 +165,8 @@ export function OrdersPage() {
       {/* Filters and Search */}
       <Card>
         <CardHeader>
-          <div className="flex items-center gap-4">
-            <div className="relative flex-1 max-w-md">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+            <div className="relative flex-1 sm:max-w-md">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
               <input
                 type="text"
@@ -159,7 +183,72 @@ export function OrdersPage() {
           </div>
         </CardHeader>
         <CardContent className="p-0">
-          <div className="overflow-x-auto">
+          {/* Mobile Card View */}
+          <div className="md:hidden divide-y divide-gray-200">
+            {filteredOrders.map((order) => (
+              <div 
+                key={order.id} 
+                className="p-4 hover:bg-gray-50 cursor-pointer transition-colors"
+                onClick={() => handleViewOrder(order.id)}
+              >
+                <div className="space-y-3">
+                  {/* Order ID and Status */}
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <span className="font-semibold text-gray-900 truncate">{order.id}</span>
+                      {order.requiresApproval && (
+                        <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0" title="Requires approval" />
+                      )}
+                    </div>
+                    <Badge variant={getStatusBadgeVariant(order.status)} className="text-xs flex-shrink-0">
+                      {order.status}
+                    </Badge>
+                  </div>
+                  
+                  {/* Customer */}
+                  <div className="min-w-0">
+                    <div className="font-medium text-gray-900 break-words">{order.customer}</div>
+                    <div className="text-xs text-gray-500 truncate">{order.agent}</div>
+                  </div>
+                  
+                  {/* Dates */}
+                  <div className="grid grid-cols-2 gap-2 text-sm min-w-0">
+                    <div className="min-w-0">
+                      <div className="text-xs text-gray-500">Order Date</div>
+                      <div className="text-gray-900 truncate">{order.orderDate}</div>
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-xs text-gray-500">Required Date</div>
+                      <div className="text-gray-900 truncate">{order.requiredDate}</div>
+                    </div>
+                  </div>
+                  
+                  {/* Amount and Payment */}
+                  <div className="flex items-center justify-between gap-2 pt-2 border-t border-gray-100 min-w-0">
+                    <div className="min-w-0 flex-1">
+                      <div className="font-semibold text-gray-900 break-words">₱{order.totalAmount.toLocaleString()}</div>
+                      {order.discountPercent > 0 && (
+                        <div className="text-xs text-gray-500 truncate">-{order.discountPercent.toFixed(1)}% discount</div>
+                      )}
+                    </div>
+                    <Badge variant={getPaymentBadgeVariant(order.paymentStatus)} className="text-xs flex-shrink-0">
+                      {order.paymentStatus}
+                    </Badge>
+                  </div>
+                </div>
+              </div>
+            ))}
+            {filteredOrders.length === 0 && (
+              <div className="px-4 py-12 text-center text-gray-500">
+                <FileText className="w-12 h-12 mx-auto mb-3 text-gray-400" />
+                <p className="font-medium">No orders found</p>
+                <p className="text-sm mt-1">Try adjusting your filters or create a new order</p>
+              </div>
+            )}
+          </div>
+
+          {/* Desktop Table View */}
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b border-gray-200">
                 <tr>

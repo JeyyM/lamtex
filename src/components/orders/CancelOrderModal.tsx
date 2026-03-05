@@ -156,7 +156,7 @@ export function CancelOrderModal({
             </div>
 
             {/* Order Information */}
-            <div className="grid grid-cols-2 gap-4 p-4 bg-gray-50 rounded-lg">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 bg-gray-50 rounded-lg">
               <div>
                 <p className="text-sm text-gray-500">Order ID</p>
                 <p className="font-semibold text-gray-900">{orderId}</p>

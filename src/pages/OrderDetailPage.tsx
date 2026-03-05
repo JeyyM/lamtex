@@ -464,25 +464,26 @@ export function OrderDetailPage() {
   const allPaymentStatuses = ['Unbilled', 'Invoiced', 'Partially Paid', 'Paid', 'Overdue'];
 
   return (
-    <div className="p-8 space-y-6">
+    <div className="p-4 md:p-6 lg:p-8 space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center gap-4">
           <Button
             variant="ghost"
             size="sm"
             onClick={() => navigate('/orders')}
-            className="gap-2"
+            className="gap-2 flex-shrink-0"
           >
             <ArrowLeft className="w-4 h-4" />
-            Back to Orders
+            <span className="hidden sm:inline">Back to Orders</span>
+            <span className="sm:hidden">Back</span>
           </Button>
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">{order.id}</h1>
+          <div className="min-w-0">
+            <h1 className="text-xl md:text-2xl font-bold text-gray-900 truncate">{order.id}</h1>
             <p className="text-sm text-gray-500 mt-1">Order Details</p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 md:gap-3 flex-wrap">
           {isEditing ? (
             <>
               <Button variant="outline" onClick={handleCancelEdit}>
@@ -677,6 +678,78 @@ export function OrderDetailPage() {
           )}
         </CardHeader>
         <CardContent className="p-0">
+          {/* Mobile Card View */}
+          <div className="md:hidden divide-y divide-gray-200">
+            {displayOrder.items.map((item, index) => (
+              <div key={index} className="p-4 space-y-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium text-gray-900 break-words">{item.productName}</div>
+                    <div className="text-xs text-gray-500 mt-1">{item.variantDescription}</div>
+                    <div className="text-xs text-gray-600 mt-1">SKU: {item.sku}</div>
+                    <div className="flex gap-2 mt-2 flex-wrap">
+                      {item.batchDiscount && (
+                        <Badge variant="warning" className="text-xs">Bulk {item.batchDiscount}%</Badge>
+                      )}
+                      {item.negotiatedPrice && item.originalPrice && item.negotiatedPrice < item.originalPrice && (
+                        <Badge variant="danger" className="text-xs">Negotiated</Badge>
+                      )}
+                      <Badge variant={item.stockHint === 'Available' ? 'success' : 'warning'} className="text-xs">
+                        {item.stockHint}
+                      </Badge>
+                    </div>
+                  </div>
+                  {isEditing && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleRemoveItem(item.id)}
+                      className="text-red-600 hover:text-red-700 hover:bg-red-50 flex-shrink-0"
+                    >
+                      <X className="w-4 h-4" />
+                    </Button>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <div className="text-xs text-gray-500">Quantity</div>
+                    {isEditing ? (
+                      <input
+                        type="number"
+                        min="1"
+                        value={item.quantity}
+                        onChange={(e) => handleQuantityChange(item.id, parseInt(e.target.value) || 1)}
+                        className="w-full px-2 py-1 border border-gray-300 rounded text-center focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
+                      />
+                    ) : (
+                      <div className="font-medium text-gray-900">{item.quantity}</div>
+                    )}
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500">Unit Price</div>
+                    <div className="font-medium text-gray-900">₱{item.unitPrice}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500">Discount</div>
+                    <div className="font-medium text-gray-900">{item.batchDiscount ? `${item.batchDiscount}%` : '-'}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500">Line Total</div>
+                    <div className="font-semibold text-gray-900">₱{item.lineTotal.toLocaleString()}</div>
+                  </div>
+                </div>
+              </div>
+            ))}
+            <div className="p-4 bg-gray-50 border-t-2 border-gray-200">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-gray-700">Subtotal:</span>
+                <span className="font-bold text-gray-900 text-lg">₱{displayOrder.totalAmount.toLocaleString()}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Desktop Table View */}
+          <div className="hidden md:block">
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b border-gray-200">
@@ -769,7 +842,8 @@ export function OrderDetailPage() {
                   </tfoot>
                 </table>
               </div>
-            </CardContent>
+          </div>
+        </CardContent>
           </Card>
 
           {/* Approval Information */}
@@ -1564,38 +1638,38 @@ export function OrderDetailPage() {
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     Document Type
                   </label>
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="grid grid-cols-3 gap-2 md:gap-3">
                     <button
                       onClick={() => setProofType('delivery')}
-                      className={`p-3 border-2 rounded-lg text-center transition-colors ${
+                      className={`p-2 md:p-3 border-2 rounded-lg text-center transition-colors ${
                         proofType === 'delivery'
                           ? 'border-blue-500 bg-blue-50 text-blue-700'
                           : 'border-gray-200 hover:border-gray-300'
                       }`}
                     >
-                      <Truck className="w-5 h-5 mx-auto mb-1" />
+                      <Truck className="w-4 h-4 md:w-5 md:h-5 mx-auto mb-1" />
                       <span className="text-xs font-medium">Delivery</span>
                     </button>
                     <button
                       onClick={() => setProofType('payment')}
-                      className={`p-3 border-2 rounded-lg text-center transition-colors ${
+                      className={`p-2 md:p-3 border-2 rounded-lg text-center transition-colors ${
                         proofType === 'payment'
                           ? 'border-green-500 bg-green-50 text-green-700'
                           : 'border-gray-200 hover:border-gray-300'
                       }`}
                     >
-                      <CreditCard className="w-5 h-5 mx-auto mb-1" />
+                      <CreditCard className="w-4 h-4 md:w-5 md:h-5 mx-auto mb-1" />
                       <span className="text-xs font-medium">Payment</span>
                     </button>
                     <button
                       onClick={() => setProofType('receipt')}
-                      className={`p-3 border-2 rounded-lg text-center transition-colors ${
+                      className={`p-2 md:p-3 border-2 rounded-lg text-center transition-colors ${
                         proofType === 'receipt'
                           ? 'border-purple-500 bg-purple-50 text-purple-700'
                           : 'border-gray-200 hover:border-gray-300'
                       }`}
                     >
-                      <FileText className="w-5 h-5 mx-auto mb-1" />
+                      <FileText className="w-4 h-4 md:w-5 md:h-5 mx-auto mb-1" />
                       <span className="text-xs font-medium">Receipt</span>
                     </button>
                   </div>
