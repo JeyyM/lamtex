@@ -26,12 +26,12 @@ export function Sidebar() {
 
   const navItems = [
     { name: 'Dashboard', path: '/', icon: LayoutDashboard, roles: ['Executive', 'Warehouse', 'Logistics', 'Agent', 'Finance', 'Production', 'Manager'] },
-    { name: 'Chats', path: '/chats', icon: MessageCircle, roles: ['Executive', 'Warehouse', 'Logistics', 'Agent', 'Finance', 'Production', 'Manager'] },
     { name: 'Orders', path: '/orders', icon: ShoppingCart, roles: ['Executive', 'Agent', 'Warehouse', 'Logistics', 'Finance', 'Manager'] },
     { name: 'Products', path: '/products', icon: Package, roles: ['Executive', 'Warehouse', 'Agent', 'Production', 'Manager'] },
     { name: 'Raw Materials', path: '/materials', icon: Box, roles: ['Executive', 'Warehouse', 'Production', 'Manager'] },
     { name: 'Warehouse', path: '/warehouse', icon: Warehouse, roles: ['Executive', 'Warehouse', 'Manager'] },
     { name: 'Logistics', path: '/logistics', icon: Truck, roles: ['Executive', 'Logistics', 'Manager'] },
+    { name: 'Chats', path: '/chats', icon: MessageCircle, roles: ['Executive', 'Warehouse', 'Logistics', 'Agent', 'Finance', 'Production', 'Manager'] },
     { name: 'Customers', path: '/customers', icon: Users, roles: ['Executive', 'Agent', 'Manager'] },
     { name: 'Suppliers', path: '/suppliers', icon: Truck, roles: ['Executive', 'Warehouse', 'Procurement', 'Manager'] },
     { name: 'Invoices & Payments', path: '/finance', icon: CreditCard, roles: ['Executive', 'Finance', 'Agent', 'Manager'] },
