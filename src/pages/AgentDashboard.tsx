@@ -131,7 +131,7 @@ export function AgentDashboard() {
       </div>
 
       {/* TODAY'S WORK & QUICK ACTIONS */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         {/* Today's Tasks */}
         <Card className="border-blue-200">
           <CardHeader className="bg-gradient-to-r from-blue-50 to-white">
@@ -241,7 +241,7 @@ export function AgentDashboard() {
       {/* KPI Strip - Performance Metrics */}
       <div>
         <h2 className="text-lg font-semibold text-gray-900 mb-3">📊 My Performance</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-8 gap-4">
           {kpis.map((kpi) => (
             <KpiTile
               key={kpi.id}
@@ -321,7 +321,7 @@ export function AgentDashboard() {
       <div>
         <h2 className="text-lg font-semibold text-gray-900 mb-3">📈 Performance Analytics</h2>
       </div>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         {/* Sales Performance Trend */}
         <Card>
           <CardHeader>
@@ -628,83 +628,94 @@ export function AgentDashboard() {
               <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b">
                 <tr>
                   <th className="px-4 py-3 text-left font-medium">Customer</th>
-                  <th className="px-4 py-3 text-left font-medium">Contact</th>
-                  <th className="px-4 py-3 text-left font-medium">Type</th>
+                  <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Type</th>
                   <th className="px-4 py-3 text-left font-medium">Outstanding</th>
-                  <th className="px-4 py-3 text-left font-medium">Status</th>
-                  <th className="px-4 py-3 text-left font-medium">Health</th>
-                  <th className="px-4 py-3 text-left font-medium">Next Visit</th>
-                  <th className="px-4 py-3 text-left font-medium">Actions</th>
+                  <th className="px-4 py-3 text-left font-medium hidden sm:table-cell">Status</th>
+                  <th className="px-4 py-3 text-left font-medium hidden xl:table-cell">Health</th>
+                  <th className="px-4 py-3 text-left font-medium hidden min-[450px]:table-cell">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
                 {customers.map((customer) => (
-                  <tr key={customer.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3">
-                      <div>
-                        <p className="font-medium text-gray-900">{customer.customerName}</p>
-                        <p className="text-xs text-gray-500 flex items-center gap-1">
-                          <MapPin className="w-3 h-3" />
-                          {customer.location}
-                        </p>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="text-xs text-gray-600">
-                        <p className="flex items-center gap-1">
-                          <User className="w-3 h-3" />
-                          {customer.contactPerson}
-                        </p>
-                        <p className="flex items-center gap-1 mt-1">
-                          <Phone className="w-3 h-3" />
-                          {customer.phone}
-                        </p>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <Badge variant="outline">{customer.accountType}</Badge>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div>
-                        <p className="font-medium text-gray-900">
-                          ₱{customer.outstandingBalance.toLocaleString()}
-                        </p>
-                        {customer.daysOverdue && customer.daysOverdue > 0 && (
-                          <p className="text-xs text-red-600">{customer.daysOverdue} days late</p>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <Badge variant={getPaymentStatusColor(customer.paymentStatus)}>
-                        {customer.paymentStatus}
-                      </Badge>
-                    </td>
-                    <td className="px-4 py-3">
-                      <Badge variant={getHealthScoreColor(customer.healthScore)}>
-                        {customer.healthScore}
-                      </Badge>
-                    </td>
-                    <td className="px-4 py-3 text-gray-600">
-                      {customer.nextVisitScheduled ? (
-                        <span className="flex items-center gap-1 text-xs">
-                          <Calendar className="w-3 h-3" />
-                          {customer.nextVisitScheduled}
-                        </span>
-                      ) : (
-                        <span className="text-xs text-gray-400">Not scheduled</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex gap-1">
-                        <Button variant="outline" size="sm">
-                          Visit
-                        </Button>
-                        <Button variant="primary" size="sm">
-                          Create Order
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
+                  <>
+                    <tr key={customer.id} className="hover:bg-gray-50">
+                      <td className="px-4 py-3">
+                        <div>
+                          <p className="font-medium text-gray-900">{customer.customerName}</p>
+                          <p className="text-xs text-gray-500 flex items-center gap-1">
+                            <MapPin className="w-3 h-3" />
+                            {customer.location}
+                          </p>
+                          <p className="text-xs text-gray-600 flex items-center gap-1 mt-1">
+                            <User className="w-3 h-3" />
+                            {customer.contactPerson}
+                          </p>
+                          <p className="text-xs text-gray-600 flex items-center gap-1">
+                            <Phone className="w-3 h-3" />
+                            {customer.phone}
+                          </p>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 hidden md:table-cell">
+                        <Badge variant="outline">{customer.accountType}</Badge>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div>
+                          <p className="font-medium text-gray-900">
+                            ₱{customer.outstandingBalance.toLocaleString()}
+                          </p>
+                          {customer.daysOverdue && customer.daysOverdue > 0 && (
+                            <p className="text-xs text-red-600">{customer.daysOverdue} days late</p>
+                          )}
+                          {customer.nextVisitScheduled ? (
+                            <p className="flex items-center gap-1 text-xs text-gray-600 mt-1">
+                              <Calendar className="w-3 h-3" />
+                              Next: {customer.nextVisitScheduled}
+                            </p>
+                          ) : (
+                            <p className="text-xs text-gray-400 mt-1">No visit scheduled</p>
+                          )}
+                          <div className="sm:hidden mt-1">
+                            <Badge variant={getPaymentStatusColor(customer.paymentStatus)}>
+                              {customer.paymentStatus}
+                            </Badge>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 hidden sm:table-cell">
+                        <Badge variant={getPaymentStatusColor(customer.paymentStatus)}>
+                          {customer.paymentStatus}
+                        </Badge>
+                      </td>
+                      <td className="px-4 py-3 hidden xl:table-cell">
+                        <Badge variant={getHealthScoreColor(customer.healthScore)}>
+                          {customer.healthScore}
+                        </Badge>
+                      </td>
+                      <td className="px-4 py-3 hidden min-[450px]:table-cell">
+                        <div className="flex flex-col sm:flex-row gap-1">
+                          <Button variant="outline" size="sm">
+                            Visit
+                          </Button>
+                          <Button variant="primary" size="sm">
+                            Create Order
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                    <tr className="min-[450px]:hidden hover:bg-gray-50">
+                      <td colSpan={2} className="px-4 py-3">
+                        <div className="flex gap-1">
+                          <Button variant="outline" size="sm" className="flex-1">
+                            Visit
+                          </Button>
+                          <Button variant="primary" size="sm" className="flex-1">
+                            Create Order
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  </>
                 ))}
               </tbody>
             </table>
@@ -713,7 +724,7 @@ export function AgentDashboard() {
       </Card>
 
       {/* Orders & PODs Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         {/* My Orders */}
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
@@ -821,7 +832,7 @@ export function AgentDashboard() {
       </div>
 
       {/* Payments & Purchase Requests Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         {/* Payment Collections */}
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">

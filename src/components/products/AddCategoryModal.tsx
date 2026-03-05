@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { X, Upload, Image as ImageIcon, Trash2 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
 import ImageGalleryModal from '../ImageGalleryModal';
 import CategoryIconModal from './CategoryIconModal';
 
@@ -162,8 +161,10 @@ const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
 
   return (
     <>
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-0 md:p-4">
-        <div className="bg-white w-full h-full md:w-auto md:h-auto md:rounded-xl md:max-w-2xl md:max-h-[90vh] flex flex-col shadow-xl">
+      <div className="fixed inset-0 z-50 overflow-y-auto">
+        <div className="fixed inset-0 bg-black/50" onClick={handleClose} />
+        <div className="flex min-h-full items-center justify-center p-4">
+          <div className="bg-white w-full md:max-w-2xl rounded-xl max-h-[90vh] flex flex-col shadow-xl" onClick={(e) => e.stopPropagation()}>
           {/* Header */}
           <div className="px-4 md:px-6 py-4 md:py-6 border-b border-gray-200">
             <div className="flex items-center justify-between gap-3">
@@ -361,11 +362,9 @@ const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
               </button>
             </div>
           </div>
-              </motion.div>
-            </div>
-          </div>
-        )}
-      </AnimatePresence>
+        </div>
+      </div>
+    </div>
 
       {/* Image Gallery Modal */}
       <ImageGalleryModal

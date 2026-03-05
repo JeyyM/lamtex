@@ -162,7 +162,7 @@ export function ExecutiveDashboard() {
       </div>
 
       {/* Strategic KPI Strip */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-3 2xl:grid-cols-6 gap-4">
         {/* Revenue */}
         <Card>
           <CardContent className="p-4">
@@ -260,14 +260,14 @@ export function ExecutiveDashboard() {
       {criticalApprovals.length > 0 && (
         <Card className="border-2 border-red-200 bg-gradient-to-r from-red-50 to-rose-50">
           <CardHeader>
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-4">
               <div className="flex items-center gap-2">
                 <AlertTriangle className="w-5 h-5 text-red-600" />
                 <CardTitle className="text-red-900">
                   Critical Approvals Requiring Immediate Action ({criticalApprovals.length})
                 </CardTitle>
               </div>
-              <Button variant="outline" size="sm" onClick={() => navigate('/orders')}>
+              <Button variant="outline" size="sm" className="whitespace-nowrap flex-shrink-0" onClick={() => navigate('/orders')}>
                 View All <ArrowRight className="w-4 h-4 ml-1" />
               </Button>
             </div>
@@ -280,60 +280,63 @@ export function ExecutiveDashboard() {
                   className="bg-white rounded-lg border border-red-200 p-4 hover:border-red-300 transition-colors cursor-pointer"
                   onClick={() => navigate(`/orders/${approval.orderNumber}`)}
                 >
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex-1 space-y-2">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-semibold text-gray-900">{approval.orderNumber}</span>
-                        <Badge variant="danger">Urgency: {approval.urgencyScore}/100</Badge>
-                        <Badge 
-                          className={`border ${getMarginImpactColor(approval.marginImpact)}`}
-                        >
-                          {approval.marginImpact} Margin Impact
-                        </Badge>
+                  <div className="space-y-3">
+                    {/* Top Section: Badges */}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-semibold text-gray-900">{approval.orderNumber}</span>
+                      <Badge variant="danger">Urgency: {approval.urgencyScore}/100</Badge>
+                      <Badge 
+                        className={`border ${getMarginImpactColor(approval.marginImpact)}`}
+                      >
+                        {approval.marginImpact} Margin Impact
+                      </Badge>
+                    </div>
+                    
+                    {/* Middle Section: Details Grid */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                      <div>
+                        <p className="text-gray-500 text-xs">Customer</p>
+                        <p className="font-medium text-gray-900">{approval.customer}</p>
                       </div>
-                      
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-                        <div>
-                          <p className="text-gray-500 text-xs">Customer</p>
-                          <p className="font-medium text-gray-900">{approval.customer}</p>
-                        </div>
-                        <div>
-                          <p className="text-gray-500 text-xs">Agent</p>
-                          <p className="font-medium text-gray-900">{approval.agent}</p>
-                        </div>
-                        <div>
-                          <p className="text-gray-500 text-xs">Order Value</p>
-                          <p className="font-medium text-gray-900">{formatCurrency(approval.totalAmount)}</p>
-                        </div>
-                        <div>
-                          <p className="text-gray-500 text-xs">Discount Requested</p>
-                          <p className="font-bold text-red-600">{approval.requestedDiscount}%</p>
-                        </div>
+                      <div>
+                        <p className="text-gray-500 text-xs">Agent</p>
+                        <p className="font-medium text-gray-900">{approval.agent}</p>
                       </div>
+                      <div>
+                        <p className="text-gray-500 text-xs">Order Value</p>
+                        <p className="font-medium text-gray-900">{formatCurrency(approval.totalAmount)}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500 text-xs">Discount Requested</p>
+                        <p className="font-bold text-red-600">{approval.requestedDiscount}%</p>
+                      </div>
+                    </div>
 
+                    {/* Bottom Section: Delivery Date + Action Buttons */}
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                       <div className="flex items-center gap-2 text-sm">
                         <Clock className="w-4 h-4 text-gray-400" />
                         <span className="text-gray-600">
                           Required Delivery: <span className="font-medium">{approval.requestedDeliveryDate}</span>
                         </span>
                       </div>
-                    </div>
 
-                    <div className="flex flex-col gap-2">
-                      <Button variant="success" size="sm" onClick={(e) => {
-                        e.stopPropagation();
-                        alert(`Approving order ${approval.orderNumber}`);
-                      }}>
-                        <CheckCircle className="w-4 h-4 mr-1" />
-                        Approve
-                      </Button>
-                      <Button variant="danger" size="sm" onClick={(e) => {
-                        e.stopPropagation();
-                        alert(`Rejecting order ${approval.orderNumber}`);
-                      }}>
-                        <XCircle className="w-4 h-4 mr-1" />
-                        Reject
-                      </Button>
+                      <div className="flex gap-2 justify-center sm:justify-end">
+                        <Button variant="success" size="sm" onClick={(e) => {
+                          e.stopPropagation();
+                          alert(`Approving order ${approval.orderNumber}`);
+                        }}>
+                          <CheckCircle className="w-4 h-4 mr-1" />
+                          Approve
+                        </Button>
+                        <Button variant="danger" size="sm" onClick={(e) => {
+                          e.stopPropagation();
+                          alert(`Rejecting order ${approval.orderNumber}`);
+                        }}>
+                          <XCircle className="w-4 h-4 mr-1" />
+                          Reject
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -347,14 +350,14 @@ export function ExecutiveDashboard() {
       {criticalInventory.length > 0 && (
         <Card className="border-2 border-orange-200 bg-gradient-to-r from-orange-50 to-amber-50">
           <CardHeader>
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-4">
               <div className="flex items-center gap-2">
                 <Package className="w-5 h-5 text-orange-600" />
                 <CardTitle className="text-orange-900">
                   Critical Inventory Exceptions ({criticalInventory.length})
                 </CardTitle>
               </div>
-              <Button variant="outline" size="sm" onClick={() => navigate('/warehouse')}>
+              <Button variant="outline" size="sm" className="whitespace-nowrap flex-shrink-0" onClick={() => navigate('/warehouse')}>
                 View Warehouse <ArrowRight className="w-4 h-4 ml-1" />
               </Button>
             </div>
@@ -389,7 +392,7 @@ export function ExecutiveDashboard() {
       )}
 
       {/* SECTION 4: FINANCIAL HEALTH - Charts */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 xl:grid-cols-1 2xl:grid-cols-2 gap-6">
         {/* Revenue & Orders Trend - 2 columns */}
         <Card>
           <CardHeader>
@@ -489,7 +492,7 @@ export function ExecutiveDashboard() {
       </div>
 
       {/* SECTION 5: STRATEGIC INSIGHTS - Top Performers */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-2 2xl:grid-cols-3 gap-6">
         {/* Top Products */}
         <Card>
           <CardHeader>
@@ -562,6 +565,9 @@ export function ExecutiveDashboard() {
             </div>
           </CardContent>
         </Card>
+
+        {/* Empty spacer div for 2xl breakpoint to maintain layout */}
+        <div className="hidden 2xl:block"></div>
       </div>
     </div>
   );

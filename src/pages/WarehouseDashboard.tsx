@@ -107,7 +107,7 @@ export function WarehouseDashboard() {
       </div>
 
       {/* KPI Strip */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
         {/* Finished Goods */}
         <Card>
           <CardContent className="p-4">
@@ -342,26 +342,30 @@ export function WarehouseDashboard() {
         </Card>
       )}
 
-      {/* Orders Needing Loading */}
-      {ordersReadyToLoad > 0 && (
-        <Card className="border-2 border-green-200 bg-gradient-to-r from-green-50 to-emerald-50">
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Truck className="w-5 h-5 text-green-600" />
-                <CardTitle className="text-green-900">
-                  Orders Ready for Loading ({ordersReadyToLoad})
-                </CardTitle>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => navigate('/warehouse?tab=orders')}
-              >
-                View All <ArrowRight className="w-4 h-4 ml-1" />
-              </Button>
-            </div>
-          </CardHeader>
+      {/* Orders Section - Ready for Loading & Awaiting Stock */}
+      {(ordersReadyToLoad > 0 || ordersWaitingStock > 0) && (
+        <div className="grid grid-cols-1 xl:grid-cols-1 2xl:grid-cols-2 gap-6">
+          {/* Orders Needing Loading */}
+          {ordersReadyToLoad > 0 && (
+            <Card className="border-2 border-green-200 bg-gradient-to-r from-green-50 to-emerald-50">
+              <CardHeader>
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-2">
+                    <Truck className="w-5 h-5 text-green-600" />
+                    <CardTitle className="text-green-900">
+                      Orders Ready for Loading ({ordersReadyToLoad})
+                    </CardTitle>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="whitespace-nowrap flex-shrink-0"
+                    onClick={() => navigate('/warehouse?tab=orders')}
+                  >
+                    View All <ArrowRight className="w-4 h-4 ml-1" />
+                  </Button>
+                </div>
+              </CardHeader>
           <CardContent>
             <div className="space-y-3">
               {orderFulfillment
@@ -426,7 +430,7 @@ export function WarehouseDashboard() {
       {ordersWaitingStock > 0 && (
         <Card className="border-2 border-orange-200 bg-gradient-to-r from-orange-50 to-yellow-50">
           <CardHeader>
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-4">
               <div className="flex items-center gap-2">
                 <Clock className="w-5 h-5 text-orange-600" />
                 <CardTitle className="text-orange-900">
@@ -436,6 +440,7 @@ export function WarehouseDashboard() {
               <Button
                 variant="outline"
                 size="sm"
+                className="whitespace-nowrap flex-shrink-0"
                 onClick={() => navigate('/warehouse?tab=orders')}
               >
                 View All <ArrowRight className="w-4 h-4 ml-1" />
@@ -513,6 +518,8 @@ export function WarehouseDashboard() {
           </CardContent>
         </Card>
       )}
+        </div>
+      )}
 
       {/* Production Readiness */}
       {pendingBatches > 0 && (
@@ -540,25 +547,25 @@ export function WarehouseDashboard() {
                 .map((batch) => (
                   <div
                     key={batch.id}
-                    className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200"
+                    className="p-3 bg-gray-50 rounded-lg border border-gray-200"
                   >
-                    <div className="flex-1">
-                      <p className="font-medium text-gray-900">{batch.productName}</p>
-                      <p className="text-sm text-gray-600 mt-1">
-                        Batch: {batch.batchNumber}
-                      </p>
-                    </div>
-                    <div className="text-right mr-4">
-                      <p className="text-sm font-medium text-gray-900">
-                        {batch.plannedQty} units
-                      </p>
-                      <p className="text-xs text-gray-500">Target qty</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-sm font-medium text-gray-900">
-                        {batch.scheduledDate}
-                      </p>
-                      <p className="text-xs text-gray-500">Scheduled</p>
+                    <div className="space-y-2">
+                      <div className="flex-1">
+                        <p className="font-medium text-gray-900">{batch.productName}</p>
+                        <p className="text-sm text-gray-600 mt-1">
+                          Batch: {batch.batchNumber}
+                        </p>
+                      </div>
+                      <div className="flex items-center justify-between gap-4 text-sm">
+                        <div>
+                          <span className="text-gray-500">Target Qty: </span>
+                          <span className="font-medium text-gray-900">{batch.plannedQty} units</span>
+                        </div>
+                        <div>
+                          <span className="text-gray-500">Scheduled: </span>
+                          <span className="font-medium text-gray-900">{batch.scheduledDate}</span>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 ))}

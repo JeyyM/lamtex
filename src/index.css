@@ -6,6 +6,32 @@
 }
 
 @layer base {
+  /* Responsive base font size - scales everything proportionally */
+  html {
+    font-size: 16px; /* Desktop default (1rem = 16px) */
+  }
+  
+  /* Tablet and smaller desktops */
+  @media (max-width: 1024px) {
+    html {
+      font-size: 15px; /* Slightly smaller (1rem = 15px) */
+    }
+  }
+  
+  /* Mobile devices */
+  @media (max-width: 768px) {
+    html {
+      font-size: 14px; /* Mobile size (1rem = 14px) */
+    }
+  }
+  
+  /* Small mobile devices */
+  @media (max-width: 640px) {
+    html {
+      font-size: 13px; /* Extra small mobile (1rem = 13px) */
+    }
+  }
+  
   body {
     @apply font-sans antialiased text-gray-900 bg-gray-50;
   }

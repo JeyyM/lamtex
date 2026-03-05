@@ -20,12 +20,12 @@ import {
   Activity,
   BarChart3,
   PieChart as PieChartIcon,
-  Calendar,
   Navigation,
   Phone,
   FileText,
   Settings,
   PlayCircle,
+  Calendar,
 } from 'lucide-react';
 import {
   ComposedChart,
@@ -118,19 +118,19 @@ export function LogisticsDashboard() {
   return (
     <div className="space-y-6">
       {/* HEADER */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Logistics & Dispatch Dashboard</h1>
           <p className="text-sm text-gray-500 mt-1">
             Viewing data for: <span className="font-medium text-gray-700">{branch}</span>
           </p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={() => navigate('/logistics')}>
+        <div className="flex flex-col md:flex-row gap-2">
+          <Button variant="outline" className="whitespace-nowrap" onClick={() => navigate('/logistics')}>
             <Truck className="w-4 h-4 mr-2" />
             View All Deliveries
           </Button>
-          <Button variant="primary" onClick={() => navigate('/logistics')}>
+          <Button variant="primary" className="whitespace-nowrap" onClick={() => navigate('/logistics')}>
             <PlayCircle className="w-4 h-4 mr-2" />
             Create New Trip
           </Button>
@@ -185,7 +185,7 @@ export function LogisticsDashboard() {
       )}
 
       {/* KPI STRIP */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
@@ -314,7 +314,7 @@ export function LogisticsDashboard() {
       </div>
 
       {/* QUICK DISPATCH SECTION */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         {/* Active Trips - Real-time Tracking */}
         <Card className="border-blue-200">
           <CardHeader className="bg-gradient-to-r from-blue-50 to-white">
@@ -473,7 +473,7 @@ export function LogisticsDashboard() {
         <h2 className="text-lg font-semibold text-gray-900 mb-3">📊 Performance Analytics</h2>
       </div>
       
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         {/* On-Time Delivery Performance */}
         <Card>
           <CardHeader>
@@ -539,26 +539,30 @@ export function LogisticsDashboard() {
           <CardContent>
             <ResponsiveContainer width="100%" height={300}>
               <ComposedChart 
+                layout="vertical"
                 data={vehicles.map((v) => ({
                   vehicle: v.vehicleName.replace('Truck ', 'T').replace('Container Van ', 'CV'),
                   utilization: v.utilizationPercent || 0,
+                  fullName: v.vehicleName,
                 }))}
               >
-                <defs>
-                  <linearGradient id="colorUtilization" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#F59E0B" stopOpacity={0.3}/>
-                    <stop offset="95%" stopColor="#F59E0B" stopOpacity={0.05}/>
-                  </linearGradient>
-                </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
-                <XAxis dataKey="vehicle" stroke="#9CA3AF" />
-                <YAxis stroke="#9CA3AF" />
+                <XAxis type="number" stroke="#9CA3AF" />
+                <YAxis type="category" dataKey="vehicle" stroke="#9CA3AF" />
                 <Tooltip 
                   formatter={(value: number) => `${value}%`}
                   contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.95)', borderRadius: '8px', border: '1px solid #E5E7EB' }}
                 />
                 <Legend />
-                <Bar dataKey="utilization" fill="#F59E0B" name="Utilization %" />
+                <Bar dataKey="utilization" name="Utilization %">
+                  {vehicles.map((v, index) => {
+                    // Generate color based on vehicle name hash
+                    const hash = v.vehicleName.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+                    const colors = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#14B8A6', '#F97316'];
+                    const color = colors[hash % colors.length];
+                    return <Cell key={`cell-${index}`} fill={color} />;
+                  })}
+                </Bar>
               </ComposedChart>
             </ResponsiveContainer>
           </CardContent>
@@ -607,9 +611,10 @@ export function LogisticsDashboard() {
                   />
                 </div>
                 <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-1">
+                  <div className="flex flex-wrap items-center gap-2 mb-1">
                     <h4 className="font-medium text-gray-900">{alert.title}</h4>
                     <Badge
+                      className="w-fit"
                       variant={
                         alert.severity === 'Critical' || alert.severity === 'High'
                           ? 'danger'
@@ -636,7 +641,7 @@ export function LogisticsDashboard() {
       </Card>
 
       {/* Dispatch Board Preview: Orders Ready + Trip Builder */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         {/* Orders Ready for Dispatch */}
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
@@ -769,7 +774,7 @@ export function LogisticsDashboard() {
         <h2 className="text-lg font-semibold text-gray-900 mb-4">📊 Performance Metrics</h2>
       </div>
       
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {performance.map((metric) => (
           <Card key={metric.id}>
             <CardContent className="p-4">
