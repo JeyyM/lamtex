@@ -118,25 +118,6 @@ export function ProductsPage() {
                 <AlertTriangle className="w-6 h-6 text-orange-600" />
               </div>
               <div>
-                <p className="text-sm text-gray-500">Low/Out of Stock</p>
-                <p className="text-2xl font-bold text-gray-900">{lowStockProducts}</p>
-                <TrendingUp className="w-6 h-6 text-green-600" />
-              </div>
-              <div>
-                <p className="text-sm text-gray-500">Active Products</p>
-                <p className="text-2xl font-bold text-gray-900">{activeProducts}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-orange-100 rounded-lg">
-                <AlertTriangle className="w-6 h-6 text-orange-600" />
-              </div>
-              <div>
                 <p className="text-sm text-gray-500">Low Stock Items</p>
                 <p className="text-2xl font-bold text-gray-900">{lowStockProducts}</p>
               </div>
