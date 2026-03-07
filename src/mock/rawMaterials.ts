@@ -11,6 +11,15 @@ import type {
   MaterialAnalytics,
 } from '@/src/types/materials';
 
+// Import raw material images
+import whitePelletsImg from '@/src/assets/raw-materials/White Pellets.webp';
+import resinPowderImg from '@/src/assets/raw-materials/Resin Powder.avif';
+import pvcImg from '@/src/assets/raw-materials/Polyvinyl-Chloride.avif';
+import polypropyleneImg from '@/src/assets/raw-materials/Polypropylene.jpg';
+import petImg from '@/src/assets/raw-materials/Polyethylene Terephthalate.jpg';
+import ldpeImg from '@/src/assets/raw-materials/Low Density Polyethylene.jpg';
+import j70Img from '@/src/assets/raw-materials/J-70.jfif';
+
 // ============================================================
 // RAW MATERIALS
 // ============================================================
@@ -23,6 +32,7 @@ export const rawMaterials: RawMaterial[] = [
     sku: 'PVC-SG5-001',
     category: 'PVC Resin',
     description: 'Suspension Grade PVC Resin, K-value 66-68, for rigid pipe applications',
+    imageUrl: pvcImg,
     specifications: {
       grade: 'SG-5',
       purity: '99.5%',
@@ -105,6 +115,7 @@ export const rawMaterials: RawMaterial[] = [
     sku: 'HDPE-PE100-001',
     category: 'HDPE Resin',
     description: 'High-density polyethylene PE100 grade for pressure pipe systems',
+    imageUrl: ldpeImg,
     specifications: {
       grade: 'PE100',
       purity: '99.7%',
@@ -147,6 +158,7 @@ export const rawMaterials: RawMaterial[] = [
     sku: 'PPR-T3-001',
     category: 'PPR Resin',
     description: 'Polypropylene Random Copolymer Type III for hot & cold water systems',
+    imageUrl: polypropyleneImg,
     specifications: {
       grade: 'Type III (PP-R)',
       purity: '99.8%',
@@ -229,7 +241,7 @@ export const rawMaterials: RawMaterial[] = [
     sku: 'STAB-TIN-001',
     category: 'Stabilizers',
     description: 'Organotin-based thermal stabilizer for high-performance PVC applications',
-    imageUrl: '/src/assets/raw-materials/White Pellets.webp',
+    imageUrl: whitePelletsImg,
     specifications: {
       grade: 'Methyltin Mercaptide',
       color: 'Transparent Liquid',
@@ -272,6 +284,7 @@ export const rawMaterials: RawMaterial[] = [
     sku: 'LUB-PEW-001',
     category: 'Lubricants',
     description: 'Polyethylene wax for internal/external lubrication in PVC processing',
+    imageUrl: resinPowderImg,
     specifications: {
       grade: 'Low Density PE Wax',
       density: '0.92 g/cm³',
@@ -312,6 +325,7 @@ export const rawMaterials: RawMaterial[] = [
     sku: 'COL-TIO2-001',
     category: 'Colorants',
     description: 'Titanium Dioxide pigment for white PVC/PPR pipes',
+    imageUrl: petImg,
     specifications: {
       grade: 'Rutile Type',
       purity: '98%',

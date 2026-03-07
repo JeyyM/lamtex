@@ -106,7 +106,7 @@ export function OrdersPage() {
       </div>
 
       {/* Tabs - Mobile Dropdown */}
-      <div className="min-[700px]:hidden">
+      <div className="md:hidden">
         <div className="relative">
           <select
             value={activeTab}
@@ -130,40 +130,35 @@ export function OrdersPage() {
       </div>
 
       {/* Tabs - Desktop Navigation */}
-      <div className="hidden min-[700px]:block border-b border-gray-200">
-        <nav className="flex flex-wrap gap-x-6 gap-y-2">
+      <div className="hidden md:block border-b border-gray-200">
+        <nav className="flex gap-6">
           {[
-            { key: 'all', label: 'All Orders', icon: FileText, group: 1 },
-            { key: 'draft', label: 'Drafts', icon: Edit2, group: 1 },
-            { key: 'pending', label: 'Pending', icon: Clock, group: 1 },
-            { key: 'approved', label: 'Approved', icon: CheckCircle, group: 1 },
-            { key: 'intransit', label: 'In Transit', icon: Truck, group: 2 },
-            { key: 'delivered', label: 'Delivered', icon: Package, group: 2 },
-            { key: 'rejected', label: 'Rejected', icon: XCircle, group: 2 },
-          ].map(({ key, label, icon: Icon, group }, index, arr) => {
-            const isLastInGroup1 = group === 1 && arr[index + 1]?.group === 2;
-            return (
-              <React.Fragment key={key}>
-                <button
-                  onClick={() => setActiveTab(key as OrderTab)}
-                  className={`flex items-center gap-2 px-1 py-3 border-b-2 text-sm font-medium transition-colors whitespace-nowrap ${
-                    activeTab === key
-                      ? 'border-red-600 text-red-600'
-                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                  }`}
-                >
-                  <Icon className="w-4 h-4" />
-                  {label}
-                  <span className={`px-2 py-0.5 rounded-full text-xs ${
-                    activeTab === key ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-600'
-                  }`}>
-                    {tabCounts[key as keyof typeof tabCounts]}
-                  </span>
-                </button>
-                {isLastInGroup1 && <div className="max-[1399px]:basis-full max-[1399px]:h-0" />}
-              </React.Fragment>
-            );
-          })}
+            { key: 'all', label: 'All Orders', icon: FileText },
+            { key: 'draft', label: 'Drafts', icon: Edit2 },
+            { key: 'pending', label: 'Pending', icon: Clock },
+            { key: 'approved', label: 'Approved', icon: CheckCircle },
+            { key: 'intransit', label: 'In Transit', icon: Truck },
+            { key: 'delivered', label: 'Delivered', icon: Package },
+            { key: 'rejected', label: 'Rejected', icon: XCircle },
+          ].map(({ key, label, icon: Icon }) => (
+            <button
+              key={key}
+              onClick={() => setActiveTab(key as OrderTab)}
+              className={`flex items-center gap-2 px-1 py-3 border-b-2 text-sm font-medium transition-colors whitespace-nowrap ${
+                activeTab === key
+                  ? 'border-red-600 text-red-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              <Icon className="w-4 h-4" />
+              {label}
+              <span className={`px-2 py-0.5 rounded-full text-xs ${
+                activeTab === key ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-600'
+              }`}>
+                {tabCounts[key as keyof typeof tabCounts]}
+              </span>
+            </button>
+          ))}
         </nav>
       </div>
 
@@ -188,21 +183,82 @@ export function OrdersPage() {
           </div>
         </CardHeader>
         <CardContent className="p-0">
-          {/* Table View */}
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm min-w-[700px]">
+          {/* Mobile Card View */}
+          <div className="md:hidden divide-y divide-gray-200">
+            {filteredOrders.map((order) => (
+              <div 
+                key={order.id} 
+                className="p-4 hover:bg-gray-50 cursor-pointer transition-colors"
+                onClick={() => handleViewOrder(order.id)}
+              >
+                <div className="space-y-3">
+                  {/* Order ID and Status */}
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <span className="font-semibold text-gray-900 truncate">{order.id}</span>
+                      {order.requiresApproval && (
+                        <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0" title="Requires approval" />
+                      )}
+                    </div>
+                    <Badge variant={getStatusBadgeVariant(order.status)} className="text-xs flex-shrink-0">
+                      {order.status}
+                    </Badge>
+                  </div>
+                  
+                  {/* Customer */}
+                  <div className="min-w-0">
+                    <div className="font-medium text-gray-900 break-words">{order.customer}</div>
+                    <div className="text-xs text-gray-500 truncate">{order.agent}</div>
+                  </div>
+                  
+                  {/* Dates */}
+                  <div className="grid grid-cols-2 gap-2 text-sm min-w-0">
+                    <div className="min-w-0">
+                      <div className="text-xs text-gray-500">Order Date</div>
+                      <div className="text-gray-900 truncate">{order.orderDate}</div>
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-xs text-gray-500">Required Date</div>
+                      <div className="text-gray-900 truncate">{order.requiredDate}</div>
+                    </div>
+                  </div>
+                  
+                  {/* Amount and Payment */}
+                  <div className="flex items-center justify-between gap-2 pt-2 border-t border-gray-100 min-w-0">
+                    <div className="min-w-0 flex-1">
+                      <div className="font-semibold text-gray-900 break-words">₱{order.totalAmount.toLocaleString()}</div>
+                      {order.discountPercent > 0 && (
+                        <div className="text-xs text-gray-500 truncate">-{order.discountPercent.toFixed(1)}% discount</div>
+                      )}
+                    </div>
+                    <Badge variant={getPaymentBadgeVariant(order.paymentStatus)} className="text-xs flex-shrink-0">
+                      {order.paymentStatus}
+                    </Badge>
+                  </div>
+                </div>
+              </div>
+            ))}
+            {filteredOrders.length === 0 && (
+              <div className="px-4 py-12 text-center text-gray-500">
+                <FileText className="w-12 h-12 mx-auto mb-3 text-gray-400" />
+                <p className="font-medium">No orders found</p>
+                <p className="text-sm mt-1">Try adjusting your filters or create a new order</p>
+              </div>
+            )}
+          </div>
+
+          {/* Desktop Table View */}
+          <div className="hidden md:block overflow-x-auto">
+            <table className="w-full text-sm">
               <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b border-gray-200">
                 <tr>
-                  <th className="px-6 py-3 text-left font-medium hidden 2xl:table-cell">Order #</th>
+                  <th className="px-6 py-3 text-left font-medium">Order #</th>
                   <th className="px-6 py-3 text-left font-medium">Customer</th>
-                  <th className="px-6 py-3 text-left font-medium max-[749px]:hidden min-[1350px]:hidden">Dates</th>
-                  <th className="px-6 py-3 text-left font-medium min-[750px]:hidden">Amount & Dates</th>
-                  <th className="px-6 py-3 text-left font-medium hidden min-[1350px]:table-cell">Order Date</th>
-                  <th className="px-6 py-3 text-left font-medium hidden min-[1350px]:table-cell">Required Date</th>
-                  <th className="px-6 py-3 text-left font-medium hidden min-[750px]:table-cell">Amount</th>
-                  <th className="px-6 py-3 text-left font-medium min-[1200px]:hidden">Status & Payment</th>
-                  <th className="px-6 py-3 text-left font-medium hidden min-[1200px]:table-cell">Status</th>
-                  <th className="px-6 py-3 text-left font-medium hidden min-[1200px]:table-cell">Payment</th>
+                  <th className="px-6 py-3 text-left font-medium">Order Date</th>
+                  <th className="px-6 py-3 text-left font-medium">Required Date</th>
+                  <th className="px-6 py-3 text-left font-medium">Amount</th>
+                  <th className="px-6 py-3 text-left font-medium">Status</th>
+                  <th className="px-6 py-3 text-left font-medium">Payment</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
@@ -212,7 +268,7 @@ export function OrdersPage() {
                     className="hover:bg-gray-50 cursor-pointer transition-colors"
                     onClick={() => handleViewOrder(order.id)}
                   >
-                    <td className="px-6 py-4 hidden 2xl:table-cell">
+                    <td className="px-6 py-4">
                       <div className="flex items-center gap-2">
                         <span className="font-medium text-gray-900">{order.id}</span>
                         {order.requiresApproval && (
@@ -222,74 +278,24 @@ export function OrdersPage() {
                     </td>
                     <td className="px-6 py-4">
                       <div>
-                        <div className="2xl:hidden flex items-center gap-2 text-xs text-gray-600 mb-1">
-                          <span className="font-medium">{order.id}</span>
-                          {order.requiresApproval && (
-                            <AlertTriangle className="w-3 h-3 text-amber-500" title="Requires approval" />
-                          )}
-                        </div>
                         <div className="font-medium text-gray-900">{order.customer}</div>
                         <div className="text-xs text-gray-500">{order.agent}</div>
                       </div>
                     </td>
-                    <td className="px-6 py-4 max-[749px]:hidden min-[1350px]:hidden">
-                      <div>
-                        <div className="text-gray-900 text-xs">
-                          <span className="font-medium">Ordered:</span> {order.orderDate}
-                        </div>
-                        <div className="text-gray-900 text-xs mt-1">
-                          <span className="font-medium">Required:</span> {order.requiredDate}
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 min-[750px]:hidden">
-                      <div className="space-y-2">
-                        <div>
-                          <div className="font-semibold text-gray-900 text-base">₱{order.totalAmount.toLocaleString()}</div>
-                          {order.discountPercent > 0 && (
-                            <div className="text-xs text-gray-500">-{order.discountPercent.toFixed(1)}% discount</div>
-                          )}
-                        </div>
-                        <div className="pt-1 border-t border-gray-100">
-                          <div className="text-gray-900 text-xs">
-                            <span className="font-medium">Ordered:</span> {order.orderDate}
-                          </div>
-                          <div className="text-gray-900 text-xs mt-1">
-                            <span className="font-medium">Required:</span> {order.requiredDate}
-                          </div>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 text-gray-600 hidden min-[1350px]:table-cell">{order.orderDate}</td>
-                    <td className="px-6 py-4 text-gray-600 hidden min-[1350px]:table-cell">{order.requiredDate}</td>
-                    <td className="px-6 py-4 hidden min-[750px]:table-cell">
+                    <td className="px-6 py-4 text-gray-600">{order.orderDate}</td>
+                    <td className="px-6 py-4 text-gray-600">{order.requiredDate}</td>
+                    <td className="px-6 py-4">
                       <div className="font-medium text-gray-900">₱{order.totalAmount.toLocaleString()}</div>
                       {order.discountPercent > 0 && (
                         <div className="text-xs text-gray-500">-{order.discountPercent.toFixed(1)}% discount</div>
                       )}
                     </td>
-                    <td className="px-6 py-4 min-[1200px]:hidden">
-                      <div className="space-y-1.5">
-                        <div>
-                          <div className="text-xs text-gray-500 mb-1">Status</div>
-                          <Badge variant={getStatusBadgeVariant(order.status)} className="min-w-[120px] justify-center">
-                            {order.status}
-                          </Badge>
-                        </div>
-                        <div>
-                          <div className="text-xs text-gray-500 mb-1">Payment</div>
-                          <Badge variant={getPaymentBadgeVariant(order.paymentStatus)} className="min-w-[100px] justify-center">
-                            {order.paymentStatus}
-                          </Badge>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 hidden min-[1200px]:table-cell">
+                    <td className="px-6 py-4">
                       <Badge variant={getStatusBadgeVariant(order.status)} className="min-w-[120px] justify-center">
                         {order.status}
                       </Badge>
                     </td>
-                    <td className="px-6 py-4 hidden min-[1200px]:table-cell">
+                    <td className="px-6 py-4">
                       <Badge variant={getPaymentBadgeVariant(order.paymentStatus)} className="min-w-[100px] justify-center">
                         {order.paymentStatus}
                       </Badge>
