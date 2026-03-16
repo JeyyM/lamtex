@@ -4,6 +4,7 @@ import { Bell, Search, Menu, Calendar, X, Settings } from 'lucide-react';
 import { UserRole, Branch } from '@/src/types';
 import { NotificationsDrawer } from '../dashboard/NotificationsDrawer';
 import { getNotificationsByBranch } from '@/src/mock/executiveDashboard';
+import lamtexLogo from '../../assets/Smartufacture Logo.png';
 
 export function Topbar() {
   const { role, setRole, branch, setBranch, isMobileMenuOpen, setIsMobileMenuOpen } = useAppContext();
@@ -111,17 +112,13 @@ export function Topbar() {
           <Menu className="w-5 h-5" />
         </button>
 
-        {/* Search Bar */}
-        <div className="flex items-center gap-4 flex-1 max-w-2xl">
-          <div className="relative flex-1 max-w-md lg:max-w-lg">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-            <input 
-              type="text" 
-              placeholder="Search orders, products, customers..." 
-              className="w-full pl-10 pr-4 py-2 bg-gray-50 border-transparent rounded-lg text-sm focus:bg-white focus:border-red-500 focus:ring-2 focus:ring-red-200 transition-all outline-none"
-            />
-          </div>
+        {/* Logo - visible on mobile when sidebar is hidden */}
+        <div className="lg:hidden flex items-center">
+          <img src={lamtexLogo} alt="Smartufacture Logo" className="h-8 w-auto" />
         </div>
+
+        {/* Spacer to push controls to the right */}
+        <div className="flex-1"></div>
 
         {/* Desktop Controls */}
         <div className="hidden md:flex items-center gap-4 lg:gap-6">
