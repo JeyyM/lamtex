@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
 import { Card, CardContent } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import {
@@ -18,7 +19,8 @@ import {
   Image as ImageIcon,
   Paperclip,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  ArrowLeft
 } from 'lucide-react';
 import { MOCK_CHATS, MOCK_MESSAGES, CURRENT_USER, MOCK_CHAT_USERS } from '../mock/chats';
 import { Chat, ChatMessage, ChatUser } from '../types/chat';
@@ -26,8 +28,10 @@ import { Chat, ChatMessage, ChatUser } from '../types/chat';
 const EMOJI_LIST = ['👍', '❤️', '😂', '😮', '😢', '😡', '👏', '🎉', '🔥', '✅', '🙏', '💪'];
 
 export default function ChatsPage() {
+  const { chatId } = useParams<{ chatId: string }>();
+  const navigate = useNavigate();
   const [chats] = useState<Chat[]>(MOCK_CHATS);
-  const [selectedChat, setSelectedChat] = useState<Chat | null>(MOCK_CHATS[0]);
+  const [selectedChat, setSelectedChat] = useState<Chat | null>(null);
   const [messages, setMessages] = useState<{ [chatId: string]: ChatMessage[] }>(MOCK_MESSAGES);
   const [newMessage, setNewMessage] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -45,6 +49,25 @@ export default function ChatsPage() {
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Handle chat selection from URL
+  useEffect(() => {
+    if (chatId) {
+      const chat = chats.find(c => c.id === chatId);
+      if (chat) {
+        setSelectedChat(chat);
+      } else {
+        // If chat not found, redirect to chats page
+        navigate('/chats');
+      }
+    } else {
+      // If no chatId in URL, select first chat by default
+      if (chats.length > 0 && !selectedChat) {
+        setSelectedChat(chats[0]);
+        navigate(`/chats/${chats[0].id}`, { replace: true });
+      }
+    }
+  }, [chatId, chats, navigate, selectedChat]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -240,7 +263,7 @@ export default function ChatsPage() {
     );
 
     if (existingChat) {
-      setSelectedChat(existingChat);
+      navigate(`/chats/${existingChat.id}`);
     } else {
       // Create new chat (in real app, this would be API call)
       console.log('Create new chat with:', user.name);
@@ -281,15 +304,15 @@ export default function ChatsPage() {
         </p>
       </div>
 
-      <div className="grid grid-cols-12 gap-4 h-[calc(100vh-180px)]">
-        {/* Chat List Sidebar */}
-        <Card className={`col-span-12 transition-all duration-300 ${
+      <div className="flex gap-4 h-[calc(100vh-180px)]">
+        {/* Chat List Sidebar - Hidden on mobile (≤1023px) when chat is selected */}
+        <Card className={`transition-all duration-300 flex-shrink-0 ${
           isSidebarCollapsed 
-            ? 'lg:col-span-1 xl:col-span-1' 
-            : 'lg:col-span-4 xl:col-span-3'
-        }`}>
+            ? 'lg:w-20' 
+            : 'lg:w-1/3 xl:w-1/4'
+        } ${selectedChat && chatId ? 'max-lg:hidden' : 'max-lg:w-full'} max-lg:w-full`}>
           <CardContent className="p-0 h-full flex flex-col">
-            {/* Collapse Button */}
+            {/* Collapse Button - Only visible on desktop (≥1024px) */}
             <div className="p-4 border-b flex items-center justify-between">
               {!isSidebarCollapsed && (
                 <h3 className="font-semibold text-gray-900">Messages</h3>
@@ -298,7 +321,7 @@ export default function ChatsPage() {
                 onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
                 variant="outline"
                 size="sm"
-                className="ml-auto"
+                className="ml-auto hidden lg:flex"
                 title={isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
               >
                 {isSidebarCollapsed ? (
@@ -309,7 +332,8 @@ export default function ChatsPage() {
               </Button>
             </div>
 
-            {!isSidebarCollapsed && (
+            {/* Expanded View - Always visible on mobile, conditional on desktop */}
+            <div className={`flex-1 flex-col overflow-hidden ${isSidebarCollapsed ? 'hidden lg:hidden' : 'flex'} max-lg:!flex`}>
               <>
                 {/* Search and New Chat */}
                 <div className="p-4 border-b space-y-3">
@@ -352,7 +376,7 @@ export default function ChatsPage() {
                 return (
                   <div
                     key={chat.id}
-                    onClick={() => setSelectedChat(chat)}
+                    onClick={() => navigate(`/chats/${chat.id}`)}
                     className={`p-4 border-b cursor-pointer transition-colors ${
                       selectedChat?.id === chat.id
                         ? 'bg-red-50 border-l-4 border-l-red-600'
@@ -389,7 +413,7 @@ export default function ChatsPage() {
                             {chat.members.length} members
                           </p>
                         )}
-                        <p className="text-sm text-gray-600 truncate">
+                        <p className="text-sm text-gray-600 overflow-hidden line-clamp-2">
                           {chat.lastMessage?.content || 'No messages yet'}
                         </p>
                       </div>
@@ -406,11 +430,11 @@ export default function ChatsPage() {
               })}
             </div>
             </>
-            )}
+            </div>
 
-            {/* Collapsed View - Show Chat Avatars */}
+            {/* Collapsed View - Show Chat Avatars (Only when collapsed AND on desktop ≥1024px) */}
             {isSidebarCollapsed && (
-              <div className="flex-1 overflow-y-auto p-2">
+              <div className="hidden lg:flex lg:flex-1 overflow-y-auto p-2 flex-col">
                 {filteredChats.map((chat) => {
                   const otherUser = getOtherUser(chat);
                   const displayName = chat.type === 'group' ? chat.name : otherUser?.name || chat.name;
@@ -418,7 +442,7 @@ export default function ChatsPage() {
                   return (
                     <button
                       key={chat.id}
-                      onClick={() => setSelectedChat(chat)}
+                      onClick={() => navigate(`/chats/${chat.id}`)}
                       className={`w-full mb-2 p-2 rounded-lg transition-colors relative ${
                         selectedChat?.id === chat.id
                           ? 'bg-red-50'
@@ -447,17 +471,27 @@ export default function ChatsPage() {
         </Card>
 
         {/* Chat Area */}
-        <Card className={`col-span-12 transition-all duration-300 ${
+        <Card className={`transition-all duration-300 ${
           isSidebarCollapsed 
-            ? 'lg:col-span-11 xl:col-span-11' 
-            : 'lg:col-span-8 xl:col-span-9'
-        }`}>
+            ? 'flex-1' 
+            : 'flex-1'
+        } ${!selectedChat || !chatId ? 'max-lg:hidden' : 'max-lg:w-full'}`}>
           {selectedChat ? (
             <CardContent className="p-0 h-full flex flex-col">
               {/* Chat Header */}
               <div className="p-4 border-b bg-white">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
+                    {/* Back button for mobile (≤1023px) */}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => navigate('/chats')}
+                      className="max-lg:block lg:hidden -ml-2"
+                      title="Back to chats"
+                    >
+                      <ArrowLeft className="w-5 h-5" />
+                    </Button>
                     <div className="relative">
                       <div className="w-10 h-10 rounded-full bg-gradient-to-br from-red-400 to-red-600 flex items-center justify-center text-white font-semibold">
                         {selectedChat.type === 'group' ? (
