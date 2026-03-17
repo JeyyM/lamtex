@@ -185,8 +185,7 @@ export function CustomerFormPage() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
           <Button variant="ghost" size="sm" onClick={() => navigate('/customers')}>
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            Back to Customers
+            <ArrowLeft className="w-4 h-4" />
           </Button>
           <div>
             <h1 className="text-2xl font-bold text-gray-900">
@@ -197,7 +196,7 @@ export function CustomerFormPage() {
             </p>
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 max-[499px]:flex-col-reverse">
           <Button variant="outline" onClick={handleCancel}>
             <X className="w-4 h-4 mr-2" />
             Cancel

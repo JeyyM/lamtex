@@ -121,14 +121,14 @@ export function CustomersPage() {
           <h1 className="text-2xl font-bold text-gray-900">Customers</h1>
           <p className="text-sm text-gray-500 mt-1">Manage customer relationships and track sales performance</p>
         </div>
-        <Button variant="primary" className="gap-2" onClick={() => navigate('/customers/new')}>
+        <Button variant="primary" className="gap-2 w-max flex-shrink-0 ml-4" onClick={() => navigate('/customers/new')}>
           <Plus className="w-4 h-4" />
           Add Customer
         </Button>
       </div>
 
-      {/* Tabs */}
-      <div className="border-b border-gray-200">
+      {/* Tabs - Desktop view (≥475px) */}
+      <div className="border-b border-gray-200 hidden min-[475px]:block">
         <nav className="flex gap-6">
           {[
             { key: 'all', label: 'All Customers', icon: Building2 },
@@ -157,6 +157,31 @@ export function CustomersPage() {
         </nav>
       </div>
 
+      {/* Tabs - Mobile dropdown (<475px) */}
+      <div className="min-[475px]:hidden">
+        <div className="relative">
+          <select
+            value={activeTab}
+            onChange={(e) => setActiveTab(e.target.value as CustomerTab)}
+            className="w-full px-4 py-3 pr-10 border border-gray-300 rounded-lg text-sm font-medium focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none appearance-none bg-white"
+          >
+            {[
+              { key: 'all', label: 'All Customers' },
+              { key: 'active', label: 'Active & Healthy' },
+              { key: 'atrisk', label: 'At Risk' },
+              { key: 'dormant', label: 'Dormant' },
+            ].map(({ key, label }) => (
+              <option key={key} value={key}>
+                {label} ({tabCounts[key as keyof typeof tabCounts]})
+              </option>
+            ))}
+          </select>
+          <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+            <Filter className="w-4 h-4 text-gray-400" />
+          </div>
+        </div>
+      </div>
+
       {/* Search and Filters */}
       <Card>
         <CardHeader>
@@ -182,14 +207,14 @@ export function CustomersPage() {
             <table className="w-full text-sm">
               <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b border-gray-200">
                 <tr>
-                  <th className="px-6 py-3 text-left font-medium">Customer</th>
-                  <th className="px-6 py-3 text-left font-medium">Type</th>
-                  <th className="px-6 py-3 text-left font-medium">Contact</th>
-                  <th className="px-6 py-3 text-right font-medium">YTD Sales</th>
-                  <th className="px-6 py-3 text-right font-medium">Outstanding</th>
-                  <th className="px-6 py-3 text-center font-medium">Risk</th>
-                  <th className="px-6 py-3 text-left font-medium">Last Order</th>
-                  <th className="px-6 py-3 text-center font-medium">Actions</th>
+                  <th className="px-6 py-3 text-left font-medium max-[474px]:border-r max-[474px]:border-gray-200">Customer</th>
+                  <th className="px-6 py-3 text-left font-medium hidden min-[1556px]:table-cell">Type</th>
+                  <th className="px-6 py-3 text-left font-medium hidden min-[475px]:table-cell">Contact</th>
+                  <th className="px-6 py-3 text-right font-medium hidden min-[1330px]:table-cell">YTD Sales</th>
+                  <th className="px-6 py-3 text-right font-medium max-[474px]:border-r max-[474px]:border-gray-200">Outstanding</th>
+                  <th className="px-6 py-3 text-center font-medium hidden min-[1211px]:table-cell">Risk</th>
+                  <th className="px-6 py-3 text-left font-medium hidden min-[1100px]:table-cell">Last Order</th>
+                  <th className="px-6 py-3 text-center font-medium hidden min-[601px]:table-cell">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
@@ -199,38 +224,60 @@ export function CustomersPage() {
                     className="hover:bg-gray-50"
                   >
                     <td 
-                      className="px-6 py-4 cursor-pointer"
+                      className="px-6 py-4 cursor-pointer max-[474px]:border-r max-[474px]:border-gray-200"
                       onClick={() => handleViewCustomer(customer)}
                     >
                       <div>
                         <div className="font-medium text-gray-900">{customer.name}</div>
                         <div className="text-xs text-gray-500">{customer.id}</div>
+                        {/* Show type below name on screens ≤1555px */}
+                        <div className="mt-1 min-[1556px]:hidden">
+                          <Badge variant="default">{customer.type}</Badge>
+                        </div>
+                        {/* Show contact below customer on screens ≤474px */}
+                        <div className="max-[474px]:block hidden">
+                          <hr className="my-2 border-gray-200" />
+                          <div className="text-sm">
+                            <div className="font-medium text-gray-900">{customer.contactPerson}</div>
+                            <div className="text-xs text-gray-500">{customer.phone}</div>
+                            {/* Show last order below contact on screens <1100px */}
+                            <div className="mt-2 min-[1100px]:hidden">
+                              <div className="text-xs font-bold text-gray-700">Last Order</div>
+                              <div className="text-xs text-gray-600">{customer.lastOrderDate || 'Never'}</div>
+                            </div>
+                          </div>
+                        </div>
                       </div>
                     </td>
                     <td 
-                      className="px-6 py-4 cursor-pointer"
+                      className="px-6 py-4 cursor-pointer hidden min-[1556px]:table-cell"
                       onClick={() => handleViewCustomer(customer)}
                     >
                       <Badge variant="default">{customer.type}</Badge>
                     </td>
                     <td 
-                      className="px-6 py-4 cursor-pointer"
+                      className="px-6 py-4 cursor-pointer hidden min-[475px]:table-cell"
                       onClick={() => handleViewCustomer(customer)}
                     >
                       <div className="text-sm">
                         <div className="font-medium text-gray-900">{customer.contactPerson}</div>
                         <div className="text-xs text-gray-500">{customer.phone}</div>
+                        {/* Show last order below contact on screens <1100px */}
+                        <div className="mt-2 min-[1100px]:hidden">
+                          <div className="text-xs font-bold text-gray-700">Last Order</div>
+                          <div className="text-xs text-gray-600">{customer.lastOrderDate || 'Never'}</div>
+                        </div>
                       </div>
                     </td>
                     <td 
-                      className="px-6 py-4 text-right cursor-pointer"
+                      className="px-6 py-4 text-right cursor-pointer hidden min-[1330px]:table-cell"
                       onClick={() => handleViewCustomer(customer)}
                     >
                       <div className="font-medium text-gray-900">₱{(customer.totalPurchasesYTD / 1000000).toFixed(1)}M</div>
                       <div className="text-xs text-gray-500">{customer.orderCount} orders</div>
                     </td>
                     <td 
-                      className="px-6 py-4 text-right cursor-pointer"
+                      className="px-6 py-4 text-right cursor-pointer max-[474px]:border-r max-[474px]:border-gray-200"
                       onClick={() => handleViewCustomer(customer)}
                     >
                       <div className={`font-medium ${customer.overdueAmount > 0 ? 'text-red-600' : 'text-gray-900'}`}>
@@ -239,9 +286,15 @@ export function CustomersPage() {
                       {customer.overdueAmount > 0 && (
                         <div className="text-xs text-red-600">₱{(customer.overdueAmount / 1000).toFixed(0)}K overdue</div>
                       )}
+                      {/* Show risk below outstanding on screens ≤1210px */}
+                      <div className="mt-1 min-[1211px]:hidden flex justify-end">
+                        <Badge variant={getRiskBadgeVariant(customer.riskLevel)}>
+                          {customer.riskLevel}
+                        </Badge>
+                      </div>
                     </td>
                     <td 
-                      className="px-6 py-4 text-center cursor-pointer"
+                      className="px-6 py-4 text-center cursor-pointer hidden min-[1211px]:table-cell"
                       onClick={() => handleViewCustomer(customer)}
                     >
                       <Badge variant={getRiskBadgeVariant(customer.riskLevel)}>
@@ -249,12 +302,12 @@ export function CustomersPage() {
                       </Badge>
                     </td>
                     <td 
-                      className="px-6 py-4 text-gray-600 cursor-pointer"
+                      className="px-6 py-4 text-gray-600 cursor-pointer hidden min-[1100px]:table-cell"
                       onClick={() => handleViewCustomer(customer)}
                     >
                       {customer.lastOrderDate || 'Never'}
                     </td>
-                    <td className="px-6 py-4 text-center">
+                    <td className="px-6 py-4 text-center hidden min-[601px]:table-cell">
                       <Button 
                         variant="ghost" 
                         size="sm"

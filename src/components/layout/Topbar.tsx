@@ -4,7 +4,7 @@ import { Bell, Search, Menu, Calendar, X, Settings } from 'lucide-react';
 import { UserRole, Branch } from '@/src/types';
 import { NotificationsDrawer } from '../dashboard/NotificationsDrawer';
 import { getNotificationsByBranch } from '@/src/mock/executiveDashboard';
-import lamtexLogo from '../../assets/Smartufacture Logo.png';
+import lamtexLogo from '../../assets/MyMart Logo.png';
 
 export function Topbar() {
   const { role, setRole, branch, setBranch, isMobileMenuOpen, setIsMobileMenuOpen } = useAppContext();
@@ -114,7 +114,7 @@ export function Topbar() {
 
         {/* Logo - visible on mobile when sidebar is hidden */}
         <div className="lg:hidden flex items-center">
-          <img src={lamtexLogo} alt="Smartufacture Logo" className="h-8 w-auto" />
+          <img src={lamtexLogo} alt="MyMart Logo" className="h-8 w-auto" />
         </div>
 
         {/* Spacer to push controls to the right */}

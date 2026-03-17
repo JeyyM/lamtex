@@ -41,6 +41,7 @@ import {
   Timer,
   Shield,
   TrendingUpDown,
+  ChevronDown,
 } from 'lucide-react';
 import {
   ComposedChart,
@@ -404,7 +405,7 @@ export function SuppliersPage() {
       </div>
 
       {/* Quick Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 min-[600px]:grid-cols-3 min-[1500px]:grid-cols-5 gap-4">
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
@@ -480,8 +481,8 @@ export function SuppliersPage() {
         </Card>
       </div>
 
-      {/* View Mode Tabs */}
-      <div className="border-b border-gray-200">
+      {/* View Mode Tabs - Desktop (>750px) */}
+      <div className="border-b border-gray-200 max-[750px]:hidden">
         <nav className="flex gap-8">
           {[
             { id: 'overview', label: 'Supplier Overview', icon: <Factory className="w-4 h-4" /> },
@@ -507,53 +508,97 @@ export function SuppliersPage() {
         </nav>
       </div>
 
+      {/* View Mode Tabs - Mobile dropdown (≤750px) */}
+      <div className="min-[751px]:hidden">
+        <div className="relative">
+          <select
+            value={viewMode}
+            onChange={(e) => setViewMode(e.target.value as ViewMode)}
+            className="w-full px-4 py-3 pr-10 border border-gray-300 rounded-lg text-sm font-medium focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none appearance-none bg-white"
+          >
+            <option value="overview">Supplier Overview</option>
+            <option value="performance">Performance Metrics</option>
+            <option value="spending">Spending Analysis</option>
+            <option value="materials">Materials Tracking</option>
+          </select>
+          <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+            <ChevronDown className="w-4 h-4 text-gray-400" />
+          </div>
+        </div>
+      </div>
+
       {/* SUPPLIER OVERVIEW */}
       {viewMode === 'overview' && (
         <div className="space-y-6">
           {/* Search and Filters */}
           <Card>
             <CardContent className="p-4">
-              <div className="flex items-center gap-4">
-                <div className="flex-1 relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                  <input
-                    type="text"
-                    placeholder="Search by supplier name, contact person, or category..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
-                  />
+              <div className="flex flex-col gap-4">
+                {/* First row - Search and Type filter */}
+                <div className="flex items-center gap-4">
+                  <div className="flex-1 relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                    <input
+                      type="text"
+                      placeholder="Search by supplier name, contact person, or category..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                    />
+                  </div>
+                  <select
+                    value={filterType}
+                    onChange={(e) => setFilterType(e.target.value)}
+                    className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                  >
+                    <option value="All">All Types</option>
+                    <option value="Raw Materials">Raw Materials</option>
+                    <option value="Packaging">Packaging</option>
+                    <option value="Chemicals">Chemicals</option>
+                    <option value="Equipment">Equipment</option>
+                    <option value="Services">Services</option>
+                  </select>
+                  {/* Risk Levels on desktop (>900px) */}
+                  <select
+                    value={filterRisk}
+                    onChange={(e) => setFilterRisk(e.target.value)}
+                    className="max-[900px]:hidden px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                  >
+                    <option value="All">All Risk Levels</option>
+                    <option value="Low">Low Risk</option>
+                    <option value="Medium">Medium Risk</option>
+                    <option value="High">High Risk</option>
+                  </select>
+                  <Button variant="outline" className="max-[900px]:hidden">
+                    <Filter className="w-4 h-4 mr-2" />
+                    More Filters
+                  </Button>
+                  <Button variant="outline" className="max-[900px]:hidden">
+                    <Download className="w-4 h-4 mr-2" />
+                    Export
+                  </Button>
                 </div>
-                <select
-                  value={filterType}
-                  onChange={(e) => setFilterType(e.target.value)}
-                  className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
-                >
-                  <option value="All">All Types</option>
-                  <option value="Raw Materials">Raw Materials</option>
-                  <option value="Packaging">Packaging</option>
-                  <option value="Chemicals">Chemicals</option>
-                  <option value="Equipment">Equipment</option>
-                  <option value="Services">Services</option>
-                </select>
-                <select
-                  value={filterRisk}
-                  onChange={(e) => setFilterRisk(e.target.value)}
-                  className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
-                >
-                  <option value="All">All Risk Levels</option>
-                  <option value="Low">Low Risk</option>
-                  <option value="Medium">Medium Risk</option>
-                  <option value="High">High Risk</option>
-                </select>
-                <Button variant="outline">
-                  <Filter className="w-4 h-4 mr-2" />
-                  More Filters
-                </Button>
-                <Button variant="outline">
-                  <Download className="w-4 h-4 mr-2" />
-                  Export
-                </Button>
+                {/* Second row - Risk Levels, More Filters, Export on mobile/tablet (≤900px) */}
+                <div className="min-[901px]:hidden flex items-center gap-4">
+                  <select
+                    value={filterRisk}
+                    onChange={(e) => setFilterRisk(e.target.value)}
+                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                  >
+                    <option value="All">All Risk Levels</option>
+                    <option value="Low">Low Risk</option>
+                    <option value="Medium">Medium Risk</option>
+                    <option value="High">High Risk</option>
+                  </select>
+                  <Button variant="outline">
+                    <Filter className="w-4 h-4 mr-2" />
+                    More Filters
+                  </Button>
+                  <Button variant="outline">
+                    <Download className="w-4 h-4 mr-2" />
+                    Export
+                  </Button>
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -563,7 +608,8 @@ export function SuppliersPage() {
             {filteredSuppliers.map((supplier) => (
               <Card key={supplier.id} className="hover:shadow-lg transition-shadow">
                 <CardContent className="p-6">
-                  <div className="flex items-start justify-between">
+                  {/* Desktop layout (≥1400px) - side by side */}
+                  <div className="max-[1399px]:hidden flex items-start justify-between">
                     {/* Supplier Info */}
                     <div className="flex items-start gap-4 flex-1">
                       <div className={`p-3 rounded-lg ${
@@ -582,19 +628,36 @@ export function SuppliersPage() {
                         }`} />
                       </div>
                       <div className="flex-1">
-                        <div className="flex items-center gap-3 mb-2">
-                          <h3 className="text-lg font-bold text-gray-900">{supplier.name}</h3>
-                          {supplier.preferredSupplier && (
-                            <Badge variant="success">
-                              <Award className="w-3 h-3 mr-1" />
-                              Preferred
-                            </Badge>
-                          )}
-                          <Badge variant={getStatusColor(supplier.status)}>{supplier.status}</Badge>
-                          <Badge variant={getRiskColor(supplier.riskLevel)}>{supplier.riskLevel} Risk</Badge>
-                          <span className="text-xs text-gray-500">{supplier.id}</span>
+                        <div className="mb-2">
+                          <div className="flex items-center gap-3">
+                            <h3 className="text-lg font-bold text-gray-900">{supplier.name}</h3>
+                            {/* Badges on desktop (≥1200px) */}
+                            <div className="max-[1199px]:hidden flex items-center gap-2">
+                              {supplier.preferredSupplier && (
+                                <Badge variant="success">
+                                  <Award className="w-3 h-3 mr-1" />
+                                  Preferred
+                                </Badge>
+                              )}
+                              <Badge variant={getStatusColor(supplier.status)}>{supplier.status}</Badge>
+                              <Badge variant={getRiskColor(supplier.riskLevel)}>{supplier.riskLevel} Risk</Badge>
+                              <span className="text-xs text-gray-500">{supplier.id}</span>
+                            </div>
+                          </div>
+                          {/* Badges on mobile/tablet (<1200px) */}
+                          <div className="min-[1200px]:hidden flex items-center gap-2 mt-2">
+                            {supplier.preferredSupplier && (
+                              <Badge variant="success">
+                                <Award className="w-3 h-3 mr-1" />
+                                Preferred
+                              </Badge>
+                            )}
+                            <Badge variant={getStatusColor(supplier.status)}>{supplier.status}</Badge>
+                            <Badge variant={getRiskColor(supplier.riskLevel)}>{supplier.riskLevel} Risk</Badge>
+                            <span className="text-xs text-gray-500">{supplier.id}</span>
+                          </div>
                         </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 text-sm">
+                        <div className="grid grid-cols-4 gap-4 text-sm">
                           <div className="flex items-center gap-2">
                             <Package className="w-4 h-4 text-gray-400" />
                             <div>
@@ -643,9 +706,111 @@ export function SuppliersPage() {
                     </div>
                   </div>
 
+                  {/* Mobile/Tablet layout (<1400px) - stacked */}
+                  <div className="min-[1400px]:hidden">
+                    <div className="flex items-start justify-between mb-4">
+                      {/* Supplier Info */}
+                      <div className="flex items-start gap-4 flex-1">
+                        <div className={`p-3 rounded-lg ${
+                          supplier.type === 'Raw Materials' ? 'bg-blue-100' :
+                          supplier.type === 'Chemicals' ? 'bg-purple-100' :
+                          supplier.type === 'Packaging' ? 'bg-orange-100' :
+                          supplier.type === 'Equipment' ? 'bg-red-100' :
+                          'bg-green-100'
+                        }`}>
+                          <Factory className={`w-6 h-6 ${
+                            supplier.type === 'Raw Materials' ? 'text-blue-600' :
+                            supplier.type === 'Chemicals' ? 'text-purple-600' :
+                            supplier.type === 'Packaging' ? 'text-orange-600' :
+                            supplier.type === 'Equipment' ? 'text-red-600' :
+                            'text-green-600'
+                          }`} />
+                        </div>
+                        <div className="flex-1">
+                          <div className="mb-2">
+                            <div className="flex items-center gap-3">
+                              <h3 className="text-lg font-bold text-gray-900">{supplier.name}</h3>
+                              {/* Badges on desktop (≥1200px) */}
+                              <div className="max-[1199px]:hidden flex items-center gap-2">
+                                {supplier.preferredSupplier && (
+                                  <Badge variant="success">
+                                    <Award className="w-3 h-3 mr-1" />
+                                    Preferred
+                                  </Badge>
+                                )}
+                                <Badge variant={getStatusColor(supplier.status)}>{supplier.status}</Badge>
+                                <Badge variant={getRiskColor(supplier.riskLevel)}>{supplier.riskLevel} Risk</Badge>
+                                <span className="text-xs text-gray-500">{supplier.id}</span>
+                              </div>
+                            </div>
+                            {/* Badges on mobile/tablet (<1200px) */}
+                            <div className="min-[1200px]:hidden flex items-center gap-2 mt-2">
+                              {supplier.preferredSupplier && (
+                                <Badge variant="success">
+                                  <Award className="w-3 h-3 mr-1" />
+                                  Preferred
+                                </Badge>
+                              )}
+                              <Badge variant={getStatusColor(supplier.status)}>{supplier.status}</Badge>
+                              <Badge variant={getRiskColor(supplier.riskLevel)}>{supplier.riskLevel} Risk</Badge>
+                              <span className="text-xs text-gray-500">{supplier.id}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Actions */}
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setSelectedSupplier(supplier)}
+                        >
+                          <Eye className="w-4 h-4 mr-1" />
+                          View Details
+                        </Button>
+                        <Button variant="outline" size="sm">
+                          <Edit className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* Full width details section */}
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div className="flex items-center gap-2">
+                        <Package className="w-4 h-4 text-gray-400" />
+                        <div>
+                          <div className="text-gray-500 text-xs">Category</div>
+                          <div className="text-gray-900 font-medium">{supplier.category}</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <User className="w-4 h-4 text-gray-400" />
+                        <div>
+                          <div className="text-gray-500 text-xs">Contact Person</div>
+                          <div className="text-gray-900">{supplier.contactPerson}</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <MapPin className="w-4 h-4 text-gray-400" />
+                        <div>
+                          <div className="text-gray-500 text-xs">Location</div>
+                          <div className="text-gray-900">{supplier.city}, {supplier.country}</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Clock className="w-4 h-4 text-gray-400" />
+                        <div>
+                          <div className="text-gray-500 text-xs">Payment Terms</div>
+                          <div className="text-gray-900">{supplier.paymentTerms}</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
                   {/* Performance & Financial Summary */}
                   <div className="mt-6 pt-6 border-t border-gray-200">
-                    <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-4">
+                    <div className="grid grid-cols-2 md:grid-cols-3 min-[1400px]:grid-cols-6 gap-4 mb-4">
                       <div>
                         <div className="text-xs text-gray-500 mb-1">YTD Spending</div>
                         <div className="text-sm font-bold text-blue-600">
@@ -679,7 +844,7 @@ export function SuppliersPage() {
                     </div>
 
                     {/* Key Metrics Bar */}
-                    <div className="grid grid-cols-3 gap-4">
+                    <div className="grid grid-cols-2 min-[800px]:grid-cols-3 gap-4">
                       <div>
                         <div className="flex items-center justify-between text-xs mb-1">
                           <span className="text-gray-500">On-Time Delivery</span>

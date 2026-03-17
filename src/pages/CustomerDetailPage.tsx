@@ -29,6 +29,7 @@ import {
   ChevronDown,
   ChevronUp,
   TrendingUp,
+  X,
 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { CreateOrderModal } from '@/src/components/orders/CreateOrderModal';
@@ -40,6 +41,10 @@ export function CustomerDetailPage() {
   const [activeTab, setActiveTab] = useState<'overview' | 'orders' | 'notes' | 'tasks'>('overview');
   const [expandedProduct, setExpandedProduct] = useState<number | null>(null);
   const [showCreateOrder, setShowCreateOrder] = useState(false);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [dateError, setDateError] = useState('');
 
   // Get customer by actual ID from URL
   const customer = getCustomerById(id || '');
@@ -50,8 +55,7 @@ export function CustomerDetailPage() {
         <div className="text-center">
           <p className="text-xl font-semibold text-gray-900">Customer not found</p>
           <Button variant="outline" className="mt-4" onClick={() => navigate('/customers')}>
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            Back to Customers
+            <ArrowLeft className="w-4 h-4" />
           </Button>
         </div>
       </div>
@@ -76,6 +80,75 @@ export function CustomerDetailPage() {
   const handleAddTask = () => {
     alert('Add task functionality coming soon');
     addAuditLog('Add Task', 'Customer', `Adding task for ${customer.name}`);
+  };
+
+  // Date range helper functions
+  const getTodayDate = () => {
+    const today = new Date();
+    return today.toISOString().split('T')[0];
+  };
+
+  const validateDateRange = (from: string, to: string) => {
+    const today = getTodayDate();
+    
+    if (!from || !to) {
+      setDateError('Both dates are required');
+      return false;
+    }
+
+    if (from > today) {
+      setDateError('From date cannot be in the future');
+      return false;
+    }
+
+    if (to > today) {
+      setDateError('To date cannot be in the future');
+      return false;
+    }
+
+    if (from > to) {
+      setDateError('From date must be before To date');
+      return false;
+    }
+
+    setDateError('');
+    return true;
+  };
+
+  const handleDateFromChange = (value: string) => {
+    setDateFrom(value);
+    if (dateTo) {
+      validateDateRange(value, dateTo);
+    }
+  };
+
+  const handleDateToChange = (value: string) => {
+    setDateTo(value);
+    if (dateFrom) {
+      validateDateRange(dateFrom, value);
+    }
+  };
+
+  const applyDateRange = () => {
+    if (validateDateRange(dateFrom, dateTo)) {
+      setShowDatePicker(false);
+      console.log('Date range applied:', { from: dateFrom, to: dateTo });
+    }
+  };
+
+  const clearDateRange = () => {
+    setDateFrom('');
+    setDateTo('');
+    setDateError('');
+  };
+
+  const formatDateRange = () => {
+    if (dateFrom && dateTo) {
+      const from = new Date(dateFrom);
+      const to = new Date(dateTo);
+      return `${from.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${to.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
+    }
+    return 'Select Date Range';
   };
 
   // Mock purchase history data for products
@@ -133,8 +206,19 @@ export function CustomerDetailPage() {
             <ArrowLeft className="w-4 h-4" />
           </Button>
           <div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 flex-wrap">
               <h1 className="text-2xl font-bold text-gray-900">{customer.name}</h1>
+              {/* Badges visible on screens >600px */}
+              <Badge variant={customer.status === 'Active' ? 'success' : 'default'} className="hidden min-[601px]:inline-flex">
+                {customer.status}
+              </Badge>
+              <Badge variant={customer.riskLevel === 'High' ? 'danger' : customer.riskLevel === 'Medium' ? 'warning' : 'success'} className="hidden min-[601px]:inline-flex">
+                {customer.riskLevel} Risk
+              </Badge>
+            </div>
+            <p className="text-sm text-gray-500 mt-1">{customer.id} • {customer.type}</p>
+            {/* Badges below ID and type on screens ≤600px */}
+            <div className="flex items-center gap-2 mt-2 min-[601px]:hidden">
               <Badge variant={customer.status === 'Active' ? 'success' : 'default'}>
                 {customer.status}
               </Badge>
@@ -142,17 +226,16 @@ export function CustomerDetailPage() {
                 {customer.riskLevel} Risk
               </Badge>
             </div>
-            <p className="text-sm text-gray-500 mt-1">{customer.id} • {customer.type}</p>
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 max-[585px]:flex-col">
+          <Button variant="primary" size="sm" onClick={handleCreateOrder} className="w-max ml-4">
+            <ShoppingCart className="w-4 h-4 mr-2" />
+            Create Order
+          </Button>
           <Button variant="outline" size="sm" onClick={() => navigate(`/customers/${customer.id}/edit`)}>
             <Edit className="w-4 h-4 mr-2" />
             Edit
-          </Button>
-          <Button variant="primary" size="sm" onClick={handleCreateOrder}>
-            <ShoppingCart className="w-4 h-4 mr-2" />
-            Create Order
           </Button>
         </div>
       </div>
@@ -175,8 +258,8 @@ export function CustomerDetailPage() {
         )}
       </div>
 
-      {/* Tabs */}
-      <div className="border-b border-gray-200">
+      {/* Tabs - Desktop (>420px) */}
+      <div className="border-b border-gray-200 max-[420px]:hidden">
         <nav className="flex gap-6">
           {[
             { key: 'overview', label: 'Overview', icon: FileText },
@@ -198,6 +281,25 @@ export function CustomerDetailPage() {
             </button>
           ))}
         </nav>
+      </div>
+
+      {/* Tabs - Mobile dropdown (≤420px) */}
+      <div className="min-[421px]:hidden">
+        <div className="relative">
+          <select
+            value={activeTab}
+            onChange={(e) => setActiveTab(e.target.value as any)}
+            className="w-full px-4 py-3 pr-10 border border-gray-300 rounded-lg text-sm font-medium focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none appearance-none bg-white"
+          >
+            <option value="overview">Overview</option>
+            <option value="orders">Orders ({orders.length})</option>
+            <option value="notes">Notes ({notes.length})</option>
+            <option value="tasks">Tasks ({tasks.filter(t => t.status !== 'Completed').length})</option>
+          </select>
+          <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+            <ChevronDown className="w-4 h-4 text-gray-400" />
+          </div>
+        </div>
       </div>
 
       {/* Content */}
@@ -266,12 +368,20 @@ export function CustomerDetailPage() {
             {/* Payment Behavior */}
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <CreditCard className="w-5 h-5" />
-                  Payment Behavior
-                </CardTitle>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="flex items-center gap-2">
+                    <CreditCard className="w-5 h-5" />
+                    Payment Behavior
+                  </CardTitle>
+                  {/* Behavior Status Badge on mobile (≤600px) */}
+                  <div className="min-[601px]:hidden">
+                    <Badge variant={customer.paymentBehavior === 'Good' ? 'success' : customer.paymentBehavior === 'Watchlist' ? 'warning' : 'danger'} className="text-base px-3 py-1">
+                      {customer.paymentBehavior}
+                    </Badge>
+                  </div>
+                </div>
               </CardHeader>
-              <CardContent className="grid grid-cols-3 gap-4">
+              <CardContent className="grid max-[600px]:grid-cols-2 grid-cols-3 gap-4">
                 <div>
                   <div className="text-xs text-gray-500 mb-1">Payment Score</div>
                   <div className="flex items-center gap-2">
@@ -292,7 +402,8 @@ export function CustomerDetailPage() {
                   <div className="text-2xl font-bold text-gray-900">{customer.avgPaymentDays}</div>
                   <div className="text-xs text-gray-500 mt-1">Terms: {customer.paymentTerms}</div>
                 </div>
-                <div>
+                {/* Behavior Status on desktop (>600px) */}
+                <div className="max-[600px]:hidden">
                   <div className="text-xs text-gray-500 mb-1">Behavior Status</div>
                   <Badge variant={customer.paymentBehavior === 'Good' ? 'success' : customer.paymentBehavior === 'Watchlist' ? 'warning' : 'danger'} className="text-base px-3 py-1">
                     {customer.paymentBehavior}
@@ -305,10 +416,84 @@ export function CustomerDetailPage() {
             {topProducts.length > 0 && (
               <Card>
                 <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Package className="w-5 h-5" />
-                    Top Products
-                  </CardTitle>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="flex items-center gap-2">
+                      <Package className="w-5 h-5" />
+                      Top Products
+                    </CardTitle>
+                    
+                    {/* Date Range Selector */}
+                    <div className="relative">
+                      <button
+                        onClick={() => setShowDatePicker(!showDatePicker)}
+                        className="flex items-center gap-2 text-sm text-gray-600 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-100 transition-colors"
+                      >
+                        <Calendar className="w-4 h-4 text-gray-400" />
+                        <span className="font-medium">{formatDateRange()}</span>
+                      </button>
+
+                      {showDatePicker && (
+                        <div className="absolute top-full mt-2 right-0 bg-white rounded-lg shadow-lg border border-gray-200 p-4 z-50 w-[calc(100vw-2rem)] max-w-[320px] md:w-auto md:min-w-[320px]">
+                          <div className="flex items-center justify-between mb-3">
+                            <h3 className="text-sm font-semibold text-gray-900">Select Date Range</h3>
+                            <button
+                              onClick={() => setShowDatePicker(false)}
+                              className="text-gray-400 hover:text-gray-600"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+
+                          <div className="space-y-3">
+                            <div>
+                              <label className="block text-xs font-medium text-gray-700 mb-1">From Date</label>
+                              <input
+                                type="date"
+                                value={dateFrom}
+                                onChange={(e) => handleDateFromChange(e.target.value)}
+                                max={getTodayDate()}
+                                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-xs font-medium text-gray-700 mb-1">To Date</label>
+                              <input
+                                type="date"
+                                value={dateTo}
+                                onChange={(e) => handleDateToChange(e.target.value)}
+                                min={dateFrom || undefined}
+                                max={getTodayDate()}
+                                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                              />
+                            </div>
+
+                            {dateError && (
+                              <div className="text-xs text-red-600 bg-red-50 px-2 py-1 rounded">
+                                {dateError}
+                              </div>
+                            )}
+
+                            <div className="flex items-center gap-2 pt-2">
+                              <button
+                                onClick={applyDateRange}
+                                disabled={!dateFrom || !dateTo || !!dateError}
+                                className="flex-1 px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+                              >
+                                Apply
+                              </button>
+                              <button
+                                onClick={clearDateRange}
+                                className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors"
+                              >
+                                Clear
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-3">
