@@ -231,7 +231,7 @@ const AgentAnalyticsPage: React.FC = () => {
             <div
               key={agent.agentId}
               className="bg-white rounded-xl border border-gray-200 p-6 hover:shadow-lg transition-shadow cursor-pointer"
-              onClick={() => navigate(`/agents/${agent.agentId}`)}
+              onClick={() => navigate(`/agents/AGT-001`)}
             >
               {/* Agent Header */}
               <div className="flex items-start justify-between mb-4">
@@ -371,7 +371,7 @@ const AgentAnalyticsPage: React.FC = () => {
                   <tr
                     key={agent.agentId}
                     className="hover:bg-gray-50 cursor-pointer transition-colors"
-                    onClick={() => navigate(`/agents/${agent.agentId}`)}
+                    onClick={() => navigate(`/agents/AGT-001`)}
                   >
                     <td className="px-4 py-2.5">
                       <div>
