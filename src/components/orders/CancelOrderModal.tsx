@@ -113,8 +113,8 @@ export function CancelOrderModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <Card className="w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-0 lg:p-4">
+      <Card className="w-full h-full max-h-screen overflow-y-auto rounded-none lg:rounded-xl lg:w-full lg:max-w-2xl lg:max-h-[90vh]">
         <CardHeader className="border-b border-gray-200 bg-red-50">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -138,7 +138,7 @@ export function CancelOrderModal({
         </CardHeader>
 
         <form onSubmit={handleSubmit}>
-          <CardContent className="p-6 space-y-6">
+          <CardContent className="p-4 md:p-6 space-y-6">
             {/* Warning Banner */}
             <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
               <div className="flex items-start gap-3">
@@ -314,20 +314,20 @@ export function CancelOrderModal({
             </div>
 
             {/* Action Buttons */}
-            <div className="flex gap-3 pt-4 border-t border-gray-200">
+            <div className="flex flex-col-reverse sm:flex-row gap-3 pt-4 border-t border-gray-200">
               <Button
                 type="button"
                 variant="outline"
                 onClick={onClose}
                 disabled={isSubmitting}
-                className="flex-1"
+                className="flex-1 w-full"
               >
                 Keep Order
               </Button>
               <Button
                 type="submit"
                 disabled={isSubmitting}
-                className="flex-1 bg-red-600 hover:bg-red-700 text-white"
+                className="flex-1 w-full bg-red-600 hover:bg-red-700 text-white"
               >
                 {isSubmitting ? (
                   <>

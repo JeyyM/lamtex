@@ -36,9 +36,9 @@ export const KpiTile: React.FC<KpiTileProps> = ({ label, value, trend, trendUp, 
       onClick={onClick}
       title={previousValue ? `Previous: ${previousValue}` : undefined}
     >
-      <CardContent className="p-4">
+      <CardContent className="p-3 sm:p-4 md:p-5">
         <div className="flex justify-between items-start">
-          <p className="text-sm font-medium text-gray-500">{label}</p>
+          <p className="text-xs sm:text-sm font-medium text-gray-500">{label}</p>
           {trend && (
             <div className={cn("flex items-center text-xs font-medium px-1.5 py-0.5 rounded", trendUp ? "text-green-700 bg-green-100" : "text-red-700 bg-red-100")}>
               {trendUp ? <ArrowUpRight className="w-3 h-3 mr-1" /> : <ArrowDownRight className="w-3 h-3 mr-1" />}
@@ -47,7 +47,7 @@ export const KpiTile: React.FC<KpiTileProps> = ({ label, value, trend, trendUp, 
           )}
         </div>
         <div className="mt-2 flex items-baseline gap-2">
-          <h3 className="text-2xl font-bold text-gray-900">{value}</h3>
+          <h3 className="text-xl sm:text-2xl font-bold text-gray-900 break-words">{value}</h3>
           {previousValue && (
             <span className="text-xs text-gray-400">vs {previousValue}</span>
           )}

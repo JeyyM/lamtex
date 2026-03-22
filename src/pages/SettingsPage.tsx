@@ -274,6 +274,15 @@ export default function SettingsPage() {
   const [addresses] = useState<Address[]>(MOCK_ADDRESSES);
   const [paymentProfiles] = useState<PaymentProfile[]>(MOCK_PAYMENT_PROFILES);
   const [socialMedia] = useState<SocialMedia[]>(MOCK_SOCIAL_MEDIA);
+  const settingsTabs: Array<{ id: ViewMode; label: string; icon: React.ReactNode }> = [
+    { id: 'company', label: 'Company Info', icon: <Building2 className="w-4 h-4" /> },
+    { id: 'contacts', label: 'Contacts', icon: <Users className="w-4 h-4" /> },
+    { id: 'addresses', label: 'Addresses', icon: <MapPin className="w-4 h-4" /> },
+    { id: 'payment', label: 'Payment Profiles', icon: <CreditCard className="w-4 h-4" /> },
+    { id: 'social', label: 'Social Media', icon: <Globe className="w-4 h-4" /> },
+    { id: 'notifications', label: 'Notifications', icon: <Bell className="w-4 h-4" /> },
+    { id: 'security', label: 'Security', icon: <Shield className="w-4 h-4" /> },
+  ];
 
   const getSocialIcon = (platform: string) => {
     switch (platform) {
@@ -310,9 +319,9 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-3 sm:p-4 md:p-6 space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
             <Settings className="w-7 h-7 text-red-600" />
@@ -322,7 +331,7 @@ export default function SettingsPage() {
             Manage company information, contacts, payment methods, and preferences
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 self-start sm:self-auto">
           <Badge variant="outline" className="text-gray-600">
             Branch: {selectedBranch}
           </Badge>
@@ -331,16 +340,19 @@ export default function SettingsPage() {
 
       {/* View Mode Tabs */}
       <div className="border-b border-gray-200">
-        <nav className="flex gap-6">
-          {[
-            { id: 'company', label: 'Company Info', icon: <Building2 className="w-4 h-4" /> },
-            { id: 'contacts', label: 'Contacts', icon: <Users className="w-4 h-4" /> },
-            { id: 'addresses', label: 'Addresses', icon: <MapPin className="w-4 h-4" /> },
-            { id: 'payment', label: 'Payment Profiles', icon: <CreditCard className="w-4 h-4" /> },
-            { id: 'social', label: 'Social Media', icon: <Globe className="w-4 h-4" /> },
-            { id: 'notifications', label: 'Notifications', icon: <Bell className="w-4 h-4" /> },
-            { id: 'security', label: 'Security', icon: <Shield className="w-4 h-4" /> },
-          ].map((tab) => (
+        <div className="sm:hidden pb-3">
+          <select
+            value={viewMode}
+            onChange={(e) => setViewMode(e.target.value as ViewMode)}
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+          >
+            {settingsTabs.map((tab) => (
+              <option key={tab.id} value={tab.id}>{tab.label}</option>
+            ))}
+          </select>
+        </div>
+        <nav className="hidden sm:flex gap-4 lg:gap-6 overflow-x-auto">
+          {settingsTabs.map((tab) => (
             <button
               key={tab.id}
               onClick={() => setViewMode(tab.id as ViewMode)}
@@ -428,12 +440,12 @@ export default function SettingsPage() {
                   />
                 </div>
               </div>
-              <div className="flex justify-end gap-3 pt-4">
-                <Button variant="outline">
+              <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-4">
+                <Button variant="outline" className="w-full sm:w-auto">
                   <XCircle className="w-4 h-4 mr-2" />
                   Cancel
                 </Button>
-                <Button className="bg-red-600 hover:bg-red-700">
+                <Button className="bg-red-600 hover:bg-red-700 w-full sm:w-auto">
                   <Save className="w-4 h-4 mr-2" />
                   Save Changes
                 </Button>
@@ -446,9 +458,9 @@ export default function SettingsPage() {
       {/* CONTACTS */}
       {viewMode === 'contacts' && (
         <div className="space-y-6">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <h2 className="text-lg font-bold text-gray-900">Contact Directory</h2>
-            <Button className="bg-red-600 hover:bg-red-700">
+            <Button className="bg-red-600 hover:bg-red-700 w-full sm:w-auto">
               <Plus className="w-4 h-4 mr-2" />
               Add Contact
             </Button>
@@ -506,9 +518,9 @@ export default function SettingsPage() {
       {/* ADDRESSES */}
       {viewMode === 'addresses' && (
         <div className="space-y-6">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <h2 className="text-lg font-bold text-gray-900">Business Locations</h2>
-            <Button className="bg-red-600 hover:bg-red-700">
+            <Button className="bg-red-600 hover:bg-red-700 w-full sm:w-auto">
               <Plus className="w-4 h-4 mr-2" />
               Add Address
             </Button>
@@ -518,7 +530,7 @@ export default function SettingsPage() {
             {addresses.map((address) => (
               <Card key={address.id}>
                 <CardContent className="p-6">
-                  <div className="flex items-start justify-between">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                     <div className="flex-1">
                       <div className="flex items-center gap-3 mb-3">
                         <div className={`p-2 rounded-lg ${
@@ -548,12 +560,12 @@ export default function SettingsPage() {
                         <p>{address.country}</p>
                       </div>
                     </div>
-                    <div className="flex gap-2">
-                      <Button variant="outline" size="sm">
+                    <div className="flex gap-2 w-full sm:w-auto">
+                      <Button variant="outline" size="sm" className="flex-1 sm:flex-none">
                         <Edit2 className="w-3 h-3 mr-1" />
                         Edit
                       </Button>
-                      <Button variant="outline" size="sm" className="text-red-600 hover:bg-red-50">
+                      <Button variant="outline" size="sm" className="flex-1 sm:flex-none text-red-600 hover:bg-red-50">
                         <Trash2 className="w-3 h-3 mr-1" />
                         Delete
                       </Button>
@@ -569,9 +581,9 @@ export default function SettingsPage() {
       {/* PAYMENT PROFILES */}
       {viewMode === 'payment' && (
         <div className="space-y-6">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <h2 className="text-lg font-bold text-gray-900">Payment Methods</h2>
-            <Button className="bg-red-600 hover:bg-red-700">
+            <Button className="bg-red-600 hover:bg-red-700 w-full sm:w-auto">
               <Plus className="w-4 h-4 mr-2" />
               Add Payment Method
             </Button>
@@ -643,9 +655,9 @@ export default function SettingsPage() {
       {/* SOCIAL MEDIA */}
       {viewMode === 'social' && (
         <div className="space-y-6">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <h2 className="text-lg font-bold text-gray-900">Social Media Profiles</h2>
-            <Button className="bg-red-600 hover:bg-red-700">
+            <Button className="bg-red-600 hover:bg-red-700 w-full sm:w-auto">
               <Plus className="w-4 h-4 mr-2" />
               Add Platform
             </Button>
@@ -756,12 +768,12 @@ export default function SettingsPage() {
                 ))}
               </div>
 
-              <div className="flex justify-end gap-3 pt-4">
-                <Button variant="outline">
+              <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-4">
+                <Button variant="outline" className="w-full sm:w-auto">
                   <XCircle className="w-4 h-4 mr-2" />
                   Cancel
                 </Button>
-                <Button className="bg-red-600 hover:bg-red-700">
+                <Button className="bg-red-600 hover:bg-red-700 w-full sm:w-auto">
                   <Save className="w-4 h-4 mr-2" />
                   Save Preferences
                 </Button>
@@ -843,7 +855,7 @@ export default function SettingsPage() {
                     { device: 'Windows PC - Chrome', location: 'Makati, Philippines', lastActive: '2 minutes ago', current: true },
                     { device: 'iPhone 13 - Safari', location: 'Quezon City, Philippines', lastActive: '2 hours ago', current: false },
                   ].map((session, index) => (
-                    <div key={index} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                    <div key={index} className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between p-4 bg-gray-50 rounded-lg">
                       <div>
                         <p className="font-medium text-gray-900 flex items-center gap-2">
                           {session.device}

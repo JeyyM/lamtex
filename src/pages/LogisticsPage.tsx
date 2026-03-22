@@ -94,15 +94,22 @@ export function LogisticsPage() {
     return <Clock className="w-4 h-4" />;
   };
 
+  const viewModeTabs = [
+    { id: 'dispatch' as ViewMode, label: 'Dispatch Board', icon: <Route className="w-4 h-4" /> },
+    { id: 'fleet' as ViewMode, label: 'Fleet Management', icon: <Truck className="w-4 h-4" /> },
+    { id: 'routes' as ViewMode, label: 'Route Planning', icon: <Map className="w-4 h-4" /> },
+    { id: 'shipments' as ViewMode, label: 'Inter-Island Shipments', icon: <Ship className="w-4 h-4" /> },
+  ];
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 w-full max-w-full overflow-x-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 w-full max-w-full">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Logistics Management</h1>
         </div>
-        <div className="flex items-center gap-3">
-          <Button variant="primary" onClick={() => setViewMode('routes')}>
+        <div className="w-full sm:w-auto flex items-center gap-3">
+          <Button variant="primary" onClick={() => setViewMode('routes')} className="w-full sm:w-auto justify-center">
             <Plus className="w-4 h-4 mr-2" />
             Create New Trip
           </Button>
@@ -110,14 +117,20 @@ export function LogisticsPage() {
       </div>
 
       {/* View Mode Tabs */}
-      <div className="border-b border-gray-200">
-        <nav className="flex gap-8">
-          {[
-            { id: 'dispatch', label: 'Dispatch Board', icon: <Route className="w-4 h-4" /> },
-            { id: 'fleet', label: 'Fleet Management', icon: <Truck className="w-4 h-4" /> },
-            { id: 'routes', label: 'Route Planning', icon: <Map className="w-4 h-4" /> },
-            { id: 'shipments', label: 'Inter-Island Shipments', icon: <Ship className="w-4 h-4" /> },
-          ].map((tab) => (
+      <div className="border-b border-gray-200 w-full max-w-full">
+        <div className="md:hidden pb-3">
+          <select
+            value={viewMode}
+            onChange={(e) => setViewMode(e.target.value as ViewMode)}
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+          >
+            {viewModeTabs.map((tab) => (
+              <option key={tab.id} value={tab.id}>{tab.label}</option>
+            ))}
+          </select>
+        </div>
+        <nav className="hidden md:flex gap-8">
+          {viewModeTabs.map((tab) => (
             <button
               key={tab.id}
               onClick={() => setViewMode(tab.id as ViewMode)}
@@ -138,12 +151,12 @@ export function LogisticsPage() {
 
       {/* DISPATCH BOARD VIEW */}
       {viewMode === 'dispatch' && (
-        <div className="space-y-6">
+        <div className="space-y-6 w-full max-w-full">
           {/* Search and Filters */}
           <Card>
             <CardContent className="p-4">
-              <div className="flex items-center gap-4">
-                <div className="flex-1 relative">
+              <div className="flex flex-col lg:flex-row lg:items-center gap-3 md:gap-4 w-full max-w-full">
+                <div className="w-full lg:flex-1 relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                   <input
                     type="text"
@@ -156,7 +169,7 @@ export function LogisticsPage() {
                 <select
                   value={filterStatus}
                   onChange={(e) => setFilterStatus(e.target.value)}
-                  className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                  className="w-full lg:w-auto px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
                 >
                   <option value="All">All Status</option>
                   <option value="Planned">Planned</option>
@@ -165,11 +178,11 @@ export function LogisticsPage() {
                   <option value="Completed">Completed</option>
                   <option value="Delayed">Delayed</option>
                 </select>
-                <Button variant="outline">
+                <Button variant="outline" className="w-full lg:w-auto justify-center">
                   <Filter className="w-4 h-4 mr-2" />
                   More Filters
                 </Button>
-                <Button variant="outline">
+                <Button variant="outline" className="w-full lg:w-auto justify-center">
                   <Download className="w-4 h-4 mr-2" />
                   Export
                 </Button>
@@ -178,8 +191,8 @@ export function LogisticsPage() {
           </Card>
 
           {/* Quick Stats */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <Card>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 w-full">
+            <Card className="w-full">
               <CardContent className="p-4">
                 <div className="flex items-center justify-between">
                   <div>
@@ -194,7 +207,7 @@ export function LogisticsPage() {
                 </div>
               </CardContent>
             </Card>
-            <Card>
+            <Card className="w-full">
               <CardContent className="p-4">
                 <div className="flex items-center justify-between">
                   <div>
@@ -207,7 +220,7 @@ export function LogisticsPage() {
                 </div>
               </CardContent>
             </Card>
-            <Card>
+            <Card className="w-full">
               <CardContent className="p-4">
                 <div className="flex items-center justify-between">
                   <div>
@@ -222,7 +235,7 @@ export function LogisticsPage() {
                 </div>
               </CardContent>
             </Card>
-            <Card>
+            <Card className="w-full">
               <CardContent className="p-4">
                 <div className="flex items-center justify-between">
                   <div>
@@ -245,7 +258,7 @@ export function LogisticsPage() {
               <CardTitle>Dispatch Queue</CardTitle>
             </CardHeader>
             <CardContent className="p-0">
-              <div className="overflow-x-auto">
+              <div className="hidden md:block">
                 <table className="w-full">
                   <thead className="bg-gray-50 border-b border-gray-200">
                     <tr>
@@ -359,6 +372,70 @@ export function LogisticsPage() {
                   </tbody>
                 </table>
               </div>
+
+              <div className="md:hidden divide-y divide-gray-200">
+                {filteredTrips.map((trip) => (
+                  <div key={trip.id} className="p-4 space-y-3 w-full">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium text-gray-900 break-words">{trip.tripNumber}</p>
+                        <p className="text-xs text-gray-500 mt-1 break-words">
+                          {trip.orders.length} order{trip.orders.length > 1 ? 's' : ''} • {trip.vehicleName}
+                        </p>
+                      </div>
+                      <Badge variant={getStatusColor(trip.status)} className="flex-shrink-0">
+                        {trip.status}
+                      </Badge>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div>
+                        <p className="text-xs text-gray-500">Driver</p>
+                        <p className="text-gray-900 break-words">{trip.driverName}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500">Schedule</p>
+                        <p className="text-gray-900">{trip.departureTime || trip.scheduledDate}</p>
+                      </div>
+                      <div className="col-span-2">
+                        <p className="text-xs text-gray-500">Route</p>
+                        <p className="text-gray-900 break-words">{trip.destinations.join(' -> ')}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500">Capacity</p>
+                        <p className="text-gray-900">{trip.capacityUsed}% full</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500">ETA</p>
+                        <p className="text-gray-900">{trip.eta || 'TBD'}</p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 pt-1">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="flex-1 justify-center"
+                        onClick={() => {
+                          setSelectedTrip(trip);
+                          setShowTripDetails(true);
+                        }}
+                      >
+                        <FileText className="w-4 h-4 mr-2" />
+                        Details
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="flex-1 justify-center"
+                      >
+                        <Phone className="w-4 h-4 mr-2" />
+                        Contact
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </CardContent>
           </Card>
         </div>
@@ -377,9 +454,9 @@ export function LogisticsPage() {
                 <CardContent>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     {vehicles.map((vehicle) => (
-                      <div key={vehicle.id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+                      <div key={vehicle.id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow w-full max-w-full">
                         <div className="flex items-start justify-between mb-3">
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 min-w-0 flex-1">
                             <div className={`p-2 rounded-lg ${
                               vehicle.status === 'Available' ? 'bg-green-100' :
                               vehicle.status === 'On Trip' ? 'bg-blue-100' :
@@ -388,12 +465,12 @@ export function LogisticsPage() {
                             }`}>
                               {getVehicleStatusIcon(vehicle.status)}
                             </div>
-                            <div>
-                              <div className="font-medium text-gray-900">{vehicle.vehicleName}</div>
-                              <div className="text-xs text-gray-500">{vehicle.vehicleId}</div>
+                            <div className="min-w-0 flex-1">
+                              <div className="font-medium text-gray-900 break-words">{vehicle.vehicleName}</div>
+                              <div className="text-xs text-gray-500 break-words">{vehicle.vehicleId}</div>
                             </div>
                           </div>
-                          <Badge variant={getStatusColor(vehicle.status)} className="text-xs">
+                          <Badge variant={getStatusColor(vehicle.status)} className="text-xs flex-shrink-0">
                             {vehicle.status}
                           </Badge>
                         </div>
@@ -414,19 +491,19 @@ export function LogisticsPage() {
                           {vehicle.currentTrip && (
                             <div className="flex items-center justify-between text-sm">
                               <span className="text-gray-500">Current Trip:</span>
-                              <span className="text-blue-600 font-medium text-xs">{vehicle.currentTrip}</span>
+                              <span className="text-blue-600 font-medium text-xs break-words text-right">{vehicle.currentTrip}</span>
                             </div>
                           )}
                           {vehicle.nextAvailableTime && (
                             <div className="flex items-center justify-between text-sm">
                               <span className="text-gray-500">Available at:</span>
-                              <span className="text-gray-900 font-medium text-xs">{vehicle.nextAvailableTime}</span>
+                              <span className="text-gray-900 font-medium text-xs break-words text-right">{vehicle.nextAvailableTime}</span>
                             </div>
                           )}
                           {vehicle.maintenanceDue && (
                             <div className="flex items-center justify-between text-sm">
                               <span className="text-gray-500">Maintenance:</span>
-                              <span className="text-orange-600 font-medium text-xs">{vehicle.maintenanceDue}</span>
+                              <span className="text-orange-600 font-medium text-xs break-words text-right">{vehicle.maintenanceDue}</span>
                             </div>
                           )}
                         </div>
@@ -436,7 +513,7 @@ export function LogisticsPage() {
                             {vehicle.alerts.map((alert, idx) => (
                               <div key={idx} className="flex items-center gap-2 text-xs text-orange-600">
                                 <AlertTriangle className="w-3 h-3" />
-                                <span>{alert}</span>
+                                <span className="break-words">{alert}</span>
                               </div>
                             ))}
                           </div>
@@ -589,9 +666,9 @@ export function LogisticsPage() {
             <CardContent>
               <div className="space-y-4">
                 {shipments.map((shipment) => (
-                  <div key={shipment.id} className="border border-gray-200 rounded-lg p-4">
+                  <div key={shipment.id} className="border border-gray-200 rounded-lg p-4 w-full max-w-full">
                     <div className="flex items-start justify-between mb-3">
-                      <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
                         <div className={`p-3 rounded-lg ${
                           shipment.type === 'Sea Freight' ? 'bg-blue-100' : 'bg-purple-100'
                         }`}>
@@ -601,12 +678,12 @@ export function LogisticsPage() {
                             <Plane className="w-5 h-5 text-purple-600" />
                           )}
                         </div>
-                        <div>
-                          <div className="font-medium text-gray-900">{shipment.shipmentNumber}</div>
-                          <div className="text-sm text-gray-500">{shipment.type}</div>
+                        <div className="min-w-0 flex-1">
+                          <div className="font-medium text-gray-900 break-words">{shipment.shipmentNumber}</div>
+                          <div className="text-sm text-gray-500 break-words">{shipment.type}</div>
                         </div>
                       </div>
-                      <Badge variant={getStatusColor(shipment.status)}>
+                      <Badge variant={getStatusColor(shipment.status)} className="flex-shrink-0">
                         {shipment.status}
                       </Badge>
                     </div>
@@ -630,17 +707,17 @@ export function LogisticsPage() {
                       </div>
                     </div>
 
-                    <div className="flex items-center justify-between pt-3 border-t border-gray-200">
-                      <div className="text-sm text-gray-500">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-3 border-t border-gray-200">
+                      <div className="text-sm text-gray-500 break-words">
                         {shipment.orders.length} order{shipment.orders.length > 1 ? 's' : ''} • {shipment.carrier || 'Carrier TBD'}
                         {shipment.trackingNumber && <span className="ml-2">• #{shipment.trackingNumber}</span>}
                       </div>
-                      <div className="flex items-center gap-2">
-                        <Button variant="outline" size="sm">
+                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
+                        <Button variant="outline" size="sm" className="w-full sm:w-auto justify-center">
                           <Globe className="w-3 h-3 mr-1" />
                           Track
                         </Button>
-                        <Button variant="outline" size="sm">
+                        <Button variant="outline" size="sm" className="w-full sm:w-auto justify-center">
                           <FileText className="w-3 h-3 mr-1" />
                           Details
                         </Button>

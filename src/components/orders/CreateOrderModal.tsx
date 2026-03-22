@@ -486,17 +486,17 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
 
   return (
     <div 
-      className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-0 md:p-4"
+      className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-0 lg:p-4"
       onClick={onClose}
     >
       <div 
-        className="bg-white md:rounded-lg shadow-xl w-full h-full md:h-auto md:max-w-5xl md:max-h-[90vh] overflow-hidden flex flex-col"
+        className="bg-white w-full h-full max-h-screen overflow-hidden flex flex-col lg:rounded-lg lg:h-auto lg:max-w-5xl lg:max-h-[90vh]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="px-4 md:px-6 py-4 border-b border-gray-200 flex items-center justify-between">
           <div>
-            <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+            <h2 className="text-lg sm:text-xl font-bold text-gray-900 flex items-center gap-2">
               <ShoppingCart className="w-6 h-6 text-red-600" />
               Create Order
             </h2>
@@ -870,16 +870,17 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
         </div>
 
         {/* Footer */}
-        <div className="px-4 md:px-6 py-4 border-t border-gray-200 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-gray-50">
+        <div className="sticky bottom-0 px-4 md:px-6 py-4 border-t border-gray-200 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-gray-50">
           <div className="text-sm text-gray-600 text-center sm:text-left">
             {orderItems.length} item{orderItems.length !== 1 ? 's' : ''} • Total: ₱{calculateTotal().toLocaleString()}
           </div>
-          <div className="flex gap-3">
+          <div className="flex flex-col-reverse sm:flex-row gap-3 w-full sm:w-auto">
             <Button
               type="button"
               variant="outline"
               onClick={onClose}
               disabled={isSubmitting}
+              className="w-full sm:w-auto"
             >
               Cancel
             </Button>
@@ -888,6 +889,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
               variant="primary"
               onClick={handleSubmit}
               disabled={orderItems.length === 0 || !deliveryDate || isSubmitting}
+              className="w-full sm:w-auto"
             >
               {isSubmitting ? (
                 <>Creating Order...</>
@@ -905,7 +907,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
       {/* Product Detail Modal - E-commerce Style */}
       {selectedProduct && selectedVariant && (
         <div className="absolute inset-0 bg-black/70 flex items-center justify-center z-10 p-4">
-          <div className="bg-white rounded-lg shadow-2xl w-full max-w-4xl max-h-[85vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-none lg:rounded-lg shadow-2xl w-full h-full lg:h-auto lg:max-w-4xl lg:max-h-[85vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
             
             {/* Close Button */}
             <button

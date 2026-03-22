@@ -18,9 +18,9 @@ export function SalesPerformance({ topProducts, topStores, agentPerformance, bra
   const navigate = useNavigate();
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
+    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 sm:gap-6">
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between pb-2">
+        <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between pb-2">
           <CardTitle className="text-sm font-medium text-gray-500">Top Products (MTD)</CardTitle>
           <div className="flex items-center gap-2">
             {showViewAll && (
@@ -57,7 +57,7 @@ export function SalesPerformance({ topProducts, topStores, agentPerformance, bra
       </Card>
 
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between pb-2">
+        <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between pb-2">
           <CardTitle className="text-sm font-medium text-gray-500">Top Hardware Stores</CardTitle>
           <div className="flex items-center gap-2">
             {showViewAll && (
@@ -91,7 +91,7 @@ export function SalesPerformance({ topProducts, topStores, agentPerformance, bra
       </Card>
 
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between pb-2">
+        <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between pb-2">
           <CardTitle className="text-sm font-medium text-gray-500">Agent Leaderboard</CardTitle>
           <div className="flex items-center gap-2">
             {showViewAll && (
@@ -132,7 +132,7 @@ export function SalesPerformance({ topProducts, topStores, agentPerformance, bra
       </Card>
 
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between pb-2">
+        <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between pb-2">
           <CardTitle className="text-sm font-medium text-gray-500">Branch Performance</CardTitle>
           <MapPin className="w-4 h-4 text-gray-400" />
         </CardHeader>

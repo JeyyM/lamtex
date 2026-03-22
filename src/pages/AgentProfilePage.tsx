@@ -29,7 +29,7 @@ const AgentProfilePage: React.FC = () => {
 
   if (!agent || !agentProfile) {
     return (
-      <div className="p-6">
+      <div className="p-3 sm:p-4 md:p-6">
         <div className="bg-white rounded-xl border border-gray-200 p-8 text-center">
           <h2 className="text-2xl font-bold text-gray-900 mb-2">Employee Not Found</h2>
           <p className="text-gray-600 mb-4">The employee profile you're looking for doesn't exist.</p>
@@ -502,7 +502,7 @@ const AgentProfilePage: React.FC = () => {
         return (
           <div className="space-y-6">
             {/* Customer Portfolio Stats */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               <div className="bg-white rounded-lg border border-gray-200 p-4">
                 <p className="text-sm text-gray-600 mb-1">Total Customers</p>
                 <p className="text-2xl font-bold text-gray-900">{agentProfile.customerAssignments.length}</p>
@@ -532,7 +532,48 @@ const AgentProfilePage: React.FC = () => {
               <div className="p-6 border-b border-gray-200">
                 <h3 className="text-lg font-bold text-gray-900">Assigned Customers</h3>
               </div>
-              <div className="overflow-x-auto">
+              <div className="md:hidden divide-y divide-gray-200">
+                {agentProfile.customerAssignments.map((customer) => (
+                  <div key={customer.customerId} className="p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="font-semibold text-gray-900">{customer.customerName}</p>
+                        <p className="text-sm text-gray-600">{customer.company}</p>
+                      </div>
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium whitespace-nowrap ${
+                        customer.status === 'Active' ? 'bg-green-100 text-green-700' :
+                        customer.status === 'VIP' ? 'bg-purple-100 text-purple-700' :
+                        customer.status === 'At Risk' ? 'bg-orange-100 text-orange-700' :
+                        'bg-gray-100 text-gray-700'
+                      }`}>
+                        {customer.status}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3 mt-3 text-sm">
+                      <div>
+                        <p className="text-gray-500">Orders</p>
+                        <p className="font-semibold text-gray-900">{customer.totalOrders}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500">Revenue</p>
+                        <p className="font-semibold text-gray-900">{formatCurrency(customer.lifetimeRevenue)}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500">Phone</p>
+                        <p className="font-medium text-gray-900">{customer.contactNumber}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500">Last Order</p>
+                        <p className="font-medium text-gray-900">{formatDate(customer.lastOrderDate)}</p>
+                      </div>
+                    </div>
+                    <p className="text-sm text-gray-600 mt-2 break-all">{customer.email}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="hidden md:block overflow-x-auto">
                 <table className="w-full">
                   <thead className="bg-gray-50">
                     <tr>
@@ -934,7 +975,7 @@ const AgentProfilePage: React.FC = () => {
   };
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-3 sm:p-4 md:p-6 space-y-6">
       {/* Back Button */}
       <button
         onClick={() => navigate(backPath)}
@@ -946,8 +987,8 @@ const AgentProfilePage: React.FC = () => {
 
       {/* Profile Header */}
       <div className="bg-white rounded-xl border border-gray-200 p-6">
-        <div className="flex items-start justify-between">
-          <div className="flex items-center gap-6">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-4 sm:gap-6">
             {/* Profile Photo */}
             <div className="w-24 h-24 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center text-white font-bold text-3xl">
               {agent.agentName.split(' ').map(n => n[0]).join('')}
@@ -955,9 +996,9 @@ const AgentProfilePage: React.FC = () => {
             
             {/* Basic Info */}
             <div>
-              <h1 className="text-3xl font-bold text-gray-900">{agent.agentName}</h1>
+              <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">{agent.agentName}</h1>
               <p className="text-gray-600 mt-1">{agent.agentId} • {agent.branchName} Branch</p>
-              <div className="flex items-center gap-3 mt-3">
+              <div className="flex flex-wrap items-center gap-3 mt-3">
                 <span className={`px-3 py-1 rounded-full text-sm font-medium ${
                   agent.status === 'active' 
                     ? 'bg-green-100 text-green-700' 
@@ -976,8 +1017,8 @@ const AgentProfilePage: React.FC = () => {
           </div>
 
           {/* Action Buttons */}
-          <div>
-            <button className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2">
+          <div className="w-full sm:w-auto">
+            <button className="w-full sm:w-auto px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center justify-center gap-2">
               <Edit className="w-4 h-4" />
               Edit Profile
             </button>
@@ -986,7 +1027,7 @@ const AgentProfilePage: React.FC = () => {
       </div>
 
       {/* Quick Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white rounded-xl border border-gray-200 p-5">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
@@ -1039,7 +1080,18 @@ const AgentProfilePage: React.FC = () => {
       {/* Tabs */}
       <div className="bg-white rounded-xl border border-gray-200">
         <div className="border-b border-gray-200 p-4">
-          <div className="grid grid-cols-5 gap-2">
+          <div className="md:hidden">
+            <select
+              value={activeTab}
+              onChange={(e) => setActiveTab(e.target.value)}
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              {tabs.map((tab) => (
+                <option key={tab.id} value={tab.id}>{tab.label}</option>
+              ))}
+            </select>
+          </div>
+          <div className="hidden md:grid md:grid-cols-3 lg:grid-cols-5 gap-2">
             {tabs.map((tab) => {
               const Icon = tab.icon;
               return (
@@ -1061,7 +1113,7 @@ const AgentProfilePage: React.FC = () => {
         </div>
 
         {/* Tab Content */}
-        <div className="p-6">
+        <div className="p-4 sm:p-6">
           {renderTabContent()}
         </div>
       </div>

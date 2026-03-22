@@ -163,19 +163,19 @@ export function PurchaseOrdersPage() {
   const totalValue = purchaseOrders.reduce((sum, po) => sum + po.totalAmount, 0);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6 p-3 sm:p-4 md:p-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Purchase Orders</h1>
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Purchase Orders</h1>
           <p className="text-sm text-gray-500 mt-1">Manage purchase orders for raw materials</p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline">
+        <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+          <Button variant="outline" className="w-full sm:w-auto">
             <Download className="w-4 h-4 mr-2" />
             Export
           </Button>
-          <Button variant="primary" onClick={() => setIsModalOpen(true)}>
+          <Button variant="primary" onClick={() => setIsModalOpen(true)} className="w-full sm:w-auto">
             <Plus className="w-4 h-4 mr-2" />
             New Purchase Order
           </Button>
@@ -183,7 +183,7 @@ export function PurchaseOrdersPage() {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center gap-3">
@@ -279,7 +279,63 @@ export function PurchaseOrdersPage() {
         </CardHeader>
         <CardContent className="p-0">
           {filteredPOs.length > 0 ? (
-            <div className="overflow-x-auto">
+            <>
+              <div className="md:hidden divide-y divide-gray-200">
+                {filteredPOs.map((po) => (
+                  <div key={po.id} className="p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="font-medium text-blue-600">{po.poNumber}</div>
+                        <div className="text-sm text-gray-900 mt-1">{po.supplier}</div>
+                      </div>
+                      <Badge variant={getStatusColor(po.status)} className="flex items-center gap-1 w-fit">
+                        {getStatusIcon(po.status)}
+                        {po.status}
+                      </Badge>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div>
+                        <p className="text-gray-500">Date</p>
+                        <p className="font-medium text-gray-900">{new Date(po.date).toLocaleDateString()}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500">Expected Delivery</p>
+                        <p className="font-medium text-gray-900">{new Date(po.expectedDelivery).toLocaleDateString()}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500">Items</p>
+                        <p className="font-medium text-gray-900">{po.itemCount} {po.itemCount === 1 ? 'item' : 'items'}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500">Amount</p>
+                        <p className="font-medium text-gray-900">₱{po.totalAmount.toLocaleString()}</p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-2 border-t border-gray-100">
+                      <span className="text-xs text-gray-500">Created by {po.createdBy}</span>
+                      <div className="flex gap-2">
+                        <Button variant="ghost" size="sm" onClick={() => alert(`View PO ${po.poNumber}`)}>
+                          <Eye className="w-4 h-4" />
+                        </Button>
+                        {po.status === 'Confirmed' && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => alert(`Receive against ${po.poNumber}`)}
+                            title="Receive Materials"
+                          >
+                            <CheckCircle className="w-4 h-4 text-green-600" />
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="hidden md:block overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b">
                   <tr>
@@ -351,7 +407,8 @@ export function PurchaseOrdersPage() {
                   ))}
                 </tbody>
               </table>
-            </div>
+              </div>
+            </>
           ) : (
             <div className="flex flex-col items-center justify-center py-12">
               <ShoppingCart className="w-12 h-12 text-gray-300 mb-4" />

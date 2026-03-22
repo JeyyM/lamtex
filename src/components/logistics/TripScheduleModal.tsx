@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Button } from '@/src/components/ui/Button';
 import { Badge } from '@/src/components/ui/Badge';
 import {
@@ -36,6 +36,16 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
 }) => {
   const [selectedDates, setSelectedDates] = useState<string[]>([]);
   const [currentMonth, setCurrentMonth] = useState(new Date('2026-02-27'));
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    return () => {
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -131,13 +141,13 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
                       'July', 'August', 'September', 'October', 'November', 'December'];
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-0 sm:p-4">
+      <div className="bg-white w-full max-w-full h-full max-h-screen sm:h-auto sm:max-w-4xl sm:max-h-[90vh] sm:rounded-lg shadow-2xl flex flex-col overflow-hidden">
         {/* Header */}
-        <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between z-10">
-          <div>
-            <div className="flex items-center gap-3">
-              <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+        <div className="sticky top-0 bg-white border-b border-gray-200 px-4 sm:px-6 py-4 flex items-start justify-between gap-3 z-10">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+              <h2 className="text-lg sm:text-xl font-bold text-gray-900 flex items-center gap-2 break-words min-w-0">
                 <Calendar className="w-6 h-6 text-blue-600" />
                 Schedule Delivery Trip
               </h2>
@@ -148,7 +158,7 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
                 </Badge>
               )}
             </div>
-            <p className="text-sm text-gray-600 mt-1">
+            <p className="text-sm text-gray-600 mt-1 break-words">
               Select date(s) for trip with {orderCount} orders using {vehicleName}
             </p>
           </div>
@@ -161,37 +171,37 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
         </div>
 
         {/* Content */}
-        <div className="p-6 space-y-6">
+        <div className="flex-1 overflow-y-auto overflow-x-hidden p-5 sm:p-6 space-y-7 w-full max-w-full">
           {/* Legend */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-6 text-sm flex-wrap">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-4 sm:gap-6 text-sm flex-wrap">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 bg-blue-600 border-2 border-blue-700 rounded flex items-center justify-center">
                   <CheckCircle className="w-4 h-4 text-white" />
                 </div>
-                <span className="text-gray-600">Selected</span>
+                <span className="text-sm text-gray-600">Selected</span>
               </div>
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 bg-orange-600 border-2 border-orange-700 rounded flex items-center justify-center">
                   <AlertTriangle className="w-4 h-4 text-white" />
                 </div>
-                <span className="text-gray-600">Conflict</span>
+                <span className="text-sm text-gray-600">Conflict</span>
               </div>
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 bg-orange-100 border-2 border-orange-300 rounded" />
-                <span className="text-gray-600">Existing Trip</span>
+                <span className="text-sm text-gray-600">Existing Trip</span>
               </div>
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 bg-red-100 border-2 border-red-300 rounded" />
-                <span className="text-gray-600">Maintenance</span>
+                <span className="text-sm text-gray-600">Maintenance</span>
               </div>
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 bg-white border-2 border-gray-200 rounded" />
-                <span className="text-gray-600">Available</span>
+                <span className="text-sm text-gray-600">Available</span>
               </div>
             </div>
             {selectedDates.length > 0 && (
-              <Badge variant="warning" className="text-sm">
+              <Badge variant="warning" className="text-sm w-fit">
                 {selectedDates.length} {selectedDates.length === 1 ? 'day' : 'days'} selected
               </Badge>
             )}
@@ -202,9 +212,9 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
             <div className="bg-orange-50 border-2 border-orange-300 rounded-lg p-4">
               <div className="flex items-start gap-3">
                 <AlertTriangle className="w-5 h-5 text-orange-600 mt-0.5 flex-shrink-0" />
-                <div>
-                  <p className="font-semibold text-orange-900">Schedule Conflict Detected</p>
-                  <p className="text-sm text-orange-700 mt-1">
+                <div className="min-w-0 flex-1">
+                  <p className="text-base font-semibold text-orange-900">Schedule Conflict Detected</p>
+                  <p className="text-sm text-orange-700 mt-1 leading-relaxed break-words">
                     One or more selected dates already have trips scheduled. This may cause resource conflicts.
                   </p>
                 </div>
@@ -222,7 +232,7 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
               >
                 <ChevronLeft className="w-5 h-5 text-gray-700" />
               </button>
-              <h3 className="text-lg font-bold text-gray-900">
+                <h3 className="text-base sm:text-lg font-bold text-gray-900">
                 {monthNames[currentMonth.getMonth()]} {currentMonth.getFullYear()}
               </h3>
               <button
@@ -238,7 +248,7 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
               <div className="grid grid-cols-7 gap-2">
                 {/* Day headers */}
                 {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
-                  <div key={day} className="text-center text-sm font-bold text-gray-700 py-2">
+                  <div key={day} className="text-center text-xs sm:text-sm font-bold text-gray-700 py-2">
                     {day}
                   </div>
                 ))}
@@ -254,7 +264,7 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
                     <div
                       key={index}
                       onClick={() => !isPast && toggleDateSelection(date)}
-                      className={`min-h-[90px] p-2 rounded-lg transition-all ${colorClass}`}
+                      className={`min-h-[76px] sm:min-h-[90px] p-2 rounded-lg transition-all ${colorClass}`}
                     >
                       {date && (
                         <>
@@ -267,7 +277,7 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
                             </div>
                           )}
                           {booking && booking.type !== 'Available' && !isSelected && (
-                            <div className="text-xs mt-1">
+                            <div className="text-xs mt-1 space-y-1">
                               {booking.type === 'Trip' ? (
                                 <>
                                   <div className="flex items-center gap-1 mb-1">
@@ -295,8 +305,8 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
 
           {/* Selected Dates Summary */}
           {selectedDates.length > 0 && (
-            <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-4">
-              <h4 className="font-semibold text-blue-900 mb-2">Selected Dates</h4>
+              <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-4">
+              <h4 className="text-base font-semibold text-blue-900 mb-2">Selected Dates</h4>
               <div className="flex flex-wrap gap-2">
                 {selectedDates.map(dateStr => {
                   const date = new Date(dateStr);
@@ -332,8 +342,8 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="sticky bottom-0 bg-gray-50 border-t border-gray-200 px-6 py-4 flex items-center justify-between">
-          <Button variant="outline" onClick={onClose}>
+        <div className="sticky bottom-0 bg-gray-50 border-t border-gray-200 px-4 sm:px-6 py-4 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3">
+          <Button variant="outline" onClick={onClose} className="w-full sm:w-auto justify-center">
             Cancel
           </Button>
           <Button
@@ -343,6 +353,7 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
               onClose();
             }}
             disabled={selectedDates.length === 0}
+            className="w-full sm:w-auto justify-center"
           >
             <CheckCircle className="w-4 h-4 mr-2" />
             Schedule Trip ({selectedDates.length} {selectedDates.length === 1 ? 'day' : 'days'})

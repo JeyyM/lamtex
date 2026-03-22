@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { X, Plus, Trash2, Package, AlertCircle, Save, Minus, Check } from 'lucide-react';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
@@ -89,6 +89,16 @@ export function EditTripModal({ isOpen, onClose, trip, onSave }: EditTripModalPr
   const [variantQuantity, setVariantQuantity] = useState(1);
   const [selectedOrderId, setSelectedOrderId] = useState('ORD-2026-1234');
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    return () => {
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   // Calculate totals
@@ -144,13 +154,13 @@ export function EditTripModal({ isOpen, onClose, trip, onSave }: EditTripModalPr
   const isOverCapacity = weightPercent > 100 || volumePercent > 100;
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-6xl max-h-[90vh] flex flex-col relative">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-0 sm:p-4">
+      <div className="bg-white w-full max-w-full h-full max-h-screen sm:h-auto sm:max-w-6xl sm:max-h-[90vh] sm:rounded-lg shadow-xl flex flex-col relative overflow-hidden">
         {/* Header */}
-        <div className="sticky top-0 bg-white border-b border-gray-200 rounded-t-lg px-6 py-4 flex items-center justify-between z-10">
-          <div>
-            <h2 className="text-xl font-bold text-gray-900">Edit Trip: {trip.tripNumber}</h2>
-            <p className="text-sm text-gray-500 mt-1">{trip.vehicleName} • {trip.driverName}</p>
+        <div className="sticky top-0 bg-white border-b border-gray-200 sm:rounded-t-lg px-4 sm:px-6 py-4 flex items-start justify-between gap-3 z-10">
+          <div className="min-w-0 flex-1">
+            <h2 className="text-lg sm:text-xl font-bold text-gray-900 break-words">Edit Trip: {trip.tripNumber}</h2>
+            <p className="text-sm text-gray-500 mt-1 break-words">{trip.vehicleName} • {trip.driverName}</p>
           </div>
           <button
             onClick={onClose}
@@ -161,10 +171,10 @@ export function EditTripModal({ isOpen, onClose, trip, onSave }: EditTripModalPr
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        <div className="flex-1 overflow-y-auto overflow-x-hidden p-5 sm:p-6 space-y-7 w-full max-w-full">
           {/* Status Selection */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm text-gray-500 mb-2">
               Trip Status
             </label>
             <div className="flex flex-wrap gap-2">
@@ -187,7 +197,7 @@ export function EditTripModal({ isOpen, onClose, trip, onSave }: EditTripModalPr
 
           {/* Capacity Overview */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className={`border-2 rounded-lg p-4 ${isOverCapacity ? 'border-red-300 bg-red-50' : 'border-green-300 bg-green-50'}`}>
+            <div className={`border-2 rounded-lg p-4 w-full ${isOverCapacity ? 'border-red-300 bg-red-50' : 'border-green-300 bg-green-50'}`}>
               <div className="text-sm font-medium text-gray-700 mb-1">Total Capacity</div>
               <div className={`text-2xl font-bold ${isOverCapacity ? 'text-red-600' : 'text-green-600'}`}>
                 {capacityUsed}%
@@ -199,14 +209,14 @@ export function EditTripModal({ isOpen, onClose, trip, onSave }: EditTripModalPr
                 </div>
               )}
             </div>
-            <div className="border border-gray-200 rounded-lg p-4">
+            <div className="border border-gray-200 rounded-lg p-4 w-full">
               <div className="text-sm font-medium text-gray-700 mb-1">Weight</div>
               <div className="text-lg font-bold text-gray-900">
                 {totalWeight.toFixed(0)} / {trip.maxWeight} kg
               </div>
               <div className="text-sm text-gray-600 mt-1">{weightPercent}% used</div>
             </div>
-            <div className="border border-gray-200 rounded-lg p-4">
+            <div className="border border-gray-200 rounded-lg p-4 w-full">
               <div className="text-sm font-medium text-gray-700 mb-1">Volume</div>
               <div className="text-lg font-bold text-gray-900">
                 {totalVolume.toFixed(1)} / {trip.maxVolume} m³
@@ -218,7 +228,7 @@ export function EditTripModal({ isOpen, onClose, trip, onSave }: EditTripModalPr
           {/* Product Selector Grid - Matches Orders Page */}
           <div className="border-t border-gray-200 pt-4">
             <h3 className="text-sm font-medium text-gray-700 mb-3">Add Products to Trip</h3>
-            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
               {AVAILABLE_PRODUCTS.map((product) => (
                 <button
                   key={product.id}
@@ -228,13 +238,13 @@ export function EditTripModal({ isOpen, onClose, trip, onSave }: EditTripModalPr
                     setSelectedVariant(product.variants[0]);
                     setVariantQuantity(1);
                   }}
-                  className="flex flex-col items-center p-3 border border-gray-200 rounded-lg hover:border-blue-500 hover:bg-blue-50 transition-all group relative"
+                  className="w-full max-w-full flex flex-col items-center p-3 border border-gray-200 rounded-lg hover:border-blue-500 hover:bg-blue-50 transition-all group relative"
                 >
                   <div className="w-12 h-12 bg-gray-100 rounded-lg flex items-center justify-center mb-2 group-hover:bg-blue-100 transition-colors">
                     <Package className="w-6 h-6 text-gray-600 group-hover:text-blue-600" />
                   </div>
-                  <div className="text-xs font-medium text-gray-900 text-center line-clamp-2">{product.name}</div>
-                  <div className="text-xs text-gray-500 mt-1">{product.category}</div>
+                  <div className="text-xs font-medium text-gray-900 text-center break-words line-clamp-2 w-full">{product.name}</div>
+                  <div className="text-sm text-gray-500 mt-1">{product.category}</div>
                 </button>
               ))}
             </div>
@@ -254,25 +264,25 @@ export function EditTripModal({ isOpen, onClose, trip, onSave }: EditTripModalPr
                 <p className="text-sm mt-1">Select products above to start building the trip</p>
               </div>
             ) : (
-              <div className="space-y-3">
+              <div className="space-y-4">
                 {items.map((item, idx) => (
-                  <div key={item.id} className="flex items-center gap-4 p-4 bg-gray-50 rounded-lg">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="font-semibold text-gray-900">{item.productName}</span>
+                  <div key={item.id} className="flex flex-col sm:flex-row sm:items-center gap-4 p-5 bg-gray-50 rounded-lg w-full max-w-full">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-base font-semibold text-gray-900 break-words leading-relaxed">{item.productName}</span>
                         <Badge variant="default" className="text-xs">{item.variantSize}</Badge>
                         <Badge variant="outline" className="text-xs">{item.orderId}</Badge>
                       </div>
-                      <div className="text-sm text-gray-600 mt-1">{item.variantDescription}</div>
+                      <div className="text-sm text-gray-600 mt-1 break-words leading-relaxed">{item.variantDescription}</div>
                       <div className="flex items-center gap-2 mt-2">
-                        <div className="text-xs text-gray-500">
+                        <div className="text-sm text-gray-500 break-words leading-relaxed">
                           {item.weight} kg/unit • {item.volume} m³/unit
                         </div>
                       </div>
                     </div>
 
                     {/* Quantity Controls */}
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 w-full sm:w-auto">
                       <button
                         type="button"
                         onClick={() => updateQuantity(idx, item.quantity - 1)}
@@ -285,7 +295,7 @@ export function EditTripModal({ isOpen, onClose, trip, onSave }: EditTripModalPr
                         min="1"
                         value={item.quantity}
                         onChange={(e) => updateQuantity(idx, parseInt(e.target.value) || 1)}
-                        className="w-20 text-center px-2 py-1 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        className="flex-1 sm:w-20 sm:flex-none text-center px-2 py-1 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                       />
                       <button
                         type="button"
@@ -297,9 +307,9 @@ export function EditTripModal({ isOpen, onClose, trip, onSave }: EditTripModalPr
                     </div>
 
                     {/* Weight/Volume Total */}
-                    <div className="w-32 text-right">
-                      <div className="font-semibold text-gray-900">{(item.weight * item.quantity).toFixed(1)} kg</div>
-                      <div className="text-sm text-gray-600">{(item.volume * item.quantity).toFixed(2)} m³</div>
+                    <div className="w-full sm:w-32 text-left sm:text-right">
+                      <div className="text-base font-semibold text-gray-900">{(item.weight * item.quantity).toFixed(1)} kg</div>
+                      <div className="text-sm text-gray-600 leading-relaxed">{(item.volume * item.quantity).toFixed(2)} m³</div>
                     </div>
 
                     {/* Remove Button */}
@@ -318,16 +328,16 @@ export function EditTripModal({ isOpen, onClose, trip, onSave }: EditTripModalPr
         </div>
 
         {/* Footer */}
-        <div className="sticky bottom-0 bg-gray-50 border-t border-gray-200 rounded-b-lg px-6 py-4 z-10">
-          <div className="flex items-center justify-between">
-            <div className="text-sm text-gray-600">
+        <div className="sticky bottom-0 bg-gray-50 border-t border-gray-200 sm:rounded-b-lg px-4 sm:px-6 py-4 z-10">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-sm text-gray-600 break-words">
               {items.length} item{items.length !== 1 ? 's' : ''} • {capacityUsed}% capacity used
             </div>
-            <div className="flex items-center gap-3">
-              <Button variant="outline" onClick={onClose}>
+            <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center gap-3 w-full sm:w-auto">
+              <Button variant="outline" onClick={onClose} className="w-full sm:w-auto justify-center">
                 Cancel
               </Button>
-              <Button variant="primary" onClick={handleSave}>
+              <Button variant="primary" onClick={handleSave} className="w-full sm:w-auto justify-center">
                 <Save className="w-4 h-4 mr-2" />
                 Save Changes
               </Button>
@@ -338,7 +348,7 @@ export function EditTripModal({ isOpen, onClose, trip, onSave }: EditTripModalPr
         {/* Product Detail Modal - E-commerce Style (Matches Orders Page) */}
         {selectedProduct && selectedVariant && (
           <div className="absolute inset-0 bg-black/70 flex items-center justify-center z-20 p-4">
-            <div className="bg-white rounded-lg shadow-2xl w-full max-w-4xl max-h-[85vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="bg-white rounded-lg shadow-2xl w-full max-w-full sm:max-w-4xl max-h-[85vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
               
               {/* Close Button */}
               <button
@@ -354,7 +364,7 @@ export function EditTripModal({ isOpen, onClose, trip, onSave }: EditTripModalPr
 
               {/* Product Content */}
               <div className="flex-1 overflow-y-auto">
-                <div className="grid grid-cols-2 gap-8 p-8">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 p-4 sm:p-6 lg:p-8">
                   
                   {/* Left: Product Image */}
                   <div className="space-y-4">
@@ -370,17 +380,17 @@ export function EditTripModal({ isOpen, onClose, trip, onSave }: EditTripModalPr
                   </div>
 
                   {/* Right: Product Details */}
-                  <div className="space-y-6">
+                  <div className="space-y-7">
                     {/* Product Title */}
                     <div>
                       <Badge variant="default" className="mb-2">{selectedProduct.category}</Badge>
-                      <h2 className="text-3xl font-bold text-gray-900 mb-2">{selectedProduct.name}</h2>
-                      <p className="text-gray-600">{selectedVariant.description}</p>
+                      <h2 className="text-xl sm:text-2xl lg:text-3xl font-bold text-gray-900 mb-2 break-words">{selectedProduct.name}</h2>
+                      <p className="text-base text-gray-600 break-words leading-relaxed">{selectedVariant.description}</p>
                     </div>
 
                     {/* Stock Status */}
                     <div className="flex items-center gap-4">
-                      <div className="text-sm text-gray-600">
+                      <div className="text-base text-gray-600 leading-relaxed">
                         <span className="font-medium">Available Stock:</span>{' '}
                         <span className={`font-bold ${selectedVariant.stock > 50 ? 'text-green-600' : selectedVariant.stock > 0 ? 'text-yellow-600' : 'text-red-600'}`}>
                           {selectedVariant.stock} Units
@@ -391,7 +401,7 @@ export function EditTripModal({ isOpen, onClose, trip, onSave }: EditTripModalPr
                     {/* Variant Selector */}
                     <div>
                       <label className="block text-sm font-semibold text-gray-900 mb-3">Select Size</label>
-                      <div className="grid grid-cols-2 gap-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         {selectedProduct.variants.map((variant) => (
                           <button
                             key={variant.id}
@@ -406,7 +416,7 @@ export function EditTripModal({ isOpen, onClose, trip, onSave }: EditTripModalPr
                                 : 'border-gray-200 hover:border-gray-300 text-gray-700'
                             }`}
                           >
-                            <div className="font-semibold">{variant.size}</div>
+                            <div className="font-semibold break-words">{variant.size}</div>
                             <div className="text-xs text-gray-500 mt-1">Stock: {variant.stock}</div>
                           </button>
                         ))}
@@ -418,14 +428,14 @@ export function EditTripModal({ isOpen, onClose, trip, onSave }: EditTripModalPr
                       <div className="flex items-center justify-between mb-2">
                         <div className="text-sm text-gray-600">Specifications</div>
                       </div>
-                      <div className="space-y-1 text-sm">
+                      <div className="space-y-2 text-sm">
                         <div className="flex justify-between">
-                          <span className="text-gray-600">Weight:</span>
-                          <span className="font-semibold text-gray-900">{selectedVariant.weight} kg/unit</span>
+                          <span className="text-sm text-gray-500">Weight</span>
+                          <span className="text-base font-medium text-gray-900">{selectedVariant.weight} kg/unit</span>
                         </div>
                         <div className="flex justify-between">
-                          <span className="text-gray-600">Volume:</span>
-                          <span className="font-semibold text-gray-900">{selectedVariant.volume} m³/unit</span>
+                          <span className="text-sm text-gray-500">Volume</span>
+                          <span className="text-base font-medium text-gray-900">{selectedVariant.volume} m³/unit</span>
                         </div>
                       </div>
                     </div>
@@ -446,7 +456,7 @@ export function EditTripModal({ isOpen, onClose, trip, onSave }: EditTripModalPr
                     {/* Quantity Selector */}
                     <div>
                       <label className="block text-sm font-semibold text-gray-900 mb-3">Quantity Request</label>
-                      <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-3 sm:gap-4 w-full">
                         <button
                           type="button"
                           onClick={() => setVariantQuantity(Math.max(1, variantQuantity - 1))}
@@ -460,7 +470,7 @@ export function EditTripModal({ isOpen, onClose, trip, onSave }: EditTripModalPr
                           max={selectedVariant.stock}
                           value={variantQuantity}
                           onChange={(e) => setVariantQuantity(Math.max(1, parseInt(e.target.value) || 1))}
-                          className="w-24 text-center text-2xl font-bold px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                          className="flex-1 sm:w-24 sm:flex-none text-center text-xl sm:text-2xl font-bold px-3 sm:px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                         />
                         <button
                           type="button"

@@ -64,9 +64,9 @@ export function InventoryAlerts({ finishedGoods, rawMaterials, showViewAll = fal
 
   return (
     <>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
+          <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <CardTitle className="flex items-center gap-2">
                 <Package className="w-5 h-5 text-red-500" />
@@ -132,12 +132,12 @@ export function InventoryAlerts({ finishedGoods, rawMaterials, showViewAll = fal
                       </p>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                       <Button 
                         variant="primary" 
                         size="sm" 
                         onClick={() => handleScheduleBatch(item)}
-                        className="flex items-center gap-1"
+                        className="flex items-center justify-center gap-1 w-full sm:w-auto"
                       >
                         <Package className="w-4 h-4" />
                         Schedule Batch
@@ -146,7 +146,7 @@ export function InventoryAlerts({ finishedGoods, rawMaterials, showViewAll = fal
                         variant="outline" 
                         size="sm" 
                         onClick={() => handleTransferStock(item)}
-                        className="flex items-center gap-1"
+                        className="flex items-center justify-center gap-1 w-full sm:w-auto"
                       >
                         <ArrowRightLeft className="w-4 h-4" />
                         Transfer Stock
@@ -160,7 +160,7 @@ export function InventoryAlerts({ finishedGoods, rawMaterials, showViewAll = fal
         </Card>
 
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
+          <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <CardTitle className="flex items-center gap-2">
                 <AlertTriangle className="w-5 h-5 text-yellow-500" />
@@ -245,8 +245,8 @@ export function InventoryAlerts({ finishedGoods, rawMaterials, showViewAll = fal
       {/* Schedule Batch Modal */}
       {schedulingBatch && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
-            <div className="p-6">
+          <div className="bg-white rounded-lg shadow-xl w-full mx-0 my-0 max-h-screen lg:mx-4 lg:my-4 lg:max-w-md lg:max-h-[90vh] overflow-y-auto">
+            <div className="p-4 md:p-6">
               <div className="flex items-center gap-3 mb-4">
                 <div className="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center">
                   <Package className="w-6 h-6 text-blue-600" />
@@ -276,7 +276,7 @@ export function InventoryAlerts({ finishedGoods, rawMaterials, showViewAll = fal
                 </div>
               </div>
 
-              <div className="flex gap-3">
+              <div className="flex flex-col-reverse sm:flex-row gap-3">
                 <Button 
                   variant="outline" 
                   className="flex-1"
@@ -300,8 +300,8 @@ export function InventoryAlerts({ finishedGoods, rawMaterials, showViewAll = fal
       {/* Transfer Stock Modal */}
       {transferringStock && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
-            <div className="p-6">
+          <div className="bg-white rounded-lg shadow-xl w-full mx-0 my-0 max-h-screen lg:mx-4 lg:my-4 lg:max-w-md lg:max-h-[90vh] overflow-y-auto">
+            <div className="p-4 md:p-6">
               <div className="flex items-center gap-3 mb-4">
                 <div className="w-12 h-12 rounded-full bg-purple-100 flex items-center justify-center">
                   <ArrowRightLeft className="w-6 h-6 text-purple-600" />
@@ -337,7 +337,7 @@ export function InventoryAlerts({ finishedGoods, rawMaterials, showViewAll = fal
                 </div>
               </div>
 
-              <div className="flex gap-3">
+              <div className="flex flex-col-reverse sm:flex-row gap-3">
                 <Button 
                   variant="outline" 
                   className="flex-1"
@@ -361,8 +361,8 @@ export function InventoryAlerts({ finishedGoods, rawMaterials, showViewAll = fal
       {/* Purchase Request Modal */}
       {creatingPR && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
-            <div className="p-6">
+          <div className="bg-white rounded-lg shadow-xl w-full mx-0 my-0 max-h-screen lg:mx-4 lg:my-4 lg:max-w-md lg:max-h-[90vh] overflow-y-auto">
+            <div className="p-4 md:p-6">
               <div className="flex items-center gap-3 mb-4">
                 <div className="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center">
                   <ShoppingCart className="w-6 h-6 text-green-600" />
@@ -392,7 +392,7 @@ export function InventoryAlerts({ finishedGoods, rawMaterials, showViewAll = fal
                 </div>
               </div>
 
-              <div className="flex gap-3">
+              <div className="flex flex-col-reverse sm:flex-row gap-3">
                 <Button 
                   variant="outline" 
                   className="flex-1"

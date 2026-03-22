@@ -174,15 +174,15 @@ const EmployeesPage: React.FC = () => {
   };
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-3 sm:p-4 md:p-6 space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-3xl font-bold text-gray-900">Employees</h1>
+        <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Employees</h1>
         <p className="text-gray-600 mt-1">Manage all company employees across departments</p>
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         <div className="bg-white rounded-lg border border-gray-200 p-4">
           <div className="flex items-center gap-2 mb-2">
             <UserCheck className="w-5 h-5 text-blue-600" />
@@ -240,12 +240,12 @@ const EmployeesPage: React.FC = () => {
           </div>
 
           {/* Role Filter */}
-          <div className="relative">
+          <div className="relative w-full md:w-auto">
             <Filter className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
             <select
               value={selectedRole}
               onChange={(e) => setSelectedRole(e.target.value as EmployeeRole | 'all')}
-              className="pl-10 pr-8 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 appearance-none bg-white min-w-[200px]"
+              className="w-full md:w-auto pl-10 pr-8 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 appearance-none bg-white md:min-w-[200px]"
             >
               <option value="all">All Roles</option>
               <option value="Sales Agent">Sales Agents</option>
@@ -258,12 +258,12 @@ const EmployeesPage: React.FC = () => {
           </div>
 
           {/* Branch Filter */}
-          <div className="relative">
+          <div className="relative w-full md:w-auto">
             <MapPin className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
             <select
               value={selectedBranch}
               onChange={(e) => setSelectedBranch(e.target.value)}
-              className="pl-10 pr-8 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 appearance-none bg-white min-w-[180px]"
+              className="w-full md:w-auto pl-10 pr-8 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 appearance-none bg-white md:min-w-[180px]"
             >
               <option value="all">All Branches</option>
               <option value="BR-001">Quezon City</option>

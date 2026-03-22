@@ -182,7 +182,7 @@ export function CustomerFormPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
         <div className="flex items-center gap-4">
           <Button variant="ghost" size="sm" onClick={() => navigate('/customers')}>
             <ArrowLeft className="w-4 h-4" />
@@ -196,12 +196,12 @@ export function CustomerFormPage() {
             </p>
           </div>
         </div>
-        <div className="flex gap-2 max-[499px]:flex-col-reverse">
-          <Button variant="outline" onClick={handleCancel}>
+        <div className="flex flex-col-reverse sm:flex-row gap-2 w-full md:w-auto">
+          <Button variant="outline" onClick={handleCancel} className="w-full sm:w-auto">
             <X className="w-4 h-4 mr-2" />
             Cancel
           </Button>
-          <Button variant="primary" onClick={handleSubmit}>
+          <Button variant="primary" onClick={handleSubmit} className="w-full sm:w-auto">
             <Save className="w-4 h-4 mr-2" />
             {isEditMode ? 'Save Changes' : 'Create Customer'}
           </Button>

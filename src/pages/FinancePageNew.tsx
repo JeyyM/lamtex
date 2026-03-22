@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
+import { ResponsiveTable, ResponsiveTableColumn } from '@/src/components/ui/ResponsiveTable';
 import { getOrderById, MOCK_ORDERS_DETAILED } from '@/src/mock/orders';
 import { Invoice, ProofDocument } from '@/src/types/orders';
 import {
@@ -281,27 +282,28 @@ export function FinancePageNew() {
   };
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-3 sm:p-4 md:p-6 space-y-4 sm:space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">Finance & Invoices</h1>
-          <p className="text-gray-500 mt-1">Manage invoices, payments, and accounts receivable</p>
+          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Finance & Invoices</h1>
+          <p className="text-xs sm:text-sm text-gray-500 mt-1">Manage invoices, payments, and accounts receivable</p>
         </div>
-        <Button variant="primary" className="gap-2">
+        <Button variant="primary" className="gap-2 w-full sm:w-auto">
           <Plus className="w-4 h-4" />
-          Generate Bulk Invoices
+          <span className="hidden sm:inline">Generate Bulk Invoices</span>
+          <span className="sm:hidden">Generate</span>
         </Button>
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6">
         <Card>
-          <CardContent className="p-6">
+          <CardContent className="p-4 sm:p-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-gray-600">Total Outstanding</p>
-                <p className="text-2xl font-bold text-gray-900 mt-2">
+                <p className="text-xs sm:text-sm font-medium text-gray-600">Total Outstanding</p>
+                <p className="text-xl sm:text-2xl font-bold text-gray-900 mt-2">
                   ₱{metrics.totalOutstanding.toLocaleString()}
                 </p>
                 <p className="text-xs text-gray-500 mt-1">Across all customers</p>
@@ -314,51 +316,51 @@ export function FinancePageNew() {
         </Card>
 
         <Card>
-          <CardContent className="p-6">
+          <CardContent className="p-4 sm:p-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-gray-600">Overdue Amount</p>
-                <p className="text-2xl font-bold text-red-600 mt-2">
+                <p className="text-xs sm:text-sm font-medium text-gray-600">Overdue Amount</p>
+                <p className="text-xl sm:text-2xl font-bold text-red-600 mt-2">
                   ₱{metrics.totalOverdue.toLocaleString()}
                 </p>
                 <p className="text-xs text-gray-500 mt-1">Requires attention</p>
               </div>
-              <div className="w-12 h-12 bg-red-100 rounded-lg flex items-center justify-center">
-                <AlertTriangle className="w-6 h-6 text-red-600" />
+              <div className="w-10 sm:w-12 h-10 sm:h-12 bg-red-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                <AlertTriangle className="w-5 sm:w-6 h-5 sm:h-6 text-red-600" />
               </div>
             </div>
           </CardContent>
         </Card>
 
         <Card>
-          <CardContent className="p-6">
+          <CardContent className="p-4 sm:p-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-gray-600">Collected This Month</p>
-                <p className="text-2xl font-bold text-green-600 mt-2">
+                <p className="text-xs sm:text-sm font-medium text-gray-600">Collected This Month</p>
+                <p className="text-xl sm:text-2xl font-bold text-green-600 mt-2">
                   ₱{metrics.collectedThisMonth.toLocaleString()}
                 </p>
                 <p className="text-xs text-gray-500 mt-1">Cash flow this month</p>
               </div>
-              <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
-                <TrendingUp className="w-6 h-6 text-green-600" />
+              <div className="w-10 sm:w-12 h-10 sm:h-12 bg-green-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                <TrendingUp className="w-5 sm:w-6 h-5 sm:h-6 text-green-600" />
               </div>
             </div>
           </CardContent>
         </Card>
 
         <Card>
-          <CardContent className="p-6">
+          <CardContent className="p-4 sm:p-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-gray-600">Pending Invoices</p>
-                <p className="text-2xl font-bold text-gray-900 mt-2">
+                <p className="text-xs sm:text-sm font-medium text-gray-600">Pending Invoices</p>
+                <p className="text-xl sm:text-2xl font-bold text-gray-900 mt-2">
                   {metrics.invoicesPending}
                 </p>
                 <p className="text-xs text-gray-500 mt-1">Awaiting payment</p>
               </div>
-              <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
-                <FileText className="w-6 h-6 text-purple-600" />
+              <div className="w-10 sm:w-12 h-10 sm:h-12 bg-purple-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                <FileText className="w-5 sm:w-6 h-5 sm:h-6 text-purple-600" />
               </div>
             </div>
           </CardContent>
@@ -366,8 +368,8 @@ export function FinancePageNew() {
       </div>
 
       {/* Tabs */}
-      <div className="border-b border-gray-200">
-        <div className="flex gap-6">
+      <div className="border-b border-gray-200 overflow-x-auto md:overflow-x-visible">
+        <div className="flex gap-4 sm:gap-6">
           <button
             onClick={() => setActiveTab('invoices')}
             className={`pb-3 px-1 border-b-2 font-medium text-sm transition-colors ${
@@ -419,23 +421,23 @@ export function FinancePageNew() {
       {activeTab === 'invoices' && (
         <Card>
           <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle>All Invoices</CardTitle>
-              <div className="flex gap-3">
-                <div className="relative">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <CardTitle className="text-lg sm:text-xl">All Invoices</CardTitle>
+              <div className="flex flex-col sm:flex-row gap-3">
+                <div className="relative flex-1 sm:flex-none">
                   <Search className="w-4 h-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
                   <input
                     type="text"
                     placeholder="Search invoices..."
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
-                    className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none"
+                    className="w-full pl-10 pr-4 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none"
                   />
                 </div>
                 <select
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value)}
-                  className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none"
+                  className="px-4 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none bg-white"
                 >
                   <option value="all">All Status</option>
                   <option value="Unbilled">Unbilled</option>
@@ -448,89 +450,83 @@ export function FinancePageNew() {
             </div>
           </CardHeader>
           <CardContent>
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b border-gray-200">
-                    <th className="text-left py-3 px-4 font-semibold text-sm text-gray-700">Invoice #</th>
-                    <th className="text-left py-3 px-4 font-semibold text-sm text-gray-700">Customer</th>
-                    <th className="text-left py-3 px-4 font-semibold text-sm text-gray-700">Issue Date</th>
-                    <th className="text-left py-3 px-4 font-semibold text-sm text-gray-700">Due Date</th>
-                    <th className="text-right py-3 px-4 font-semibold text-sm text-gray-700">Total</th>
-                    <th className="text-right py-3 px-4 font-semibold text-sm text-gray-700">Paid</th>
-                    <th className="text-right py-3 px-4 font-semibold text-sm text-gray-700">Balance</th>
-                    <th className="text-center py-3 px-4 font-semibold text-sm text-gray-700">Status</th>
-                    <th className="text-center py-3 px-4 font-semibold text-sm text-gray-700">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredInvoices.map((invoice) => (
-                    <tr key={invoice.id} className="border-b border-gray-100 hover:bg-gray-50">
-                      <td className="py-3 px-4">
-                        <div className="flex items-center gap-2">
-                          <Receipt className="w-4 h-4 text-gray-400" />
-                          <span className="font-medium text-gray-900">{invoice.invoiceNumber}</span>
-                        </div>
-                      </td>
-                      <td className="py-3 px-4">
-                        <div>
-                          <p className="font-medium text-gray-900">{invoice.billTo.name}</p>
-                          <p className="text-xs text-gray-500">Order: {invoice.orderId}</p>
-                        </div>
-                      </td>
-                      <td className="py-3 px-4 text-sm text-gray-600">
-                        {new Date(invoice.issueDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                      </td>
-                      <td className="py-3 px-4 text-sm text-gray-600">
-                        {new Date(invoice.dueDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                      </td>
-                      <td className="py-3 px-4 text-right font-medium text-gray-900">
-                        ₱{invoice.totalAmount.toLocaleString()}
-                      </td>
-                      <td className="py-3 px-4 text-right text-green-600 font-medium">
-                        ₱{invoice.amountPaid.toLocaleString()}
-                      </td>
-                      <td className="py-3 px-4 text-right font-bold text-gray-900">
-                        ₱{invoice.balanceDue.toLocaleString()}
-                      </td>
-                      <td className="py-3 px-4 text-center">
-                        {getStatusBadge(invoice.paymentStatus)}
-                      </td>
-                      <td className="py-3 px-4">
-                        <div className="flex items-center justify-center gap-2">
-                          <Button 
-                            variant="outline" 
-                            size="sm"
-                            onClick={() => navigate(`/orders/${invoice.orderId}`)}
-                          >
-                            <Eye className="w-4 h-4" />
-                          </Button>
-                          <Button 
-                            variant="outline" 
-                            size="sm"
-                            onClick={() => alert(`Download invoice ${invoice.invoiceNumber}`)}
-                          >
-                            <Download className="w-4 h-4" />
-                          </Button>
-                          {invoice.balanceDue > 0 && (
-                            <Button 
-                              variant="primary" 
-                              size="sm"
-                              onClick={() => {
-                                setSelectedInvoice(invoice);
-                                setShowPaymentModal(true);
-                              }}
-                            >
-                              <DollarSign className="w-4 h-4" />
-                            </Button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <ResponsiveTable
+              columns={[
+                { 
+                  key: 'invoiceNumber', 
+                  label: 'Invoice #', 
+                  align: 'left',
+                  render: (val) => (
+                    <div className="flex items-center gap-2">
+                      <Receipt className="w-4 h-4 text-gray-400" />
+                      <span className="font-medium text-gray-900">{val}</span>
+                    </div>
+                  )
+                },
+                { 
+                  key: 'customerName', 
+                  label: 'Customer', 
+                  align: 'left',
+                  render: (_, row) => (
+                    <div>
+                      <p className="font-medium text-gray-900">{row.billTo.name}</p>
+                      <p className="text-xs text-gray-500">Order: {row.orderId}</p>
+                    </div>
+                  )
+                },
+                { 
+                  key: 'issueDate', 
+                  label: 'Issue Date', 
+                  align: 'left',
+                  hideOnMobile: true,
+                  render: (val) => new Date(val).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                },
+                { 
+                  key: 'dueDate', 
+                  label: 'Due Date', 
+                  align: 'left',
+                  hideOnMobile: true,
+                  render: (val) => new Date(val).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                },
+                { 
+                  key: 'totalAmount', 
+                  label: 'Total', 
+                  align: 'right',
+                  render: (val) => `₱${val.toLocaleString()}`
+                },
+                { 
+                  key: 'amountPaid', 
+                  label: 'Paid', 
+                  align: 'right',
+                  render: (val) => <span className="text-green-600 font-medium">₱{val.toLocaleString()}</span>
+                },
+                { 
+                  key: 'balanceDue', 
+                  label: 'Balance', 
+                  align: 'right',
+                  render: (val) => <span className="font-bold text-gray-900">₱{val.toLocaleString()}</span>
+                },
+                { 
+                  key: 'paymentStatus', 
+                  label: 'Status', 
+                  align: 'center',
+                  render: (val) => getStatusBadge(val)
+                },
+              ]}
+              data={filteredInvoices.map(invoice => ({
+                ...invoice,
+                invoiceNumber: invoice.invoiceNumber,
+                customerName: invoice.billTo.name,
+                issueDate: invoice.issueDate,
+                dueDate: invoice.dueDate,
+                totalAmount: invoice.totalAmount,
+                amountPaid: invoice.amountPaid,
+                balanceDue: invoice.balanceDue,
+                paymentStatus: invoice.paymentStatus,
+              }))}
+              mobileColumns={['invoiceNumber', 'customerName', 'totalAmount', 'balanceDue', 'paymentStatus']}
+              emptyMessage="No invoices found"
+            />
           </CardContent>
         </Card>
       )}

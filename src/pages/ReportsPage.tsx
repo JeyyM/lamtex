@@ -202,22 +202,30 @@ export function ReportsPage() {
   };
 
   const COLORS = ['#EF4444', '#F59E0B', '#10B981', '#3B82F6', '#8B5CF6', '#EC4899'];
+  const reportTabs: Array<{ id: ViewMode; label: string; icon: React.ReactNode }> = [
+    { id: 'overview', label: 'Overview', icon: <BarChart3 className="w-4 h-4" /> },
+    { id: 'sales', label: 'Sales Analytics', icon: <TrendingUp className="w-4 h-4" /> },
+    { id: 'agents', label: 'Agent Performance', icon: <Users className="w-4 h-4" /> },
+    { id: 'products', label: 'Product Analysis', icon: <Package className="w-4 h-4" /> },
+    { id: 'inventory', label: 'Inventory Reports', icon: <PackageCheck className="w-4 h-4" /> },
+    { id: 'predictions', label: 'AI Predictions', icon: <Brain className="w-4 h-4" /> },
+  ];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Reports & Analytics</h1>
           <p className="text-sm text-gray-500 mt-1">
             Comprehensive business intelligence, performance metrics & predictive analytics for <span className="font-medium text-gray-700">{branch}</span>
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2 sm:gap-3 w-full lg:w-auto">
           <select
             value={timeRange}
             onChange={(e) => setTimeRange(e.target.value as TimeRange)}
-            className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
           >
             <option value="7D">Last 7 Days</option>
             <option value="1M">Last Month</option>
@@ -227,15 +235,15 @@ export function ReportsPage() {
             <option value="YTD">Year to Date</option>
             <option value="ALL">All Time</option>
           </select>
-          <Button variant="outline">
+          <Button variant="outline" className="w-full sm:w-auto">
             <Printer className="w-4 h-4 mr-2" />
             Print
           </Button>
-          <Button variant="outline">
+          <Button variant="outline" className="w-full sm:w-auto">
             <Share2 className="w-4 h-4 mr-2" />
             Share
           </Button>
-          <Button variant="primary">
+          <Button variant="primary" className="w-full sm:w-auto">
             <Download className="w-4 h-4 mr-2" />
             Export All
           </Button>
@@ -250,7 +258,7 @@ export function ReportsPage() {
         </h2>
         
         {/* Sales KPIs */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <Card>
             <CardContent className="p-4">
               <div className="flex items-center justify-between">
@@ -465,7 +473,7 @@ export function ReportsPage() {
         </h2>
         
         {/* Agent KPIs */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <Card>
             <CardContent className="p-4">
               <div className="flex items-center justify-between">
@@ -598,7 +606,7 @@ export function ReportsPage() {
         </h2>
         
         {/* Product KPIs */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <Card>
             <CardContent className="p-4">
               <div className="flex items-center justify-between">
@@ -733,7 +741,7 @@ export function ReportsPage() {
         </h2>
         
         {/* Inventory KPIs */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <Card>
             <CardContent className="p-4">
               <div className="flex items-center justify-between">
@@ -880,7 +888,7 @@ export function ReportsPage() {
         </h2>
         
         {/* Branch KPIs */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {MOCK_BRANCH_PERFORMANCE.map((branch, index) => (
             <Card key={index}>
               <CardContent className="p-4">
@@ -984,15 +992,19 @@ export function ReportsPage() {
 
       {/* View Mode Tabs */}
       <div className="border-b border-gray-200">
-        <nav className="flex gap-8">
-          {[
-            { id: 'overview', label: 'Overview', icon: <BarChart3 className="w-4 h-4" /> },
-            { id: 'sales', label: 'Sales Analytics', icon: <TrendingUp className="w-4 h-4" /> },
-            { id: 'agents', label: 'Agent Performance', icon: <Users className="w-4 h-4" /> },
-            { id: 'products', label: 'Product Analysis', icon: <Package className="w-4 h-4" /> },
-            { id: 'inventory', label: 'Inventory Reports', icon: <PackageCheck className="w-4 h-4" /> },
-            { id: 'predictions', label: 'AI Predictions', icon: <Brain className="w-4 h-4" /> },
-          ].map((tab) => (
+        <div className="sm:hidden pb-3">
+          <select
+            value={viewMode}
+            onChange={(e) => setViewMode(e.target.value as ViewMode)}
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+          >
+            {reportTabs.map((tab) => (
+              <option key={tab.id} value={tab.id}>{tab.label}</option>
+            ))}
+          </select>
+        </div>
+        <nav className="hidden sm:flex gap-4 lg:gap-8 overflow-x-auto">
+          {reportTabs.map((tab) => (
             <button
               key={tab.id}
               onClick={() => setViewMode(tab.id as ViewMode)}
@@ -1266,7 +1278,35 @@ export function ReportsPage() {
               <CardTitle>Detailed Monthly Sales Data</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="overflow-x-auto">
+              <div className="md:hidden space-y-3">
+                {MOCK_SALES_REPORT.slice(-6).reverse().map((report, index) => (
+                  <div key={index} className="border border-gray-200 rounded-lg p-4 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-gray-500">Period</span>
+                      <span className="font-medium text-gray-900">{report.period}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-gray-500">Revenue</span>
+                      <span className="font-bold text-blue-600">{formatCurrency(report.revenue)}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-gray-500">Orders</span>
+                      <span className="text-gray-900">{report.orders.toLocaleString()}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-gray-500">Avg Order Value</span>
+                      <span className="text-gray-900">₱{report.avgOrderValue.toLocaleString()}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-gray-500">Growth</span>
+                      <span className={`font-medium ${getGrowthColor(report.growth)}`}>
+                        {report.growth > 0 ? '+' : ''}{report.growth.toFixed(1)}%
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="hidden md:block overflow-x-auto">
                 <table className="w-full">
                   <thead className="bg-gray-50 border-b border-gray-200">
                     <tr>
@@ -1423,7 +1463,37 @@ export function ReportsPage() {
               <CardTitle>Detailed Agent Performance Metrics</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="overflow-x-auto">
+              <div className="md:hidden space-y-3">
+                {MOCK_AGENT_PERFORMANCE.map((agent, index) => (
+                  <div key={index} className="border border-gray-200 rounded-lg p-4 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-gray-500">Agent</span>
+                      <span className="font-medium text-gray-900">{agent.name}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-gray-500">Sales / Target</span>
+                      <span className="text-sm text-gray-900">{formatCurrency(agent.sales)} / {formatCurrency(agent.target)}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-gray-500">Orders / Customers</span>
+                      <span className="text-sm text-gray-900">{agent.orders} / {agent.customers}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-gray-500">Commission</span>
+                      <span className="font-medium text-green-600">₱{agent.commission.toLocaleString()}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-gray-500">Status</span>
+                      <Badge variant={getPerformanceColor(agent.performance)}>
+                        {agent.performance >= 100 ? 'Exceeding' :
+                         agent.performance >= 80 ? 'On Track' :
+                         'Below Target'}
+                      </Badge>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="hidden md:block overflow-x-auto">
                 <table className="w-full">
                   <thead className="bg-gray-50 border-b border-gray-200">
                     <tr>
@@ -1598,7 +1668,34 @@ export function ReportsPage() {
               <CardTitle>Detailed Product Performance Metrics</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="overflow-x-auto">
+              <div className="md:hidden space-y-3">
+                {MOCK_PRODUCT_PERFORMANCE.map((product, index) => (
+                  <div key={index} className="border border-gray-200 rounded-lg p-4 space-y-2">
+                    <div className="text-sm font-medium text-gray-900">{product.product}</div>
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      <div>
+                        <div className="text-xs text-gray-500">Units Sold</div>
+                        <div className="text-gray-900">{product.unitsSold.toLocaleString()}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-gray-500">Revenue</div>
+                        <div className="font-bold text-blue-600">{formatCurrency(product.revenue)}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-gray-500">Growth</div>
+                        <div className={`font-medium ${getGrowthColor(product.growth)}`}>
+                          {product.growth > 0 ? '+' : ''}{product.growth.toFixed(1)}%
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-gray-500">Margin</div>
+                        <div className="text-gray-900">{product.margin}%</div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="hidden md:block overflow-x-auto">
                 <table className="w-full">
                   <thead className="bg-gray-50 border-b border-gray-200">
                     <tr>
@@ -1669,7 +1766,59 @@ export function ReportsPage() {
               <CardTitle>Current Inventory Status</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="overflow-x-auto">
+              <div className="md:hidden space-y-3">
+                {MOCK_STOCK_PREDICTIONS.map((stock, index) => (
+                  <div key={index} className="border border-gray-200 rounded-lg p-4 space-y-2">
+                    <div className="text-sm font-medium text-gray-900">{stock.material}</div>
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      <div>
+                        <div className="text-xs text-gray-500">Current Stock</div>
+                        <div className="font-medium text-gray-900">{stock.currentStock.toLocaleString()} kg</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-gray-500">Reorder Point</div>
+                        <div className="text-orange-600">{stock.reorderPoint.toLocaleString()} kg</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-gray-500">Avg Consumption</div>
+                        <div className="text-gray-900">{stock.avgConsumption.toLocaleString()} kg/day</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-gray-500">Days Remaining</div>
+                        <div className={`font-medium ${
+                          stock.daysRemaining <= 7 ? 'text-red-600' :
+                          stock.daysRemaining <= 14 ? 'text-orange-600' :
+                          'text-green-600'
+                        }`}>
+                          {stock.daysRemaining} days
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <Badge variant={getStockStatusColor(stock.status)}>
+                        {stock.status === 'Critical' && <AlertTriangle className="w-3 h-3 mr-1" />}
+                        {stock.status === 'Warning' && <Clock className="w-3 h-3 mr-1" />}
+                        {stock.status === 'Safe' && <CheckCircle className="w-3 h-3 mr-1" />}
+                        {stock.status}
+                      </Badge>
+                      {stock.status === 'Critical' ? (
+                        <Button variant="primary" size="sm">
+                          <AlertTriangle className="w-3 h-3 mr-1" />
+                          Order Now
+                        </Button>
+                      ) : stock.status === 'Warning' ? (
+                        <Button variant="outline" size="sm">
+                          <Clock className="w-3 h-3 mr-1" />
+                          Plan Order
+                        </Button>
+                      ) : (
+                        <span className="text-sm text-gray-500">No action needed</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="hidden md:block overflow-x-auto">
                 <table className="w-full">
                   <thead className="bg-gray-50 border-b border-gray-200">
                     <tr>

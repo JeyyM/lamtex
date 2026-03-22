@@ -308,11 +308,11 @@ export function PurchaseRequestsPage() {
   // Create mode - Complete form implementation
   if (isCreateMode) {
     return (
-      <div className="space-y-6">
+      <div className="space-y-4 sm:space-y-6 p-3 sm:p-4 md:p-6">
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Create Purchase Request</h1>
+            <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Create Purchase Request</h1>
             <p className="text-sm text-gray-500 mt-1">
               Submit a new material procurement request
             </p>
@@ -459,15 +459,16 @@ export function PurchaseRequestsPage() {
               </div>
 
               {/* Form Actions */}
-              <div className="flex justify-end gap-3 pt-6 border-t">
+              <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-6 border-t">
                 <Button
                   type="button"
                   variant="outline"
+                  className="w-full sm:w-auto"
                   onClick={() => navigate(materialId ? `/materials/${materialId}` : '/materials')}
                 >
                   Cancel
                 </Button>
-                <Button type="submit" variant="primary">
+                <Button type="submit" variant="primary" className="w-full sm:w-auto">
                   <Plus className="w-4 h-4 mr-2" />
                   Submit Request
                 </Button>
@@ -481,22 +482,22 @@ export function PurchaseRequestsPage() {
 
   // Main list view
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6 p-3 sm:p-4 md:p-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Purchase Requests</h1>
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Purchase Requests</h1>
           <p className="text-sm text-gray-500 mt-1">
             Manage material procurement requests across branches
           </p>
         </div>
         {isBoss && (
-          <div className="flex gap-2">
-            <Button variant="outline">
+          <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+            <Button variant="outline" className="w-full sm:w-auto">
               <Download className="w-4 h-4 mr-2" />
               Export
             </Button>
-            <Button variant="primary" onClick={() => navigate('/materials')}>
+            <Button variant="primary" onClick={() => navigate('/materials')} className="w-full sm:w-auto">
               <Plus className="w-4 h-4 mr-2" />
               New Request
             </Button>
@@ -505,7 +506,7 @@ export function PurchaseRequestsPage() {
       </div>
 
       {/* KPI Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center gap-3">
@@ -620,7 +621,106 @@ export function PurchaseRequestsPage() {
         </CardHeader>
         <CardContent className="p-0">
           {filteredRequests.length > 0 ? (
-            <div className="overflow-x-auto">
+            <>
+              <div className="md:hidden divide-y divide-gray-200">
+                {filteredRequests.map((request) => {
+                  const delayed = isDelayed(request);
+                  const statusConfig = getStatusBadgeConfig(request.status);
+
+                  return (
+                    <div key={request.id} className="p-4 space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="font-mono text-sm font-medium text-blue-600">{request.id}</div>
+                          <div className="text-sm font-medium text-gray-900 mt-1">{request.material}</div>
+                        </div>
+                        <Badge variant="outline">Branch {request.branch}</Badge>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3 text-sm">
+                        <div>
+                          <p className="text-gray-500">Quantity</p>
+                          <p className="font-medium text-gray-900">{request.quantity.toLocaleString()}</p>
+                        </div>
+                        <div>
+                          <p className="text-gray-500">Requester</p>
+                          <p className="font-medium text-gray-900">{request.requestedBy}</p>
+                        </div>
+                        <div>
+                          <p className="text-gray-500">Reason</p>
+                          <Badge variant={getReasonBadgeVariant(request.reason)}>{request.reason}</Badge>
+                        </div>
+                        <div>
+                          <p className="text-gray-500">Expected Arrival</p>
+                          <p className="font-medium text-gray-900">
+                            {new Date(request.expectedArrival).toLocaleDateString('en-US', {
+                              year: 'numeric',
+                              month: 'short',
+                              day: 'numeric',
+                            })}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant={statusConfig.variant} className={statusConfig.className}>
+                          {request.status}
+                        </Badge>
+                        {delayed && (
+                          <Badge variant="danger" className="flex items-center gap-1">
+                            <AlertTriangle className="w-3 h-3" />
+                            Delayed
+                          </Badge>
+                        )}
+                      </div>
+
+                      {isBoss && (
+                        <div className="flex flex-wrap gap-2 pt-2 border-t border-gray-100">
+                          {request.status === PurchaseRequestStatus.PENDING_APPROVAL && (
+                            <>
+                              <Button variant="success" size="sm" onClick={() => handleApprove(request.id)} className="flex-1 sm:flex-none">
+                                Approve
+                              </Button>
+                              <Button variant="danger" size="sm" onClick={() => handleReject(request.id)} className="flex-1 sm:flex-none">
+                                Reject
+                              </Button>
+                            </>
+                          )}
+
+                          {request.status === PurchaseRequestStatus.APPROVED && (
+                            <>
+                              <Button variant="primary" size="sm" onClick={() => handleConvertToPO(request.id)} className="flex-1 sm:flex-none">
+                                Convert to PO
+                              </Button>
+                              <Button variant="danger" size="sm" onClick={() => handleReject(request.id)} className="flex-1 sm:flex-none">
+                                Reject
+                              </Button>
+                            </>
+                          )}
+
+                          {request.status === PurchaseRequestStatus.ORDERED && (
+                            <Button variant="outline" size="sm" onClick={() => handleFollowUp(request.id)} className="w-full sm:w-auto">
+                              Follow-Up Supplier
+                            </Button>
+                          )}
+
+                          {request.status === PurchaseRequestStatus.REJECTED && (
+                            <Button variant="outline" size="sm" onClick={() => handleUndoReject(request.id)} className="w-full sm:w-auto">
+                              Undo Reject
+                            </Button>
+                          )}
+
+                          {request.status === PurchaseRequestStatus.RECEIVED && (
+                            <span className="text-gray-400 text-xs">No actions</span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="hidden md:block overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b">
                   <tr>
@@ -767,7 +867,8 @@ export function PurchaseRequestsPage() {
                   })}
                 </tbody>
               </table>
-            </div>
+              </div>
+            </>
           ) : (
             <div className="flex flex-col items-center justify-center py-12">
               <Package className="w-12 h-12 text-gray-300 mb-4" />

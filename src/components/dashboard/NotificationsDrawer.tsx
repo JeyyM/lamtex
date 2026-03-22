@@ -26,14 +26,14 @@ export function NotificationsDrawer({ isOpen, onClose, notifications, onMarkRead
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       <div className="fixed inset-0 bg-black/20" onClick={onClose} />
-      <div className="w-96 bg-white h-full shadow-xl flex flex-col relative z-10 transform transition-transform duration-300">
-        <div className="p-4 border-b border-gray-200 flex items-center justify-between bg-gray-50">
+      <div className="w-full md:w-96 bg-white h-full shadow-xl flex flex-col relative z-10 transform transition-transform duration-300">
+        <div className="p-4 md:p-5 border-b border-gray-200 flex items-center justify-between bg-gray-50">
           <h2 className="text-lg font-semibold text-gray-900">Notifications</h2>
           <Button variant="ghost" size="sm" onClick={onClose}>
             <X className="w-5 h-5" />
           </Button>
         </div>
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="flex-1 overflow-y-auto p-4 md:p-5 space-y-4">
           {notifications.map((notif) => (
             <div 
               key={notif.id} 

@@ -163,13 +163,13 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl max-w-5xl w-full max-h-[90vh] flex flex-col shadow-xl">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-0 sm:p-4">
+      <div className="bg-white w-full h-full sm:h-auto rounded-none sm:rounded-xl max-h-screen sm:max-h-[90vh] sm:max-w-5xl flex flex-col shadow-xl">
         {/* Header */}
-        <div className="p-6 border-b border-gray-200">
+        <div className="p-4 sm:p-6 border-b border-gray-200">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h2 className="text-2xl font-bold text-gray-900">Image Gallery</h2>
+              <h2 className="text-xl sm:text-2xl font-bold text-gray-900">Image Gallery</h2>
               <p className="text-sm text-gray-500 mt-1">
                 Select images for your product
               </p>
@@ -183,7 +183,7 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
           </div>
 
           {/* Search and Upload */}
-          <div className="flex gap-3">
+          <div className="flex flex-col sm:flex-row gap-3">
             <div className="flex-1 relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
               <input 
@@ -197,7 +197,7 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
             <button 
               onClick={handleFileSelect}
               disabled={uploading}
-              className="flex items-center gap-2 px-4 py-2.5 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Upload className="w-4 h-4" />
               {uploading ? 'Uploading...' : 'Upload New'}
@@ -206,7 +206,7 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
         </div>
 
         {/* Gallery Grid */}
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6">
           {loading ? (
             <div className="flex items-center justify-center h-64">
               <div className="text-center">
@@ -236,7 +236,7 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
               )}
             </div>
           ) : (
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
               {filteredImages.map((image) => {
                 const selectionIndex = getImageSelectionIndex(image.url);
                 const isSelected = isImageSelected(image.url);
@@ -295,8 +295,8 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="p-6 border-t border-gray-200 bg-gray-50 flex items-center justify-between rounded-b-xl">
-          <div className="text-sm text-gray-600">
+        <div className="p-4 sm:p-6 border-t border-gray-200 bg-gray-50 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:rounded-b-xl">
+          <div className="text-sm text-gray-600 text-center sm:text-left">
             <span className="font-medium">{filteredImages.length}</span> {filteredImages.length === 1 ? 'image' : 'images'} available
             {isMultiSelect ? (
               <span className="ml-3">
@@ -309,17 +309,17 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
               )
             )}
           </div>
-          <div className="flex gap-3">
+          <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
             <button 
               onClick={onClose}
-              className="px-5 py-2.5 rounded-lg border border-gray-300 bg-white font-medium text-gray-700 hover:bg-gray-50 transition-all"
+              className="w-full sm:w-auto px-5 py-2.5 rounded-lg border border-gray-300 bg-white font-medium text-gray-700 hover:bg-gray-50 transition-all"
             >
               Cancel
             </button>
             <button 
               onClick={handleConfirm}
               disabled={isMultiSelect ? selectedImagesOrder.length === 0 : !selectedImage}
-              className="px-5 py-2.5 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full sm:w-auto px-5 py-2.5 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isMultiSelect 
                 ? `Use ${selectedImagesOrder.length} Image${selectedImagesOrder.length !== 1 ? 's' : ''}`

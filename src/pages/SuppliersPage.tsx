@@ -383,35 +383,37 @@ export function SuppliersPage() {
   const COLORS = ['#EF4444', '#F59E0B', '#10B981', '#3B82F6', '#8B5CF6'];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Supplier Management</h1>
-          <p className="text-sm text-gray-500 mt-1">
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Supplier Management</h1>
+          <p className="text-xs sm:text-sm text-gray-500 mt-1">
             Track purchases, spending patterns & supplier performance for <span className="font-medium text-gray-700">{branch}</span>
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          <Button variant="outline" onClick={() => navigate('/reports')}>
-            <BarChart3 className="w-4 h-4 mr-2" />
-            Procurement Reports
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+          <Button variant="outline" onClick={() => navigate('/reports')} className="gap-2">
+            <BarChart3 className="w-4 h-4" />
+            <span className="hidden sm:inline">Procurement Reports</span>
+            <span className="sm:hidden">Reports</span>
           </Button>
-          <Button variant="primary">
-            <Plus className="w-4 h-4 mr-2" />
-            Add New Supplier
+          <Button variant="primary" className="gap-2">
+            <Plus className="w-4 h-4" />
+            <span className="hidden sm:inline">Add New Supplier</span>
+            <span className="sm:hidden">Add</span>
           </Button>
         </div>
       </div>
 
       {/* Quick Stats */}
-      <div className="grid grid-cols-2 min-[600px]:grid-cols-3 min-[1500px]:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 2xl:grid-cols-5 gap-3 sm:gap-4">
         <Card>
-          <CardContent className="p-4">
+          <CardContent className="p-3 sm:p-4 md:p-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-gray-500">Total Suppliers</p>
-                <p className="text-2xl font-bold text-gray-900 mt-1">{MOCK_SUPPLIERS.length}</p>
+                <p className="text-xs sm:text-sm text-gray-500">Total Suppliers</p>
+                <p className="text-xl sm:text-2xl font-bold text-gray-900 mt-1">{MOCK_SUPPLIERS.length}</p>
               </div>
               <div className="p-3 bg-blue-100 rounded-lg">
                 <Factory className="w-6 h-6 text-blue-600" />
@@ -420,11 +422,11 @@ export function SuppliersPage() {
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="p-4">
+          <CardContent className="p-3 sm:p-4 md:p-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-gray-500">Preferred Suppliers</p>
-                <p className="text-2xl font-bold text-gray-900 mt-1">
+                <p className="text-xs sm:text-sm text-gray-500">Preferred Suppliers</p>
+                <p className="text-xl sm:text-2xl font-bold text-gray-900 mt-1">
                   {MOCK_SUPPLIERS.filter(s => s.preferredSupplier).length}
                 </p>
               </div>
@@ -435,11 +437,11 @@ export function SuppliersPage() {
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="p-4">
+          <CardContent className="p-3 sm:p-4 md:p-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-gray-500">YTD Spending</p>
-                <p className="text-2xl font-bold text-gray-900 mt-1">
+                <p className="text-xs sm:text-sm text-gray-500">YTD Spending</p>
+                <p className="text-xl sm:text-2xl font-bold text-gray-900 mt-1">
                   {formatCurrency(MOCK_SUPPLIERS.reduce((sum, s) => sum + s.totalPurchasesYTD, 0))}
                 </p>
               </div>
@@ -450,11 +452,11 @@ export function SuppliersPage() {
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="p-4">
+          <CardContent className="p-3 sm:p-4 md:p-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-gray-500">Total Orders YTD</p>
-                <p className="text-2xl font-bold text-gray-900 mt-1">
+                <p className="text-xs sm:text-sm text-gray-500">Total Orders YTD</p>
+                <p className="text-xl sm:text-2xl font-bold text-gray-900 mt-1">
                   {MOCK_SUPPLIERS.reduce((sum, s) => sum + s.orderCount, 0)}
                 </p>
               </div>
@@ -465,11 +467,11 @@ export function SuppliersPage() {
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="p-4">
+          <CardContent className="p-3 sm:p-4 md:p-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-gray-500">Avg Performance</p>
-                <p className="text-2xl font-bold text-gray-900 mt-1">
+                <p className="text-xs sm:text-sm text-gray-500">Avg Performance</p>
+                <p className="text-xl sm:text-2xl font-bold text-gray-900 mt-1">
                   {Math.round(MOCK_SUPPLIERS.reduce((sum, s) => sum + s.performanceScore, 0) / MOCK_SUPPLIERS.length)}
                 </p>
               </div>
@@ -481,8 +483,8 @@ export function SuppliersPage() {
         </Card>
       </div>
 
-      {/* View Mode Tabs - Desktop (>750px) */}
-      <div className="border-b border-gray-200 max-[750px]:hidden">
+      {/* View Mode Tabs - Desktop (md and up) */}
+      <div className="hidden md:block border-b border-gray-200">
         <nav className="flex gap-8">
           {[
             { id: 'overview', label: 'Supplier Overview', icon: <Factory className="w-4 h-4" /> },
@@ -508,8 +510,8 @@ export function SuppliersPage() {
         </nav>
       </div>
 
-      {/* View Mode Tabs - Mobile dropdown (≤750px) */}
-      <div className="min-[751px]:hidden">
+      {/* View Mode Tabs - Mobile dropdown (md and below) */}
+      <div className="md:hidden">
         <div className="relative">
           <select
             value={viewMode}
@@ -532,10 +534,10 @@ export function SuppliersPage() {
         <div className="space-y-6">
           {/* Search and Filters */}
           <Card>
-            <CardContent className="p-4">
-              <div className="flex flex-col gap-4">
-                {/* First row - Search and Type filter */}
-                <div className="flex items-center gap-4">
+            <CardContent className="p-4 sm:p-6">
+              <div className="flex flex-col gap-3 sm:gap-4">
+                {/* Row 1: Search and Type Filter */}
+                <div className="flex flex-col sm:flex-row gap-3 sm:gap-4">
                   <div className="flex-1 relative">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                     <input
@@ -543,13 +545,13 @@ export function SuppliersPage() {
                       placeholder="Search by supplier name, contact person, or category..."
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                      className="w-full pl-10 pr-4 py-2 text-sm sm:text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
                     />
                   </div>
                   <select
                     value={filterType}
                     onChange={(e) => setFilterType(e.target.value)}
-                    className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                    className="px-4 py-2 text-sm sm:text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 bg-white"
                   >
                     <option value="All">All Types</option>
                     <option value="Raw Materials">Raw Materials</option>
@@ -558,45 +560,49 @@ export function SuppliersPage() {
                     <option value="Equipment">Equipment</option>
                     <option value="Services">Services</option>
                   </select>
-                  {/* Risk Levels on desktop (>900px) */}
+                </div>
+                
+                {/* Row 2: Risk Filter, More Filters, Export (Desktop: lg and up) */}
+                <div className="hidden lg:flex gap-3 sm:gap-4 items-stretch">
                   <select
                     value={filterRisk}
                     onChange={(e) => setFilterRisk(e.target.value)}
-                    className="max-[900px]:hidden px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                    className="px-4 py-2 text-sm sm:text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 bg-white"
                   >
                     <option value="All">All Risk Levels</option>
                     <option value="Low">Low Risk</option>
                     <option value="Medium">Medium Risk</option>
                     <option value="High">High Risk</option>
                   </select>
-                  <Button variant="outline" className="max-[900px]:hidden">
-                    <Filter className="w-4 h-4 mr-2" />
-                    More Filters
+                  <Button variant="outline" className="gap-2">
+                    <Filter className="w-4 h-4" />
+                    <span className="hidden sm:inline">More Filters</span>
                   </Button>
-                  <Button variant="outline" className="max-[900px]:hidden">
-                    <Download className="w-4 h-4 mr-2" />
-                    Export
+                  <Button variant="outline" className="gap-2">
+                    <Download className="w-4 h-4" />
+                    <span className="hidden sm:inline">Export</span>
                   </Button>
                 </div>
-                {/* Second row - Risk Levels, More Filters, Export on mobile/tablet (≤900px) */}
-                <div className="min-[901px]:hidden flex items-center gap-4">
+                
+                {/* Row 2 Alternative: Compact mobile/tablet (lg and below) */}
+                <div className="lg:hidden flex flex-col sm:flex-row gap-3 sm:gap-4">
                   <select
                     value={filterRisk}
                     onChange={(e) => setFilterRisk(e.target.value)}
-                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                    className="flex-1 px-4 py-2 text-sm sm:text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 bg-white"
                   >
                     <option value="All">All Risk Levels</option>
                     <option value="Low">Low Risk</option>
                     <option value="Medium">Medium Risk</option>
                     <option value="High">High Risk</option>
                   </select>
-                  <Button variant="outline">
-                    <Filter className="w-4 h-4 mr-2" />
-                    More Filters
+                  <Button variant="outline" className="gap-2">
+                    <Filter className="w-4 h-4" />
+                    <span className="hidden sm:inline">Filters</span>
                   </Button>
-                  <Button variant="outline">
-                    <Download className="w-4 h-4 mr-2" />
-                    Export
+                  <Button variant="outline" className="gap-2">
+                    <Download className="w-4 h-4" />
+                    <span className="hidden sm:inline">Export</span>
                   </Button>
                 </div>
               </div>
@@ -607,11 +613,10 @@ export function SuppliersPage() {
           <div className="grid grid-cols-1 gap-4">
             {filteredSuppliers.map((supplier) => (
               <Card key={supplier.id} className="hover:shadow-lg transition-shadow">
-                <CardContent className="p-6">
-                  {/* Desktop layout (≥1400px) - side by side */}
-                  <div className="max-[1399px]:hidden flex items-start justify-between">
-                    {/* Supplier Info */}
-                    <div className="flex items-start gap-4 flex-1">
+                <CardContent className="p-4 sm:p-6">
+                  {/* Mobile/Tablet Stack (xl and below) */}
+                  <div className="xl:hidden">
+                    <div className="flex items-start justify-between mb-4 gap-4">
                       <div className={`p-3 rounded-lg ${
                         supplier.type === 'Raw Materials' ? 'bg-blue-100' :
                         supplier.type === 'Chemicals' ? 'bg-purple-100' :
@@ -706,11 +711,10 @@ export function SuppliersPage() {
                     </div>
                   </div>
 
-                  {/* Mobile/Tablet layout (<1400px) - stacked */}
-                  <div className="min-[1400px]:hidden">
-                    <div className="flex items-start justify-between mb-4">
-                      {/* Supplier Info */}
-                      <div className="flex items-start gap-4 flex-1">
+                  {/* Desktop Side-by-side (xl and up) */}
+                  <div className="hidden xl:flex items-start justify-between">
+                    {/* Supplier Info */}
+                    <div className="flex items-start gap-4 flex-1">
                         <div className={`p-3 rounded-lg ${
                           supplier.type === 'Raw Materials' ? 'bg-blue-100' :
                           supplier.type === 'Chemicals' ? 'bg-purple-100' :
@@ -728,10 +732,10 @@ export function SuppliersPage() {
                         </div>
                         <div className="flex-1">
                           <div className="mb-2">
-                            <div className="flex items-center gap-3">
-                              <h3 className="text-lg font-bold text-gray-900">{supplier.name}</h3>
-                              {/* Badges on desktop (≥1200px) */}
-                              <div className="max-[1199px]:hidden flex items-center gap-2">
+                            <div className="flex items-center gap-3 flex-wrap">
+                              <h3 className="text-base sm:text-lg font-bold text-gray-900">{supplier.name}</h3>
+                              {/* Badges on desktop (lg and up) */}
+                              <div className="hidden lg:flex items-center gap-2">
                                 {supplier.preferredSupplier && (
                                   <Badge variant="success">
                                     <Award className="w-3 h-3 mr-1" />
@@ -743,8 +747,8 @@ export function SuppliersPage() {
                                 <span className="text-xs text-gray-500">{supplier.id}</span>
                               </div>
                             </div>
-                            {/* Badges on mobile/tablet (<1200px) */}
-                            <div className="min-[1200px]:hidden flex items-center gap-2 mt-2">
+                            {/* Badges on mobile/tablet (lg and below) */}
+                            <div className="lg:hidden flex flex-wrap items-center gap-2 mt-2">
                               {supplier.preferredSupplier && (
                                 <Badge variant="success">
                                   <Award className="w-3 h-3 mr-1" />
@@ -806,11 +810,10 @@ export function SuppliersPage() {
                         </div>
                       </div>
                     </div>
-                  </div>
 
                   {/* Performance & Financial Summary */}
                   <div className="mt-6 pt-6 border-t border-gray-200">
-                    <div className="grid grid-cols-2 md:grid-cols-3 min-[1400px]:grid-cols-6 gap-4 mb-4">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3 sm:gap-4 mb-4">
                       <div>
                         <div className="text-xs text-gray-500 mb-1">YTD Spending</div>
                         <div className="text-sm font-bold text-blue-600">
@@ -844,7 +847,7 @@ export function SuppliersPage() {
                     </div>
 
                     {/* Key Metrics Bar */}
-                    <div className="grid grid-cols-2 min-[800px]:grid-cols-3 gap-4">
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4">
                       <div>
                         <div className="flex items-center justify-between text-xs mb-1">
                           <span className="text-gray-500">On-Time Delivery</span>

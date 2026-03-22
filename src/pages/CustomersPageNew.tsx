@@ -185,8 +185,8 @@ export function CustomersPage() {
       {/* Search and Filters */}
       <Card>
         <CardHeader>
-          <div className="flex items-center gap-4">
-            <div className="relative flex-1 max-w-md">
+          <div className="flex flex-col md:flex-row md:items-center gap-3 md:gap-4">
+            <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
               <input
                 type="text"
@@ -196,14 +196,15 @@ export function CustomersPage() {
                 className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
               />
             </div>
-            <Button variant="outline" size="sm" className="gap-2">
+            <Button variant="outline" size="sm" className="gap-2 w-full md:w-auto">
               <Filter className="w-4 h-4" />
               More Filters
             </Button>
           </div>
         </CardHeader>
         <CardContent className="p-0">
-          <div className="overflow-x-auto">
+          {/* Desktop Table View */}
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b border-gray-200">
                 <tr>
@@ -332,6 +333,84 @@ export function CustomersPage() {
                 )}
               </tbody>
             </table>
+          </div>
+
+          {/* Mobile Card View */}
+          <div className="md:hidden divide-y divide-gray-200">
+            {filteredCustomers.map((customer) => (
+              <div key={customer.id} className="p-4 space-y-3 hover:bg-gray-50 cursor-pointer" onClick={() => handleViewCustomer(customer)}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="font-medium text-gray-900 break-words">{customer.name}</p>
+                    <p className="text-xs text-gray-500 mt-1">{customer.id}</p>
+                  </div>
+                  <Badge variant={getRiskBadgeVariant(customer.riskLevel)} className="flex-shrink-0">
+                    {customer.riskLevel}
+                  </Badge>
+                </div>
+                
+                <div className="flex items-center gap-2">
+                  <Badge variant="default">{customer.type}</Badge>
+                  {customer.overdueAmount > 0 && (
+                    <Badge variant="danger">Overdue</Badge>
+                  )}
+                </div>
+                
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <p className="text-xs text-gray-500">Contact Person</p>
+                    <p className="text-gray-900 font-medium">{customer.contactPerson}</p>
+                    <p className="text-xs text-gray-600">{customer.phone}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500">Outstanding</p>
+                    <p className={`font-semibold ${customer.overdueAmount > 0 ? 'text-red-600' : 'text-gray-900'}`}>
+                      ₱{(customer.outstandingBalance / 1000).toFixed(0)}K
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500">YTD Sales</p>
+                    <p className="text-gray-900 font-medium">₱{(customer.totalPurchasesYTD / 1000000).toFixed(1)}M</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500">Last Order</p>
+                    <p className="text-gray-900">{customer.lastOrderDate || 'Never'}</p>
+                  </div>
+                </div>
+                
+                <div className="flex gap-2 pt-2">
+                  <Button 
+                    variant="primary" 
+                    size="sm"
+                    className="flex-1"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleViewCustomer(customer);
+                    }}
+                  >
+                    <Eye className="w-4 h-4" />
+                  </Button>
+                  <Button 
+                    variant="outline" 
+                    size="sm"
+                    className="flex-1"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      navigate(`/customers/${customer.id}/edit`);
+                    }}
+                  >
+                    <Edit className="w-4 h-4" />
+                  </Button>
+                </div>
+              </div>
+            ))}
+            {filteredCustomers.length === 0 && (
+              <div className="px-4 py-12 text-center text-gray-500">
+                <Building2 className="w-12 h-12 mx-auto mb-3 text-gray-400" />
+                <p className="font-medium">No customers found</p>
+                <p className="text-sm mt-1">Try adjusting your search or filters</p>
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>

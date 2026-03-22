@@ -144,31 +144,39 @@ export function TruckDetailPage() {
     return 'bg-white';
   };
 
+  const tabs = [
+    { id: 'overview' as TabMode, label: 'Overview', icon: <FileText className="w-4 h-4" /> },
+    { id: 'trips' as TabMode, label: 'Trip History', icon: <MapPin className="w-4 h-4" /> },
+    { id: 'schedule' as TabMode, label: 'Schedule', icon: <Calendar className="w-4 h-4" /> },
+    { id: 'maintenance' as TabMode, label: 'Maintenance', icon: <Wrench className="w-4 h-4" /> },
+    { id: 'performance' as TabMode, label: 'Performance', icon: <TrendingUp className="w-4 h-4" /> },
+  ];
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 w-full max-w-full overflow-x-hidden px-4 md:px-6">
       {/* Header with Back Button */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Button variant="outline" onClick={() => navigate('/logistics')}>
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 w-full max-w-full">
+        <div className="flex flex-col sm:flex-row sm:items-start gap-3 md:gap-4 min-w-0">
+          <Button variant="outline" onClick={() => navigate('/logistics')} className="w-full sm:w-auto justify-center">
             <ArrowLeft className="w-4 h-4 mr-2" />
             Back to Fleet
           </Button>
-          <div>
-            <div className="flex items-center gap-3">
-              <h1 className="text-2xl font-bold text-gray-900">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+              <h1 className="text-xl md:text-2xl font-bold text-gray-900 break-words min-w-0">
                 {truck.vehicleId} - {truck.vehicleName}
               </h1>
-              <Badge variant={getStatusColor(truck.status)}>{truck.status}</Badge>
+              <Badge variant={getStatusColor(truck.status)} className="flex-shrink-0">{truck.status}</Badge>
             </div>
-            <p className="text-sm text-gray-500 mt-1">{truck.plateNumber} • {truck.make} {truck.model}</p>
+            <p className="text-sm text-gray-500 mt-1 break-words">{truck.plateNumber} • {truck.make} {truck.model}</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
+          <Button variant="outline" size="sm" className="w-full sm:w-auto justify-center">
             <Edit className="w-4 h-4 mr-2" />
             Edit Details
           </Button>
-          <Button variant="outline" size="sm">
+          <Button variant="outline" size="sm" className="w-full sm:w-auto justify-center">
             <Calendar className="w-4 h-4 mr-2" />
             Schedule Trip
           </Button>
@@ -273,15 +281,20 @@ export function TruckDetailPage() {
       )}
 
       {/* Tabs */}
-      <div className="border-b border-gray-200">
-        <nav className="flex gap-8">
-          {[
-            { id: 'overview', label: 'Overview', icon: <FileText className="w-4 h-4" /> },
-            { id: 'trips', label: 'Trip History', icon: <MapPin className="w-4 h-4" /> },
-            { id: 'schedule', label: 'Schedule', icon: <Calendar className="w-4 h-4" /> },
-            { id: 'maintenance', label: 'Maintenance', icon: <Wrench className="w-4 h-4" /> },
-            { id: 'performance', label: 'Performance', icon: <TrendingUp className="w-4 h-4" /> },
-          ].map((tab) => (
+      <div className="border-b border-gray-200 w-full max-w-full">
+        <div className="md:hidden pb-3">
+          <select
+            value={activeTab}
+            onChange={(e) => setActiveTab(e.target.value as TabMode)}
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+          >
+            {tabs.map((tab) => (
+              <option key={tab.id} value={tab.id}>{tab.label}</option>
+            ))}
+          </select>
+        </div>
+        <nav className="hidden md:flex gap-6 lg:gap-8">
+          {tabs.map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id as TabMode)}
@@ -301,7 +314,7 @@ export function TruckDetailPage() {
       </div>
 
       {/* Tab Content */}
-      <div>
+      <div className="w-full max-w-full min-w-0">
         {/* OVERVIEW TAB */}
         {activeTab === 'overview' && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -313,13 +326,13 @@ export function TruckDetailPage() {
                   <CardTitle>Vehicle Specifications</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="grid grid-cols-2 gap-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div>
                       <p className="text-sm text-gray-500 mb-4">Basic Information</p>
                       <div className="space-y-3">
-                        <div className="flex justify-between">
+                        <div className="flex justify-between gap-3">
                           <span className="text-sm text-gray-600">Type</span>
-                          <span className="text-sm font-medium text-gray-900">{truck.type}</span>
+                          <span className="text-sm font-medium text-gray-900 text-right break-words min-w-0">{truck.type}</span>
                         </div>
                         <div className="flex justify-between">
                           <span className="text-sm text-gray-600">Make</span>
@@ -394,7 +407,7 @@ export function TruckDetailPage() {
                   <CardTitle>Registration & Acquisition</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="grid grid-cols-2 gap-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div>
                       <p className="text-sm text-gray-500 mb-4">Registration Details</p>
                       <div className="space-y-3">
@@ -452,7 +465,7 @@ export function TruckDetailPage() {
                   <CardTitle>Financial Summary (Recent Trips)</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="grid grid-cols-4 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
                     <div className="p-4 bg-green-50 rounded-lg border border-green-200">
                       <p className="text-sm text-green-600 mb-1">Total Revenue</p>
                       <p className="text-xl font-bold text-green-900">₱{totalRevenue.toLocaleString()}</p>
@@ -565,19 +578,19 @@ export function TruckDetailPage() {
                 <CardContent>
                   <div className="space-y-3">
                     {drivers.map(driver => (
-                      <div key={driver.driverId} className="flex items-center justify-between p-2 rounded hover:bg-gray-50">
-                        <div className="flex items-center gap-3">
+                      <div key={driver.driverId} className="flex items-center justify-between gap-2 p-2 rounded hover:bg-gray-50 min-w-0">
+                        <div className="flex items-center gap-3 min-w-0">
                           <div className="w-8 h-8 bg-gray-100 rounded-full flex items-center justify-center">
                             <User className="w-4 h-4 text-gray-600" />
                           </div>
-                          <div>
+                          <div className="min-w-0">
                             <p className="text-sm font-medium text-gray-900 flex items-center gap-2">
                               {driver.driverName}
                               {driver.isPrimary && (
                                 <Star className="w-3 h-3 text-yellow-500 fill-yellow-500" />
                               )}
                             </p>
-                            <p className="text-xs text-gray-500">{driver.totalTrips} trips • {driver.onTimeRate}% OTR</p>
+                            <p className="text-xs text-gray-500 break-words">{driver.totalTrips} trips • {driver.onTimeRate}% OTR</p>
                           </div>
                         </div>
                       </div>
@@ -595,19 +608,19 @@ export function TruckDetailPage() {
             {/* Filters */}
             <Card>
               <CardContent className="p-4">
-                <div className="flex items-center gap-4">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-3 md:gap-4 w-full">
                   <select
                     value={tripFilter}
                     onChange={(e) => setTripFilter(e.target.value)}
-                    className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500"
+                    className="w-full sm:w-auto px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500"
                   >
                     <option value="All">All Status</option>
                     <option value="Completed">Completed</option>
                     <option value="Delayed">Delayed</option>
                     <option value="Failed">Failed</option>
                   </select>
-                  <div className="flex-1" />
-                  <Button variant="outline" size="sm">
+                  <div className="hidden sm:block flex-1" />
+                  <Button variant="outline" size="sm" className="w-full sm:w-auto justify-center">
                     <Download className="w-4 h-4 mr-2" />
                     Export
                   </Button>
@@ -621,7 +634,7 @@ export function TruckDetailPage() {
                 <CardTitle>Trip History ({filteredTrips.length} trips)</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="overflow-x-auto">
+                <div className="hidden md:block">
                   <table className="w-full">
                     <thead>
                       <tr className="border-b border-gray-200">
@@ -667,6 +680,50 @@ export function TruckDetailPage() {
                     </tbody>
                   </table>
                 </div>
+
+                <div className="md:hidden divide-y divide-gray-200">
+                  {filteredTrips.map((trip) => (
+                    <div key={trip.id} className="p-4 space-y-3 w-full">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <button className="text-sm font-medium text-blue-600 hover:text-blue-700 break-words text-left">
+                            {trip.tripNumber}
+                          </button>
+                          <p className="text-xs text-gray-500 mt-1 break-words">{trip.date} • {trip.driverName}</p>
+                        </div>
+                        <Badge variant={trip.status === 'Completed' ? 'success' : trip.status === 'Delayed' ? 'warning' : 'danger'} className="flex-shrink-0">
+                          {trip.status}
+                        </Badge>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3 text-sm">
+                        <div className="col-span-2 min-w-0">
+                          <p className="text-xs text-gray-500">Route</p>
+                          <p className="text-gray-900 break-words">{trip.route.join(' → ')}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500">Orders</p>
+                          <p className="text-gray-900">{trip.ordersCount}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500">Distance</p>
+                          <p className="text-gray-900">{trip.distance} km</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500">Duration</p>
+                          <p className="text-gray-900">{trip.duration}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500">Fuel</p>
+                          <p className="text-gray-900">{trip.fuelUsed}L</p>
+                        </div>
+                        <div className="col-span-2">
+                          <p className="text-xs text-gray-500">Revenue</p>
+                          <p className="text-gray-900 font-medium">₱{trip.revenue.toLocaleString()}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </CardContent>
             </Card>
           </div>
@@ -677,9 +734,9 @@ export function TruckDetailPage() {
           <div className="space-y-6">
             <Card>
               <CardHeader>
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                   <CardTitle>February 2026</CardTitle>
-                  <div className="flex items-center gap-4 text-sm">
+                  <div className="flex flex-wrap items-center gap-3 text-sm">
                     <div className="flex items-center gap-2">
                       <div className="w-4 h-4 bg-blue-100 border border-blue-300 rounded" />
                       <span className="text-gray-600">On Trip</span>
@@ -696,7 +753,7 @@ export function TruckDetailPage() {
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-7 gap-2">
+                <div className="grid grid-cols-7 gap-1 sm:gap-2">
                   {/* Day headers */}
                   {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
                     <div key={day} className="text-center text-sm font-medium text-gray-600 py-2">
@@ -712,7 +769,7 @@ export function TruckDetailPage() {
                     return (
                       <div
                         key={index}
-                        className={`min-h-[80px] p-2 border rounded-lg ${colorClass} ${
+                        className={`min-h-[72px] sm:min-h-[80px] p-1.5 sm:p-2 border rounded-lg ${colorClass} ${
                           date ? 'cursor-pointer transition-shadow hover:shadow-md' : ''
                         }`}
                       >
@@ -783,9 +840,9 @@ export function TruckDetailPage() {
           <div className="space-y-4">
             <Card>
               <CardHeader>
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                   <CardTitle>Maintenance History</CardTitle>
-                  <Button variant="primary" size="sm">
+                  <Button variant="primary" size="sm" className="w-full sm:w-auto justify-center">
                     <Plus className="w-4 h-4 mr-2" />
                     Add Maintenance Record
                   </Button>
@@ -825,7 +882,7 @@ export function TruckDetailPage() {
                         </div>
                       </div>
                       
-                      <div className="grid grid-cols-4 gap-4 pt-3 border-t border-gray-200 text-sm">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 pt-3 border-t border-gray-200 text-sm">
                         <div>
                           <span className="text-gray-500">Date</span>
                           <p className="font-medium text-gray-900">{record.date}</p>

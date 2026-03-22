@@ -200,7 +200,7 @@ export function CustomerDetailPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-start justify-between">
+      <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
         <div className="flex items-start gap-4">
           <Button variant="outline" size="sm" onClick={() => navigate('/customers')}>
             <ArrowLeft className="w-4 h-4" />
@@ -228,12 +228,12 @@ export function CustomerDetailPage() {
             </div>
           </div>
         </div>
-        <div className="flex gap-2 max-[585px]:flex-col">
-          <Button variant="primary" size="sm" onClick={handleCreateOrder} className="w-max ml-4">
+        <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto">
+          <Button variant="primary" size="sm" onClick={handleCreateOrder} className="w-full sm:w-auto">
             <ShoppingCart className="w-4 h-4 mr-2" />
             Create Order
           </Button>
-          <Button variant="outline" size="sm" onClick={() => navigate(`/customers/${customer.id}/edit`)}>
+          <Button variant="outline" size="sm" onClick={() => navigate(`/customers/${customer.id}/edit`)} className="w-full sm:w-auto">
             <Edit className="w-4 h-4 mr-2" />
             Edit
           </Button>
@@ -241,17 +241,17 @@ export function CustomerDetailPage() {
       </div>
 
       {/* Quick Actions */}
-      <div className="flex gap-3">
-        <Button variant="outline" size="sm" onClick={handleAddNote}>
+      <div className="flex flex-col sm:flex-row gap-3">
+        <Button variant="outline" size="sm" onClick={handleAddNote} className="w-full sm:w-auto">
           <MessageSquare className="w-4 h-4 mr-2" />
           Add Note
         </Button>
-        <Button variant="outline" size="sm" onClick={handleAddTask}>
+        <Button variant="outline" size="sm" onClick={handleAddTask} className="w-full sm:w-auto">
           <Clipboard className="w-4 h-4 mr-2" />
           Create Task
         </Button>
         {customer.mapLocation && (
-          <Button variant="outline" size="sm">
+          <Button variant="outline" size="sm" className="w-full sm:w-auto">
             <MapPin className="w-4 h-4 mr-2" />
             View on Map
           </Button>
@@ -314,14 +314,14 @@ export function CustomerDetailPage() {
                   Contact Information
                 </CardTitle>
               </CardHeader>
-              <CardContent className="grid grid-cols-2 gap-4">
+              <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <InfoRow icon={User} label="Contact Person" value={customer.contactPerson} />
                 <InfoRow icon={Phone} label="Phone" value={customer.phone} />
                 <InfoRow icon={Mail} label="Email" value={customer.email} />
                 {customer.alternatePhone && (
                   <InfoRow icon={Phone} label="Alternate Phone" value={customer.alternatePhone} />
                 )}
-                <InfoRow icon={MapPin} label="Address" value={`${customer.address}, ${customer.city}, ${customer.province}`} className="col-span-2" />
+                <InfoRow icon={MapPin} label="Address" value={`${customer.address}, ${customer.city}, ${customer.province}`} className="md:col-span-2" />
               </CardContent>
             </Card>
 
@@ -333,7 +333,7 @@ export function CustomerDetailPage() {
                   Financial Summary
                 </CardTitle>
               </CardHeader>
-              <CardContent className="grid grid-cols-3 gap-4">
+              <CardContent className="grid grid-cols-2 md:grid-cols-3 gap-4">
                 <div>
                   <div className="text-xs text-gray-500 mb-1">Credit Limit</div>
                   <div className="text-lg font-semibold text-gray-900">₱{(customer.creditLimit / 1000000).toFixed(1)}M</div>

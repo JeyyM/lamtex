@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Package, FileText, Truck, Calendar, History, Search, Filter, TrendingDown, AlertTriangle, CheckCircle, Plus, X, Factory, ShoppingCart, Clock, MapPin, TrendingUp, Activity, Brain, Target, RefreshCw } from 'lucide-react';
+import { Package, FileText, Truck, Calendar, History, Search, TrendingDown, AlertTriangle, CheckCircle, Plus, X, Factory, ShoppingCart, Clock, MapPin, TrendingUp, Activity, Brain, Target, RefreshCw } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine, Area, ComposedChart } from 'recharts';
 import CreateRequestModal from '../components/logistics/CreateRequestModal';
 import OrderDetailModal from '../components/logistics/OrderDetailModal';
@@ -1204,17 +1204,28 @@ export default function WarehousePage() {
   ];
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 w-full max-w-full overflow-x-hidden">
       {/* Header */}
-      <div className="bg-white border-b border-gray-200">
-        <div className="px-4 md:px-6 py-4">
+      <div className="bg-white border-b border-gray-200 w-full max-w-full">
+        <div className="px-4 md:px-6 py-4 w-full max-w-full">
           <h1 className="text-xl md:text-2xl font-bold text-gray-900">Warehouse Management</h1>
           <p className="text-sm text-gray-600 mt-1">Track inventory, manage requests, and coordinate logistics</p>
         </div>
 
         {/* Tabs */}
-        <div className="px-4 md:px-6">
-          <div className="flex gap-2 md:gap-4 border-b border-gray-200 overflow-x-auto">
+        <div className="px-4 md:px-6 w-full max-w-full">
+          <div className="md:hidden pb-3">
+            <select
+              value={activeTab}
+              onChange={(e) => setActiveTab(e.target.value as TabType)}
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              {tabs.map((tab) => (
+                <option key={tab.id} value={tab.id}>{tab.label}</option>
+              ))}
+            </select>
+          </div>
+          <div className="hidden md:flex gap-2 md:gap-4 border-b border-gray-200">
             {tabs.map(tab => {
               const Icon = tab.icon;
               return (
@@ -1237,7 +1248,7 @@ export default function WarehousePage() {
       </div>
 
       {/* Content */}
-      <div className="p-4 md:p-6">
+      <div className="p-4 md:p-6 w-full max-w-full overflow-x-hidden">
         {activeTab === 'inventory' && (
           <div className="space-y-4">
             {/* Controls */}
@@ -1283,12 +1294,11 @@ export default function WarehousePage() {
 
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full lg:w-auto">
                   {/* Category Filter */}
-                  <div className="flex items-center gap-2">
-                    <Filter className="w-4 h-4 text-gray-500 flex-shrink-0" />
+                  <div className="w-full sm:w-auto">
                     <select
                       value={categoryFilter}
                       onChange={(e) => setCategoryFilter(e.target.value)}
-                      className="flex-1 sm:flex-none border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full sm:w-auto border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
                       {(viewMode === 'finished' ? finishedGoodsCategories : rawMaterialsCategories).map(cat => (
                         <option key={cat} value={cat}>
@@ -1302,7 +1312,7 @@ export default function WarehousePage() {
                   <select
                     value={statusFilter}
                     onChange={(e) => setStatusFilter(e.target.value as StockStatus | 'all')}
-                    className="flex-1 sm:flex-none border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full sm:w-auto border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
                     <option value="all">All Status</option>
                     <option value="healthy">Healthy</option>
@@ -1313,14 +1323,14 @@ export default function WarehousePage() {
               </div>
 
               {/* Summary Stats */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 pt-4 border-t border-gray-200">
-                <div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 pt-4 border-t border-gray-200 w-full">
+                <div className="w-full">
                   <p className="text-sm text-gray-600">Total Items</p>
                   <p className="text-2xl font-bold text-gray-900">
                     {viewMode === 'finished' ? filteredFinishedGoods.length : filteredRawMaterials.length}
                   </p>
                 </div>
-                <div>
+                <div className="w-full">
                   <p className="text-sm text-gray-600">Healthy Stock</p>
                   <p className="text-2xl font-bold text-green-600">
                     {viewMode === 'finished' 
@@ -1329,7 +1339,7 @@ export default function WarehousePage() {
                     }
                   </p>
                 </div>
-                <div>
+                <div className="w-full">
                   <p className="text-sm text-gray-600">Low Stock</p>
                   <p className="text-2xl font-bold text-yellow-600">
                     {viewMode === 'finished' 
@@ -1338,7 +1348,7 @@ export default function WarehousePage() {
                     }
                   </p>
                 </div>
-                <div>
+                <div className="w-full">
                   <p className="text-sm text-gray-600">Critical</p>
                   <p className="text-2xl font-bold text-red-600">
                     {viewMode === 'finished' 
@@ -1584,7 +1594,7 @@ export default function WarehousePage() {
             {/* Controls Header */}
             <div className="bg-white rounded-lg border border-gray-200 p-4">
               <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
-                <div className="flex items-center gap-4">
+                <div className="w-full lg:w-auto">
                   {/* Request Type Toggle */}
                   <div className="flex bg-gray-100 rounded-lg p-1 w-full lg:w-auto">
                     <button
@@ -1623,12 +1633,12 @@ export default function WarehousePage() {
 
               {/* Schedule Calendar */}
               <div className="mt-6 pt-6 border-t border-gray-200">
-                <div className="flex items-center justify-between mb-4">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
                   <h3 className="flex items-center gap-2 font-semibold text-gray-900">
                     <Calendar className="w-5 h-5 text-gray-500" />
                     Schedule Calendar (14 Days)
                   </h3>
-                  <div className="flex items-center gap-3 text-xs">
+                  <div className="flex flex-wrap items-center gap-3 text-xs">
                     <div className="flex items-center gap-1">
                       <div className="w-3 h-3 rounded-full bg-green-500"></div>
                       <span className="text-gray-600">Production</span>
@@ -1746,7 +1756,7 @@ export default function WarehousePage() {
               </div>
 
               {/* Summary Stats */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 md:gap-4 mt-4 pt-4 border-t border-gray-200">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 md:gap-4 mt-4 pt-4 border-t border-gray-200">
                 <div>
                   <p className="text-sm text-gray-600">Total</p>
                   <p className="text-2xl font-bold text-gray-900">
@@ -2015,7 +2025,7 @@ export default function WarehousePage() {
         {activeTab === 'orders' && (
           <div className="space-y-6">
             {/* Header with Stats */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
               <div className="bg-white rounded-lg border border-gray-200 p-4">
                 <p className="text-sm text-gray-600">Ready to Load</p>
                 <p className="text-2xl font-bold text-blue-600">8</p>
@@ -2044,7 +2054,7 @@ export default function WarehousePage() {
                 <h3 className="text-lg font-semibold text-gray-900">Orders Ready for Loading</h3>
               </div>
 
-              <div className="overflow-x-auto">
+              <div className="hidden md:block overflow-x-auto">
                 <table className="w-full">
                   <thead className="bg-gray-50 border-b border-gray-200">
                     <tr>
@@ -2291,6 +2301,204 @@ export default function WarehousePage() {
                   </tbody>
                 </table>
               </div>
+
+              <div className="md:hidden divide-y divide-gray-200">
+                <div
+                  className="p-4 space-y-3"
+                  onClick={() => {
+                    setSelectedOrder({
+                      orderNumber: 'ORD-2026-1234',
+                      customer: 'BuildRight Corp',
+                      destination: 'Quezon City',
+                      requiredDate: 'Feb 28, 2026',
+                      items: [
+                        { name: 'PVC Pipe 4" Pressure', sku: 'PVC-P-4-001', quantity: 100, currentStock: 200, unit: 'pcs', status: 'available' },
+                        { name: 'PVC Elbow 4"', sku: 'PVC-E-4-001', quantity: 50, currentStock: 150, unit: 'pcs', status: 'available' },
+                        { name: 'PVC Tee 4"', sku: 'PVC-T-4-001', quantity: 30, currentStock: 80, unit: 'pcs', status: 'available' }
+                      ],
+                      totalWeight: 850,
+                      totalVolume: 4.2,
+                      urgency: 'High',
+                      status: 'Approved'
+                    });
+                    setShowOrderDetailModal(true);
+                  }}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-medium text-gray-900 break-words">Order 1 - All Stock Available</p>
+                      <p className="text-xs text-gray-600 mt-1">ORD-2026-1234 • BuildRight Corp</p>
+                    </div>
+                    <span className="px-2 py-1 bg-red-50 text-red-700 rounded text-xs font-medium flex-shrink-0">High</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <p className="text-xs text-gray-500">Destination</p>
+                      <p className="text-gray-900">Quezon City</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500">Required</p>
+                      <p className="text-gray-900">Feb 28</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500">Weight / Volume</p>
+                      <p className="text-gray-900">850 kg / 4.2 m3</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500">Stock Status</p>
+                      <p className="text-green-600 font-medium">All Available</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  className="p-4 space-y-3 bg-red-50"
+                  onClick={() => {
+                    setSelectedOrder({
+                      orderNumber: 'ORD-2026-1235',
+                      customer: 'MegaConstruct Inc',
+                      destination: 'Makati City',
+                      requiredDate: 'Feb 29, 2026',
+                      items: [
+                        { name: 'PVC Pipe 4" Sanitary', sku: 'PVC-S-4-001', quantity: 200, currentStock: 50, unit: 'pcs', status: 'shortage', nextBatch: { date: 'Mar 2', quantity: 500 } },
+                        { name: 'PVC Elbow 2"', sku: 'PVC-E-2-001', quantity: 100, currentStock: 80, unit: 'pcs', status: 'partial', nextBatch: { date: 'Mar 1', quantity: 300 } },
+                        { name: 'PVC Cap 4"', sku: 'PVC-C-4-001', quantity: 50, currentStock: 100, unit: 'pcs', status: 'available' },
+                        { name: 'PVC Adapter 4"', sku: 'PVC-A-4-001', quantity: 30, currentStock: 60, unit: 'pcs', status: 'available' }
+                      ],
+                      totalWeight: 1200,
+                      totalVolume: 6.8,
+                      urgency: 'Medium',
+                      status: 'Approved'
+                    });
+                    setShowOrderDetailModal(true);
+                  }}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-medium text-gray-900 break-words">Order 2 - Stock Shortage</p>
+                      <p className="text-xs text-gray-600 mt-1">ORD-2026-1235 • MegaConstruct Inc</p>
+                    </div>
+                    <span className="px-2 py-1 bg-yellow-50 text-yellow-700 rounded text-xs font-medium flex-shrink-0">Medium</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <p className="text-xs text-gray-500">Destination</p>
+                      <p className="text-gray-900">Makati City</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500">Required</p>
+                      <p className="text-gray-900">Feb 29</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500">Weight / Volume</p>
+                      <p className="text-gray-900">1,200 kg / 6.8 m3</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500">Stock Status</p>
+                      <p className="text-red-600 font-medium">Stock Issues (2)</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  className="p-4 space-y-3"
+                  onClick={() => {
+                    setSelectedOrder({
+                      orderNumber: 'ORD-2026-1236',
+                      customer: 'CityWorks Ltd',
+                      destination: 'Pasig City',
+                      requiredDate: 'Mar 1, 2026',
+                      items: [
+                        { name: 'PVC Pipe 6" Pressure', sku: 'PVC-P-6-001', quantity: 80, currentStock: 150, unit: 'pcs', status: 'available' },
+                        { name: 'PVC Coupling 6"', sku: 'PVC-C-6-001', quantity: 40, currentStock: 25, unit: 'pcs', status: 'partial', nextBatch: { date: 'Mar 3', quantity: 200 } }
+                      ],
+                      totalWeight: 720,
+                      totalVolume: 3.8,
+                      urgency: 'Low',
+                      status: 'Approved'
+                    });
+                    setShowOrderDetailModal(true);
+                  }}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-medium text-gray-900 break-words">Order 3 - Partial Stock</p>
+                      <p className="text-xs text-gray-600 mt-1">ORD-2026-1236 • CityWorks Ltd</p>
+                    </div>
+                    <span className="px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs font-medium flex-shrink-0">Low</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <p className="text-xs text-gray-500">Destination</p>
+                      <p className="text-gray-900">Pasig City</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500">Required</p>
+                      <p className="text-gray-900">Mar 1</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500">Weight / Volume</p>
+                      <p className="text-gray-900">720 kg / 3.8 m3</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500">Stock Status</p>
+                      <p className="text-yellow-600 font-medium">Partial Stock</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  className="p-4 space-y-3"
+                  onClick={() => {
+                    setSelectedOrder({
+                      orderNumber: 'ORD-2026-1237',
+                      customer: 'Manila Builders',
+                      destination: 'Manila',
+                      requiredDate: 'Mar 2, 2026',
+                      items: [
+                        { name: 'PVC Pipe 4" Pressure', sku: 'PVC-P-4-001', quantity: 120, currentStock: 200, unit: 'pcs', status: 'available' },
+                        { name: 'PVC Elbow 4"', sku: 'PVC-E-4-001', quantity: 60, currentStock: 150, unit: 'pcs', status: 'available' },
+                        { name: 'PVC Tee 4"', sku: 'PVC-T-4-001', quantity: 40, currentStock: 80, unit: 'pcs', status: 'available' }
+                      ],
+                      totalWeight: 950,
+                      totalVolume: 5.1,
+                      urgency: 'High',
+                      status: 'Assigned',
+                      truckId: 'TRK-003',
+                      truckName: 'Truck 003 (DEF-9012)',
+                      driverName: 'Pedro Cruz',
+                      scheduledDeparture: 'Today, 1:00 PM'
+                    });
+                    setShowOrderDetailModal(true);
+                  }}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-medium text-gray-900 break-words">Order 4 - Assigned to Truck</p>
+                      <p className="text-xs text-gray-600 mt-1">ORD-2026-1237 • Manila Builders</p>
+                    </div>
+                    <span className="px-2 py-1 bg-red-50 text-red-700 rounded text-xs font-medium flex-shrink-0">High</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <p className="text-xs text-gray-500">Destination</p>
+                      <p className="text-gray-900">Manila</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500">Required</p>
+                      <p className="text-gray-900">Mar 2</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500">Weight / Volume</p>
+                      <p className="text-gray-900">950 kg / 5.1 m3</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500">Stock Status</p>
+                      <p className="text-green-600 font-medium">All Available</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
 
             {/* Available Trucks */}
@@ -2299,7 +2507,7 @@ export default function WarehousePage() {
                 <h3 className="text-lg font-semibold text-gray-900">Available Trucks</h3>
               </div>
 
-              <div className="grid grid-cols-3 gap-4 p-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 p-4">
                 {/* Truck 1 - Available */}
                 <div className="border border-gray-200 rounded-lg p-4 hover:border-blue-400 hover:shadow-md transition-all cursor-pointer">
                   <div className="flex items-start justify-between mb-3">
@@ -2468,7 +2676,7 @@ export default function WarehousePage() {
           <div className="space-y-6">
             {/* Header with Item Selector */}
             <div className="bg-white rounded-lg border border-gray-200 p-6">
-              <div className="flex items-center justify-between mb-6">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between mb-6">
                 <div>
                   <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-3">
                     <Activity className="w-7 h-7 text-blue-600" />
@@ -2476,7 +2684,7 @@ export default function WarehousePage() {
                   </h2>
                   <p className="text-sm text-gray-600 mt-1">AI-powered demand prediction using historical data and machine learning</p>
                 </div>
-                <div className="flex items-center gap-2 text-sm">
+                <div className="flex items-start sm:items-center gap-2 text-sm">
                   <Brain className="w-5 h-5 text-purple-600" />
                   <div>
                     <div className="font-semibold text-gray-900">Model Accuracy: 87.3%</div>
@@ -2486,7 +2694,7 @@ export default function WarehousePage() {
               </div>
 
               {/* Item Selector */}
-              <div className="flex gap-4 items-end">
+              <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-end">
                 <div className="flex-1">
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     Select Item to Forecast
@@ -2520,7 +2728,7 @@ export default function WarehousePage() {
                 </div>
                 <button 
                   onClick={() => setDemandData(generateDemandData(selectedForecastItem.id))}
-                  className="px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
+                  className="w-full sm:w-auto px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
                 >
                   <RefreshCw className="w-4 h-4" />
                   Refresh
@@ -2577,7 +2785,7 @@ export default function WarehousePage() {
 
             {/* Demand Forecast Chart */}
             <div className="bg-white rounded-lg border border-gray-200 p-6">
-              <div className="flex items-center justify-between mb-6">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between mb-6">
                 <div>
                   <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
                     <TrendingUp className="w-5 h-5 text-blue-600" />
@@ -2587,7 +2795,7 @@ export default function WarehousePage() {
                     Historical consumption (14 days) + AI-predicted demand (14 days)
                   </p>
                 </div>
-                <div className="flex items-center gap-6 text-sm">
+                <div className="flex flex-wrap items-center gap-4 text-sm">
                   <div className="flex items-center gap-2">
                     <div className="w-8 h-1 bg-blue-600 rounded"></div>
                     <span className="text-gray-600">Historical (Actual)</span>
@@ -2990,8 +3198,8 @@ export default function WarehousePage() {
       {/* Calendar Event Detail Modal */}
       {selectedCalendarEvent && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
-            <div className="p-6">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto">
+            <div className="p-4 md:p-6">
               {/* Header */}
               <div className="flex items-center gap-3 mb-4">
                 <div className={`w-12 h-12 rounded-full flex items-center justify-center ${
@@ -3060,7 +3268,7 @@ export default function WarehousePage() {
               </div>
 
               {/* Actions */}
-              <div className="flex gap-3">
+              <div className="flex flex-col-reverse sm:flex-row gap-3">
                 <button
                   onClick={() => setSelectedCalendarEvent(null)}
                   className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"

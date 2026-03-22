@@ -76,17 +76,17 @@ const AgentAnalyticsPage: React.FC = () => {
   };
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-3 sm:p-4 md:p-6 space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">Agent Analytics</h1>
+          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Agent Analytics</h1>
           <p className="text-gray-600 mt-1">Performance tracking and insights</p>
         </div>
-        <div className="flex gap-3">
+        <div className="grid grid-cols-2 gap-3 w-full md:w-auto">
           <button
             onClick={() => setViewMode('overview')}
-            className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+            className={`px-4 py-2 rounded-lg font-medium transition-colors w-full ${
               viewMode === 'overview'
                 ? 'bg-blue-600 text-white'
                 : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
@@ -96,7 +96,7 @@ const AgentAnalyticsPage: React.FC = () => {
           </button>
           <button
             onClick={() => setViewMode('detailed')}
-            className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+            className={`px-4 py-2 rounded-lg font-medium transition-colors w-full ${
               viewMode === 'detailed'
                 ? 'bg-blue-600 text-white'
                 : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
@@ -108,7 +108,7 @@ const AgentAnalyticsPage: React.FC = () => {
       </div>
 
       {/* Company-Wide KPIs */}
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         <div className="bg-gradient-to-br from-blue-500 to-blue-600 text-white p-4 rounded-xl shadow-lg">
           <div className="flex items-center gap-2 mb-2">
             <DollarSign className="w-5 h-5" />
@@ -330,7 +330,67 @@ const AgentAnalyticsPage: React.FC = () => {
       {/* Detailed Table View */}
       {viewMode === 'detailed' && (
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-          <div className="overflow-x-auto">
+          <div className="md:hidden divide-y divide-gray-200">
+            {filteredAgents.map((agent) => (
+              <div
+                key={agent.agentId}
+                className="p-4 cursor-pointer hover:bg-gray-50"
+                onClick={() => navigate(`/agents/AGT-001`)}
+              >
+                <div className="flex items-start justify-between mb-3">
+                  <div>
+                    <div className="font-semibold text-gray-900">{agent.agentName}</div>
+                    <div className="text-xs text-gray-600">{agent.branchName}</div>
+                  </div>
+                  <div className="inline-flex items-center gap-1 px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded-full font-bold text-xs">
+                    <Trophy className="w-3 h-3" />
+                    #{agent.ranking.rankByRevenue}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <p className="text-gray-500">Revenue</p>
+                    <p className="font-semibold text-gray-900">{formatCurrency(agent.salesPerformance.totalRevenue)}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-500">Orders</p>
+                    <p className="font-semibold text-gray-900">{formatNumber(agent.salesPerformance.numberOfOrders)}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-500">AOV</p>
+                    <p className="font-semibold text-gray-900">₱{formatNumber(agent.salesPerformance.averageOrderValue)}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-500">Customers</p>
+                    <p className="font-semibold text-gray-900">{agent.customerMetrics.activeCustomers}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-500">Commission</p>
+                    <p className="font-semibold text-green-600">₱{formatNumber(agent.financialMetrics.commissionEarned)}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-500">Conversion</p>
+                    <p className="font-semibold text-gray-900">{agent.salesPerformance.sellRate}%</p>
+                  </div>
+                </div>
+
+                <div className="mt-3 pt-3 border-t border-gray-100 flex items-center justify-between">
+                  <span className="text-xs px-2 py-0.5 rounded font-medium bg-blue-100 text-blue-700">
+                    Target {agent.targets.targetAchievementRate.toFixed(1)}%
+                  </span>
+                  <div className="flex items-center gap-1">
+                    {getTrendIcon(agent.salesPerformance.salesGrowthRate)}
+                    <span className={`text-sm font-semibold ${getTrendColor(agent.salesPerformance.salesGrowthRate)}`}>
+                      {Math.abs(agent.salesPerformance.salesGrowthRate).toFixed(1)}%
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
@@ -435,12 +495,12 @@ const AgentAnalyticsPage: React.FC = () => {
       )}
 
       {/* Branch Performance Section */}
-      <div className="bg-white rounded-xl border border-gray-200 p-6">
+      <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
         <h2 className="text-xl font-bold text-gray-900 mb-6 flex items-center gap-2">
           <MapPin className="w-6 h-6 text-blue-600" />
           Branch Performance Comparison
         </h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
           {mockBranchAnalytics.map((branch) => (
             <div key={branch.branchId} className="border border-gray-200 rounded-lg p-5">
               <div className="flex items-center justify-between mb-4">

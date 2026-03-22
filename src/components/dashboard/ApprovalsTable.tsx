@@ -80,7 +80,7 @@ export function ApprovalsTable({ orders, showViewAll = false }: ApprovalsTablePr
   return (
     <>
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
+        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <CardTitle>Priority Action Center: Approvals</CardTitle>
             <p className="text-sm text-gray-500 mt-1">
@@ -95,7 +95,75 @@ export function ApprovalsTable({ orders, showViewAll = false }: ApprovalsTablePr
           )}
         </CardHeader>
         <CardContent className="p-0">
-          <div className="overflow-x-auto">
+          <div className="md:hidden divide-y divide-gray-200">
+            {orders.length === 0 ? (
+              <div className="px-4 py-8 text-center text-gray-500 text-sm">
+                No pending approvals for this branch.
+              </div>
+            ) : (
+              orders.map((order) => (
+                <div key={order.id} className="p-4 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-semibold text-gray-900">{order.orderNumber}</p>
+                      <p className="text-sm text-gray-600">{order.customer}</p>
+                      <p className="text-xs text-gray-500">{order.agent} • {order.branch}</p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={selectedOrders.includes(order.id)}
+                      onChange={() => toggleSelect(order.id)}
+                      className="rounded text-red-600 focus:ring-red-500"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <p className="text-gray-500">Amount</p>
+                      <p className="font-medium text-gray-900">₱{order.totalAmount.toLocaleString()}</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-500">Discount</p>
+                      <p className={order.requestedDiscount > 10 ? 'text-red-600 font-medium' : 'text-gray-900'}>{order.requestedDiscount}%</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-500">Margin</p>
+                      <Badge variant={order.marginImpact === 'Green' ? 'success' : order.marginImpact === 'Yellow' ? 'warning' : 'danger'}>
+                        {order.marginImpact}
+                      </Badge>
+                    </div>
+                    <div>
+                      <p className="text-gray-500">Req. Date</p>
+                      <p className={new Date(order.requestedDeliveryDate) <= new Date('2026-02-26') ? 'text-red-600 font-medium' : 'text-gray-600'}>
+                        {order.requestedDeliveryDate}
+                      </p>
+                    </div>
+                  </div>
+
+                  <p className="text-sm text-gray-600">{order.productsSummary}</p>
+
+                  <div className="flex flex-wrap gap-2 pt-2 border-t border-gray-100">
+                    <Button variant="outline" size="sm" onClick={() => handleEdit(order)} className="flex-1 sm:flex-none">
+                      <Edit className="w-4 h-4" />
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleReject(order)}
+                      className="flex-1 sm:flex-none text-red-600 hover:bg-red-50 hover:text-red-700"
+                    >
+                      <X className="w-4 h-4" />
+                    </Button>
+                    <Button variant="primary" size="sm" onClick={() => handleApprove(order)} className="flex-1 sm:flex-none">
+                      <Check className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-sm text-left">
               <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b border-gray-200">
                 <tr>
@@ -211,8 +279,8 @@ export function ApprovalsTable({ orders, showViewAll = false }: ApprovalsTablePr
       {/* Approve Confirmation Modal */}
       {approvingOrder && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
-            <div className="p-6">
+          <div className="bg-white rounded-lg shadow-xl w-full mx-0 my-0 max-h-screen lg:mx-4 lg:my-4 lg:max-w-md lg:max-h-[90vh] overflow-y-auto">
+            <div className="p-4 md:p-6">
               <div className="flex items-center gap-3 mb-4">
                 <div className="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center">
                   <Check className="w-6 h-6 text-green-600" />
@@ -242,7 +310,7 @@ export function ApprovalsTable({ orders, showViewAll = false }: ApprovalsTablePr
                 </div>
               </div>
 
-              <div className="flex gap-3">
+              <div className="flex flex-col-reverse sm:flex-row gap-3">
                 <Button 
                   variant="outline" 
                   className="flex-1"
@@ -266,8 +334,8 @@ export function ApprovalsTable({ orders, showViewAll = false }: ApprovalsTablePr
       {/* Reject Modal with Reason */}
       {rejectingOrder && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
-            <div className="p-6">
+          <div className="bg-white rounded-lg shadow-xl w-full mx-0 my-0 max-h-screen lg:mx-4 lg:my-4 lg:max-w-md lg:max-h-[90vh] overflow-y-auto">
+            <div className="p-4 md:p-6">
               <div className="flex items-center gap-3 mb-4">
                 <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center">
                   <X className="w-6 h-6 text-red-600" />
@@ -291,7 +359,7 @@ export function ApprovalsTable({ orders, showViewAll = false }: ApprovalsTablePr
                 />
               </div>
 
-              <div className="flex gap-3">
+              <div className="flex flex-col-reverse sm:flex-row gap-3">
                 <Button 
                   variant="outline" 
                   className="flex-1"
@@ -319,7 +387,7 @@ export function ApprovalsTable({ orders, showViewAll = false }: ApprovalsTablePr
       {/* Edit Order Modal */}
       {editingOrder && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-lg shadow-xl w-full mx-0 my-0 max-h-screen lg:mx-4 lg:my-4 lg:max-w-lg lg:max-h-[90vh] overflow-y-auto">
             <div className="sticky top-0 bg-white border-b border-gray-200 p-4 flex items-center justify-between">
               <h3 className="text-lg font-bold text-gray-900">Edit Order</h3>
               <button
@@ -330,7 +398,7 @@ export function ApprovalsTable({ orders, showViewAll = false }: ApprovalsTablePr
               </button>
             </div>
             
-            <div className="p-6">
+            <div className="p-4 md:p-6">
               <div className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Order Number</label>
@@ -371,7 +439,7 @@ export function ApprovalsTable({ orders, showViewAll = false }: ApprovalsTablePr
                 </div>
               </div>
 
-              <div className="flex gap-3 mt-6">
+              <div className="flex flex-col-reverse sm:flex-row gap-3 mt-6">
                 <Button 
                   variant="outline" 
                   className="flex-1"
