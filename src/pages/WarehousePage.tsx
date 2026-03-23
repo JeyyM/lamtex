@@ -9,6 +9,21 @@ type StockStatus = 'healthy' | 'warning' | 'critical';
 type RequestType = 'production' | 'purchase';
 type RequestStatus = 'pending' | 'approved' | 'in-progress' | 'completed' | 'cancelled';
 
+const PIPE_CATEGORIES = [
+  'Sanitary Pipes',
+  'Pressure Pipes',
+  'Electrical Conduits',
+  'Drainage Pipes'
+];
+
+const FITTINGS_CATEGORIES = [
+  'Sanitary Fittings',
+  'Electrical Fittings',
+  'Drainage Fittings',
+  'Valves & Accessories',
+  'Couplings & Adapters'
+];
+
 interface FinishedGood {
   id: string;
   sku: string;
@@ -1114,6 +1129,7 @@ export default function WarehousePage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<StockStatus | 'all'>('all');
+  const [viewType, setViewType] = useState<'pipes' | 'fittings'>('pipes');
   const [viewMode, setViewMode] = useState<'finished' | 'raw'>('finished');
   const [requestType, setRequestType] = useState<RequestType>('production');
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -1177,10 +1193,17 @@ export default function WarehousePage() {
     }
   };
 
-  const filteredFinishedGoods = mockFinishedGoods.filter(item => {
+  const selectedProductCategories = viewType === 'pipes' ? PIPE_CATEGORIES : FITTINGS_CATEGORIES;
+  const scopedFinishedGoods = mockFinishedGoods.filter(item => selectedProductCategories.includes(item.category));
+  const finishedGoodsCategories = ['all', ...Array.from(new Set(scopedFinishedGoods.map(item => item.category)))];
+  const safeCategoryFilter = categoryFilter !== 'all' && !finishedGoodsCategories.includes(categoryFilter)
+    ? 'all'
+    : categoryFilter;
+
+  const filteredFinishedGoods = scopedFinishedGoods.filter(item => {
     const matchesSearch = item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
                          item.sku.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesCategory = categoryFilter === 'all' || item.category === categoryFilter;
+    const matchesCategory = safeCategoryFilter === 'all' || item.category === safeCategoryFilter;
     const matchesStatus = statusFilter === 'all' || item.status === statusFilter;
     return matchesSearch && matchesCategory && matchesStatus;
   });
@@ -1193,7 +1216,6 @@ export default function WarehousePage() {
     return matchesSearch && matchesCategory && matchesStatus;
   });
 
-  const finishedGoodsCategories = ['all', ...Array.from(new Set(mockFinishedGoods.map(item => item.category)))];
   const rawMaterialsCategories = ['all', ...Array.from(new Set(mockRawMaterials.map(item => item.category)))];
 
   const tabs = [
@@ -1253,6 +1275,18 @@ export default function WarehousePage() {
           <div className="space-y-4">
             {/* Controls */}
             <div className="bg-white rounded-lg border border-gray-200 p-4">
+              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-4 pb-4 border-b border-gray-200">
+                <div className="text-sm text-gray-600">Product Group View</div>
+                <select
+                  value={viewType}
+                  onChange={(e) => setViewType(e.target.value as 'pipes' | 'fittings')}
+                  className="w-full md:w-auto border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="pipes">Pipes</option>
+                  <option value="fittings">Fittings</option>
+                </select>
+              </div>
+
               <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 mb-4">
                 <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 md:gap-4 w-full lg:w-auto">
                   {/* View Mode Toggle */}
@@ -1296,7 +1330,7 @@ export default function WarehousePage() {
                   {/* Category Filter */}
                   <div className="w-full sm:w-auto">
                     <select
-                      value={categoryFilter}
+                      value={viewMode === 'finished' ? safeCategoryFilter : categoryFilter}
                       onChange={(e) => setCategoryFilter(e.target.value)}
                       className="w-full sm:w-auto border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
