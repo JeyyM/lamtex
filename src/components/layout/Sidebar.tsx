@@ -20,7 +20,7 @@ import {
   X
 } from 'lucide-react';
 import { cn } from '@/src/lib/utils';
-import lamtexLogo from '../../assets/MyMart Logo.png';
+import lamtexLogo from '../../assets/Lamtex Logo.png';
 
 export function Sidebar() {
   const { role, isSidebarCollapsed, setIsSidebarCollapsed, isMobileMenuOpen, setIsMobileMenuOpen } = useAppContext();
@@ -70,7 +70,7 @@ export function Sidebar() {
             "flex items-center gap-2",
             isSidebarCollapsed && "lg:hidden"
           )}>
-            <img src={lamtexLogo} alt="MyMart Logo" className="h-10 w-auto" />
+            <img src={lamtexLogo} alt="Lamtex Logo" className="h-10 w-auto" />
           </div>
           
           {/* Button group - pushed to right */}

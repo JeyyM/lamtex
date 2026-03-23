@@ -17,7 +17,7 @@ import {
   Wallet,
   Info,
 } from 'lucide-react';
-import lamtexLogo from '../assets/MyMart Logo.png';
+import lamtexLogo from '../assets/Lamtex Logo.png';
 
 export function PaymentPage() {
   const { token } = useParams<{ token: string }>();
