@@ -4,7 +4,7 @@ import { Button } from '@/src/components/ui/Button';
 import { Badge } from '@/src/components/ui/Badge';
 import { getOrderById } from '@/src/mock/orders';
 import { Download, Printer, Send, Mail, MessageSquare, ExternalLink } from 'lucide-react';
-import lamtexLogo from '../assets/MyMart Logo.png';
+import lamtexLogo from '../assets/Lamtex Logo.png';
 
 export function InvoicePreviewPage() {
   const { orderId } = useParams<{ orderId: string }>();

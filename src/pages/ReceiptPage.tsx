@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom';
 import { Button } from '@/src/components/ui/Button';
 import { Badge } from '@/src/components/ui/Badge';
 import { CheckCircle, Download, Printer } from 'lucide-react';
-import lamtexLogo from '../assets/MyMart Logo.png';
+import lamtexLogo from '../assets/Lamtex Logo.png';
 
 export function ReceiptPage() {
   const { id } = useParams<{ id: string }>();
