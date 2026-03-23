@@ -299,7 +299,7 @@ export const MOCK_ORDERS_DETAILED: OrderDetail[] = [
     updatedAt: '2026-02-24T16:45:00Z',
   },
   {
-    id: 'ORD-2026-1003',
+    id: 'ORD-2026-1005',
     customer: 'City Builders Supply',
     customerId: 'CUS-003',
     agent: 'Pedro Reyes',
