@@ -293,20 +293,10 @@ export default function ChatsPage() {
   const otherBranchUsers = MOCK_CHAT_USERS.filter(u => u.branch !== CURRENT_USER.branch);
 
   return (
-    <div className="p-6 bg-gray-50 min-h-screen">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-          <MessageCircle className="w-7 h-7 text-red-600" />
-          Chats
-        </h1>
-        <p className="text-sm text-gray-500 mt-1">
-          Team communication and messaging
-        </p>
-      </div>
-
-      <div className="flex gap-4 h-[calc(100vh-180px)]">
+    <div className="w-full h-full flex flex-col overflow-hidden bg-gray-50">
+      <div className="flex flex-1 min-h-0 w-full gap-0 md:gap-4 md:px-4 overflow-hidden">
         {/* Chat List Sidebar - Hidden on mobile (≤1023px) when chat is selected */}
-        <Card className={`transition-all duration-300 flex-shrink-0 ${
+        <Card className={`transition-all duration-300 flex-shrink-0 min-w-0 h-full overflow-hidden border-0 rounded-none shadow-none lg:rounded-lg lg:border lg:shadow-sm ${
           isSidebarCollapsed 
             ? 'lg:w-20' 
             : 'lg:w-1/3 xl:w-1/4'
@@ -333,7 +323,7 @@ export default function ChatsPage() {
             </div>
 
             {/* Expanded View - Always visible on mobile, conditional on desktop */}
-            <div className={`flex-1 flex-col overflow-hidden ${isSidebarCollapsed ? 'hidden lg:hidden' : 'flex'} max-lg:!flex`}>
+            <div className={`flex-1 min-h-0 flex-col overflow-hidden ${isSidebarCollapsed ? 'hidden lg:hidden' : 'flex'} max-lg:!flex`}>
               <>
                 {/* Search and New Chat */}
                 <div className="p-4 border-b space-y-3">
@@ -367,7 +357,7 @@ export default function ChatsPage() {
                 </div>
 
                 {/* Chat List */}
-                <div className="flex-1 overflow-y-auto">
+                <div className="flex-1 min-h-0 overflow-hidden">
               {filteredChats.map((chat) => {
                 const otherUser = getOtherUser(chat);
                 const displayName = chat.type === 'group' ? chat.name : otherUser?.name || chat.name;
@@ -434,7 +424,7 @@ export default function ChatsPage() {
 
             {/* Collapsed View - Show Chat Avatars (Only when collapsed AND on desktop ≥1024px) */}
             {isSidebarCollapsed && (
-              <div className="hidden lg:flex lg:flex-1 overflow-y-auto p-2 flex-col">
+              <div className="hidden lg:flex lg:flex-1 min-h-0 overflow-hidden p-2 flex-col">
                 {filteredChats.map((chat) => {
                   const otherUser = getOtherUser(chat);
                   const displayName = chat.type === 'group' ? chat.name : otherUser?.name || chat.name;
@@ -471,15 +461,15 @@ export default function ChatsPage() {
         </Card>
 
         {/* Chat Area */}
-        <Card className={`transition-all duration-300 ${
+        <Card className={`transition-all duration-300 min-w-0 h-full overflow-hidden border-0 rounded-none shadow-none lg:rounded-lg lg:border lg:shadow-sm ${
           isSidebarCollapsed 
             ? 'flex-1' 
             : 'flex-1'
         } ${!selectedChat || !chatId ? 'max-lg:hidden' : 'max-lg:w-full'}`}>
           {selectedChat ? (
-            <CardContent className="p-0 h-full flex flex-col">
+            <CardContent className="p-0 h-full min-h-0 flex flex-col overflow-hidden">
               {/* Chat Header */}
-              <div className="p-4 border-b bg-white">
+              <div className="shrink-0 p-3 md:p-4 border-b bg-white">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     {/* Back button for mobile (≤1023px) */}
@@ -531,7 +521,7 @@ export default function ChatsPage() {
               </div>
 
               {/* Messages Area */}
-              <div className="flex-1 overflow-y-auto p-4 bg-gray-50 space-y-4">
+              <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-3 py-2 md:px-4 md:py-3 bg-gray-50 space-y-4">
                 {currentMessages.map((message, index) => {
                   const isOwnMessage = message.senderId === CURRENT_USER.id;
                   const showAvatar = !isOwnMessage && (
@@ -742,7 +732,7 @@ export default function ChatsPage() {
 
               {/* Reply Preview */}
               {replyingTo && (
-                <div className="px-4 py-2 bg-gray-100 border-t border-gray-200">
+                <div className="shrink-0 px-4 py-2 bg-gray-100 border-t border-gray-200">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <Reply className="w-4 h-4 text-gray-500" />
@@ -766,7 +756,7 @@ export default function ChatsPage() {
               )}
 
               {/* Message Input */}
-              <div className="p-4 border-t bg-white">
+              <div className="shrink-0 p-3 md:p-4 border-t bg-white">
                 <div className="flex items-end gap-2">
                   <input
                     type="file"
