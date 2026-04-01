@@ -123,6 +123,10 @@ export default function ProductCategoryPage() {
   const [editingProduct, setEditingProduct] = useState<ProductFormData | null>(null);
   const [isEditMode, setIsEditMode] = useState(false);
 
+  // Stock adjustment modal states
+  const [showStockAdjustmentModal, setShowStockAdjustmentModal] = useState(false);
+  const [selectedItemForAdjustment, setSelectedItemForAdjustment] = useState<any>(null);
+
   const categoryTitle = categoryName
     ? categoryName.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')
     : 'HDPE Pipes';

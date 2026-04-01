@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { Package, FileText, Truck, Calendar, History, Search, TrendingDown, AlertTriangle, CheckCircle, Plus, X, Factory, ShoppingCart, Clock, MapPin, TrendingUp, Activity, Brain, Target, RefreshCw } from 'lucide-react';
+import { Package, FileText, Truck, Calendar, History, Search, TrendingDown, AlertTriangle, CheckCircle, Plus, X, Factory, ShoppingCart, Clock, MapPin, TrendingUp, Activity, Brain, Target, RefreshCw, Edit3 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine, Area, ComposedChart } from 'recharts';
 import CreateRequestModal from '../components/logistics/CreateRequestModal';
 import OrderDetailModal from '../components/logistics/OrderDetailModal';
+import StockAdjustmentModal from '../components/warehouse/StockAdjustmentModal';
 
 type TabType = 'inventory' | 'requests' | 'orders' | 'movements';
 type StockStatus = 'healthy' | 'warning' | 'critical';
@@ -1137,6 +1138,11 @@ export default function WarehousePage() {
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
   const [selectedCalendarEvent, setSelectedCalendarEvent] = useState<any>(null);
   
+  // Stock Adjustment Modal State
+  const [showStockAdjustmentModal, setShowStockAdjustmentModal] = useState(false);
+  const [selectedItemForAdjustment, setSelectedItemForAdjustment] = useState<any>(null);
+  const [adjustmentItemType, setAdjustmentItemType] = useState<'finished-good' | 'raw-material'>('finished-good');
+  
   // Movements tab state
   const [selectedForecastItem, setSelectedForecastItem] = useState<ForecastItem>(mockForecastItems[0]);
   const [demandData, setDemandData] = useState<DemandDataPoint[]>(generateDemandData(mockForecastItems[0].id));
@@ -1191,6 +1197,36 @@ export default function WarehousePage() {
       case 'medium': return 'bg-yellow-100 text-yellow-800 border-yellow-300';
       case 'low': return 'bg-gray-100 text-gray-800 border-gray-300';
     }
+  };
+
+  // Handler for opening stock adjustment modal
+  const handleOpenAdjustment = (item: any, type: 'finished-good' | 'raw-material') => {
+    setSelectedItemForAdjustment(item);
+    setAdjustmentItemType(type);
+    setShowStockAdjustmentModal(true);
+  };
+
+  // Handler for stock adjustment submission
+  const handleStockAdjustment = (adjustment: any) => {
+    console.log('Stock Adjustment:', {
+      item: selectedItemForAdjustment,
+      itemType: adjustmentItemType,
+      adjustment,
+      timestamp: new Date().toISOString(),
+    });
+
+    // TODO: In production, this would:
+    // 1. Update the backend via API
+    // 2. Refresh the inventory data
+    // 3. Create an audit log entry
+    // 4. Update stock movement history
+    // 5. Trigger notifications if needed (e.g., low stock alerts)
+
+    // Build success message
+    const notesMessage = adjustment.notes ? `\nNotes: ${adjustment.notes}` : '';
+    const message = `Stock adjusted successfully!\n\n${adjustment.type === 'add' ? '+' : '-'}${adjustment.quantity} ${selectedItemForAdjustment.unit}${notesMessage}\n\nThis would update the database in production.`;
+    
+    alert(message);
   };
 
   const selectedProductCategories = viewType === 'pipes' ? PIPE_CATEGORIES : FITTINGS_CATEGORIES;
@@ -1412,6 +1448,7 @@ export default function WarehousePage() {
                         <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Location</th>
                         <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                         <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Restocked</th>
+                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
@@ -1449,6 +1486,15 @@ export default function WarehousePage() {
                             </span>
                           </td>
                           <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">{item.lastRestocked}</td>
+                          <td className="px-3 py-3 whitespace-nowrap">
+                            <button
+                              onClick={() => handleOpenAdjustment(item, 'finished-good')}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-700 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 transition-colors"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                              Adjust Stock
+                            </button>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -1506,6 +1552,14 @@ export default function WarehousePage() {
                           </span>
                         </div>
                       </div>
+
+                      <button
+                        onClick={() => handleOpenAdjustment(item, 'finished-good')}
+                        className="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 transition-colors"
+                      >
+                        <Edit3 className="w-4 h-4" />
+                        Adjust Stock
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -1528,6 +1582,7 @@ export default function WarehousePage() {
                         <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Supplier</th>
                         <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                         <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Purchased</th>
+                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
@@ -1563,6 +1618,15 @@ export default function WarehousePage() {
                             </span>
                           </td>
                           <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">{item.lastPurchased}</td>
+                          <td className="px-3 py-3 whitespace-nowrap">
+                            <button
+                              onClick={() => handleOpenAdjustment(item, 'raw-material')}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-700 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 transition-colors"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                              Adjust Stock
+                            </button>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -1615,6 +1679,14 @@ export default function WarehousePage() {
                           <p className="text-gray-900">{item.lastPurchased}</p>
                         </div>
                       </div>
+
+                      <button
+                        onClick={() => handleOpenAdjustment(item, 'raw-material')}
+                        className="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 transition-colors"
+                      >
+                        <Edit3 className="w-4 h-4" />
+                        Adjust Stock
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -3322,6 +3394,20 @@ export default function WarehousePage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Stock Adjustment Modal */}
+      {selectedItemForAdjustment && (
+        <StockAdjustmentModal
+          isOpen={showStockAdjustmentModal}
+          onClose={() => {
+            setShowStockAdjustmentModal(false);
+            setSelectedItemForAdjustment(null);
+          }}
+          item={selectedItemForAdjustment}
+          itemType={adjustmentItemType}
+          onAdjust={handleStockAdjustment}
+        />
       )}
     </div>
   );

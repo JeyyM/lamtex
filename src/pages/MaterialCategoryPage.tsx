@@ -14,9 +14,11 @@ import {
   ShoppingCart,
   Eye,
   Edit,
-  Plus
+  Plus,
+  Edit3
 } from 'lucide-react';
 import AddMaterialModal, { MaterialFormData } from '../components/materials/AddMaterialModal';
+import StockAdjustmentModal from '../components/warehouse/StockAdjustmentModal';
 
 // Import raw material images
 import whitePelletsImg from '../assets/raw-materials/White Pellets.webp';
@@ -32,6 +34,7 @@ const mockCategoryMaterials = [
     id: 'MAT-001',
     name: 'Polyester Resin',
     sku: 'RES-001',
+    brand: 'Reichhold',
     description: 'High-quality unsaturated polyester resin for general lamination',
     category: 'Resins',
     totalStock: 2500,
@@ -51,6 +54,7 @@ const mockCategoryMaterials = [
     id: 'MAT-002',
     name: 'Epoxy Resin',
     sku: 'RES-002',
+    brand: 'Hexion',
     description: 'Premium epoxy resin for high-performance applications',
     category: 'Resins',
     totalStock: 450,
@@ -70,6 +74,7 @@ const mockCategoryMaterials = [
     id: 'MAT-003',
     name: 'Vinyl Ester Resin',
     sku: 'RES-003',
+    brand: 'Ashland',
     description: 'Corrosion-resistant vinyl ester resin for chemical applications',
     category: 'Resins',
     totalStock: 1800,
@@ -89,6 +94,7 @@ const mockCategoryMaterials = [
     id: 'MAT-004',
     name: 'Polyester Gelcoat - White',
     sku: 'RES-004',
+    brand: 'Scott Bader',
     description: 'Premium white gelcoat for smooth, glossy finish',
     category: 'Resins',
     totalStock: 950,
@@ -108,6 +114,7 @@ const mockCategoryMaterials = [
     id: 'MAT-005',
     name: 'Phenolic Resin',
     sku: 'RES-005',
+    brand: 'Sumitomo',
     description: 'Heat-resistant phenolic resin for specialty applications',
     category: 'Resins',
     totalStock: 180,
@@ -127,6 +134,7 @@ const mockCategoryMaterials = [
     id: 'MAT-006',
     name: 'Acrylic Resin',
     sku: 'RES-006',
+    brand: 'Mitsubishi Chemical',
     description: 'Clear acrylic resin for transparent applications',
     category: 'Resins',
     totalStock: 650,
@@ -154,6 +162,10 @@ export default function MaterialCategoryPage() {
   // Modal states for edit
   const [editingMaterial, setEditingMaterial] = useState<MaterialFormData | null>(null);
   const [isEditMode, setIsEditMode] = useState(false);
+
+  // Stock adjustment modal states
+  const [showStockAdjustmentModal, setShowStockAdjustmentModal] = useState(false);
+  const [selectedItemForAdjustment, setSelectedItemForAdjustment] = useState<any>(null);
 
   // For now, always show the same hardcoded data regardless of category
   const categoryTitle = categoryName
@@ -194,6 +206,33 @@ export default function MaterialCategoryPage() {
 
   const handleMaterialClick = (material: typeof mockCategoryMaterials[0]) => {
     navigate(`/materials/category/${categoryName}/details/${material.id}`);
+  };
+
+  // Stock adjustment handlers
+  const handleOpenAdjustment = (material: typeof mockCategoryMaterials[0], e: MouseEvent) => {
+    e.stopPropagation(); // Prevent card click
+    setSelectedItemForAdjustment({
+      id: material.id,
+      name: material.name,
+      sku: material.sku,
+      currentStock: material.totalStock,
+      unit: material.unitOfMeasure,
+      reorderPoint: material.reorderPoint,
+    });
+    setShowStockAdjustmentModal(true);
+  };
+
+  const handleStockAdjustment = (adjustment: any) => {
+    console.log('Stock Adjustment:', {
+      item: selectedItemForAdjustment,
+      adjustment,
+      timestamp: new Date().toISOString(),
+    });
+
+    const notesMessage = adjustment.notes ? `\nNotes: ${adjustment.notes}` : '';
+    const message = `Stock adjusted successfully!\n\n${adjustment.type === 'add' ? '+' : '-'}${adjustment.quantity} ${selectedItemForAdjustment.unit}${notesMessage}\n\nThis would update the database in production.`;
+    
+    alert(message);
   };
 
   // Filter and sort materials
@@ -427,7 +466,7 @@ export default function MaterialCategoryPage() {
                       {material.description}
                     </p>
                     <p className="text-xs text-gray-400 mt-1 font-mono">
-                      SKU: {material.sku}
+                      {material.brand ? `Brand: ${material.brand}` : `SKU: ${material.sku}`}
                     </p>
                   </div>
 
@@ -500,7 +539,7 @@ export default function MaterialCategoryPage() {
                   </div>
 
                   {/* Price & Actions */}
-                  <div className="pt-4 border-t">
+                  <div className="pt-4 border-t space-y-3">
                     <div className="flex items-center justify-between">
                       <div>
                         <div className="text-xs text-gray-500">Cost per Unit</div>
@@ -515,6 +554,17 @@ export default function MaterialCategoryPage() {
                         </div>
                       </div>
                     </div>
+                    
+                    {/* Adjust Stock Button */}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={(e) => handleOpenAdjustment(material, e)}
+                      className="w-full flex items-center justify-center gap-2 hover:bg-red-50 hover:border-red-300 hover:text-red-600 transition-colors"
+                    >
+                      <Edit3 className="w-4 h-4" />
+                      Adjust Stock
+                    </Button>
                   </div>
                 </div>
               </CardContent>
@@ -546,6 +596,20 @@ export default function MaterialCategoryPage() {
           categoryName={categoryTitle}
           initialData={editingMaterial}
           isEditMode={isEditMode}
+        />
+      )}
+
+      {/* Stock Adjustment Modal */}
+      {showStockAdjustmentModal && selectedItemForAdjustment && (
+        <StockAdjustmentModal
+          isOpen={showStockAdjustmentModal}
+          onClose={() => {
+            setShowStockAdjustmentModal(false);
+            setSelectedItemForAdjustment(null);
+          }}
+          item={selectedItemForAdjustment}
+          onAdjust={handleStockAdjustment}
+          itemType="raw-material"
         />
       )}
     </div>

@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Ca
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { useAppContext } from '@/src/store/AppContext';
+import StockAdjustmentModal from '@/src/components/warehouse/StockAdjustmentModal';
 import {
   Package,
   ArrowLeft,
@@ -23,6 +24,7 @@ import {
   Tag,
   Layers,
   Factory,
+  Edit3,
 } from 'lucide-react';
 import {
   BarChart,
@@ -47,6 +49,10 @@ export function MaterialDetailPage() {
   const navigate = useNavigate();
   const { selectedBranch } = useAppContext();
   const [activeTab, setActiveTab] = useState<'overview' | 'batches' | 'analytics'>('overview');
+
+  // Stock adjustment modal states
+  const [showStockAdjustmentModal, setShowStockAdjustmentModal] = useState(false);
+  const [selectedItemForAdjustment, setSelectedItemForAdjustment] = useState<any>(null);
 
   const material = getRawMaterialById(id || '');
   const batches = getBatchesByMaterialId(id || '');
@@ -157,6 +163,32 @@ export function MaterialDetailPage() {
     },
   ];
 
+  // Stock adjustment handlers
+  const handleOpenAdjustment = () => {
+    setSelectedItemForAdjustment({
+      id: material.id,
+      name: material.name,
+      sku: material.sku,
+      currentStock: material.totalStock,
+      unit: material.unitOfMeasure,
+      reorderPoint: material.reorderPoint,
+    });
+    setShowStockAdjustmentModal(true);
+  };
+
+  const handleStockAdjustment = (adjustment: any) => {
+    console.log('Stock Adjustment:', {
+      item: selectedItemForAdjustment,
+      adjustment,
+      timestamp: new Date().toISOString(),
+    });
+
+    const notesMessage = adjustment.notes ? `\nNotes: ${adjustment.notes}` : '';
+    const message = `Stock adjusted successfully!\n\n${adjustment.type === 'add' ? '+' : '-'}${adjustment.quantity} ${selectedItemForAdjustment.unit}${notesMessage}\n\nThis would update the database in production.`;
+    
+    alert(message);
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -182,6 +214,11 @@ export function MaterialDetailPage() {
             <Edit className="w-4 h-4 mr-2" />
             <span className="hidden sm:inline">Edit Material</span>
             <span className="sm:hidden">Edit</span>
+          </Button>
+          <Button variant="primary" onClick={handleOpenAdjustment} className="flex-1 sm:flex-none">
+            <Edit3 className="w-4 h-4 mr-2" />
+            <span className="hidden sm:inline">Adjust Stock</span>
+            <span className="sm:hidden">Adjust</span>
           </Button>
         </div>
       </div>
@@ -292,6 +329,12 @@ export function MaterialDetailPage() {
               <div>
                 <h3 className="text-sm font-medium text-gray-500 mb-2">Description</h3>
                 <p className="text-gray-900">{material.description}</p>
+                {material.brand && (
+                  <div className="mt-3">
+                    <h3 className="text-sm font-medium text-gray-500 mb-1">Brand</h3>
+                    <p className="text-gray-900 font-semibold">{material.brand}</p>
+                  </div>
+                )}
               </div>
               <div>
                 <h3 className="text-sm font-medium text-gray-500 mb-2">Status & Supplier</h3>
@@ -830,6 +873,20 @@ export function MaterialDetailPage() {
             </Card>
           </div>
         </div>
+      )}
+
+      {/* Stock Adjustment Modal */}
+      {showStockAdjustmentModal && selectedItemForAdjustment && (
+        <StockAdjustmentModal
+          isOpen={showStockAdjustmentModal}
+          onClose={() => {
+            setShowStockAdjustmentModal(false);
+            setSelectedItemForAdjustment(null);
+          }}
+          item={selectedItemForAdjustment}
+          onAdjust={handleStockAdjustment}
+          itemType="raw-material"
+        />
       )}
     </div>
   );

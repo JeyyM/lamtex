@@ -30,6 +30,7 @@ export const rawMaterials: RawMaterial[] = [
     id: 'MAT-001',
     name: 'PVC Resin SG-5',
     sku: 'PVC-SG5-001',
+    brand: 'Formosa Plastics',
     category: 'PVC Resin',
     description: 'Suspension Grade PVC Resin, K-value 66-68, for rigid pipe applications',
     imageUrl: pvcImg,
@@ -71,6 +72,7 @@ export const rawMaterials: RawMaterial[] = [
     id: 'MAT-002',
     name: 'PVC Resin SG-8',
     sku: 'PVC-SG8-001',
+    brand: 'Formosa Plastics',
     category: 'PVC Resin',
     description: 'High molecular weight PVC for electrical conduit and pressure applications',
     specifications: {
@@ -113,6 +115,7 @@ export const rawMaterials: RawMaterial[] = [
     id: 'MAT-003',
     name: 'HDPE Resin PE100',
     sku: 'HDPE-PE100-001',
+    brand: 'Borealis',
     category: 'HDPE Resin',
     description: 'High-density polyethylene PE100 grade for pressure pipe systems',
     imageUrl: ldpeImg,
@@ -156,6 +159,7 @@ export const rawMaterials: RawMaterial[] = [
     id: 'MAT-004',
     name: 'PPR Resin Type III',
     sku: 'PPR-T3-001',
+    brand: 'Hyosung',
     category: 'PPR Resin',
     description: 'Polypropylene Random Copolymer Type III for hot & cold water systems',
     imageUrl: polypropyleneImg,
@@ -199,6 +203,7 @@ export const rawMaterials: RawMaterial[] = [
     id: 'MAT-005',
     name: 'Calcium-Zinc Heat Stabilizer',
     sku: 'STAB-CZ-001',
+    brand: 'Baerlocher',
     category: 'Stabilizers',
     description: 'Environmental-friendly heat stabilizer for PVC pipe processing',
     specifications: {
@@ -239,6 +244,7 @@ export const rawMaterials: RawMaterial[] = [
     id: 'MAT-006',
     name: 'Lead-Free Stabilizer (Organotin)',
     sku: 'STAB-TIN-001',
+    brand: 'Advanced Polymers Ltd.',
     category: 'Stabilizers',
     description: 'Organotin-based thermal stabilizer for high-performance PVC applications',
     imageUrl: whitePelletsImg,
@@ -282,6 +288,7 @@ export const rawMaterials: RawMaterial[] = [
     id: 'MAT-007',
     name: 'PE Wax Processing Aid',
     sku: 'LUB-PEW-001',
+    brand: 'Clariant',
     category: 'Lubricants',
     description: 'Polyethylene wax for internal/external lubrication in PVC processing',
     imageUrl: resinPowderImg,
@@ -323,6 +330,7 @@ export const rawMaterials: RawMaterial[] = [
     id: 'MAT-008',
     name: 'TiO2 White Pigment',
     sku: 'COL-TIO2-001',
+    brand: 'Chemours',
     category: 'Colorants',
     description: 'Titanium Dioxide pigment for white PVC/PPR pipes',
     imageUrl: petImg,
@@ -362,6 +370,7 @@ export const rawMaterials: RawMaterial[] = [
     id: 'MAT-009',
     name: 'Carbon Black Pigment',
     sku: 'COL-CB-001',
+    brand: 'Cabot Corporation',
     category: 'Colorants',
     description: 'Carbon black pigment for UV protection in black HDPE pipes',
     specifications: {
@@ -400,6 +409,7 @@ export const rawMaterials: RawMaterial[] = [
     id: 'MAT-010',
     name: 'Green Colorant Masterbatch',
     sku: 'COL-GRN-001',
+    brand: 'Americhem',
     category: 'Colorants',
     description: 'Green color masterbatch for PPR pipe identification',
     specifications: {
@@ -439,6 +449,7 @@ export const rawMaterials: RawMaterial[] = [
     id: 'MAT-011',
     name: 'Corrugated Carton Boxes (Large)',
     sku: 'PKG-BOX-L',
+    brand: 'PackPro Philippines',
     category: 'Packaging Materials',
     description: 'Heavy-duty corrugated boxes for pipe packaging (100x30x30 cm)',
     specifications: {
@@ -476,6 +487,7 @@ export const rawMaterials: RawMaterial[] = [
     id: 'MAT-012',
     name: 'Plastic Strapping Band',
     sku: 'PKG-STRAP-001',
+    brand: 'Signode',
     category: 'Packaging Materials',
     description: 'PP strapping band for securing bundled pipes (15mm x 0.6mm)',
     specifications: {
@@ -514,6 +526,7 @@ export const rawMaterials: RawMaterial[] = [
     id: 'MAT-013',
     name: 'Product Label Stickers (Roll)',
     sku: 'PKG-LBL-001',
+    brand: 'Avery Dennison',
     category: 'Packaging Materials',
     description: 'Pre-printed Lamtex product label stickers (1000 pcs/roll)',
     specifications: {
@@ -553,6 +566,7 @@ export const rawMaterials: RawMaterial[] = [
     id: 'MAT-014',
     name: 'UV Stabilizer Additive',
     sku: 'ADD-UV-001',
+    brand: 'BASF',
     category: 'Additives',
     description: 'UV light stabilizer for outdoor pipe applications',
     specifications: {

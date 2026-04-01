@@ -47,6 +47,7 @@ export interface RawMaterial {
   id: string;
   name: string;
   sku: string;
+  brand?: string; // Brand/Manufacturer of the raw material
   category: MaterialCategory;
   description: string;
   imageUrl?: string; // Material image

@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Ca
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { VariantModal } from '@/src/components/products/VariantModal';
+import StockAdjustmentModal from '@/src/components/warehouse/StockAdjustmentModal';
 import {
   Package,
   ArrowLeft,
@@ -18,6 +19,7 @@ import {
   Activity,
   Save,
   X,
+  Edit3,
 } from 'lucide-react';
 import {
   BarChart,
@@ -46,6 +48,10 @@ export function ProductDetailPage() {
   const [editedProduct, setEditedProduct] = useState<any>(null);
   const [editingVariantId, setEditingVariantId] = useState<string | null>(null);
   const [editedVariant, setEditedVariant] = useState<any>(null);
+
+  // Stock adjustment modal states
+  const [showStockAdjustmentModal, setShowStockAdjustmentModal] = useState(false);
+  const [selectedItemForAdjustment, setSelectedItemForAdjustment] = useState<any>(null);
 
   const product = getProductById(id || '');
   const variants = getVariantsByProductId(id || '');
@@ -235,6 +241,32 @@ export function ProductDetailPage() {
 
   const handleVariantInputChange = (field: string, value: any) => {
     setEditedVariant({ ...editedVariant, [field]: value });
+  };
+
+  // Stock adjustment handlers
+  const handleOpenAdjustment = (variant: any) => {
+    setSelectedItemForAdjustment({
+      id: variant.id,
+      name: `${product.name} - ${variant.size}`,
+      sku: variant.sku,
+      currentStock: variant.totalStock,
+      unit: 'units',
+      reorderPoint: variant.reorderPoint || 100,
+    });
+    setShowStockAdjustmentModal(true);
+  };
+
+  const handleStockAdjustment = (adjustment: any) => {
+    console.log('Stock Adjustment:', {
+      item: selectedItemForAdjustment,
+      adjustment,
+      timestamp: new Date().toISOString(),
+    });
+
+    const notesMessage = adjustment.notes ? `\nNotes: ${adjustment.notes}` : '';
+    const message = `Stock adjusted successfully!\n\n${adjustment.type === 'add' ? '+' : '-'}${adjustment.quantity} ${selectedItemForAdjustment.unit}${notesMessage}\n\nThis would update the database in production.`;
+    
+    alert(message);
   };
 
   const displayProduct = isEditing ? editedProduct : product;
@@ -569,12 +601,22 @@ export function ProductDetailPage() {
                         </td>
                         <td className="px-6 py-4">
                           <div className="flex items-center gap-2">
-                            <span className={`font-medium ${displayVariant.totalStock <= displayVariant.reorderPoint ? 'text-orange-600' : 'text-gray-900'}`}>
-                              {displayVariant.totalStock}
-                            </span>
-                            {displayVariant.totalStock <= displayVariant.reorderPoint && (
-                              <AlertTriangle className="w-4 h-4 text-orange-500" />
-                            )}
+                            <div className="flex items-center gap-2">
+                              <span className={`font-medium ${displayVariant.totalStock <= displayVariant.reorderPoint ? 'text-orange-600' : 'text-gray-900'}`}>
+                                {displayVariant.totalStock}
+                              </span>
+                              {displayVariant.totalStock <= displayVariant.reorderPoint && (
+                                <AlertTriangle className="w-4 h-4 text-orange-500" />
+                              )}
+                            </div>
+                            <button 
+                              type="button"
+                              className="ml-2 p-1.5 text-red-600 hover:bg-red-50 rounded cursor-pointer transition-colors"
+                              onClick={() => handleOpenAdjustment(variant)}
+                              title="Adjust Stock"
+                            >
+                              <Edit3 className="w-4 h-4" />
+                            </button>
                           </div>
                         </td>
                         <td className="px-6 py-4 text-gray-900">{displayVariant.unitsSoldYTD.toLocaleString()}</td>
@@ -699,12 +741,22 @@ export function ProductDetailPage() {
                         <div>
                           <p className="text-xs text-gray-500 mb-1">Total Stock</p>
                           <div className="flex items-center gap-2">
-                            <span className={`text-sm font-medium ${displayVariant.totalStock <= displayVariant.reorderPoint ? 'text-orange-600' : 'text-gray-900'}`}>
-                              {displayVariant.totalStock}
-                            </span>
-                            {displayVariant.totalStock <= displayVariant.reorderPoint && (
-                              <AlertTriangle className="w-3 h-3 text-orange-500" />
-                            )}
+                            <div className="flex items-center gap-1">
+                              <span className={`text-sm font-medium ${displayVariant.totalStock <= displayVariant.reorderPoint ? 'text-orange-600' : 'text-gray-900'}`}>
+                                {displayVariant.totalStock}
+                              </span>
+                              {displayVariant.totalStock <= displayVariant.reorderPoint && (
+                                <AlertTriangle className="w-3 h-3 text-orange-500" />
+                              )}
+                            </div>
+                            <button 
+                              type="button"
+                              className="p-1 text-red-600 hover:bg-red-50 rounded cursor-pointer transition-colors"
+                              onClick={() => handleOpenAdjustment(variant)}
+                              title="Adjust Stock"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                            </button>
                           </div>
                         </div>
                       </div>
@@ -1178,6 +1230,20 @@ export function ProductDetailPage() {
         productName={product?.name || ''}
         variant={null}
       />
+
+      {/* Stock Adjustment Modal */}
+      {showStockAdjustmentModal && selectedItemForAdjustment && (
+        <StockAdjustmentModal
+          isOpen={showStockAdjustmentModal}
+          onClose={() => {
+            setShowStockAdjustmentModal(false);
+            setSelectedItemForAdjustment(null);
+          }}
+          item={selectedItemForAdjustment}
+          onAdjust={handleStockAdjustment}
+          itemType="finished-good"
+        />
+      )}
     </div>
   );
 }

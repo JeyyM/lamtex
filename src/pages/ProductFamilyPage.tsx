@@ -6,6 +6,7 @@ import { Button } from '../components/ui/Button';
 import { useAppContext } from '../store/AppContext';
 import BulkDiscountModal from '../components/products/BulkDiscountModal';
 import ImageGalleryModal from '../components/ImageGalleryModal';
+import StockAdjustmentModal from '../components/warehouse/StockAdjustmentModal';
 import {
   Package,
   ArrowLeft,
@@ -30,6 +31,7 @@ import {
   Trash2,
   ChevronLeft,
   ChevronRight,
+  Edit3,
 } from 'lucide-react';
 
 // Import product images
@@ -322,6 +324,8 @@ export default function ProductFamilyPage() {
   const [showBulkDiscountModal, setShowBulkDiscountModal] = useState(false);
   const [showImageGalleryModal, setShowImageGalleryModal] = useState(false);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
+  const [showStockAdjustmentModal, setShowStockAdjustmentModal] = useState(false);
+  const [selectedItemForAdjustment, setSelectedItemForAdjustment] = useState<any>(null);
 
   // Product images for carousel
   const productImages = [hdpePipeImg, pipesImg, pressureLineImg];
@@ -433,6 +437,39 @@ export default function ProductFamilyPage() {
     } else {
       setSelectedVariant({ ...selectedVariant, bulkDiscounts: discounts });
     }
+  };
+
+  const handleOpenAdjustment = () => {
+    setSelectedItemForAdjustment({
+      id: displayVariant.id,
+      name: `${displayVariant.variantName} - ${displayVariant.sku}`,
+      sku: displayVariant.sku,
+      currentStock: displayVariant.stock,
+      unit: 'units',
+      reorderPoint: displayVariant.reorderPoint,
+      category: 'Products',
+    });
+    setShowStockAdjustmentModal(true);
+  };
+
+  const handleStockAdjustment = (adjustment: {
+    type: 'add' | 'subtract';
+    quantity: number;
+    notes: string;
+  }) => {
+    const { type, quantity } = adjustment;
+    const newStock = type === 'add'
+      ? displayVariant.stock + quantity
+      : displayVariant.stock - quantity;
+
+    // Update the stock
+    if (isEditingVariant) {
+      setEditedVariant({ ...editedVariant, stock: newStock });
+    } else {
+      setSelectedVariant({ ...selectedVariant, stock: newStock });
+    }
+
+    setShowStockAdjustmentModal(false);
   };
 
   const displayVariant = isEditingVariant ? editedVariant : selectedVariant;
@@ -762,9 +799,18 @@ export default function ProductFamilyPage() {
                     className="border rounded px-3 py-1 text-lg font-bold w-32 text-right"
                   />
                 ) : (
-                  <p className="text-lg font-bold text-gray-900">
-                    {displayVariant.stock.toLocaleString()} units
-                  </p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-lg font-bold text-gray-900">
+                      {displayVariant.stock.toLocaleString()} units
+                    </p>
+                    <button
+                      onClick={handleOpenAdjustment}
+                      className="p-1 hover:bg-gray-100 rounded transition-colors"
+                      title="Adjust Stock"
+                    >
+                      <Edit3 className="w-4 h-4 text-red-600" />
+                    </button>
+                  </div>
                 )}
               </div>
               <div className="w-full bg-gray-200 rounded-full h-2 mb-1">
@@ -1412,6 +1458,20 @@ export default function ProductFamilyPage() {
         maxImages={999}
         currentImages={productImages}
       />
+
+      {/* Stock Adjustment Modal */}
+      {selectedItemForAdjustment && (
+        <StockAdjustmentModal
+          isOpen={showStockAdjustmentModal}
+          onClose={() => {
+            setShowStockAdjustmentModal(false);
+            setSelectedItemForAdjustment(null);
+          }}
+          onAdjust={handleStockAdjustment}
+          item={selectedItemForAdjustment}
+          itemType="finished-good"
+        />
+      )}
     </div>
   );
 }
