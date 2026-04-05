@@ -1,38 +1,56 @@
 -- ============================================================================
 -- LAMTEX ERP - Comprehensive Supabase Database Schema
--- Generated: 2026-03-07
--- Run this entire script in the Supabase SQL Editor
--- All statements use IF NOT EXISTS for idempotent re-runs
+-- Version: 2.0
+-- Database: PostgreSQL (Supabase)
+-- Generated: 2026-03-15
+-- 
+-- Run this entire script in the Supabase SQL Editor.
+-- All statements use IF NOT EXISTS / DO blocks for idempotent re-runs.
 -- ============================================================================
 
 -- ============================================================================
--- SECTION 0: Extensions
+-- SECTION 0: EXTENSIONS
 -- ============================================================================
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";   -- uuid_generate_v4()
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";     -- gen_random_uuid(), crypt(), gen_salt()
+
 
 -- ============================================================================
 -- SECTION 1: ENUM TYPES
 -- Safe creation using DO blocks to avoid errors on re-run
 -- ============================================================================
 
--- User / Auth enums
-DO $$ BEGIN CREATE TYPE user_role AS ENUM ('Executive', 'Warehouse', 'Logistics', 'Agent'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+-- ── Auth & Roles ────────────────────────────────────────────────────────────
+DO $$ BEGIN CREATE TYPE user_role AS ENUM ('Executive', 'Warehouse', 'Logistics', 'Agent', 'Driver'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE employee_role AS ENUM ('Sales Agent', 'Logistics Manager', 'Warehouse Manager', 'Machine Worker', 'Truck Driver'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE employee_status AS ENUM ('active', 'on-leave', 'inactive'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE system_role AS ENUM ('Agent', 'Senior Agent', 'Team Lead', 'Branch Manager'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE employment_status AS ENUM ('Full-time', 'Part-time', 'Contract', 'Probationary'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE gender_enum AS ENUM ('Male', 'Female', 'Other'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE civil_status_enum AS ENUM ('Single', 'Married', 'Widowed', 'Separated'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE bank_account_type AS ENUM ('Savings', 'Current'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE pay_frequency AS ENUM ('Weekly', 'Bi-weekly', 'Monthly'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE commission_tier AS ENUM ('Bronze', 'Silver', 'Gold', 'Platinum'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE skill_level AS ENUM ('Beginner', 'Intermediate', 'Advanced', 'Expert'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE training_type AS ENUM ('Product Knowledge', 'Sales Skills', 'Technical', 'Soft Skills', 'Compliance'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE document_type AS ENUM ('Resume', 'ID', 'Certificate', 'Contract', 'Performance Review', 'Other'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE asset_type AS ENUM ('Laptop', 'Mobile Phone', 'Vehicle', 'Tablet', 'Equipment', 'Other'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE asset_condition AS ENUM ('New', 'Good', 'Fair', 'Needs Repair'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE employee_note_type AS ENUM ('General', 'Performance', 'Disciplinary', 'Commendation', 'HR'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE employee_activity_type AS ENUM ('Login', 'Order Created', 'Customer Visit', 'Quote Generated', 'Meeting', 'Other'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE customer_assignment_status AS ENUM ('Active', 'Inactive', 'At Risk', 'VIP'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
--- Product enums
+-- ── Product Enums ───────────────────────────────────────────────────────────
 DO $$ BEGIN CREATE TYPE product_status AS ENUM ('Active', 'Discontinued', 'Out of Stock', 'Low Stock'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
--- Material enums
+-- ── Material Enums ──────────────────────────────────────────────────────────
 DO $$ BEGIN CREATE TYPE material_status AS ENUM ('Active', 'Discontinued', 'Low Stock', 'Out of Stock', 'Expired'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE unit_of_measure AS ENUM ('kg', 'ton', 'liter', 'pieces', 'bags', 'drums'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE quality_status AS ENUM ('Pending', 'Passed', 'Failed', 'Conditionally Approved'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE material_movement_type AS ENUM ('Receipt', 'Issue', 'Transfer', 'Adjustment', 'Return'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE movement_reference_type AS ENUM ('PO', 'PR', 'Production', 'Transfer Request', 'Manual'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
--- Order enums
+-- ── Order Enums ─────────────────────────────────────────────────────────────
 DO $$ BEGIN CREATE TYPE order_status AS ENUM ('Draft', 'Pending', 'Approved', 'Picking', 'Packed', 'Ready', 'Scheduled', 'In Transit', 'Delivered', 'Completed', 'Cancelled', 'Rejected'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE payment_status AS ENUM ('Unbilled', 'Invoiced', 'Partially Paid', 'Paid', 'Overdue'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE delivery_type AS ENUM ('Truck', 'Ship', 'Pickup'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
@@ -40,15 +58,22 @@ DO $$ BEGIN CREATE TYPE payment_terms AS ENUM ('COD', '15 Days', '30 Days', '45 
 DO $$ BEGIN CREATE TYPE payment_method_enum AS ENUM ('Online', 'Offline'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE stock_hint AS ENUM ('Available', 'Partial', 'Not Available'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE delivery_status_enum AS ENUM ('On Time', 'Delayed', 'Failed'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN CREATE TYPE order_log_action AS ENUM ('created', 'status_changed', 'payment_status_changed', 'item_added', 'item_removed', 'item_quantity_changed', 'item_price_changed', 'discount_applied', 'approved', 'rejected', 'shipped', 'delivered', 'cancelled', 'payment_received', 'invoice_generated', 'note_added', 'proof_uploaded', 'proof_verified', 'proof_rejected'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE order_log_action AS ENUM (
+  'created', 'status_changed', 'payment_status_changed',
+  'item_added', 'item_removed', 'item_quantity_changed', 'item_price_changed',
+  'discount_applied', 'approved', 'rejected', 'shipped', 'delivered', 'cancelled',
+  'payment_received', 'invoice_generated', 'note_added',
+  'proof_uploaded', 'proof_verified', 'proof_rejected'
+); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE order_log_role AS ENUM ('Agent', 'Warehouse Staff', 'Manager', 'Admin', 'System', 'Logistics'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE proof_type AS ENUM ('delivery', 'payment', 'receipt'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE proof_status AS ENUM ('pending', 'verified', 'rejected'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE proof_uploader_role AS ENUM ('Agent', 'Customer', 'Logistics'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
--- Customer enums
+-- ── Customer Enums ──────────────────────────────────────────────────────────
 DO $$ BEGIN CREATE TYPE customer_type AS ENUM ('Hardware Store', 'Construction Company', 'Contractor', 'Distributor'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE customer_status AS ENUM ('Active', 'Inactive', 'Suspended', 'Dormant', 'On Hold'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE client_type AS ENUM ('Office', 'Personal'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE risk_level AS ENUM ('Low', 'Medium', 'High'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE payment_behavior AS ENUM ('Good', 'Watchlist', 'Risk'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE customer_note_type AS ENUM ('Call', 'Visit', 'Email', 'Meeting', 'Negotiation', 'Complaint', 'Other'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
@@ -57,18 +82,18 @@ DO $$ BEGIN CREATE TYPE task_priority AS ENUM ('Low', 'Medium', 'High', 'Urgent'
 DO $$ BEGIN CREATE TYPE task_status AS ENUM ('Pending', 'In Progress', 'Completed', 'Cancelled'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE customer_activity_type AS ENUM ('Order Created', 'Payment Received', 'Note Added', 'Task Created', 'Call Made', 'Visit Completed', 'Status Changed'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
--- Supplier enums
+-- ── Supplier Enums ──────────────────────────────────────────────────────────
 DO $$ BEGIN CREATE TYPE supplier_type AS ENUM ('Raw Materials', 'Packaging', 'Chemicals', 'Equipment', 'Services'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE supplier_category AS ENUM ('Resin Supplier', 'Additives Supplier', 'Packaging Supplier', 'General'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE supplier_status AS ENUM ('Active', 'Inactive', 'Blacklisted'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
--- Purchase enums
+-- ── Purchase Enums ──────────────────────────────────────────────────────────
 DO $$ BEGIN CREATE TYPE purchase_requisition_status AS ENUM ('Draft', 'Pending Approval', 'Approved', 'Rejected', 'Ordered', 'Completed', 'Cancelled'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE purchase_order_status AS ENUM ('Draft', 'Sent', 'Confirmed', 'Partially Received', 'Completed', 'Cancelled'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE grn_status AS ENUM ('Draft', 'Completed', 'Partially Accepted', 'Rejected'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE urgency_level AS ENUM ('Low', 'Medium', 'High', 'Critical'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
--- Logistics enums
+-- ── Logistics Enums ─────────────────────────────────────────────────────────
 DO $$ BEGIN CREATE TYPE vehicle_type AS ENUM ('Truck', 'Container Van', 'Motorcycle'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE vehicle_status AS ENUM ('Available', 'On Trip', 'Loading', 'Maintenance', 'Out of Service'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE financing_status AS ENUM ('Owned', 'Financed', 'Leased'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
@@ -80,7 +105,7 @@ DO $$ BEGIN CREATE TYPE shipment_type AS ENUM ('Sea Freight', 'Air Freight'); EX
 DO $$ BEGIN CREATE TYPE shipment_status AS ENUM ('Preparing', 'In Transit', 'Arrived', 'Delayed'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE maintenance_category AS ENUM ('Preventive', 'Corrective', 'Emergency'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
--- Warehouse enums
+-- ── Warehouse Enums ─────────────────────────────────────────────────────────
 DO $$ BEGIN CREATE TYPE fulfillment_status AS ENUM ('To Pick', 'Picking', 'Packing', 'Ready', 'Blocked'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE warehouse_stock_status AS ENUM ('Fully Available', 'Partial', 'Not Available'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE loading_detail_status AS ENUM ('Pending', 'Loading', 'Partial', 'Full', 'Out of Stock', 'Ready'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
@@ -91,49 +116,42 @@ DO $$ BEGIN CREATE TYPE machine_status_enum AS ENUM ('Running', 'Idle', 'Mainten
 DO $$ BEGIN CREATE TYPE product_stock_movement_type AS ENUM ('In', 'Out', 'Transfer', 'Adjustment'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE warehouse_movement_type AS ENUM ('In', 'Out', 'Transfer', 'Adjust', 'Production', 'Damage'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
--- Payment system enums
+-- ── Payment System Enums ────────────────────────────────────────────────────
 DO $$ BEGIN CREATE TYPE payment_method_type AS ENUM ('GCash', 'Maya', 'Bank Transfer', 'Credit Card', 'Debit Card', 'Cash', 'Check'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE payment_link_status AS ENUM ('pending', 'paid', 'expired', 'cancelled', 'failed'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE payment_transaction_status AS ENUM ('pending', 'processing', 'completed', 'failed', 'refunded'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
--- Collections enums
+-- ── Collections Enums ───────────────────────────────────────────────────────
 DO $$ BEGIN CREATE TYPE collection_status AS ENUM ('Current', 'Due Soon', 'Overdue', 'Critical', 'Collected', 'Partially Paid'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE collection_note_type AS ENUM ('Phone Call', 'Email', 'Visit', 'Promise to Pay', 'Dispute', 'Other'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE collection_payment_method AS ENUM ('Cash', 'Check', 'Bank Transfer', 'Online Payment', 'Credit Card'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE verification_status AS ENUM ('Pending', 'Verified', 'Rejected'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
--- Chat enums
+-- ── Chat Enums ──────────────────────────────────────────────────────────────
 DO $$ BEGIN CREATE TYPE chat_type AS ENUM ('direct', 'group'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE chat_user_status AS ENUM ('online', 'offline', 'away'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE chat_member_role AS ENUM ('admin', 'member'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
--- Agent profile enums
-DO $$ BEGIN CREATE TYPE gender_type AS ENUM ('Male', 'Female', 'Other'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN CREATE TYPE civil_status AS ENUM ('Single', 'Married', 'Widowed', 'Separated'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN CREATE TYPE employment_status AS ENUM ('Full-time', 'Part-time', 'Contract', 'Probationary'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN CREATE TYPE commission_tier AS ENUM ('Bronze', 'Silver', 'Gold', 'Platinum'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN CREATE TYPE bank_account_type AS ENUM ('Savings', 'Current'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN CREATE TYPE pay_frequency AS ENUM ('Weekly', 'Bi-weekly', 'Monthly'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN CREATE TYPE skill_level AS ENUM ('Beginner', 'Intermediate', 'Advanced', 'Expert'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN CREATE TYPE training_type AS ENUM ('Product Knowledge', 'Sales Skills', 'Technical', 'Soft Skills', 'Compliance'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN CREATE TYPE document_type AS ENUM ('Resume', 'ID', 'Certificate', 'Contract', 'Performance Review', 'Other'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN CREATE TYPE asset_type AS ENUM ('Laptop', 'Mobile Phone', 'Vehicle', 'Tablet', 'Equipment', 'Other'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN CREATE TYPE asset_condition AS ENUM ('New', 'Good', 'Fair', 'Needs Repair'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN CREATE TYPE agent_note_type AS ENUM ('General', 'Performance', 'Disciplinary', 'Commendation', 'HR'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN CREATE TYPE agent_activity_type AS ENUM ('Login', 'Order Created', 'Customer Visit', 'Quote Generated', 'Meeting', 'Other'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN CREATE TYPE customer_assignment_status AS ENUM ('Active', 'Inactive', 'At Risk', 'VIP'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-
--- Settings enums
-DO $$ BEGIN CREATE TYPE address_type AS ENUM ('Head Office', 'Branch', 'Warehouse', 'Factory'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN CREATE TYPE payment_profile_type AS ENUM ('Bank Account', 'Credit Card', 'E-Wallet', 'Check'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN CREATE TYPE social_platform AS ENUM ('Facebook', 'Twitter', 'Instagram', 'LinkedIn', 'YouTube', 'Website'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN CREATE TYPE notification_category AS ENUM ('Approvals', 'Inventory', 'Delivery', 'Payment', 'System'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN CREATE TYPE alert_severity AS ENUM ('Low', 'Medium', 'High', 'Critical'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-
--- Commission enums
+-- ── Agent Enums ─────────────────────────────────────────────────────────────
+DO $$ BEGIN CREATE TYPE agent_order_status AS ENUM ('Draft', 'Pending Approval', 'Approved', 'Rejected', 'In Fulfillment', 'Ready for Dispatch', 'Delivered', 'Cancelled'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE agent_account_type AS ENUM ('Retail', 'Construction', 'Distributor', 'Government'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE agent_health_score AS ENUM ('Excellent', 'Good', 'Fair', 'Poor'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE agent_alert_type AS ENUM ('Payment Overdue', 'Order Rejected', 'POD Pending', 'Credit Limit', 'Customer Issue', 'Target Alert', 'Commission Update'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE purchase_request_category AS ENUM ('Raw Material', 'Finished Good', 'Supplies', 'Equipment'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE purchase_request_status AS ENUM ('Draft', 'Submitted', 'Under Review', 'Approved', 'Rejected', 'Ordered', 'Received'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE commission_status AS ENUM ('Pending', 'Approved', 'Paid'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
--- Finance payment recording method (superset of collection + online)
-DO $$ BEGIN CREATE TYPE finance_payment_method AS ENUM ('Cash', 'Check', 'Bank Transfer', 'Credit Card', 'GCash', 'PayMaya', 'Online'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+-- ── Notification / Alert Enums ──────────────────────────────────────────────
+DO $$ BEGIN CREATE TYPE notification_category AS ENUM ('Approvals', 'Inventory', 'Delivery', 'Payment', 'System'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE alert_severity AS ENUM ('Low', 'Medium', 'High', 'Critical'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE logistics_alert_type AS ENUM ('New Order Ready', 'Warehouse Not Ready', 'Truck Unavailable', 'Delivery Failed', 'Capacity Warning', 'Executive Request'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE warehouse_alert_type AS ENUM ('Low Stock', 'Shortage Impact', 'Material Delay', 'Material Arrival', 'QA Reject', 'Transfer Request'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- ── Calendar Enums ──────────────────────────────────────────────────────────
+DO $$ BEGIN CREATE TYPE calendar_event_type AS ENUM ('Outgoing', 'Incoming', 'Transfer'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- ── Settings Enums ──────────────────────────────────────────────────────────
+DO $$ BEGIN CREATE TYPE address_type AS ENUM ('Main Office', 'Warehouse', 'Factory', 'Branch'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 
 -- ============================================================================
@@ -142,360 +160,343 @@ DO $$ BEGIN CREATE TYPE finance_payment_method AS ENUM ('Cash', 'Check', 'Bank T
 
 -- Branches
 CREATE TABLE IF NOT EXISTS branches (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  name TEXT NOT NULL UNIQUE,
-  location TEXT,
-  manager_name TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  code         VARCHAR(10)  NOT NULL UNIQUE,  -- 'A', 'B', 'C'
+  name         VARCHAR(100) NOT NULL,          -- 'Branch A', 'Branch B', 'Branch C'
+  address      TEXT,
+  city         VARCHAR(100),
+  province     VARCHAR(100),
+  phone        VARCHAR(50),
+  email        VARCHAR(255),
+  manager_name VARCHAR(200),
+  is_active    BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+
 -- ============================================================================
--- SECTION 3: EMPLOYEES
+-- SECTION 3: EMPLOYEES (Core + Extended Tables)
 -- ============================================================================
 
+-- 3a: Core employees table
 CREATE TABLE IF NOT EXISTS employees (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  employee_id TEXT NOT NULL UNIQUE,
-  employee_name TEXT NOT NULL,
-  role employee_role NOT NULL,
-  department TEXT,
-  branch_id TEXT,
-  branch_name TEXT,
-  status employee_status NOT NULL DEFAULT 'active',
-  join_date DATE,
-  tenure_months INTEGER DEFAULT 0,
-  profile_photo TEXT,
-  email TEXT,
-  phone TEXT,
-  -- Role-specific fields (Sales Agent)
-  active_customers INTEGER,
-  total_revenue NUMERIC(15,2),
-  commission NUMERIC(15,2),
-  commission_tier_text TEXT,
-  territory_coverage TEXT,
-  -- Role-specific fields (Logistics Manager)
-  deliveries_managed INTEGER,
-  on_time_delivery_rate NUMERIC(5,2),
-  trucks_managed INTEGER,
-  routes_optimized INTEGER,
-  -- Role-specific fields (Warehouse Manager)
-  inventory_accuracy NUMERIC(5,2),
-  warehouse_size TEXT,
-  staff_managed INTEGER,
-  orders_processed INTEGER,
-  -- Role-specific fields (Machine Worker)
-  machine_type TEXT,
-  shifts_completed INTEGER,
-  production_output NUMERIC(15,2),
-  efficiency_rate NUMERIC(5,2),
-  -- Role-specific fields (Truck Driver)
-  truck_number TEXT,
-  deliveries_completed INTEGER,
-  distance_covered NUMERIC(12,2),
-  safety_rating NUMERIC(3,1),
-  license_plate TEXT,
-  -- Auth / Permissions
-  system_role system_role,
-  permissions TEXT[],
-  last_password_change TIMESTAMPTZ,
-  last_login TIMESTAMPTZ,
-  -- Timestamps
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  employee_id     VARCHAR(50)     NOT NULL UNIQUE,  -- Human-readable ID (EMP-001)
+  employee_name   VARCHAR(200)    NOT NULL,
+  email           VARCHAR(255)    NOT NULL UNIQUE,
+  phone           VARCHAR(50),
+  role            employee_role   NOT NULL,
+  department      VARCHAR(100),
+  branch_id       UUID            REFERENCES branches(id) ON DELETE SET NULL,
+  status          employee_status NOT NULL DEFAULT 'active',
+  system_role     system_role,                        -- For agents only
+  profile_photo   TEXT,
+  join_date       DATE            NOT NULL,
+  tenure_months   INT             DEFAULT 0,
+  
+  -- Auth link (Supabase auth.users)
+  auth_user_id    UUID            UNIQUE,
+  user_role       user_role,                          -- Dashboard role
+  
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Employee extended: personal info
+-- 3b: Personal information
 CREATE TABLE IF NOT EXISTS employee_personal_info (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
-  date_of_birth DATE,
-  gender gender_type,
-  nationality TEXT,
-  civil_status civil_status,
-  religion TEXT,
-  blood_type TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(employee_id)
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  employee_id     UUID NOT NULL UNIQUE REFERENCES employees(id) ON DELETE CASCADE,
+  date_of_birth   DATE,
+  age             INT,
+  gender          gender_enum,
+  nationality     VARCHAR(100) DEFAULT 'Filipino',
+  civil_status    civil_status_enum,
+  religion        VARCHAR(100),
+  blood_type      VARCHAR(10),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Employee extended: contact info
+-- 3c: Contact information
 CREATE TABLE IF NOT EXISTS employee_contact_info (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
-  primary_phone TEXT,
-  secondary_phone TEXT,
-  personal_email TEXT,
-  work_email TEXT,
-  emergency_contact_name TEXT,
-  emergency_contact_phone TEXT,
-  emergency_contact_relationship TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(employee_id)
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  employee_id     UUID NOT NULL UNIQUE REFERENCES employees(id) ON DELETE CASCADE,
+  primary_phone           VARCHAR(50),
+  secondary_phone         VARCHAR(50),
+  personal_email          VARCHAR(255),
+  work_email              VARCHAR(255),
+  emergency_contact_name  VARCHAR(200),
+  emergency_contact_phone VARCHAR(50),
+  emergency_contact_relationship VARCHAR(100),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Employee extended: address
+-- 3d: Addresses
 CREATE TABLE IF NOT EXISTS employee_addresses (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
-  street TEXT,
-  barangay TEXT,
-  city TEXT,
-  province TEXT,
-  postal_code TEXT,
-  current_address TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(employee_id)
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  employee_id     UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  address_label   VARCHAR(50) DEFAULT 'Permanent', -- 'Permanent', 'Current'
+  street          TEXT,
+  barangay        VARCHAR(200),
+  city            VARCHAR(200),
+  province        VARCHAR(200),
+  postal_code     VARCHAR(20),
+  is_current      BOOLEAN DEFAULT FALSE,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Employee extended: employment info
+-- 3e: Employment details
 CREATE TABLE IF NOT EXISTS employee_employment_info (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
-  date_hired DATE,
-  employment_status employment_status,
-  position TEXT,
-  department TEXT,
-  reporting_to TEXT,
-  branch_manager_name TEXT,
-  work_schedule_days TEXT[],
-  work_schedule_start TIME,
-  work_schedule_end TIME,
-  shift TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(employee_id)
+  id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  employee_id         UUID NOT NULL UNIQUE REFERENCES employees(id) ON DELETE CASCADE,
+  employment_status   employment_status NOT NULL DEFAULT 'Full-time',
+  position            VARCHAR(200),
+  department          VARCHAR(200),
+  reporting_to        VARCHAR(200),
+  branch_manager_name VARCHAR(200),
+  work_schedule_days  TEXT[],         -- ['Monday','Tuesday',...]
+  work_start_time     TIME,
+  work_end_time       TIME,
+  shift               VARCHAR(50),
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Employee extended: compensation
+-- 3f: Compensation
 CREATE TABLE IF NOT EXISTS employee_compensation (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
-  base_salary NUMERIC(12,2),
-  commission_rate NUMERIC(5,2),
-  commission_tier commission_tier,
-  bonus_eligibility BOOLEAN DEFAULT FALSE,
-  monthly_quota NUMERIC(15,2),
-  quarterly_quota NUMERIC(15,2),
-  yearly_quota NUMERIC(15,2),
-  allowance_transportation NUMERIC(10,2) DEFAULT 0,
-  allowance_meal NUMERIC(10,2) DEFAULT 0,
+  id                      UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  employee_id             UUID NOT NULL UNIQUE REFERENCES employees(id) ON DELETE CASCADE,
+  base_salary             NUMERIC(12,2) DEFAULT 0,
+  commission_rate         NUMERIC(5,2)  DEFAULT 0,   -- Percentage
+  commission_tier         commission_tier,
+  bonus_eligibility       BOOLEAN DEFAULT FALSE,
+  monthly_quota           NUMERIC(14,2) DEFAULT 0,
+  quarterly_quota         NUMERIC(14,2) DEFAULT 0,
+  yearly_quota            NUMERIC(14,2) DEFAULT 0,
+  allowance_transport     NUMERIC(10,2) DEFAULT 0,
+  allowance_meal          NUMERIC(10,2) DEFAULT 0,
   allowance_communication NUMERIC(10,2) DEFAULT 0,
-  allowance_other NUMERIC(10,2) DEFAULT 0,
-  total_monthly_compensation NUMERIC(15,2),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(employee_id)
+  allowance_other         NUMERIC(10,2) DEFAULT 0,
+  total_monthly_compensation NUMERIC(14,2) DEFAULT 0,
+  created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Employee extended: bank details
+-- 3g: Bank details
 CREATE TABLE IF NOT EXISTS employee_bank_details (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
-  bank_name TEXT,
-  account_number TEXT,  -- encrypt at application level
-  account_name TEXT,
-  account_type bank_account_type,
+  id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  employee_id       UUID NOT NULL UNIQUE REFERENCES employees(id) ON DELETE CASCADE,
+  bank_name         VARCHAR(200),
+  account_number    VARCHAR(100),
+  account_name      VARCHAR(200),
+  account_type      bank_account_type,
   payment_frequency pay_frequency,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(employee_id)
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Employee extended: government IDs
+-- 3h: Government IDs
 CREATE TABLE IF NOT EXISTS employee_government_ids (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
-  tin TEXT,              -- encrypt at application level
-  sss TEXT,
-  phil_health TEXT,
-  pag_ibig TEXT,
-  gov_id_type TEXT,
-  gov_id_number TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(employee_id)
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  employee_id     UUID NOT NULL UNIQUE REFERENCES employees(id) ON DELETE CASCADE,
+  tin             VARCHAR(50),
+  sss             VARCHAR(50),
+  phil_health     VARCHAR(50),
+  pag_ibig        VARCHAR(50),
+  gov_id_type     VARCHAR(100),
+  gov_id_number   VARCHAR(100),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Employee: skills
+-- 3i: Skills
 CREATE TABLE IF NOT EXISTS employee_skills (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
-  skill_name TEXT NOT NULL,
-  level skill_level,
-  years_of_experience NUMERIC(4,1),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  employee_id     UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  skill_name      VARCHAR(200) NOT NULL,
+  skill_level     skill_level NOT NULL,
+  years_experience NUMERIC(4,1),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Employee: certifications
+-- 3j: Certifications
 CREATE TABLE IF NOT EXISTS employee_certifications (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
-  certification_name TEXT NOT NULL,
-  issuing_organization TEXT,
-  issue_date DATE,
-  expiry_date DATE,
-  credential_id TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  employee_id           UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  certification_name    VARCHAR(300) NOT NULL,
+  issuing_organization  VARCHAR(300),
+  issue_date            DATE,
+  expiry_date           DATE,
+  credential_id         VARCHAR(200),
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Employee: training history
+-- 3k: Training history
 CREATE TABLE IF NOT EXISTS employee_trainings (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
-  training_name TEXT NOT NULL,
-  training_type training_type,
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  employee_id     UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  training_name   VARCHAR(300) NOT NULL,
+  training_type   training_type,
   completion_date DATE,
-  duration TEXT,
-  instructor TEXT,
-  score NUMERIC(5,2),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  duration        VARCHAR(100),  -- e.g. '3 days', '2 hours'
+  instructor      VARCHAR(200),
+  score           NUMERIC(5,2),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Employee: documents
+-- 3l: Documents
 CREATE TABLE IF NOT EXISTS employee_documents (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
-  document_type document_type NOT NULL,
-  document_name TEXT NOT NULL,
-  upload_date DATE,
-  uploaded_by TEXT,
-  file_size TEXT,
-  file_url TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  employee_id     UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  document_type   document_type NOT NULL,
+  document_name   VARCHAR(300) NOT NULL,
+  file_url        TEXT NOT NULL,
+  file_size       VARCHAR(50),
+  uploaded_by     VARCHAR(200),
+  upload_date     DATE DEFAULT CURRENT_DATE,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Employee: company assets assigned
+-- 3m: Assets assigned to employees
 CREATE TABLE IF NOT EXISTS employee_assets (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
-  asset_type asset_type NOT NULL,
-  asset_name TEXT NOT NULL,
-  serial_number TEXT,
-  model TEXT,
-  assigned_date DATE,
-  condition asset_condition,
-  value NUMERIC(12,2),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  employee_id     UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  asset_type      asset_type NOT NULL,
+  asset_name      VARCHAR(300) NOT NULL,
+  serial_number   VARCHAR(200),
+  model           VARCHAR(200),
+  assigned_date   DATE,
+  condition       asset_condition DEFAULT 'Good',
+  value           NUMERIC(12,2) DEFAULT 0,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Employee: HR notes
+-- 3n: Employee notes (HR / supervisor notes)
 CREATE TABLE IF NOT EXISTS employee_notes (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
-  note_type agent_note_type NOT NULL,
-  note TEXT NOT NULL,
-  created_by TEXT,
-  is_private BOOLEAN DEFAULT FALSE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  employee_id     UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  note_type       employee_note_type NOT NULL DEFAULT 'General',
+  note            TEXT NOT NULL,
+  created_by      VARCHAR(200),
+  is_private      BOOLEAN DEFAULT FALSE,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Employee: activity log
+-- 3o: Employee activity log
 CREATE TABLE IF NOT EXISTS employee_activities (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
-  activity_type agent_activity_type NOT NULL,
-  description TEXT,
-  location TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  employee_id     UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  activity_type   employee_activity_type NOT NULL,
+  description     TEXT NOT NULL,
+  location        VARCHAR(300),
+  timestamp       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Agent targets (per-period targets)
+-- 3p: Agent targets & incentives
 CREATE TABLE IF NOT EXISTS agent_targets (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
-  period TEXT NOT NULL,                     -- e.g. '2026-Q1', '2026-03'
-  monthly_sales_target NUMERIC(15,2),
-  quarterly_sales_target NUMERIC(15,2),
-  target_achievement_rate NUMERIC(5,2),
-  days_ahead_behind_target INTEGER,
-  revenue_gap NUMERIC(15,2),
-  stretch_goal_status TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id                       UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  employee_id              UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  period                   VARCHAR(20) NOT NULL,   -- '2026-Q1', '2026-03', 'yearly-2026'
+  monthly_sales_target     NUMERIC(14,2) DEFAULT 0,
+  quarterly_sales_target   NUMERIC(14,2) DEFAULT 0,
+  target_achievement_rate  NUMERIC(5,2)  DEFAULT 0,
+  days_ahead_behind        INT           DEFAULT 0,
+  revenue_gap              NUMERIC(14,2) DEFAULT 0,
+  stretch_goal_status      VARCHAR(100),
+  created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Agent incentives / gamification
 CREATE TABLE IF NOT EXISTS agent_incentives (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
-  streak_days INTEGER DEFAULT 0,
-  milestones_achieved TEXT[],
-  awards_won TEXT[],
-  badges TEXT[],
-  bonus_tier TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(employee_id)
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  employee_id     UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  streak_days     INT DEFAULT 0,
+  bonus_tier      VARCHAR(50),
+  milestones      JSONB DEFAULT '[]'::jsonb,  -- Array of milestone strings
+  awards          JSONB DEFAULT '[]'::jsonb,
+  badges          JSONB DEFAULT '[]'::jsonb,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Agent commissions
-CREATE TABLE IF NOT EXISTS commissions (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
-  period TEXT NOT NULL,
-  sales_amount NUMERIC(15,2) NOT NULL DEFAULT 0,
-  commission_rate NUMERIC(5,2) NOT NULL DEFAULT 0,
-  commission_earned NUMERIC(15,2) NOT NULL DEFAULT 0,
-  status commission_status NOT NULL DEFAULT 'Pending',
-  paid_date DATE,
-  branch TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+-- 3q: Agent commissions
+CREATE TABLE IF NOT EXISTS agent_commissions (
+  id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  employee_id       UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  period            VARCHAR(20) NOT NULL,        -- '2026-03'
+  sales_amount      NUMERIC(14,2) DEFAULT 0,
+  commission_rate   NUMERIC(5,2)  DEFAULT 0,
+  commission_earned NUMERIC(14,2) DEFAULT 0,
+  status            commission_status NOT NULL DEFAULT 'Pending',
+  paid_date         DATE,
+  breakdown         JSONB DEFAULT '[]'::jsonb,   -- Array of {orderNumber, customerName, saleAmount, commission}
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS commission_breakdown (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  commission_id UUID NOT NULL REFERENCES commissions(id) ON DELETE CASCADE,
-  order_number TEXT,
-  customer_name TEXT,
-  sale_amount NUMERIC(15,2),
-  commission_amount NUMERIC(15,2)
+-- 3r: Customer assignments (which agent owns which customers)
+CREATE TABLE IF NOT EXISTS customer_assignments (
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  employee_id     UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  customer_id     UUID,              -- FK added after customers table
+  customer_name   VARCHAR(300),
+  company         VARCHAR(300),
+  contact_number  VARCHAR(50),
+  email           VARCHAR(255),
+  total_orders    INT DEFAULT 0,
+  lifetime_revenue NUMERIC(14,2) DEFAULT 0,
+  last_order_date DATE,
+  status          customer_assignment_status DEFAULT 'Active',
+  assigned_date   DATE DEFAULT CURRENT_DATE,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 
 -- ============================================================================
 -- SECTION 4: SUPPLIERS
 -- ============================================================================
-
 CREATE TABLE IF NOT EXISTS suppliers (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  code TEXT UNIQUE,
-  name TEXT NOT NULL,
-  type supplier_type,
-  category supplier_category,
-  contact_person TEXT,
-  phone TEXT,
-  email TEXT,
-  address TEXT,
-  city TEXT,
-  country TEXT DEFAULT 'Philippines',
-  payment_terms TEXT,
-  currency TEXT DEFAULT 'PHP',
-  credit_limit NUMERIC(15,2) DEFAULT 0,
-  delivery_lead_time INTEGER,          -- days
-  total_purchases_ytd NUMERIC(15,2) DEFAULT 0,
-  total_purchases_lifetime NUMERIC(15,2) DEFAULT 0,
-  order_count INTEGER DEFAULT 0,
-  last_purchase_date DATE,
-  account_since DATE,
-  status supplier_status NOT NULL DEFAULT 'Active',
-  performance_score INTEGER DEFAULT 0,  -- 0-100
-  quality_rating NUMERIC(2,1),          -- 1.0-5.0
-  delivery_rating NUMERIC(2,1),
-  on_time_delivery_rate NUMERIC(5,2),
-  defect_rate NUMERIC(5,2),
-  avg_lead_time INTEGER,
-  avg_order_value NUMERIC(15,2),
-  preferred_supplier BOOLEAN DEFAULT FALSE,
-  risk_level risk_level DEFAULT 'Low',
-  materials_supplied UUID[],            -- material IDs
-  notes TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  code                VARCHAR(50)  NOT NULL UNIQUE,
+  name                VARCHAR(300) NOT NULL,
+  
+  -- Contact
+  contact_person      VARCHAR(200),
+  email               VARCHAR(255),
+  phone               VARCHAR(50),
+  address             TEXT,
+  
+  -- Classification
+  type                supplier_type,
+  category            supplier_category,
+  
+  -- Terms
+  payment_terms       VARCHAR(100),
+  credit_limit        NUMERIC(14,2) DEFAULT 0,
+  delivery_lead_time  INT DEFAULT 0,  -- days
+  
+  -- Materials supplied (array of material IDs)
+  materials_supplied  UUID[],
+  
+  -- Performance metrics
+  rating              NUMERIC(3,2) DEFAULT 0,      -- 1.00 - 5.00
+  on_time_delivery_rate NUMERIC(5,2) DEFAULT 0,     -- percentage
+  quality_score       NUMERIC(5,2) DEFAULT 0,       -- percentage
+  
+  -- Status
+  status              supplier_status NOT NULL DEFAULT 'Active',
+  
+  -- Dates
+  registered_date     DATE DEFAULT CURRENT_DATE,
+  last_order_date     DATE,
+  
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 
@@ -503,130 +504,141 @@ CREATE TABLE IF NOT EXISTS suppliers (
 -- SECTION 5: PRODUCTS
 -- ============================================================================
 
+-- 5a: Product categories
 CREATE TABLE IF NOT EXISTS product_categories (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  name TEXT NOT NULL UNIQUE,
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name        VARCHAR(200) NOT NULL UNIQUE,
+  slug        VARCHAR(200) NOT NULL UNIQUE,
   description TEXT,
-  image_url TEXT,
-  icon TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  image_url   TEXT,
+  sort_order  INT DEFAULT 0,
+  is_active   BOOLEAN DEFAULT TRUE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 5b: Products
 CREATE TABLE IF NOT EXISTS products (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  name TEXT NOT NULL,
-  category_id UUID REFERENCES product_categories(id) ON DELETE SET NULL,
-  category_name TEXT,                     -- denormalized for convenience
-  family_code TEXT,
-  description TEXT,
-  image_url TEXT,
-  images TEXT[],
-  status product_status NOT NULL DEFAULT 'Active',
-  specifications JSONB DEFAULT '{}',      -- {material, pressureRating, temperature, standard, color, application}
-  total_variants INTEGER DEFAULT 0,
-  total_stock INTEGER DEFAULT 0,
-  avg_price NUMERIC(12,2) DEFAULT 0,
-  total_revenue NUMERIC(15,2) DEFAULT 0,
-  total_units_sold INTEGER DEFAULT 0,
-  branch TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name            VARCHAR(300)   NOT NULL,
+  category_id     UUID           REFERENCES product_categories(id) ON DELETE SET NULL,
+  description     TEXT,
+  specifications  JSONB DEFAULT '{}'::jsonb,  -- {material, pressureRating, temperature, standard, color, application}
+  image_url       TEXT,
+  images          TEXT[],                     -- Array of image URLs
+  status          product_status NOT NULL DEFAULT 'Active',
+  
+  -- Aggregated stats (denormalized for performance)
+  total_variants   INT DEFAULT 0,
+  total_stock      INT DEFAULT 0,
+  avg_price        NUMERIC(12,2) DEFAULT 0,
+  total_revenue    NUMERIC(14,2) DEFAULT 0,  -- YTD
+  total_units_sold INT DEFAULT 0,            -- YTD
+  
+  branch          VARCHAR(10),               -- optional branch filter
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 5c: Product variants (SKU level)
 CREATE TABLE IF NOT EXISTS product_variants (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-  product_name TEXT,
-  sku TEXT NOT NULL UNIQUE,
-  size TEXT,
-  description TEXT,
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  product_id      UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  sku             VARCHAR(100) NOT NULL UNIQUE,
+  size            VARCHAR(100) NOT NULL,        -- '20mm', '25x20mm', 'SDR 11'
+  description     TEXT,
+  
   -- Pricing
-  unit_price NUMERIC(12,2) NOT NULL DEFAULT 0,
+  unit_price      NUMERIC(12,2) NOT NULL DEFAULT 0,
   wholesale_price NUMERIC(12,2),
-  retail_price NUMERIC(12,2),
-  cost_price NUMERIC(12,2),
+  retail_price    NUMERIC(12,2),
+  cost_price      NUMERIC(12,2),
+  
   -- Stock per branch
-  stock_branch_a INTEGER NOT NULL DEFAULT 0,
-  stock_branch_b INTEGER NOT NULL DEFAULT 0,
-  stock_branch_c INTEGER NOT NULL DEFAULT 0,
-  total_stock INTEGER NOT NULL DEFAULT 0,
-  reorder_point INTEGER NOT NULL DEFAULT 0,
-  safety_stock INTEGER NOT NULL DEFAULT 0,
-  -- Physical specs
-  weight NUMERIC(10,3),         -- kg
-  length NUMERIC(10,3),         -- meters
-  outer_diameter NUMERIC(10,3), -- mm
-  inner_diameter NUMERIC(10,3), -- mm
-  wall_thickness NUMERIC(10,3), -- mm
+  stock_branch_a  INT NOT NULL DEFAULT 0,
+  stock_branch_b  INT NOT NULL DEFAULT 0,
+  stock_branch_c  INT NOT NULL DEFAULT 0,
+  total_stock     INT NOT NULL DEFAULT 0,
+  reorder_point   INT NOT NULL DEFAULT 0,
+  safety_stock    INT NOT NULL DEFAULT 0,
+  
+  -- Physical specifications
+  weight_kg       NUMERIC(10,3),
+  length_m        NUMERIC(10,3),
+  outer_diameter_mm NUMERIC(10,3),
+  inner_diameter_mm NUMERIC(10,3),
+  wall_thickness_mm NUMERIC(10,3),
+  
   -- Status
-  status product_status NOT NULL DEFAULT 'Active',
+  status          product_status NOT NULL DEFAULT 'Active',
+  
   -- Sales performance
-  units_sold_ytd INTEGER DEFAULT 0,
-  revenue_ytd NUMERIC(15,2) DEFAULT 0,
-  units_sold_mtd INTEGER DEFAULT 0,
-  revenue_mtd NUMERIC(15,2) DEFAULT 0,
+  units_sold_ytd  INT DEFAULT 0,
+  revenue_ytd     NUMERIC(14,2) DEFAULT 0,
+  units_sold_mtd  INT DEFAULT 0,
+  revenue_mtd     NUMERIC(14,2) DEFAULT 0,
+  
   -- Supplier
-  supplier_id UUID REFERENCES suppliers(id) ON DELETE SET NULL,
-  supplier_name TEXT,
-  lead_time_days INTEGER,
-  -- Dates
-  branch TEXT,
-  last_restocked TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  supplier_id     UUID REFERENCES suppliers(id) ON DELETE SET NULL,
+  lead_time_days  INT,
+  
+  branch          VARCHAR(10),
+  last_restocked  TIMESTAMPTZ,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Bulk / batch discount tiers per variant
-CREATE TABLE IF NOT EXISTS product_variant_bulk_discounts (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  variant_id UUID NOT NULL REFERENCES product_variants(id) ON DELETE CASCADE,
-  min_qty INTEGER NOT NULL,
-  discount_percent NUMERIC(5,2) NOT NULL DEFAULT 0,
-  price_per_unit NUMERIC(12,2) NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+-- 5d: Bulk / batch pricing discounts
+CREATE TABLE IF NOT EXISTS product_bulk_discounts (
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  variant_id  UUID NOT NULL REFERENCES product_variants(id) ON DELETE CASCADE,
+  min_qty     INT NOT NULL,
+  max_qty     INT,
+  discount_percent NUMERIC(5,2) NOT NULL,
+  is_active   BOOLEAN DEFAULT TRUE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Raw material recipe per variant (BOM)
+-- 5e: Bill of Materials (which raw materials make this variant)
 CREATE TABLE IF NOT EXISTS product_variant_raw_materials (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  variant_id UUID NOT NULL REFERENCES product_variants(id) ON DELETE CASCADE,
-  material_id UUID,                     -- FK added after raw_materials table
-  material_name TEXT,
-  quantity NUMERIC(12,4) NOT NULL,
-  unit TEXT,
-  cost NUMERIC(12,2),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  variant_id      UUID NOT NULL REFERENCES product_variants(id) ON DELETE CASCADE,
+  raw_material_id UUID,          -- FK added after raw_materials table
+  quantity_needed NUMERIC(12,4) NOT NULL DEFAULT 0,
+  unit_of_measure unit_of_measure DEFAULT 'kg',
+  notes           TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Product performance snapshots (monthly)
+-- 5f: Product performance tracking
 CREATE TABLE IF NOT EXISTS product_performance (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-  variant_id UUID REFERENCES product_variants(id) ON DELETE SET NULL,
-  period TEXT NOT NULL,                 -- e.g. '2026-02'
-  units_sold INTEGER DEFAULT 0,
-  revenue NUMERIC(15,2) DEFAULT 0,
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  product_id      UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  variant_id      UUID REFERENCES product_variants(id) ON DELETE SET NULL,
+  period          VARCHAR(20) NOT NULL,   -- '2026-02'
+  units_sold      INT DEFAULT 0,
+  revenue         NUMERIC(14,2) DEFAULT 0,
   avg_selling_price NUMERIC(12,2) DEFAULT 0,
-  orders_count INTEGER DEFAULT 0,
-  top_customers JSONB DEFAULT '[]',     -- [{customerName, unitsPurchased, revenue}]
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  orders_count    INT DEFAULT 0,
+  top_customers   JSONB DEFAULT '[]'::jsonb,  -- [{customerName, unitsPurchased, revenue}]
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Product stock movements
+-- 5g: Product stock movements
 CREATE TABLE IF NOT EXISTS product_stock_movements (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  variant_id UUID NOT NULL REFERENCES product_variants(id) ON DELETE CASCADE,
-  variant_sku TEXT,
-  product_name TEXT,
-  movement_type product_stock_movement_type NOT NULL,
-  quantity INTEGER NOT NULL,
-  from_branch TEXT,
-  to_branch TEXT,
-  reason TEXT,
-  performed_by TEXT,
-  reference_number TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  variant_id      UUID NOT NULL REFERENCES product_variants(id) ON DELETE CASCADE,
+  variant_sku     VARCHAR(100),
+  product_name    VARCHAR(300),
+  movement_type   product_stock_movement_type NOT NULL,
+  quantity        INT NOT NULL,
+  from_branch     VARCHAR(10),
+  to_branch       VARCHAR(10),
+  reason          TEXT,
+  performed_by    VARCHAR(200),
+  reference_number VARCHAR(100),  -- Order number, PO number, etc.
+  timestamp       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 
@@ -634,155 +646,187 @@ CREATE TABLE IF NOT EXISTS product_stock_movements (
 -- SECTION 6: RAW MATERIALS
 -- ============================================================================
 
+-- 6a: Material categories
 CREATE TABLE IF NOT EXISTS material_categories (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  name TEXT NOT NULL UNIQUE,
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name        VARCHAR(200) NOT NULL UNIQUE,
+  slug        VARCHAR(200) NOT NULL UNIQUE,
   description TEXT,
-  image_url TEXT,
-  icon TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  image_url   TEXT,
+  sort_order  INT DEFAULT 0,
+  is_active   BOOLEAN DEFAULT TRUE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 6b: Raw materials
 CREATE TABLE IF NOT EXISTS raw_materials (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  name TEXT NOT NULL,
-  sku TEXT NOT NULL UNIQUE,
-  category_id UUID REFERENCES material_categories(id) ON DELETE SET NULL,
-  category_name TEXT,
-  description TEXT,
-  image_url TEXT,
-  specifications JSONB DEFAULT '{}',     -- {grade, purity, density, meltFlowIndex, color, viscosity, standard, ...}
-  unit_of_measure unit_of_measure NOT NULL DEFAULT 'kg',
-  -- Stock
-  stock_branch_a NUMERIC(12,2) NOT NULL DEFAULT 0,
-  stock_branch_b NUMERIC(12,2) NOT NULL DEFAULT 0,
-  stock_branch_c NUMERIC(12,2) NOT NULL DEFAULT 0,
-  total_stock NUMERIC(12,2) NOT NULL DEFAULT 0,
-  reorder_point NUMERIC(12,2) NOT NULL DEFAULT 0,
-  safety_stock NUMERIC(12,2) NOT NULL DEFAULT 0,
+  id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name                VARCHAR(300) NOT NULL,
+  sku                 VARCHAR(100) NOT NULL UNIQUE,
+  brand               VARCHAR(200),
+  category_id         UUID REFERENCES material_categories(id) ON DELETE SET NULL,
+  description         TEXT,
+  image_url           TEXT,
+  specifications      JSONB DEFAULT '{}'::jsonb,  -- Flexible key/value specs
+  unit_of_measure     unit_of_measure NOT NULL DEFAULT 'kg',
+  
+  -- Stock per branch
+  stock_branch_a      NUMERIC(14,4) DEFAULT 0,
+  stock_branch_b      NUMERIC(14,4) DEFAULT 0,
+  stock_branch_c      NUMERIC(14,4) DEFAULT 0,
+  total_stock         NUMERIC(14,4) DEFAULT 0,
+  reorder_point       NUMERIC(14,4) DEFAULT 0,
+  safety_stock        NUMERIC(14,4) DEFAULT 0,
+  
   -- Pricing
-  cost_per_unit NUMERIC(12,4) NOT NULL DEFAULT 0,
-  currency TEXT DEFAULT 'PHP',
+  cost_per_unit       NUMERIC(12,4) DEFAULT 0,
+  currency            VARCHAR(10) DEFAULT 'PHP',
   last_purchase_price NUMERIC(12,4) DEFAULT 0,
-  average_cost NUMERIC(12,4) DEFAULT 0,
-  total_value NUMERIC(15,2) DEFAULT 0,
+  average_cost        NUMERIC(12,4) DEFAULT 0,
+  total_value         NUMERIC(14,2) DEFAULT 0,
+  
   -- Supplier
-  primary_supplier TEXT,
-  supplier_code TEXT,
-  lead_time_days INTEGER DEFAULT 0,
-  -- Quality
+  primary_supplier    VARCHAR(300),
+  supplier_id         UUID REFERENCES suppliers(id) ON DELETE SET NULL,
+  supplier_code       VARCHAR(100),
+  lead_time_days      INT DEFAULT 0,
+  
+  -- Quality & compliance
   requires_quality_check BOOLEAN DEFAULT FALSE,
-  shelf_life_days INTEGER,
-  expiry_date DATE,
-  batch_tracking BOOLEAN DEFAULT FALSE,
-  -- Usage
-  monthly_consumption NUMERIC(12,2) DEFAULT 0,
-  yearly_consumption NUMERIC(12,2) DEFAULT 0,
-  linked_products UUID[],                -- product IDs that use this material
+  shelf_life_days     INT,
+  expiry_date         DATE,
+  batch_tracking      BOOLEAN DEFAULT TRUE,
+  
+  -- Usage tracking
+  monthly_consumption NUMERIC(14,4) DEFAULT 0,
+  yearly_consumption  NUMERIC(14,4) DEFAULT 0,
+  linked_products     UUID[],       -- Product IDs
+  
   -- Status
-  status material_status NOT NULL DEFAULT 'Active',
-  last_restock_date DATE,
-  last_issued_date DATE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  status              material_status NOT NULL DEFAULT 'Active',
+  last_restock_date   DATE,
+  last_issued_date    DATE,
+  
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Now add FK to product_variant_raw_materials
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.table_constraints
-    WHERE constraint_name = 'fk_pvr_material_id' AND table_name = 'product_variant_raw_materials'
-  ) THEN
-    ALTER TABLE product_variant_raw_materials
-      ADD CONSTRAINT fk_pvr_material_id FOREIGN KEY (material_id) REFERENCES raw_materials(id) ON DELETE SET NULL;
-  END IF;
+-- Add FK from BOM table to raw_materials
+DO $$ BEGIN
+  ALTER TABLE product_variant_raw_materials
+    ADD CONSTRAINT fk_bom_raw_material
+    FOREIGN KEY (raw_material_id) REFERENCES raw_materials(id) ON DELETE SET NULL;
+EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
--- Material batches / lots
+-- 6c: Material batches / lots
 CREATE TABLE IF NOT EXISTS material_batches (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  material_id UUID NOT NULL REFERENCES raw_materials(id) ON DELETE CASCADE,
-  material_name TEXT,
-  batch_number TEXT NOT NULL,
-  lot_number TEXT,
-  -- Quantity
-  quantity_received NUMERIC(12,2) DEFAULT 0,
-  quantity_available NUMERIC(12,2) DEFAULT 0,
-  quantity_issued NUMERIC(12,2) DEFAULT 0,
-  unit_of_measure unit_of_measure,
+  id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  material_id         UUID NOT NULL REFERENCES raw_materials(id) ON DELETE CASCADE,
+  material_name       VARCHAR(300),
+  batch_number        VARCHAR(100) NOT NULL,
+  lot_number          VARCHAR(100),
+  
+  -- Quantities
+  quantity_received   NUMERIC(14,4) DEFAULT 0,
+  quantity_available  NUMERIC(14,4) DEFAULT 0,
+  quantity_issued     NUMERIC(14,4) DEFAULT 0,
+  unit_of_measure     unit_of_measure DEFAULT 'kg',
+  
   -- Dates
-  manufacturing_date DATE,
-  received_date DATE,
-  expiry_date DATE,
+  manufacturing_date  DATE,
+  received_date       DATE,
+  expiry_date         DATE,
+  
   -- Quality
-  quality_status quality_status DEFAULT 'Pending',
-  certificate_number TEXT,
-  test_results JSONB DEFAULT '[]',       -- [{parameter, result, specification, status}]
+  quality_status      quality_status DEFAULT 'Pending',
+  certificate_number  VARCHAR(200),
+  test_results        JSONB DEFAULT '[]'::jsonb,  -- [{parameter, result, specification, status}]
+  
   -- Source
-  supplier TEXT,
-  purchase_order_ref TEXT,
-  grn_number TEXT,
+  supplier            VARCHAR(300),
+  purchase_order_ref  VARCHAR(100),
+  grn_number          VARCHAR(100),
+  
   -- Location
-  branch TEXT,                           -- 'A', 'B', 'C'
-  warehouse_location TEXT,
-  remarks TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  branch              VARCHAR(10),
+  warehouse_location  VARCHAR(200),
+  
+  remarks             TEXT,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Material stock movements
+-- 6d: Material stock movements
 CREATE TABLE IF NOT EXISTS material_stock_movements (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  material_id UUID NOT NULL REFERENCES raw_materials(id) ON DELETE CASCADE,
-  material_name TEXT,
-  material_sku TEXT,
-  movement_type material_movement_type NOT NULL,
-  quantity NUMERIC(12,2) NOT NULL,
-  unit_of_measure unit_of_measure,
+  id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  material_id       UUID NOT NULL REFERENCES raw_materials(id) ON DELETE CASCADE,
+  material_name     VARCHAR(300),
+  material_sku      VARCHAR(100),
+  
+  movement_type     material_movement_type NOT NULL,
+  quantity          NUMERIC(14,4) NOT NULL,
+  unit_of_measure   unit_of_measure DEFAULT 'kg',
+  
   -- Location
-  from_branch TEXT,
-  to_branch TEXT,
-  from_location TEXT,
-  to_location TEXT,
+  from_branch       VARCHAR(10),
+  to_branch         VARCHAR(10),
+  from_location     VARCHAR(200),
+  to_location       VARCHAR(200),
+  
   -- References
-  reference_type movement_reference_type,
-  reference_number TEXT,
-  batch_number TEXT,
+  reference_type    movement_reference_type,
+  reference_number  VARCHAR(100),
+  batch_number      VARCHAR(100),
+  
   -- Details
-  reason TEXT,
-  remarks TEXT,
+  reason            TEXT,
+  remarks           TEXT,
+  
   -- People
-  requested_by TEXT,
-  approved_by TEXT,
-  processed_by TEXT,
+  requested_by      VARCHAR(200),
+  approved_by       VARCHAR(200),
+  processed_by      VARCHAR(200),
+  
   -- Cost
-  cost_per_unit NUMERIC(12,4),
-  total_cost NUMERIC(15,2),
-  movement_date TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  cost_per_unit     NUMERIC(12,4),
+  total_cost        NUMERIC(14,2),
+  
+  movement_date     DATE DEFAULT CURRENT_DATE,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Material consumption (production usage)
+-- 6e: Material consumption (for production)
 CREATE TABLE IF NOT EXISTS material_consumption (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  material_id UUID NOT NULL REFERENCES raw_materials(id) ON DELETE CASCADE,
-  material_name TEXT,
-  quantity_consumed NUMERIC(12,2) NOT NULL,
-  unit_of_measure unit_of_measure,
-  consumption_date DATE,
-  production_batch_id TEXT,
-  product_id UUID REFERENCES products(id) ON DELETE SET NULL,
-  product_name TEXT,
-  branch TEXT,
-  cost_per_unit NUMERIC(12,4),
-  total_cost NUMERIC(15,2),
-  batch_numbers TEXT[],
-  issued_by TEXT,
-  approved_by TEXT,
-  remarks TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  material_id         UUID NOT NULL REFERENCES raw_materials(id) ON DELETE CASCADE,
+  material_name       VARCHAR(300),
+  
+  quantity_consumed   NUMERIC(14,4) NOT NULL,
+  unit_of_measure     unit_of_measure DEFAULT 'kg',
+  consumption_date    DATE NOT NULL,
+  
+  -- Production link
+  production_batch_id UUID,
+  product_id          UUID REFERENCES products(id) ON DELETE SET NULL,
+  product_name        VARCHAR(300),
+  
+  branch              VARCHAR(10),
+  
+  -- Cost
+  cost_per_unit       NUMERIC(12,4) DEFAULT 0,
+  total_cost          NUMERIC(14,2) DEFAULT 0,
+  
+  -- Batch tracking
+  batch_numbers       TEXT[],
+  
+  -- People
+  issued_by           VARCHAR(200),
+  approved_by         VARCHAR(200),
+  
+  remarks             TEXT,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 
@@ -791,97 +835,119 @@ CREATE TABLE IF NOT EXISTS material_consumption (
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS customers (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  name TEXT NOT NULL,
-  type customer_type NOT NULL,
-  status customer_status NOT NULL DEFAULT 'Active',
-  risk_level risk_level DEFAULT 'Low',
-  payment_behavior payment_behavior DEFAULT 'Good',
+  id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name                  VARCHAR(300) NOT NULL,
+  type                  customer_type,
+  client_type           client_type DEFAULT 'Office',  -- Office=0.5% comm, Personal=1.5%
+  status                customer_status NOT NULL DEFAULT 'Active',
+  risk_level            risk_level DEFAULT 'Low',
+  payment_behavior      payment_behavior DEFAULT 'Good',
+  
   -- Contact
-  contact_person TEXT,
-  phone TEXT,
-  email TEXT,
-  alternate_phone TEXT,
-  alternate_email TEXT,
+  contact_person        VARCHAR(200),
+  phone                 VARCHAR(50),
+  email                 VARCHAR(255),
+  alternate_phone       VARCHAR(50),
+  alternate_email       VARCHAR(255),
+  
   -- Address
-  address TEXT,
-  city TEXT,
-  province TEXT,
-  postal_code TEXT,
-  map_lat NUMERIC(10,7),
-  map_lng NUMERIC(10,7),
-  -- Business
-  business_registration TEXT,
-  tax_id TEXT,
-  -- Credit
-  credit_limit NUMERIC(15,2) DEFAULT 0,
-  outstanding_balance NUMERIC(15,2) DEFAULT 0,
-  available_credit NUMERIC(15,2) DEFAULT 0,
-  payment_terms TEXT,
-  payment_score INTEGER DEFAULT 100,     -- 0-100
-  avg_payment_days INTEGER DEFAULT 0,
-  overdue_amount NUMERIC(15,2) DEFAULT 0,
-  -- Purchases
-  total_purchases_ytd NUMERIC(15,2) DEFAULT 0,
-  total_purchases_lifetime NUMERIC(15,2) DEFAULT 0,
-  order_count INTEGER DEFAULT 0,
-  last_order_date DATE,
-  account_since DATE,
+  address               TEXT,
+  city                  VARCHAR(200),
+  province              VARCHAR(200),
+  postal_code           VARCHAR(20),
+  map_lat               NUMERIC(10,7),
+  map_lng               NUMERIC(10,7),
+  
+  -- Business details
+  business_registration VARCHAR(200),
+  tax_id                VARCHAR(100),
+  
+  -- Credit & payment
+  credit_limit          NUMERIC(14,2) DEFAULT 0,
+  outstanding_balance   NUMERIC(14,2) DEFAULT 0,
+  available_credit      NUMERIC(14,2) DEFAULT 0,
+  payment_terms         VARCHAR(50),
+  payment_score         INT DEFAULT 0,           -- 0-100
+  avg_payment_days      INT DEFAULT 0,
+  overdue_amount        NUMERIC(14,2) DEFAULT 0,
+  
+  -- Purchase history
+  total_purchases_ytd      NUMERIC(14,2) DEFAULT 0,
+  total_purchases_lifetime NUMERIC(14,2) DEFAULT 0,
+  order_count              INT DEFAULT 0,
+  last_order_date          DATE,
+  account_since            DATE,
+  
   -- Assignment
-  assigned_agent_id UUID REFERENCES employees(id) ON DELETE SET NULL,
-  assigned_agent TEXT,
-  branch TEXT,
-  tags TEXT[],
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  assigned_agent_id     UUID REFERENCES employees(id) ON DELETE SET NULL,
+  branch_id             UUID REFERENCES branches(id) ON DELETE SET NULL,
+  
+  -- Tags
+  tags                  TEXT[],
+  
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Customer-Agent assignment (many-to-many with metadata)
-CREATE TABLE IF NOT EXISTS customer_assignments (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
-  customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
-  assigned_date DATE,
-  status customer_assignment_status DEFAULT 'Active',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(employee_id, customer_id)
-);
+-- Add FK from customer_assignments
+DO $$ BEGIN
+  ALTER TABLE customer_assignments
+    ADD CONSTRAINT fk_customer_assignments_customer
+    FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
+-- 7b: Customer notes
 CREATE TABLE IF NOT EXISTS customer_notes (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
-  type customer_note_type NOT NULL,
-  content TEXT NOT NULL,
-  created_by TEXT,
-  is_important BOOLEAN DEFAULT FALSE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  customer_id     UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  type            customer_note_type NOT NULL DEFAULT 'Other',
+  content         TEXT NOT NULL,
+  created_by      VARCHAR(200),
+  is_important    BOOLEAN DEFAULT FALSE,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 7c: Customer tasks
 CREATE TABLE IF NOT EXISTS customer_tasks (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
-  customer_name TEXT,
-  type customer_task_type NOT NULL,
-  title TEXT NOT NULL,
-  description TEXT,
-  priority task_priority NOT NULL DEFAULT 'Medium',
-  status task_status NOT NULL DEFAULT 'Pending',
-  due_date DATE,
-  completed_date DATE,
-  assigned_to TEXT,
-  created_by TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  customer_id     UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  customer_name   VARCHAR(300),
+  type            customer_task_type NOT NULL,
+  title           VARCHAR(300) NOT NULL,
+  description     TEXT,
+  priority        task_priority NOT NULL DEFAULT 'Medium',
+  status          task_status NOT NULL DEFAULT 'Pending',
+  due_date        DATE NOT NULL,
+  completed_date  DATE,
+  assigned_to     VARCHAR(200),
+  created_by      VARCHAR(200),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 7d: Customer activity timeline
 CREATE TABLE IF NOT EXISTS customer_activities (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
-  type customer_activity_type NOT NULL,
-  description TEXT,
-  performed_by TEXT,
-  metadata JSONB,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  customer_id     UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  type            customer_activity_type NOT NULL,
+  description     TEXT NOT NULL,
+  performed_by    VARCHAR(200),
+  metadata        JSONB,
+  timestamp       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 7e: Customer buying patterns (denormalized analytics)
+CREATE TABLE IF NOT EXISTS customer_buying_patterns (
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  customer_id     UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  product_category VARCHAR(200),
+  frequency       VARCHAR(50),      -- 'Weekly','Bi-weekly','Monthly','Quarterly','Irregular'
+  avg_order_value NUMERIC(12,2) DEFAULT 0,
+  last_purchase   DATE,
+  trend           VARCHAR(50),      -- 'Increasing','Stable','Declining'
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 
@@ -889,103 +955,136 @@ CREATE TABLE IF NOT EXISTS customer_activities (
 -- SECTION 8: ORDERS
 -- ============================================================================
 
+-- 8a: Orders
 CREATE TABLE IF NOT EXISTS orders (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  customer_id UUID REFERENCES customers(id) ON DELETE SET NULL,
-  customer_name TEXT,
-  agent_id UUID REFERENCES employees(id) ON DELETE SET NULL,
-  agent_name TEXT,
-  branch TEXT,
-  order_date DATE,
-  required_date DATE,
-  delivery_type delivery_type,
-  payment_terms payment_terms,
-  payment_method payment_method_enum DEFAULT 'Offline',
-  status order_status NOT NULL DEFAULT 'Draft',
-  payment_status payment_status NOT NULL DEFAULT 'Unbilled',
-  -- Pricing
-  subtotal NUMERIC(15,2) DEFAULT 0,
-  discount_percent NUMERIC(5,2) DEFAULT 0,
-  discount_amount NUMERIC(15,2) DEFAULT 0,
-  total_amount NUMERIC(15,2) DEFAULT 0,
-  -- Approval
-  requires_approval BOOLEAN DEFAULT FALSE,
-  approval_reason TEXT[],
-  approved_by TEXT,
-  approved_date TIMESTAMPTZ,
-  rejected_by TEXT,
-  rejected_date TIMESTAMPTZ,
-  rejection_reason TEXT,
+  id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  order_number      VARCHAR(50) NOT NULL UNIQUE,
+  
+  -- Parties
+  customer_id       UUID REFERENCES customers(id) ON DELETE SET NULL,
+  customer_name     VARCHAR(300),
+  agent_id          UUID REFERENCES employees(id) ON DELETE SET NULL,
+  agent_name        VARCHAR(200),
+  branch_id         UUID REFERENCES branches(id) ON DELETE SET NULL,
+  
+  -- Dates
+  order_date        DATE NOT NULL DEFAULT CURRENT_DATE,
+  required_date     DATE,
+  
   -- Delivery
-  estimated_delivery DATE,
-  actual_delivery DATE,
-  delivery_status delivery_status_enum,
-  delay_reason TEXT,
+  delivery_type     delivery_type DEFAULT 'Truck',
+  delivery_address  TEXT,
+  
+  -- Payment
+  payment_terms     payment_terms DEFAULT 'COD',
+  payment_method    payment_method_enum DEFAULT 'Offline',
+  
+  -- Status
+  status            order_status NOT NULL DEFAULT 'Draft',
+  payment_status    payment_status NOT NULL DEFAULT 'Unbilled',
+  
+  -- Pricing
+  subtotal          NUMERIC(14,2) DEFAULT 0,
+  discount_percent  NUMERIC(5,2)  DEFAULT 0,
+  discount_amount   NUMERIC(14,2) DEFAULT 0,
+  tax_amount        NUMERIC(14,2) DEFAULT 0,
+  total_amount      NUMERIC(14,2) DEFAULT 0,
+  
+  -- Approval workflow
+  requires_approval   BOOLEAN DEFAULT FALSE,
+  approval_reasons    TEXT[],
+  approved_by         VARCHAR(200),
+  approved_date       TIMESTAMPTZ,
+  rejected_by         VARCHAR(200),
+  rejected_date       TIMESTAMPTZ,
+  rejection_reason    TEXT,
+  
+  -- Delivery tracking
+  estimated_delivery  DATE,
+  actual_delivery     DATE,
+  delivery_status     delivery_status_enum,
+  delay_reason        TEXT,
+  
   -- Invoice
-  invoice_id TEXT,
-  invoice_date DATE,
-  due_date DATE,
-  amount_paid NUMERIC(15,2) DEFAULT 0,
-  balance_due NUMERIC(15,2) DEFAULT 0,
+  invoice_id          UUID,           -- FK added after invoices table
+  invoice_date        DATE,
+  due_date            DATE,
+  amount_paid         NUMERIC(14,2) DEFAULT 0,
+  balance_due         NUMERIC(14,2) DEFAULT 0,
+  
   -- Notes
-  order_notes TEXT,
-  internal_notes TEXT,
+  order_notes         TEXT,
+  internal_notes      TEXT,
+  special_instructions TEXT,
+  
+  -- Urgency (for dispatch)
+  urgency             urgency_level DEFAULT 'Medium',
+  volume_cbm          NUMERIC(10,3),   -- cubic meters
+  weight_kg           NUMERIC(10,3),
+  
   -- Cancellation
-  cancelled_at TIMESTAMPTZ,
+  cancelled_at        TIMESTAMPTZ,
   cancellation_reason TEXT,
-  -- Timestamps
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 8b: Order line items
 CREATE TABLE IF NOT EXISTS order_line_items (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
-  sku TEXT,
-  product_name TEXT,
-  variant_description TEXT,
-  quantity INTEGER NOT NULL DEFAULT 0,
-  unit_price NUMERIC(12,2) NOT NULL DEFAULT 0,
-  original_price NUMERIC(12,2),
-  negotiated_price NUMERIC(12,2),
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  order_id        UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  variant_id      UUID REFERENCES product_variants(id) ON DELETE SET NULL,
+  sku             VARCHAR(100),
+  product_name    VARCHAR(300),
+  variant_description VARCHAR(300),
+  
+  quantity        INT NOT NULL DEFAULT 1,
+  unit_price      NUMERIC(12,2) NOT NULL DEFAULT 0,
+  original_price  NUMERIC(12,2),         -- Price before discounts
+  negotiated_price NUMERIC(12,2),         -- After agent negotiation
   discount_percent NUMERIC(5,2) DEFAULT 0,
   discount_amount NUMERIC(12,2) DEFAULT 0,
-  line_total NUMERIC(15,2) NOT NULL DEFAULT 0,
-  stock_hint stock_hint DEFAULT 'Available',
-  available_stock INTEGER,
-  batch_discount NUMERIC(5,2),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  batch_discount  NUMERIC(5,2),           -- Bulk pricing discount %
+  line_total      NUMERIC(14,2) NOT NULL DEFAULT 0,
+  
+  stock_hint      stock_hint DEFAULT 'Available',
+  available_stock INT,
+  
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 8c: Order audit log
 CREATE TABLE IF NOT EXISTS order_logs (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
-  action order_log_action NOT NULL,
-  performed_by TEXT,
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  order_id        UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  action          order_log_action NOT NULL,
+  performed_by    VARCHAR(200),
   performed_by_role order_log_role,
-  description TEXT,
-  old_value JSONB,
-  new_value JSONB,
-  metadata JSONB,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  description     TEXT,
+  old_value       JSONB,
+  new_value       JSONB,
+  metadata        JSONB,
+  timestamp       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS proof_documents (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
-  type proof_type NOT NULL,
-  file_name TEXT,
-  file_url TEXT,
-  file_size INTEGER,
-  uploaded_by TEXT,
+-- 8d: Proof documents (delivery receipts, payment proofs)
+CREATE TABLE IF NOT EXISTS order_proof_documents (
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  order_id        UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  type            proof_type NOT NULL,
+  file_name       VARCHAR(500),
+  file_url        TEXT NOT NULL,
+  file_size       BIGINT,
+  uploaded_by     VARCHAR(200),
   uploaded_by_role proof_uploader_role,
-  uploaded_at TIMESTAMPTZ DEFAULT NOW(),
-  status proof_status DEFAULT 'pending',
-  verified_by TEXT,
-  verified_at TIMESTAMPTZ,
+  status          proof_status DEFAULT 'pending',
+  verified_by     VARCHAR(200),
+  verified_at     TIMESTAMPTZ,
   rejection_reason TEXT,
-  notes TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  notes           TEXT,
+  uploaded_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 
@@ -994,523 +1093,674 @@ CREATE TABLE IF NOT EXISTS proof_documents (
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS invoices (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
-  invoice_number TEXT UNIQUE,
-  issue_date DATE,
-  due_date DATE,
-  -- Bill to
-  bill_to_name TEXT,
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  invoice_number  VARCHAR(50) NOT NULL UNIQUE,
+  order_id        UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  
+  issue_date      DATE NOT NULL DEFAULT CURRENT_DATE,
+  due_date        DATE NOT NULL,
+  
+  -- Bill-to
+  bill_to_name    VARCHAR(300),
   bill_to_address TEXT,
-  bill_to_contact_person TEXT,
-  bill_to_phone TEXT,
-  bill_to_email TEXT,
+  bill_to_contact VARCHAR(200),
+  bill_to_phone   VARCHAR(50),
+  bill_to_email   VARCHAR(255),
+  
   -- Amounts
-  subtotal NUMERIC(15,2) DEFAULT 0,
-  discount_amount NUMERIC(15,2) DEFAULT 0,
-  tax_amount NUMERIC(15,2) DEFAULT 0,
-  total_amount NUMERIC(15,2) DEFAULT 0,
-  amount_paid NUMERIC(15,2) DEFAULT 0,
-  balance_due NUMERIC(15,2) DEFAULT 0,
-  -- Payment
-  payment_terms payment_terms,
-  payment_method payment_method_enum,
-  payment_status payment_status DEFAULT 'Unbilled',
-  -- Meta
-  notes TEXT,
-  generated_by TEXT,
-  generated_at TIMESTAMPTZ DEFAULT NOW(),
-  pdf_url TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  subtotal        NUMERIC(14,2) DEFAULT 0,
+  discount_amount NUMERIC(14,2) DEFAULT 0,
+  tax_amount      NUMERIC(14,2) DEFAULT 0,
+  total_amount    NUMERIC(14,2) DEFAULT 0,
+  amount_paid     NUMERIC(14,2) DEFAULT 0,
+  balance_due     NUMERIC(14,2) DEFAULT 0,
+  
+  -- Payment info
+  payment_terms   payment_terms,
+  payment_method  payment_method_enum,
+  payment_status  payment_status DEFAULT 'Invoiced',
+  
+  -- Metadata
+  notes           TEXT,
+  generated_by    VARCHAR(200),
+  pdf_url         TEXT,
+  
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-
--- ============================================================================
--- SECTION 10: PAYMENT SYSTEM (Online)
--- ============================================================================
-
--- Configurable payment method fees
-CREATE TABLE IF NOT EXISTS payment_method_fees (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  method payment_method_type NOT NULL UNIQUE,
-  gateway_fee_percent NUMERIC(5,2) DEFAULT 0,
-  gateway_fee_fixed NUMERIC(10,2) DEFAULT 0,
-  service_fee_percent NUMERIC(5,2) DEFAULT 0,
-  service_fee_fixed NUMERIC(10,2) DEFAULT 0,
-  enabled BOOLEAN DEFAULT TRUE,
-  description TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- Payment links (public-facing)
-CREATE TABLE IF NOT EXISTS payment_links (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  token TEXT NOT NULL UNIQUE,
-  invoice_id UUID REFERENCES invoices(id) ON DELETE SET NULL,
-  order_id UUID REFERENCES orders(id) ON DELETE SET NULL,
-  customer_name TEXT,
-  customer_email TEXT,
-  customer_phone TEXT,
-  invoice_amount NUMERIC(15,2) NOT NULL,
-  status payment_link_status NOT NULL DEFAULT 'pending',
-  link TEXT,
-  qr_code_data TEXT,
-  expires_at TIMESTAMPTZ,
-  paid_at TIMESTAMPTZ,
-  sent_via_email BOOLEAN DEFAULT FALSE,
-  sent_via_sms BOOLEAN DEFAULT FALSE,
-  last_email_sent_at TIMESTAMPTZ,
-  last_sms_sent_at TIMESTAMPTZ,
-  view_count INTEGER DEFAULT 0,
-  selected_payment_method payment_method_type,
-  payment_transaction_id UUID,
-  fee_breakdown JSONB,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- Payment transactions
-CREATE TABLE IF NOT EXISTS payment_transactions (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  payment_link_id UUID REFERENCES payment_links(id) ON DELETE SET NULL,
-  invoice_id UUID REFERENCES invoices(id) ON DELETE SET NULL,
-  order_id UUID REFERENCES orders(id) ON DELETE SET NULL,
-  payment_method payment_method_type,
-  -- Amounts
-  invoice_amount NUMERIC(15,2),
-  gateway_fee NUMERIC(10,2) DEFAULT 0,
-  service_fee NUMERIC(10,2) DEFAULT 0,
-  total_fees NUMERIC(10,2) DEFAULT 0,
-  total_paid NUMERIC(15,2),
-  -- Gateway
-  gateway_reference_number TEXT,
-  gateway_transaction_id TEXT,
-  gateway_response JSONB,
-  -- Status
-  status payment_transaction_status NOT NULL DEFAULT 'pending',
-  paid_at TIMESTAMPTZ,
-  processed_at TIMESTAMPTZ,
-  -- Customer
-  customer_name TEXT,
-  customer_email TEXT,
-  customer_phone TEXT,
-  -- Receipt link
-  receipt_id UUID,
-  receipt_sent_via_email BOOLEAN DEFAULT FALSE,
-  receipt_sent_via_sms BOOLEAN DEFAULT FALSE,
-  -- Audit
-  ip_address TEXT,
-  user_agent TEXT,
-  notes TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- Digital receipts
-CREATE TABLE IF NOT EXISTS digital_receipts (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  receipt_number TEXT NOT NULL UNIQUE,
-  payment_transaction_id UUID REFERENCES payment_transactions(id) ON DELETE SET NULL,
-  invoice_id UUID REFERENCES invoices(id) ON DELETE SET NULL,
-  order_id UUID REFERENCES orders(id) ON DELETE SET NULL,
-  -- Payment
-  paid_at TIMESTAMPTZ,
-  payment_method payment_method_type,
-  gateway_reference_number TEXT,
-  -- Customer
-  customer_name TEXT,
-  customer_email TEXT,
-  customer_phone TEXT,
-  -- Amounts
-  invoice_amount NUMERIC(15,2),
-  gateway_fee NUMERIC(10,2) DEFAULT 0,
-  service_fee NUMERIC(10,2) DEFAULT 0,
-  total_fees NUMERIC(10,2) DEFAULT 0,
-  total_paid NUMERIC(15,2),
-  -- Files
-  pdf_url TEXT,
-  public_url TEXT,
-  -- Items snapshot
-  invoice_items JSONB DEFAULT '[]',      -- [{description, quantity, unitPrice, total}]
-  -- Status
-  email_sent BOOLEAN DEFAULT FALSE,
-  sms_sent BOOLEAN DEFAULT FALSE,
-  view_count INTEGER DEFAULT 0,
-  generated_at TIMESTAMPTZ DEFAULT NOW(),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-
--- ============================================================================
--- SECTION 11: COLLECTIONS / RECEIVABLES (Agent-side)
--- ============================================================================
-
-CREATE TABLE IF NOT EXISTS receivables (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  invoice_id UUID REFERENCES invoices(id) ON DELETE SET NULL,
-  order_id UUID REFERENCES orders(id) ON DELETE SET NULL,
-  customer_id UUID REFERENCES customers(id) ON DELETE SET NULL,
-  customer_name TEXT,
-  invoice_date DATE,
-  due_date DATE,
-  invoice_amount NUMERIC(15,2) DEFAULT 0,
-  amount_paid NUMERIC(15,2) DEFAULT 0,
-  balance_due NUMERIC(15,2) DEFAULT 0,
-  status collection_status DEFAULT 'Current',
-  days_overdue INTEGER DEFAULT 0,
-  payment_terms TEXT,
-  assigned_agent_id UUID REFERENCES employees(id) ON DELETE SET NULL,
-  assigned_agent TEXT,
-  branch TEXT,
-  last_contact_date DATE,
-  next_follow_up_date DATE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS collection_notes (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  receivable_id UUID NOT NULL REFERENCES receivables(id) ON DELETE CASCADE,
-  note_type collection_note_type NOT NULL,
-  content TEXT NOT NULL,
-  next_action TEXT,
-  follow_up_date DATE,
-  created_by TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- Payment records (finance / agent-submitted)
-CREATE TABLE IF NOT EXISTS payment_records (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  receivable_id UUID REFERENCES receivables(id) ON DELETE SET NULL,
-  invoice_id UUID REFERENCES invoices(id) ON DELETE SET NULL,
-  order_id UUID REFERENCES orders(id) ON DELETE SET NULL,
-  customer_name TEXT,
-  payment_date DATE,
-  amount NUMERIC(15,2) NOT NULL,
-  payment_method finance_payment_method,
-  reference_number TEXT,
-  -- Agent submission
-  submitted_by TEXT,
-  submitted_at TIMESTAMPTZ,
-  proof_of_payment TEXT[],
-  verification_status verification_status DEFAULT 'Pending',
-  verified_by TEXT,
-  verified_at TIMESTAMPTZ,
-  recorded_by TEXT,
-  -- Linked proof
-  proof_document_id UUID REFERENCES proof_documents(id) ON DELETE SET NULL,
-  notes TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-
--- ============================================================================
--- SECTION 12: PURCHASE REQUISITIONS & PURCHASE ORDERS
--- ============================================================================
-
-CREATE TABLE IF NOT EXISTS purchase_requisitions (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  pr_number TEXT NOT NULL UNIQUE,
-  material_id UUID REFERENCES raw_materials(id) ON DELETE SET NULL,
-  material_name TEXT,
-  material_sku TEXT,
-  category_name TEXT,
-  requested_quantity NUMERIC(12,2) NOT NULL,
-  unit_of_measure unit_of_measure,
-  estimated_cost NUMERIC(15,2) DEFAULT 0,
-  delivery_branch TEXT,
-  required_date DATE,
-  reason TEXT,
-  urgency urgency_level DEFAULT 'Medium',
-  current_stock NUMERIC(12,2) DEFAULT 0,
-  reorder_point NUMERIC(12,2) DEFAULT 0,
-  suggested_supplier TEXT,
-  supplier_quotation NUMERIC(15,2),
-  status purchase_requisition_status NOT NULL DEFAULT 'Draft',
-  requested_by TEXT,
-  requested_date DATE,
-  approved_by TEXT,
-  approval_date DATE,
-  rejection_reason TEXT,
-  purchase_order_id UUID,                -- FK added after PO table
-  purchase_order_number TEXT,
-  remarks TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS purchase_orders (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  po_number TEXT NOT NULL UNIQUE,
-  supplier_id UUID REFERENCES suppliers(id) ON DELETE SET NULL,
-  supplier_name TEXT,
-  supplier_contact TEXT,
-  supplier_address TEXT,
-  -- Totals
-  subtotal NUMERIC(15,2) DEFAULT 0,
-  tax NUMERIC(15,2) DEFAULT 0,
-  shipping_cost NUMERIC(15,2) DEFAULT 0,
-  total_amount NUMERIC(15,2) DEFAULT 0,
-  -- Delivery
-  delivery_branch TEXT,
-  delivery_address TEXT,
-  requested_delivery_date DATE,
-  -- Status
-  status purchase_order_status NOT NULL DEFAULT 'Draft',
-  -- Workflow
-  created_by TEXT,
-  approved_by TEXT,
-  approval_date DATE,
-  sent_date DATE,
-  -- References
-  pr_references UUID[],                  -- PR IDs
-  -- Tracking
-  received_quantities JSONB DEFAULT '[]', -- [{materialId, quantityReceived, grnNumbers}]
-  payment_terms TEXT,
-  notes TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- FK back from PR to PO
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.table_constraints
-    WHERE constraint_name = 'fk_pr_purchase_order' AND table_name = 'purchase_requisitions'
-  ) THEN
-    ALTER TABLE purchase_requisitions
-      ADD CONSTRAINT fk_pr_purchase_order FOREIGN KEY (purchase_order_id) REFERENCES purchase_orders(id) ON DELETE SET NULL;
-  END IF;
+-- Add FK from orders.invoice_id to invoices
+DO $$ BEGIN
+  ALTER TABLE orders
+    ADD CONSTRAINT fk_orders_invoice
+    FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE SET NULL;
+EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
--- PO line items
+
+-- ============================================================================
+-- SECTION 10: PAYMENT SYSTEM
+-- ============================================================================
+
+-- 10a: Payment method fee configuration
+CREATE TABLE IF NOT EXISTS payment_method_fees (
+  id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  method              payment_method_type NOT NULL UNIQUE,
+  gateway_fee_percent NUMERIC(5,2) DEFAULT 0,
+  gateway_fee_fixed   NUMERIC(10,2) DEFAULT 0,
+  service_fee_percent NUMERIC(5,2) DEFAULT 0,   -- LAMTEX revenue
+  service_fee_fixed   NUMERIC(10,2) DEFAULT 0,
+  enabled             BOOLEAN DEFAULT TRUE,
+  description         TEXT,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 10b: Payment links (customer-facing payment pages)
+CREATE TABLE IF NOT EXISTS payment_links (
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  token           VARCHAR(100) NOT NULL UNIQUE,  -- PAY-2026-ABC123
+  invoice_id      UUID REFERENCES invoices(id) ON DELETE SET NULL,
+  order_id        UUID REFERENCES orders(id) ON DELETE SET NULL,
+  
+  customer_name   VARCHAR(300),
+  customer_email  VARCHAR(255),
+  customer_phone  VARCHAR(50),
+  
+  invoice_amount  NUMERIC(14,2) NOT NULL,
+  
+  -- Available methods (snapshot at creation)
+  payment_methods JSONB DEFAULT '[]'::jsonb,
+  
+  status          payment_link_status DEFAULT 'pending',
+  
+  link            TEXT NOT NULL,
+  qr_code_data    TEXT,
+  
+  -- Expiration
+  expires_at      TIMESTAMPTZ NOT NULL,
+  
+  -- Communication tracking
+  sent_via_email  BOOLEAN DEFAULT FALSE,
+  sent_via_sms    BOOLEAN DEFAULT FALSE,
+  last_email_sent TIMESTAMPTZ,
+  last_sms_sent   TIMESTAMPTZ,
+  view_count      INT DEFAULT 0,
+  
+  -- Completed payment info
+  selected_payment_method payment_method_type,
+  payment_transaction_id  UUID,
+  fee_breakdown           JSONB,   -- {invoiceAmount, gatewayFee, serviceFee, totalFees, totalAmount}
+  
+  paid_at         TIMESTAMPTZ,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 10c: Payment transactions
+CREATE TABLE IF NOT EXISTS payment_transactions (
+  id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  payment_link_id       UUID REFERENCES payment_links(id) ON DELETE SET NULL,
+  invoice_id            UUID REFERENCES invoices(id) ON DELETE SET NULL,
+  order_id              UUID REFERENCES orders(id) ON DELETE SET NULL,
+  
+  payment_method        payment_method_type NOT NULL,
+  
+  -- Amount breakdown
+  invoice_amount        NUMERIC(14,2) NOT NULL,
+  gateway_fee           NUMERIC(12,2) DEFAULT 0,
+  service_fee           NUMERIC(12,2) DEFAULT 0,  -- LAMTEX revenue
+  total_fees            NUMERIC(12,2) DEFAULT 0,
+  total_paid            NUMERIC(14,2) NOT NULL,
+  
+  -- Gateway details
+  gateway_reference_number VARCHAR(200),
+  gateway_transaction_id   VARCHAR(200),
+  gateway_response         JSONB,
+  
+  status                payment_transaction_status DEFAULT 'pending',
+  
+  paid_at               TIMESTAMPTZ,
+  processed_at          TIMESTAMPTZ,
+  
+  -- Customer
+  customer_name         VARCHAR(300),
+  customer_email        VARCHAR(255),
+  customer_phone        VARCHAR(50),
+  
+  -- Receipt
+  receipt_id            UUID,
+  receipt_sent_via_email BOOLEAN DEFAULT FALSE,
+  receipt_sent_via_sms   BOOLEAN DEFAULT FALSE,
+  
+  -- Audit
+  ip_address            INET,
+  user_agent            TEXT,
+  notes                 TEXT,
+  
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 10d: Digital receipts
+CREATE TABLE IF NOT EXISTS digital_receipts (
+  id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  receipt_number        VARCHAR(50) NOT NULL UNIQUE,  -- REC-2026-001234
+  
+  payment_transaction_id UUID NOT NULL REFERENCES payment_transactions(id) ON DELETE CASCADE,
+  invoice_id            UUID REFERENCES invoices(id) ON DELETE SET NULL,
+  order_id              UUID REFERENCES orders(id) ON DELETE SET NULL,
+  
+  -- Payment details
+  paid_at               TIMESTAMPTZ NOT NULL,
+  payment_method        payment_method_type NOT NULL,
+  gateway_reference_number VARCHAR(200),
+  
+  -- Customer
+  customer_name         VARCHAR(300),
+  customer_email        VARCHAR(255),
+  customer_phone        VARCHAR(50),
+  
+  -- Amount breakdown
+  invoice_amount        NUMERIC(14,2) DEFAULT 0,
+  gateway_fee           NUMERIC(12,2) DEFAULT 0,
+  service_fee           NUMERIC(12,2) DEFAULT 0,
+  total_fees            NUMERIC(12,2) DEFAULT 0,
+  total_paid            NUMERIC(14,2) DEFAULT 0,
+  
+  -- Receipt files
+  pdf_url               TEXT,
+  public_url            TEXT NOT NULL,    -- /receipt/:id (no auth required)
+  
+  -- Invoice items (for display on receipt)
+  invoice_items         JSONB DEFAULT '[]'::jsonb,  -- [{description, quantity, unitPrice, total}]
+  
+  -- Communication
+  email_sent            BOOLEAN DEFAULT FALSE,
+  sms_sent              BOOLEAN DEFAULT FALSE,
+  
+  view_count            INT DEFAULT 0,
+  
+  generated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Add FK from payment_transactions.receipt_id
+DO $$ BEGIN
+  ALTER TABLE payment_transactions
+    ADD CONSTRAINT fk_transactions_receipt
+    FOREIGN KEY (receipt_id) REFERENCES digital_receipts(id) ON DELETE SET NULL;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+
+-- ============================================================================
+-- SECTION 11: COLLECTIONS & RECEIVABLES
+-- ============================================================================
+
+-- 11a: Receivables
+CREATE TABLE IF NOT EXISTS receivables (
+  id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  invoice_id        UUID REFERENCES invoices(id) ON DELETE SET NULL,
+  order_id          UUID REFERENCES orders(id) ON DELETE SET NULL,
+  customer_id       UUID REFERENCES customers(id) ON DELETE SET NULL,
+  customer_name     VARCHAR(300),
+  
+  invoice_date      DATE,
+  due_date          DATE NOT NULL,
+  invoice_amount    NUMERIC(14,2) NOT NULL,
+  amount_paid       NUMERIC(14,2) DEFAULT 0,
+  balance_due       NUMERIC(14,2) NOT NULL,
+  
+  status            collection_status DEFAULT 'Current',
+  days_overdue      INT DEFAULT 0,
+  payment_terms     VARCHAR(50),
+  
+  -- Agent
+  assigned_agent_id   UUID REFERENCES employees(id) ON DELETE SET NULL,
+  assigned_agent_name VARCHAR(200),
+  branch_id           UUID REFERENCES branches(id) ON DELETE SET NULL,
+  
+  -- Collection tracking
+  last_contact_date   DATE,
+  next_follow_up_date DATE,
+  
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 11b: Collection notes
+CREATE TABLE IF NOT EXISTS collection_notes (
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  receivable_id   UUID NOT NULL REFERENCES receivables(id) ON DELETE CASCADE,
+  note_type       collection_note_type NOT NULL,
+  content         TEXT NOT NULL,
+  next_action     TEXT,
+  follow_up_date  DATE,
+  created_by      VARCHAR(200),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 11c: Collection payment records
+CREATE TABLE IF NOT EXISTS collection_payment_records (
+  id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  receivable_id       UUID NOT NULL REFERENCES receivables(id) ON DELETE CASCADE,
+  invoice_id          UUID REFERENCES invoices(id) ON DELETE SET NULL,
+  
+  payment_date        DATE NOT NULL,
+  amount              NUMERIC(14,2) NOT NULL,
+  payment_method      collection_payment_method,
+  reference_number    VARCHAR(200),
+  
+  -- Agent-submitted payments
+  submitted_by        VARCHAR(200),
+  submitted_at        TIMESTAMPTZ,
+  proof_of_payment    TEXT[],
+  verification_status verification_status DEFAULT 'Pending',
+  verified_by         VARCHAR(200),
+  verified_at         TIMESTAMPTZ,
+  
+  notes               TEXT,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 11d: Agent-generated payment links (for collections)
+CREATE TABLE IF NOT EXISTS collection_payment_links (
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  order_id        UUID REFERENCES orders(id) ON DELETE SET NULL,
+  invoice_id      UUID REFERENCES invoices(id) ON DELETE SET NULL,
+  customer_id     UUID REFERENCES customers(id) ON DELETE SET NULL,
+  customer_name   VARCHAR(300),
+  
+  amount          NUMERIC(14,2) NOT NULL,
+  fee_percent     NUMERIC(5,2) DEFAULT 0,
+  fee_amount      NUMERIC(12,2) DEFAULT 0,
+  total_amount    NUMERIC(14,2) NOT NULL,
+  
+  link_url        TEXT NOT NULL,
+  status          VARCHAR(50) DEFAULT 'Generated',  -- Generated, Sent, Viewed, Paid, Expired, Voided
+  expires_at      TIMESTAMPTZ,
+  
+  -- Communication
+  sent_via        TEXT[],            -- ['Email','SMS','WhatsApp']
+  recipient_email VARCHAR(255),
+  recipient_phone VARCHAR(50),
+  
+  -- Tracking
+  generated_by    VARCHAR(200),
+  generated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  sent_at         TIMESTAMPTZ,
+  viewed_at       TIMESTAMPTZ,
+  paid_at         TIMESTAMPTZ,
+  voided_at       TIMESTAMPTZ,
+  void_reason     TEXT,
+  
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+
+-- ============================================================================
+-- SECTION 12: PURCHASE REQUISITIONS & ORDERS
+-- ============================================================================
+
+-- 12a: Purchase requisitions
+CREATE TABLE IF NOT EXISTS purchase_requisitions (
+  id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  pr_number           VARCHAR(50) NOT NULL UNIQUE,
+  
+  material_id         UUID REFERENCES raw_materials(id) ON DELETE SET NULL,
+  material_name       VARCHAR(300),
+  material_sku        VARCHAR(100),
+  category            VARCHAR(100),
+  
+  requested_quantity  NUMERIC(14,4) NOT NULL,
+  unit_of_measure     unit_of_measure DEFAULT 'kg',
+  estimated_cost      NUMERIC(14,2) DEFAULT 0,
+  
+  delivery_branch     VARCHAR(10),
+  required_date       DATE,
+  
+  -- Justification
+  reason              TEXT,
+  urgency             urgency_level DEFAULT 'Medium',
+  current_stock       NUMERIC(14,4),
+  reorder_point       NUMERIC(14,4),
+  
+  -- Suggested supplier
+  suggested_supplier  VARCHAR(300),
+  supplier_quotation  NUMERIC(14,2),
+  
+  -- Workflow
+  status              purchase_requisition_status DEFAULT 'Draft',
+  requested_by        VARCHAR(200),
+  requested_date      DATE DEFAULT CURRENT_DATE,
+  approved_by         VARCHAR(200),
+  approval_date       DATE,
+  rejection_reason    TEXT,
+  
+  -- Linked PO
+  purchase_order_id   UUID,
+  purchase_order_number VARCHAR(50),
+  
+  remarks             TEXT,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 12b: Purchase orders
+CREATE TABLE IF NOT EXISTS purchase_orders (
+  id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  po_number             VARCHAR(50) NOT NULL UNIQUE,
+  
+  supplier_id           UUID REFERENCES suppliers(id) ON DELETE SET NULL,
+  supplier_name         VARCHAR(300),
+  supplier_contact      VARCHAR(200),
+  supplier_address      TEXT,
+  
+  -- Totals
+  subtotal              NUMERIC(14,2) DEFAULT 0,
+  tax                   NUMERIC(14,2) DEFAULT 0,
+  shipping_cost         NUMERIC(14,2) DEFAULT 0,
+  total_amount          NUMERIC(14,2) DEFAULT 0,
+  
+  -- Delivery
+  delivery_branch       VARCHAR(10),
+  delivery_address      TEXT,
+  requested_delivery_date DATE,
+  
+  -- Status
+  status                purchase_order_status DEFAULT 'Draft',
+  
+  -- Workflow
+  created_by            VARCHAR(200),
+  created_date          DATE DEFAULT CURRENT_DATE,
+  approved_by           VARCHAR(200),
+  approval_date         DATE,
+  sent_date             DATE,
+  
+  -- References (PR IDs)
+  pr_references         UUID[],
+  
+  payment_terms         VARCHAR(100),
+  notes                 TEXT,
+  
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Add FK from purchase_requisitions to purchase_orders
+DO $$ BEGIN
+  ALTER TABLE purchase_requisitions
+    ADD CONSTRAINT fk_pr_po
+    FOREIGN KEY (purchase_order_id) REFERENCES purchase_orders(id) ON DELETE SET NULL;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+-- 12c: Purchase order line items
 CREATE TABLE IF NOT EXISTS purchase_order_items (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  purchase_order_id UUID NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
-  material_id UUID REFERENCES raw_materials(id) ON DELETE SET NULL,
-  material_name TEXT,
-  material_sku TEXT,
-  description TEXT,
-  quantity NUMERIC(12,2) NOT NULL,
-  unit_of_measure unit_of_measure,
-  unit_price NUMERIC(12,4) NOT NULL,
-  total_price NUMERIC(15,2) NOT NULL,
+  id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  purchase_order_id     UUID NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+  material_id           UUID REFERENCES raw_materials(id) ON DELETE SET NULL,
+  material_name         VARCHAR(300),
+  material_sku          VARCHAR(100),
+  description           TEXT,
+  quantity              NUMERIC(14,4) NOT NULL,
+  unit_of_measure       unit_of_measure DEFAULT 'kg',
+  unit_price            NUMERIC(12,4) DEFAULT 0,
+  total_price           NUMERIC(14,2) DEFAULT 0,
   expected_delivery_date DATE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Goods Receipt Notes
+-- 12d: Goods Receipt Notes (GRN)
 CREATE TABLE IF NOT EXISTS goods_receipt_notes (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  grn_number TEXT NOT NULL UNIQUE,
-  purchase_order_id UUID NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
-  supplier_id UUID REFERENCES suppliers(id) ON DELETE SET NULL,
-  supplier_name TEXT,
-  delivery_note TEXT,
-  invoice_number TEXT,
-  received_date DATE,
-  received_by TEXT,
-  branch TEXT,
+  id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  grn_number            VARCHAR(50) NOT NULL UNIQUE,
+  
+  purchase_order_id     UUID NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+  purchase_order_number VARCHAR(50),
+  supplier_id           UUID REFERENCES suppliers(id) ON DELETE SET NULL,
+  supplier_name         VARCHAR(300),
+  
+  -- Delivery
+  delivery_note         TEXT,
+  invoice_number        VARCHAR(100),
+  received_date         DATE NOT NULL DEFAULT CURRENT_DATE,
+  received_by           VARCHAR(200),
+  branch                VARCHAR(10),
+  
+  -- Quality
   quality_check_required BOOLEAN DEFAULT FALSE,
-  quality_check_status quality_status,
-  quality_check_by TEXT,
-  quality_check_date DATE,
-  quality_remarks TEXT,
-  status grn_status NOT NULL DEFAULT 'Draft',
-  remarks TEXT,
-  attachments TEXT[],
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  quality_check_status  quality_status,
+  quality_check_by      VARCHAR(200),
+  quality_check_date    DATE,
+  quality_remarks       TEXT,
+  
+  -- Status
+  status                grn_status DEFAULT 'Draft',
+  
+  remarks               TEXT,
+  attachments           TEXT[],
+  
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- GRN line items
+-- 12e: GRN line items
 CREATE TABLE IF NOT EXISTS grn_items (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  grn_id UUID NOT NULL REFERENCES goods_receipt_notes(id) ON DELETE CASCADE,
-  material_id UUID REFERENCES raw_materials(id) ON DELETE SET NULL,
-  material_name TEXT,
-  material_sku TEXT,
-  ordered_quantity NUMERIC(12,2),
-  received_quantity NUMERIC(12,2),
-  accepted_quantity NUMERIC(12,2),
-  rejected_quantity NUMERIC(12,2),
-  unit_of_measure unit_of_measure,
-  batch_number TEXT,
-  expiry_date DATE,
-  remarks TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  grn_id            UUID NOT NULL REFERENCES goods_receipt_notes(id) ON DELETE CASCADE,
+  material_id       UUID REFERENCES raw_materials(id) ON DELETE SET NULL,
+  material_name     VARCHAR(300),
+  material_sku      VARCHAR(100),
+  ordered_quantity  NUMERIC(14,4),
+  received_quantity NUMERIC(14,4) NOT NULL,
+  accepted_quantity NUMERIC(14,4) DEFAULT 0,
+  rejected_quantity NUMERIC(14,4) DEFAULT 0,
+  unit_of_measure   unit_of_measure DEFAULT 'kg',
+  batch_number      VARCHAR(100),
+  expiry_date       DATE,
+  remarks           TEXT,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 
 -- ============================================================================
--- SECTION 13: LOGISTICS / FLEET
+-- SECTION 13: LOGISTICS & FLEET MANAGEMENT
 -- ============================================================================
 
+-- 13a: Vehicles / fleet
 CREATE TABLE IF NOT EXISTS vehicles (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  vehicle_id TEXT NOT NULL UNIQUE,
-  vehicle_name TEXT,
-  plate_number TEXT,
-  type vehicle_type NOT NULL,
-  status vehicle_status NOT NULL DEFAULT 'Available',
-  -- Specs
-  make TEXT,
-  model TEXT,
-  year_model INTEGER,
-  color TEXT,
-  engine_type TEXT,
-  max_weight NUMERIC(10,2),             -- kg
-  max_volume NUMERIC(10,2),             -- cubic meters
-  dimensions_length NUMERIC(8,2),
-  dimensions_width NUMERIC(8,2),
-  dimensions_height NUMERIC(8,2),
-  -- Registration
-  registration_date DATE,
-  registration_expiry DATE,
-  orcr_number TEXT,
-  -- Acquisition
-  acquisition_date DATE,
-  purchase_price NUMERIC(15,2),
-  current_book_value NUMERIC(15,2),
-  financing_status financing_status DEFAULT 'Owned',
-  branch TEXT,
-  -- Maintenance
-  last_maintenance_date DATE,
-  next_maintenance_due DATE,
-  current_mileage NUMERIC(12,1) DEFAULT 0,
-  mileage_at_last_maintenance NUMERIC(12,1),
-  -- Stats
-  total_trips INTEGER DEFAULT 0,
-  total_distance NUMERIC(12,1) DEFAULT 0,
-  utilization_percent NUMERIC(5,2) DEFAULT 0,
-  current_trip TEXT,
+  id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  vehicle_id        VARCHAR(50) NOT NULL UNIQUE,   -- Human-readable
+  vehicle_name      VARCHAR(200) NOT NULL,
+  plate_number      VARCHAR(50),
+  type              vehicle_type NOT NULL,
+  
+  status            vehicle_status DEFAULT 'Available',
+  financing_status  financing_status DEFAULT 'Owned',
+  
+  -- Current trip
+  current_trip_id   UUID,  -- FK added after trips table
+  trips_today       INT DEFAULT 0,
   next_available_time TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  utilization_percent NUMERIC(5,2) DEFAULT 0,
+  
+  -- Capacity
+  max_weight_kg     NUMERIC(10,2) DEFAULT 0,
+  max_volume_cbm    NUMERIC(10,3) DEFAULT 0,
+  
+  -- Maintenance
+  maintenance_due   DATE,
+  alerts            TEXT[],
+  
+  branch_id         UUID REFERENCES branches(id) ON DELETE SET NULL,
+  
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 13b: Trips
 CREATE TABLE IF NOT EXISTS trips (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  trip_number TEXT NOT NULL UNIQUE,
-  vehicle_id UUID REFERENCES vehicles(id) ON DELETE SET NULL,
-  vehicle_name TEXT,
-  driver_name TEXT,
-  driver_id UUID REFERENCES employees(id) ON DELETE SET NULL,
-  status trip_status NOT NULL DEFAULT 'Pending',
-  scheduled_date DATE,
-  departure_time TIMESTAMPTZ,
-  destinations TEXT[],
-  order_ids UUID[],
-  capacity_used NUMERIC(5,2) DEFAULT 0,
-  weight_used NUMERIC(10,2) DEFAULT 0,
-  volume_used NUMERIC(10,2) DEFAULT 0,
-  max_weight NUMERIC(10,2),
-  max_volume NUMERIC(10,2),
-  eta TIMESTAMPTZ,
-  actual_arrival TIMESTAMPTZ,
-  delay_reason TEXT,
-  branch TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  trip_number     VARCHAR(50) NOT NULL UNIQUE,
+  
+  vehicle_id      UUID REFERENCES vehicles(id) ON DELETE SET NULL,
+  vehicle_name    VARCHAR(200),
+  driver_id       UUID REFERENCES employees(id) ON DELETE SET NULL,
+  driver_name     VARCHAR(200),
+  
+  status          trip_status DEFAULT 'Pending',
+  scheduled_date  DATE NOT NULL,
+  departure_time  TIMESTAMPTZ,
+  
+  destinations    TEXT[],
+  order_ids       UUID[],          -- References to orders
+  
+  -- Capacity usage
+  capacity_used_percent NUMERIC(5,2) DEFAULT 0,
+  weight_used_kg  NUMERIC(10,2) DEFAULT 0,
+  volume_used_cbm NUMERIC(10,3) DEFAULT 0,
+  max_weight_kg   NUMERIC(10,2) DEFAULT 0,
+  max_volume_cbm  NUMERIC(10,3) DEFAULT 0,
+  
+  eta             TIMESTAMPTZ,
+  actual_arrival  TIMESTAMPTZ,
+  delay_reason    TEXT,
+  
+  branch_id       UUID REFERENCES branches(id) ON DELETE SET NULL,
+  
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Add FK from vehicles.current_trip_id to trips
+DO $$ BEGIN
+  ALTER TABLE vehicles
+    ADD CONSTRAINT fk_vehicles_current_trip
+    FOREIGN KEY (current_trip_id) REFERENCES trips(id) ON DELETE SET NULL;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+-- 13c: Delivery tracking
 CREATE TABLE IF NOT EXISTS delivery_tracking (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  trip_id UUID NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
-  delivery_number TEXT,
-  vehicle TEXT,
-  driver TEXT,
-  route TEXT,
-  orders_count INTEGER DEFAULT 0,
-  status delivery_tracking_status NOT NULL DEFAULT 'Scheduled',
-  eta TIMESTAMPTZ,
-  actual_arrival TIMESTAMPTZ,
-  delay_reason TEXT,
-  current_location TEXT,
-  pod_collected BOOLEAN DEFAULT FALSE,
-  branch TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  trip_id         UUID REFERENCES trips(id) ON DELETE SET NULL,
+  delivery_number VARCHAR(50) NOT NULL UNIQUE,
+  
+  vehicle         VARCHAR(200),
+  driver          VARCHAR(200),
+  route           VARCHAR(300),
+  orders_count    INT DEFAULT 0,
+  
+  status          delivery_tracking_status DEFAULT 'Scheduled',
+  eta             TIMESTAMPTZ,
+  actual_arrival  TIMESTAMPTZ,
+  delay_reason    TEXT,
+  current_location VARCHAR(300),
+  
+  pod_collected   BOOLEAN DEFAULT FALSE,
+  
+  branch_id       UUID REFERENCES branches(id) ON DELETE SET NULL,
+  
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 13d: Delay / exception records
 CREATE TABLE IF NOT EXISTS delay_exceptions (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  type delay_exception_type NOT NULL,
-  affected_trip TEXT,
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  type            delay_exception_type NOT NULL,
+  affected_trip   VARCHAR(100),
+  trip_id         UUID REFERENCES trips(id) ON DELETE SET NULL,
   affected_orders TEXT[],
   customers_affected TEXT[],
-  days_late INTEGER DEFAULT 0,
-  owner TEXT,
-  status delay_exception_status NOT NULL DEFAULT 'Open',
-  reported_date DATE,
-  resolution TEXT,
-  branch TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  days_late       INT DEFAULT 0,
+  owner           VARCHAR(200),
+  status          delay_exception_status DEFAULT 'Open',
+  reported_date   DATE DEFAULT CURRENT_DATE,
+  resolution      TEXT,
+  branch_id       UUID REFERENCES branches(id) ON DELETE SET NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 13e: Shipments (sea/air freight)
 CREATE TABLE IF NOT EXISTS shipments (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  shipment_number TEXT NOT NULL UNIQUE,
-  type shipment_type NOT NULL,
-  order_ids UUID[],
-  port TEXT,
-  destination TEXT,
-  departure_date DATE,
-  eta DATE,
-  status shipment_status NOT NULL DEFAULT 'Preparing',
-  carrier TEXT,
-  tracking_number TEXT,
-  branch TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  shipment_number VARCHAR(50) NOT NULL UNIQUE,
+  type            shipment_type NOT NULL,
+  order_ids       UUID[],
+  port            VARCHAR(200),
+  destination     VARCHAR(300),
+  departure_date  DATE,
+  eta             DATE,
+  status          shipment_status DEFAULT 'Preparing',
+  carrier         VARCHAR(200),
+  tracking_number VARCHAR(200),
+  branch_id       UUID REFERENCES branches(id) ON DELETE SET NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 13f: Trip history / completed trips
 CREATE TABLE IF NOT EXISTS trip_history (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  trip_number TEXT,
-  vehicle_id UUID REFERENCES vehicles(id) ON DELETE SET NULL,
-  date DATE,
-  driver_name TEXT,
-  driver_id UUID REFERENCES employees(id) ON DELETE SET NULL,
-  route TEXT[],
-  orders_count INTEGER DEFAULT 0,
-  distance NUMERIC(10,1),
-  duration TEXT,
-  status TEXT,                           -- 'Completed', 'Delayed', 'Failed'
-  fuel_used NUMERIC(8,2),
-  fuel_cost NUMERIC(10,2),
-  revenue NUMERIC(15,2),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  trip_id         UUID REFERENCES trips(id) ON DELETE SET NULL,
+  trip_number     VARCHAR(50),
+  vehicle_name    VARCHAR(200),
+  driver_name     VARCHAR(200),
+  scheduled_date  DATE,
+  departure_time  TIMESTAMPTZ,
+  arrival_time    TIMESTAMPTZ,
+  destinations    TEXT[],
+  orders_count    INT DEFAULT 0,
+  delivery_success_rate NUMERIC(5,2) DEFAULT 0,
+  status          trip_status,
+  notes           TEXT,
+  branch_id       UUID REFERENCES branches(id) ON DELETE SET NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 13g: Maintenance records
 CREATE TABLE IF NOT EXISTS maintenance_records (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  vehicle_id UUID NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
-  date DATE,
-  type TEXT,
-  category maintenance_category,
-  cost NUMERIC(10,2) DEFAULT 0,
-  service_provider TEXT,
-  mileage NUMERIC(12,1),
-  notes TEXT,
-  next_due DATE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  vehicle_id      UUID NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
+  category        maintenance_category NOT NULL,
+  description     TEXT NOT NULL,
+  scheduled_date  DATE,
+  completed_date  DATE,
+  cost            NUMERIC(12,2) DEFAULT 0,
+  vendor          VARCHAR(300),
+  status          VARCHAR(50) DEFAULT 'Scheduled',  -- Scheduled, In Progress, Completed
+  notes           TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 13h: Driver assignments
 CREATE TABLE IF NOT EXISTS driver_assignments (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  vehicle_id UUID NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
-  driver_id UUID REFERENCES employees(id) ON DELETE SET NULL,
-  driver_name TEXT,
-  total_trips INTEGER DEFAULT 0,
-  on_time_rate NUMERIC(5,2) DEFAULT 0,
-  is_primary BOOLEAN DEFAULT FALSE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  driver_id       UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  vehicle_id      UUID NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
+  assigned_date   DATE NOT NULL DEFAULT CURRENT_DATE,
+  end_date        DATE,
+  is_active       BOOLEAN DEFAULT TRUE,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 13i: Warehouse readiness (logistics view)
+CREATE TABLE IF NOT EXISTS warehouse_readiness (
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  order_id        UUID REFERENCES orders(id) ON DELETE SET NULL,
+  order_number    VARCHAR(50),
+  trip_id         UUID REFERENCES trips(id) ON DELETE SET NULL,
+  loading_status  VARCHAR(50) DEFAULT 'Not Started',  -- Ready, Partial, Blocked, Not Started
+  blockers        JSONB DEFAULT '[]'::jsonb,  -- [{type, itemName, quantity}]
+  last_updated    TIMESTAMPTZ DEFAULT NOW(),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 
@@ -1518,156 +1768,224 @@ CREATE TABLE IF NOT EXISTS driver_assignments (
 -- SECTION 14: WAREHOUSE OPERATIONS
 -- ============================================================================
 
+-- 14a: Production batches
 CREATE TABLE IF NOT EXISTS production_batches (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  batch_number TEXT,
-  product_name TEXT,
-  product_id UUID REFERENCES products(id) ON DELETE SET NULL,
-  planned_qty INTEGER NOT NULL DEFAULT 0,
-  actual_qty INTEGER,
-  qa_status qa_status DEFAULT 'Pending',
-  scheduled_date DATE,
-  completed_date DATE,
-  branch TEXT,
-  defect_rate NUMERIC(5,2),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  batch_number    VARCHAR(100) NOT NULL UNIQUE,
+  product_id      UUID REFERENCES products(id) ON DELETE SET NULL,
+  product_name    VARCHAR(300),
+  planned_qty     INT NOT NULL DEFAULT 0,
+  actual_qty      INT,
+  qa_status       qa_status DEFAULT 'Pending',
+  defect_rate     NUMERIC(5,2),
+  scheduled_date  DATE NOT NULL,
+  completed_date  DATE,
+  branch_id       UUID REFERENCES branches(id) ON DELETE SET NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS warehouse_order_fulfillment (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  order_id UUID REFERENCES orders(id) ON DELETE CASCADE,
-  order_number TEXT,
-  customer TEXT,
-  truck_assigned TEXT,
+-- Add FK from material_consumption to production_batches
+DO $$ BEGIN
+  ALTER TABLE material_consumption
+    ADD CONSTRAINT fk_consumption_production_batch
+    FOREIGN KEY (production_batch_id) REFERENCES production_batches(id) ON DELETE SET NULL;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+-- 14b: Order fulfillment tracking
+CREATE TABLE IF NOT EXISTS order_fulfillment (
+  id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  order_id          UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  order_number      VARCHAR(50),
+  customer_name     VARCHAR(300),
+  
+  truck_assigned    VARCHAR(200),
   weight_utilization NUMERIC(5,2),
-  required_date DATE,
-  products_summary TEXT,
-  stock_status warehouse_stock_status DEFAULT 'Fully Available',
+  required_date     DATE,
+  products_summary  TEXT,
+  
+  stock_status      warehouse_stock_status DEFAULT 'Not Available',
   fulfillment_status fulfillment_status DEFAULT 'To Pick',
-  urgency urgency_level,
-  branch TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  
+  urgency           urgency_level DEFAULT 'Medium',
+  branch_id         UUID REFERENCES branches(id) ON DELETE SET NULL,
+  
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS warehouse_loading_details (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  fulfillment_id UUID NOT NULL REFERENCES warehouse_order_fulfillment(id) ON DELETE CASCADE,
-  product_name TEXT,
-  qty INTEGER DEFAULT 0,
-  status loading_detail_status DEFAULT 'Pending',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+-- 14c: Loading details (per product per order)
+CREATE TABLE IF NOT EXISTS loading_details (
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  fulfillment_id  UUID NOT NULL REFERENCES order_fulfillment(id) ON DELETE CASCADE,
+  product_name    VARCHAR(300) NOT NULL,
+  qty             INT NOT NULL DEFAULT 0,
+  status          loading_detail_status DEFAULT 'Pending',
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 14d: Quality issues
 CREATE TABLE IF NOT EXISTS quality_issues (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  item_name TEXT,
-  batch_number TEXT,
-  issue_type quality_issue_type NOT NULL,
-  reason TEXT,
-  qty_affected INTEGER DEFAULT 0,
-  status quality_issue_status NOT NULL DEFAULT 'Open',
-  reported_date DATE,
-  assigned_to TEXT,
-  resolution TEXT,
-  branch TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  item_name       VARCHAR(300) NOT NULL,
+  batch_number    VARCHAR(100),
+  issue_type      quality_issue_type NOT NULL,
+  reason          TEXT NOT NULL,
+  qty_affected    INT NOT NULL DEFAULT 0,
+  status          quality_issue_status DEFAULT 'Open',
+  reported_date   DATE DEFAULT CURRENT_DATE,
+  assigned_to     VARCHAR(200),
+  resolution      TEXT,
+  branch_id       UUID REFERENCES branches(id) ON DELETE SET NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 14e: Machines
 CREATE TABLE IF NOT EXISTS machines (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  machine_name TEXT NOT NULL,
-  utilization_percent NUMERIC(5,2) DEFAULT 0,
+  id                      UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  machine_name            VARCHAR(200) NOT NULL,
+  utilization_percent     NUMERIC(5,2) DEFAULT 0,
   quota_completion_percent NUMERIC(5,2) DEFAULT 0,
-  next_maintenance DATE,
-  error_rate NUMERIC(5,2) DEFAULT 0,
-  status machine_status_enum NOT NULL DEFAULT 'Idle',
-  branch TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  next_maintenance        DATE,
+  error_rate              NUMERIC(5,2) DEFAULT 0,
+  status                  machine_status_enum DEFAULT 'Idle',
+  branch_id               UUID REFERENCES branches(id) ON DELETE SET NULL,
+  created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Warehouse-level stock movements (unified In/Out/Transfer/Adjust/Production/Damage)
+-- 14f: Warehouse stock movements (finished goods movements)
 CREATE TABLE IF NOT EXISTS warehouse_stock_movements (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  item_name TEXT,
-  type warehouse_movement_type NOT NULL,
-  quantity INTEGER NOT NULL,
-  reference TEXT,
-  from_location TEXT,
-  to_location TEXT,
-  performed_by TEXT,
-  notes TEXT,
-  branch TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  item_name       VARCHAR(300) NOT NULL,
+  type            warehouse_movement_type NOT NULL,
+  quantity        INT NOT NULL,
+  reference       VARCHAR(200),
+  from_location   VARCHAR(200),
+  to_location     VARCHAR(200),
+  user_name       VARCHAR(200),
+  notes           TEXT,
+  branch_id       UUID REFERENCES branches(id) ON DELETE SET NULL,
+  timestamp       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 14g: Finished goods stock (denormalized / warehouse view)
+CREATE TABLE IF NOT EXISTS finished_goods_stock (
+  id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  variant_id        UUID REFERENCES product_variants(id) ON DELETE SET NULL,
+  product_name      VARCHAR(300) NOT NULL,
+  sku               VARCHAR(100),
+  
+  current_stock     INT DEFAULT 0,
+  reserved_stock    INT DEFAULT 0,
+  available_stock   INT DEFAULT 0,
+  min_level         INT DEFAULT 0,
+  avg_daily_outflow NUMERIC(10,2) DEFAULT 0,
+  production_quota  INT,
+  qa_success_rate   NUMERIC(5,2) DEFAULT 0,
+  days_of_cover     INT DEFAULT 0,
+  risk_level        risk_level DEFAULT 'Low',
+  
+  -- Inter-branch quantities
+  inter_branch_qty  JSONB DEFAULT '{}'::jsonb,
+  
+  branch_id         UUID REFERENCES branches(id) ON DELETE SET NULL,
+  
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 
 -- ============================================================================
--- SECTION 15: CHAT / MESSAGING
+-- SECTION 15: CHAT & MESSAGING
 -- ============================================================================
 
+-- 15a: Chat users
 CREATE TABLE IF NOT EXISTS chat_users (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   employee_id UUID REFERENCES employees(id) ON DELETE SET NULL,
-  name TEXT NOT NULL,
-  avatar TEXT,
-  branch TEXT,
-  role TEXT,
-  status chat_user_status DEFAULT 'offline',
-  last_seen TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  name        VARCHAR(200) NOT NULL,
+  avatar      TEXT,
+  branch      VARCHAR(100),
+  role        VARCHAR(100),
+  status      chat_user_status DEFAULT 'offline',
+  last_seen   TIMESTAMPTZ,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 15b: Chats (direct or group)
 CREATE TABLE IF NOT EXISTS chats (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  name TEXT,
-  type chat_type NOT NULL DEFAULT 'direct',
-  avatar TEXT,
-  created_by UUID REFERENCES chat_users(id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name        VARCHAR(300),
+  type        chat_type NOT NULL DEFAULT 'direct',
+  avatar      TEXT,
+  created_by  UUID REFERENCES chat_users(id) ON DELETE SET NULL,
+  unread_count INT DEFAULT 0,
+  
+  -- Last message (denormalized for listing)
+  last_message_content  TEXT,
+  last_message_time     TIMESTAMPTZ,
+  last_message_sender   UUID,
+  
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 15c: Chat members
 CREATE TABLE IF NOT EXISTS chat_members (
-  chat_id UUID NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
-  user_id UUID NOT NULL REFERENCES chat_users(id) ON DELETE CASCADE,
-  joined_at TIMESTAMPTZ DEFAULT NOW(),
-  PRIMARY KEY (chat_id, user_id)
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  chat_id     UUID NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+  user_id     UUID NOT NULL REFERENCES chat_users(id) ON DELETE CASCADE,
+  role        chat_member_role DEFAULT 'member',
+  joined_at   TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(chat_id, user_id)
 );
 
+-- 15d: Chat messages
 CREATE TABLE IF NOT EXISTS chat_messages (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  chat_id UUID NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
-  sender_id UUID NOT NULL REFERENCES chat_users(id) ON DELETE CASCADE,
-  sender_name TEXT,
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  chat_id     UUID NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+  sender_id   UUID NOT NULL REFERENCES chat_users(id) ON DELETE CASCADE,
+  sender_name VARCHAR(200),
   sender_avatar TEXT,
-  content TEXT NOT NULL,
-  edited BOOLEAN DEFAULT FALSE,
-  edited_at TIMESTAMPTZ,
+  content     TEXT NOT NULL,
+  edited      BOOLEAN DEFAULT FALSE,
+  edited_at   TIMESTAMPTZ,
+  
+  -- Reply threading
   reply_to_message_id UUID REFERENCES chat_messages(id) ON DELETE SET NULL,
-  reply_to_sender_name TEXT,
-  reply_to_content TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  reply_to_sender     VARCHAR(200),
+  reply_to_content    TEXT,
+  
+  -- Read tracking
+  read_by     UUID[] DEFAULT '{}',
+  
+  timestamp   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 15e: Message reactions
 CREATE TABLE IF NOT EXISTS message_reactions (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  message_id UUID NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
-  user_id UUID NOT NULL REFERENCES chat_users(id) ON DELETE CASCADE,
-  emoji TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(message_id, user_id, emoji)
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  message_id  UUID NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+  emoji       VARCHAR(10) NOT NULL,
+  user_ids    UUID[] DEFAULT '{}',
+  count       INT DEFAULT 0,
+  UNIQUE(message_id, emoji)
 );
 
+-- 15f: Message read receipts
 CREATE TABLE IF NOT EXISTS message_read_receipts (
-  message_id UUID NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
-  user_id UUID NOT NULL REFERENCES chat_users(id) ON DELETE CASCADE,
-  read_at TIMESTAMPTZ DEFAULT NOW(),
-  PRIMARY KEY (message_id, user_id)
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  message_id  UUID NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+  user_id     UUID NOT NULL REFERENCES chat_users(id) ON DELETE CASCADE,
+  read_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(message_id, user_id)
 );
 
 
@@ -1676,15 +1994,22 @@ CREATE TABLE IF NOT EXISTS message_read_receipts (
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS audit_logs (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_name TEXT,
-  user_id UUID REFERENCES employees(id) ON DELETE SET NULL,
-  role user_role,
-  action TEXT NOT NULL,
-  entity TEXT,
-  details TEXT,
-  metadata JSONB,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id     UUID,
+  user_name   VARCHAR(200),
+  user_role   VARCHAR(100),
+  action      VARCHAR(200) NOT NULL,
+  module      VARCHAR(100),            -- 'Orders', 'Products', 'Warehouse', etc.
+  entity_type VARCHAR(100),            -- 'order', 'product', 'customer', etc.
+  entity_id   UUID,
+  description TEXT,
+  old_value   JSONB,
+  new_value   JSONB,
+  metadata    JSONB,
+  ip_address  INET,
+  user_agent  TEXT,
+  branch_id   UUID REFERENCES branches(id) ON DELETE SET NULL,
+  timestamp   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 
@@ -1692,33 +2017,59 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 -- SECTION 17: NOTIFICATIONS & ALERTS
 -- ============================================================================
 
+-- 17a: General notifications
 CREATE TABLE IF NOT EXISTS notifications (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID REFERENCES employees(id) ON DELETE CASCADE,
-  category notification_category NOT NULL,
-  message TEXT NOT NULL,
-  read BOOLEAN DEFAULT FALSE,
-  urgent BOOLEAN DEFAULT FALSE,
-  action_url TEXT,
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id     UUID,                     -- Target user
+  category    notification_category NOT NULL,
+  message     TEXT NOT NULL,
+  urgent      BOOLEAN DEFAULT FALSE,
+  read        BOOLEAN DEFAULT FALSE,
+  action_url  TEXT,
   action_label TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  branch_id   UUID REFERENCES branches(id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Generic alerts (warehouse, logistics, agent)
-CREATE TABLE IF NOT EXISTS alerts (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  alert_source TEXT,                     -- 'warehouse', 'logistics', 'agent', 'executive'
-  type TEXT NOT NULL,
-  severity alert_severity NOT NULL DEFAULT 'Low',
-  title TEXT NOT NULL,
-  message TEXT,
-  item_name TEXT,
+-- 17b: Logistics alerts
+CREATE TABLE IF NOT EXISTS logistics_alerts (
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  type            logistics_alert_type NOT NULL,
+  severity        alert_severity DEFAULT 'Medium',
+  title           VARCHAR(300) NOT NULL,
+  message         TEXT NOT NULL,
   action_required BOOLEAN DEFAULT FALSE,
-  related_entity TEXT,
-  branch TEXT,
-  resolved BOOLEAN DEFAULT FALSE,
-  resolved_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  related_entity  VARCHAR(200),
+  branch_id       UUID REFERENCES branches(id) ON DELETE SET NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 17c: Warehouse alerts
+CREATE TABLE IF NOT EXISTS warehouse_alerts (
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  type            warehouse_alert_type NOT NULL,
+  severity        alert_severity DEFAULT 'Medium',
+  title           VARCHAR(300) NOT NULL,
+  message         TEXT NOT NULL,
+  item_name       VARCHAR(300),
+  action_required BOOLEAN DEFAULT FALSE,
+  branch_id       UUID REFERENCES branches(id) ON DELETE SET NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 17d: Agent alerts
+CREATE TABLE IF NOT EXISTS agent_alerts (
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  agent_id        UUID REFERENCES employees(id) ON DELETE CASCADE,
+  type            agent_alert_type NOT NULL,
+  severity        alert_severity DEFAULT 'Medium',
+  title           VARCHAR(300) NOT NULL,
+  message         TEXT NOT NULL,
+  related_customer VARCHAR(300),
+  related_order   VARCHAR(100),
+  action_required BOOLEAN DEFAULT FALSE,
+  branch_id       UUID REFERENCES branches(id) ON DELETE SET NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 
@@ -1726,173 +2077,409 @@ CREATE TABLE IF NOT EXISTS alerts (
 -- SECTION 18: COMPANY SETTINGS
 -- ============================================================================
 
+-- 18a: Company settings
 CREATE TABLE IF NOT EXISTS company_settings (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  company_name TEXT,
-  trade_name TEXT,
-  registration_number TEXT,
-  tax_id TEXT,
-  industry TEXT,
-  founded_year INTEGER,
-  website TEXT,
-  logo_url TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  company_name    VARCHAR(300) NOT NULL,
+  logo_url        TEXT,
+  industry        VARCHAR(200),
+  website         VARCHAR(255),
+  tax_id          VARCHAR(100),
+  registration_number VARCHAR(100),
+  
+  -- Primary contact
+  primary_email   VARCHAR(255),
+  primary_phone   VARCHAR(50),
+  
+  -- Financial
+  currency        VARCHAR(10) DEFAULT 'PHP',
+  fiscal_year_start VARCHAR(10) DEFAULT '01-01',
+  
+  metadata        JSONB DEFAULT '{}'::jsonb,
+  
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 18b: Company contacts
 CREATE TABLE IF NOT EXISTS company_contacts (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  name TEXT NOT NULL,
-  role TEXT,
-  department TEXT,
-  phone TEXT,
-  email TEXT,
-  is_primary BOOLEAN DEFAULT FALSE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  settings_id     UUID REFERENCES company_settings(id) ON DELETE CASCADE,
+  contact_type    VARCHAR(100),  -- 'Primary', 'Accounting', 'Support', etc.
+  name            VARCHAR(200),
+  position        VARCHAR(200),
+  email           VARCHAR(255),
+  phone           VARCHAR(50),
+  is_primary      BOOLEAN DEFAULT FALSE,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 18c: Company addresses
 CREATE TABLE IF NOT EXISTS company_addresses (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  type address_type NOT NULL,
-  label TEXT,
-  street TEXT,
-  city TEXT,
-  province TEXT,
-  postal_code TEXT,
-  country TEXT DEFAULT 'Philippines',
-  is_primary BOOLEAN DEFAULT FALSE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  settings_id     UUID REFERENCES company_settings(id) ON DELETE CASCADE,
+  address_type    address_type DEFAULT 'Main Office',
+  label           VARCHAR(200),
+  street          TEXT,
+  city            VARCHAR(200),
+  province        VARCHAR(200),
+  postal_code     VARCHAR(20),
+  country         VARCHAR(100) DEFAULT 'Philippines',
+  is_primary      BOOLEAN DEFAULT FALSE,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 18d: Payment profiles
 CREATE TABLE IF NOT EXISTS company_payment_profiles (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  type payment_profile_type NOT NULL,
-  name TEXT,
-  account_number TEXT,                   -- encrypt at app level
-  bank_name TEXT,
-  expiry_date TEXT,
-  is_default BOOLEAN DEFAULT FALSE,
-  is_active BOOLEAN DEFAULT TRUE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  settings_id     UUID REFERENCES company_settings(id) ON DELETE CASCADE,
+  bank_name       VARCHAR(200),
+  account_name    VARCHAR(200),
+  account_number  VARCHAR(100),
+  swift_code      VARCHAR(50),
+  is_default      BOOLEAN DEFAULT FALSE,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 18e: Social media
 CREATE TABLE IF NOT EXISTS company_social_media (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  platform social_platform NOT NULL,
-  url TEXT,
-  followers INTEGER DEFAULT 0,
-  is_active BOOLEAN DEFAULT TRUE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  settings_id     UUID REFERENCES company_settings(id) ON DELETE CASCADE,
+  platform        VARCHAR(100) NOT NULL,
+  url             TEXT NOT NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 
 -- ============================================================================
--- SECTION 19: CALENDAR EVENTS (Executive / Logistics scheduling)
+-- SECTION 19: CALENDAR & SCHEDULING
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS calendar_events (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  title TEXT NOT NULL,
-  date DATE NOT NULL,
-  type TEXT,                             -- 'Outgoing', 'Incoming', 'Transfer'
-  at_risk BOOLEAN DEFAULT FALSE,
-  details TEXT,
-  branch TEXT,
-  related_entity_id UUID,
-  related_entity_type TEXT,              -- 'order', 'trip', 'shipment'
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  title       VARCHAR(300) NOT NULL,
+  description TEXT,
+  event_date  DATE NOT NULL,
+  start_time  TIME,
+  end_time    TIME,
+  type        calendar_event_type DEFAULT 'Outgoing',
+  at_risk     BOOLEAN DEFAULT FALSE,
+  details     TEXT,
+  
+  -- Associations
+  order_id    UUID REFERENCES orders(id) ON DELETE SET NULL,
+  trip_id     UUID REFERENCES trips(id) ON DELETE SET NULL,
+  branch_id   UUID REFERENCES branches(id) ON DELETE SET NULL,
+  
+  created_by  UUID REFERENCES employees(id) ON DELETE SET NULL,
+  
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 
 -- ============================================================================
--- SECTION 20: INDEXES
--- Performance indexes on frequently queried columns
+-- SECTION 20: REPORTS & ANALYTICS (Materialized Views / Snapshot Tables)
 -- ============================================================================
 
--- Orders
-CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
-CREATE INDEX IF NOT EXISTS idx_orders_payment_status ON orders(payment_status);
-CREATE INDEX IF NOT EXISTS idx_orders_customer_id ON orders(customer_id);
-CREATE INDEX IF NOT EXISTS idx_orders_agent_id ON orders(agent_id);
-CREATE INDEX IF NOT EXISTS idx_orders_branch ON orders(branch);
-CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at);
-CREATE INDEX IF NOT EXISTS idx_order_line_items_order ON order_line_items(order_id);
-CREATE INDEX IF NOT EXISTS idx_order_logs_order ON order_logs(order_id);
+-- 20a: Branch performance snapshots
+CREATE TABLE IF NOT EXISTS branch_performance (
+  id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  branch_id           UUID REFERENCES branches(id) ON DELETE CASCADE,
+  branch_name         VARCHAR(100),
+  period              VARCHAR(20) NOT NULL,   -- '2026-03', '2026-Q1'
+  
+  total_sales         NUMERIC(14,2) DEFAULT 0,
+  sales_quota         NUMERIC(14,2) DEFAULT 0,
+  total_orders        INT DEFAULT 0,
+  avg_order_value     NUMERIC(12,2) DEFAULT 0,
+  
+  stockout_count      INT DEFAULT 0,
+  on_time_delivery    NUMERIC(5,2) DEFAULT 0,   -- percentage
+  overdue_receivables NUMERIC(14,2) DEFAULT 0,
+  
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 20b: Agent performance snapshots
+CREATE TABLE IF NOT EXISTS agent_performance_snapshots (
+  id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  agent_id            UUID REFERENCES employees(id) ON DELETE CASCADE,
+  agent_name          VARCHAR(200),
+  branch_id           UUID REFERENCES branches(id) ON DELETE SET NULL,
+  period              VARCHAR(20) NOT NULL,
+  
+  -- Sales
+  total_revenue       NUMERIC(14,2) DEFAULT 0,
+  number_of_orders    INT DEFAULT 0,
+  avg_order_value     NUMERIC(12,2) DEFAULT 0,
+  sell_rate           NUMERIC(5,2) DEFAULT 0,
+  
+  -- Customer
+  active_customers    INT DEFAULT 0,
+  new_customers       INT DEFAULT 0,
+  retention_rate      NUMERIC(5,2) DEFAULT 0,
+  
+  -- Financial
+  commission_earned   NUMERIC(14,2) DEFAULT 0,
+  avg_profit_margin   NUMERIC(5,2) DEFAULT 0,
+  collection_rate     NUMERIC(5,2) DEFAULT 0,
+  outstanding_receivables NUMERIC(14,2) DEFAULT 0,
+  
+  -- Rankings
+  rank_by_revenue     INT,
+  rank_by_orders      INT,
+  rank_by_retention   INT,
+  
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 20c: Executive KPI snapshots
+CREATE TABLE IF NOT EXISTS executive_kpi_snapshots (
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  period          VARCHAR(20) NOT NULL,
+  kpi_name        VARCHAR(200) NOT NULL,
+  kpi_value       NUMERIC(14,2),
+  kpi_display     VARCHAR(100),
+  trend           VARCHAR(50),
+  trend_up        BOOLEAN,
+  subtitle        TEXT,
+  status          VARCHAR(50),     -- 'good','warning','danger','neutral'
+  previous_value  VARCHAR(100),
+  branch_id       UUID REFERENCES branches(id) ON DELETE SET NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+
+-- ============================================================================
+-- SECTION 21: AGENT PURCHASE REQUESTS (Agent Dashboard)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS agent_purchase_requests (
+  id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  request_number      VARCHAR(50) NOT NULL UNIQUE,
+  agent_id            UUID REFERENCES employees(id) ON DELETE SET NULL,
+  
+  item_name           VARCHAR(300) NOT NULL,
+  category            purchase_request_category NOT NULL,
+  quantity            NUMERIC(14,4) NOT NULL,
+  unit                VARCHAR(50),
+  estimated_cost      NUMERIC(14,2) DEFAULT 0,
+  supplier            VARCHAR(300),
+  supplier_quote      NUMERIC(14,2),
+  reason              TEXT,
+  urgency             urgency_level DEFAULT 'Medium',
+  
+  status              purchase_request_status DEFAULT 'Draft',
+  requested_by        VARCHAR(200),
+  request_date        DATE DEFAULT CURRENT_DATE,
+  approver            VARCHAR(200),
+  approval_date       DATE,
+  rejection_reason    TEXT,
+  expected_delivery   DATE,
+  
+  branch_id           UUID REFERENCES branches(id) ON DELETE SET NULL,
+  
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+
+-- ============================================================================
+-- SECTION 22: POD (Proof of Delivery) COLLECTION (Agent)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS pod_collections (
+  id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  delivery_number   VARCHAR(50) NOT NULL,
+  order_number      VARCHAR(50),
+  order_id          UUID REFERENCES orders(id) ON DELETE SET NULL,
+  customer_name     VARCHAR(300),
+  
+  delivered_date    DATE,
+  delivered_time    TIME,
+  delivery_amount   NUMERIC(14,2) DEFAULT 0,
+  received_by       VARCHAR(200),
+  
+  pod_collected     BOOLEAN DEFAULT FALSE,
+  pod_image         TEXT,
+  pod_notes         TEXT,
+  signature_required BOOLEAN DEFAULT TRUE,
+  issues            TEXT[],
+  
+  agent_id          UUID REFERENCES employees(id) ON DELETE SET NULL,
+  branch_id         UUID REFERENCES branches(id) ON DELETE SET NULL,
+  
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+
+-- ============================================================================
+-- SECTION 23: INDEXES
+-- ============================================================================
+
+-- Employees
+CREATE INDEX IF NOT EXISTS idx_employees_branch ON employees(branch_id);
+CREATE INDEX IF NOT EXISTS idx_employees_role ON employees(role);
+CREATE INDEX IF NOT EXISTS idx_employees_status ON employees(status);
+CREATE INDEX IF NOT EXISTS idx_employees_auth_user ON employees(auth_user_id);
 
 -- Products
 CREATE INDEX IF NOT EXISTS idx_products_category ON products(category_id);
 CREATE INDEX IF NOT EXISTS idx_products_status ON products(status);
 CREATE INDEX IF NOT EXISTS idx_product_variants_product ON product_variants(product_id);
 CREATE INDEX IF NOT EXISTS idx_product_variants_sku ON product_variants(sku);
+CREATE INDEX IF NOT EXISTS idx_product_variants_supplier ON product_variants(supplier_id);
+CREATE INDEX IF NOT EXISTS idx_product_stock_movements_variant ON product_stock_movements(variant_id);
+CREATE INDEX IF NOT EXISTS idx_product_stock_movements_timestamp ON product_stock_movements(timestamp);
 
--- Materials
+-- Raw Materials
 CREATE INDEX IF NOT EXISTS idx_raw_materials_category ON raw_materials(category_id);
+CREATE INDEX IF NOT EXISTS idx_raw_materials_sku ON raw_materials(sku);
 CREATE INDEX IF NOT EXISTS idx_raw_materials_status ON raw_materials(status);
+CREATE INDEX IF NOT EXISTS idx_raw_materials_supplier ON raw_materials(supplier_id);
 CREATE INDEX IF NOT EXISTS idx_material_batches_material ON material_batches(material_id);
 CREATE INDEX IF NOT EXISTS idx_material_stock_movements_material ON material_stock_movements(material_id);
+CREATE INDEX IF NOT EXISTS idx_material_stock_movements_date ON material_stock_movements(movement_date);
+CREATE INDEX IF NOT EXISTS idx_material_consumption_material ON material_consumption(material_id);
 
 -- Customers
 CREATE INDEX IF NOT EXISTS idx_customers_status ON customers(status);
-CREATE INDEX IF NOT EXISTS idx_customers_assigned_agent ON customers(assigned_agent_id);
-CREATE INDEX IF NOT EXISTS idx_customers_branch ON customers(branch);
-CREATE INDEX IF NOT EXISTS idx_customer_notes_customer ON customer_notes(customer_id);
+CREATE INDEX IF NOT EXISTS idx_customers_agent ON customers(assigned_agent_id);
+CREATE INDEX IF NOT EXISTS idx_customers_branch ON customers(branch_id);
+CREATE INDEX IF NOT EXISTS idx_customers_risk ON customers(risk_level);
 CREATE INDEX IF NOT EXISTS idx_customer_tasks_customer ON customer_tasks(customer_id);
+CREATE INDEX IF NOT EXISTS idx_customer_tasks_status ON customer_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_customer_tasks_due ON customer_tasks(due_date);
+CREATE INDEX IF NOT EXISTS idx_customer_activities_customer ON customer_activities(customer_id);
+CREATE INDEX IF NOT EXISTS idx_customer_buying_patterns_customer ON customer_buying_patterns(customer_id);
 
--- Employees
-CREATE INDEX IF NOT EXISTS idx_employees_role ON employees(role);
-CREATE INDEX IF NOT EXISTS idx_employees_branch ON employees(branch_id);
-CREATE INDEX IF NOT EXISTS idx_employees_status ON employees(status);
+-- Orders
+CREATE INDEX IF NOT EXISTS idx_orders_customer ON orders(customer_id);
+CREATE INDEX IF NOT EXISTS idx_orders_agent ON orders(agent_id);
+CREATE INDEX IF NOT EXISTS idx_orders_branch ON orders(branch_id);
+CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+CREATE INDEX IF NOT EXISTS idx_orders_payment_status ON orders(payment_status);
+CREATE INDEX IF NOT EXISTS idx_orders_order_date ON orders(order_date);
+CREATE INDEX IF NOT EXISTS idx_orders_required_date ON orders(required_date);
+CREATE INDEX IF NOT EXISTS idx_orders_number ON orders(order_number);
+CREATE INDEX IF NOT EXISTS idx_order_line_items_order ON order_line_items(order_id);
+CREATE INDEX IF NOT EXISTS idx_order_line_items_variant ON order_line_items(variant_id);
+CREATE INDEX IF NOT EXISTS idx_order_logs_order ON order_logs(order_id);
+CREATE INDEX IF NOT EXISTS idx_order_logs_timestamp ON order_logs(timestamp);
+CREATE INDEX IF NOT EXISTS idx_order_proofs_order ON order_proof_documents(order_id);
+
+-- Invoices
+CREATE INDEX IF NOT EXISTS idx_invoices_order ON invoices(order_id);
+CREATE INDEX IF NOT EXISTS idx_invoices_due_date ON invoices(due_date);
+CREATE INDEX IF NOT EXISTS idx_invoices_number ON invoices(invoice_number);
+CREATE INDEX IF NOT EXISTS idx_invoices_payment_status ON invoices(payment_status);
+
+-- Payment System
+CREATE INDEX IF NOT EXISTS idx_payment_links_invoice ON payment_links(invoice_id);
+CREATE INDEX IF NOT EXISTS idx_payment_links_order ON payment_links(order_id);
+CREATE INDEX IF NOT EXISTS idx_payment_links_token ON payment_links(token);
+CREATE INDEX IF NOT EXISTS idx_payment_links_status ON payment_links(status);
+CREATE INDEX IF NOT EXISTS idx_payment_transactions_link ON payment_transactions(payment_link_id);
+CREATE INDEX IF NOT EXISTS idx_payment_transactions_invoice ON payment_transactions(invoice_id);
+CREATE INDEX IF NOT EXISTS idx_payment_transactions_status ON payment_transactions(status);
+CREATE INDEX IF NOT EXISTS idx_digital_receipts_transaction ON digital_receipts(payment_transaction_id);
+CREATE INDEX IF NOT EXISTS idx_digital_receipts_number ON digital_receipts(receipt_number);
+
+-- Collections
+CREATE INDEX IF NOT EXISTS idx_receivables_customer ON receivables(customer_id);
+CREATE INDEX IF NOT EXISTS idx_receivables_agent ON receivables(assigned_agent_id);
+CREATE INDEX IF NOT EXISTS idx_receivables_status ON receivables(status);
+CREATE INDEX IF NOT EXISTS idx_receivables_due_date ON receivables(due_date);
+CREATE INDEX IF NOT EXISTS idx_collection_notes_receivable ON collection_notes(receivable_id);
+CREATE INDEX IF NOT EXISTS idx_collection_payments_receivable ON collection_payment_records(receivable_id);
+
+-- Purchase
+CREATE INDEX IF NOT EXISTS idx_purchase_requisitions_material ON purchase_requisitions(material_id);
+CREATE INDEX IF NOT EXISTS idx_purchase_requisitions_status ON purchase_requisitions(status);
+CREATE INDEX IF NOT EXISTS idx_purchase_orders_supplier ON purchase_orders(supplier_id);
+CREATE INDEX IF NOT EXISTS idx_purchase_orders_status ON purchase_orders(status);
+CREATE INDEX IF NOT EXISTS idx_grn_po ON goods_receipt_notes(purchase_order_id);
 
 -- Logistics
-CREATE INDEX IF NOT EXISTS idx_trips_status ON trips(status);
-CREATE INDEX IF NOT EXISTS idx_trips_vehicle ON trips(vehicle_id);
 CREATE INDEX IF NOT EXISTS idx_vehicles_status ON vehicles(status);
+CREATE INDEX IF NOT EXISTS idx_vehicles_branch ON vehicles(branch_id);
+CREATE INDEX IF NOT EXISTS idx_trips_vehicle ON trips(vehicle_id);
+CREATE INDEX IF NOT EXISTS idx_trips_driver ON trips(driver_id);
+CREATE INDEX IF NOT EXISTS idx_trips_status ON trips(status);
+CREATE INDEX IF NOT EXISTS idx_trips_date ON trips(scheduled_date);
+CREATE INDEX IF NOT EXISTS idx_trips_branch ON trips(branch_id);
 CREATE INDEX IF NOT EXISTS idx_delivery_tracking_trip ON delivery_tracking(trip_id);
-
--- Finance
-CREATE INDEX IF NOT EXISTS idx_invoices_order ON invoices(order_id);
-CREATE INDEX IF NOT EXISTS idx_invoices_payment_status ON invoices(payment_status);
-CREATE INDEX IF NOT EXISTS idx_payment_links_token ON payment_links(token);
-CREATE INDEX IF NOT EXISTS idx_payment_transactions_status ON payment_transactions(status);
-CREATE INDEX IF NOT EXISTS idx_receivables_customer ON receivables(customer_id);
-CREATE INDEX IF NOT EXISTS idx_receivables_status ON receivables(status);
-
--- Purchasing
-CREATE INDEX IF NOT EXISTS idx_purchase_requisitions_status ON purchase_requisitions(status);
-CREATE INDEX IF NOT EXISTS idx_purchase_orders_status ON purchase_orders(status);
-CREATE INDEX IF NOT EXISTS idx_purchase_orders_supplier ON purchase_orders(supplier_id);
-
--- Chat
-CREATE INDEX IF NOT EXISTS idx_chat_messages_chat ON chat_messages(chat_id);
-CREATE INDEX IF NOT EXISTS idx_chat_messages_sender ON chat_messages(sender_id);
-CREATE INDEX IF NOT EXISTS idx_chat_messages_created ON chat_messages(created_at);
-
--- Audit
-CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at);
-CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs(entity);
-
--- Alerts / Notifications
-CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);
-CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(read);
-CREATE INDEX IF NOT EXISTS idx_alerts_branch ON alerts(branch);
-CREATE INDEX IF NOT EXISTS idx_alerts_resolved ON alerts(resolved);
+CREATE INDEX IF NOT EXISTS idx_delivery_tracking_status ON delivery_tracking(status);
+CREATE INDEX IF NOT EXISTS idx_delay_exceptions_trip ON delay_exceptions(trip_id);
+CREATE INDEX IF NOT EXISTS idx_delay_exceptions_status ON delay_exceptions(status);
+CREATE INDEX IF NOT EXISTS idx_shipments_status ON shipments(status);
+CREATE INDEX IF NOT EXISTS idx_maintenance_vehicle ON maintenance_records(vehicle_id);
+CREATE INDEX IF NOT EXISTS idx_driver_assignments_driver ON driver_assignments(driver_id);
+CREATE INDEX IF NOT EXISTS idx_driver_assignments_vehicle ON driver_assignments(vehicle_id);
 
 -- Warehouse
-CREATE INDEX IF NOT EXISTS idx_production_batches_status ON production_batches(qa_status);
+CREATE INDEX IF NOT EXISTS idx_production_batches_product ON production_batches(product_id);
+CREATE INDEX IF NOT EXISTS idx_production_batches_qa ON production_batches(qa_status);
+CREATE INDEX IF NOT EXISTS idx_order_fulfillment_order ON order_fulfillment(order_id);
+CREATE INDEX IF NOT EXISTS idx_order_fulfillment_status ON order_fulfillment(fulfillment_status);
 CREATE INDEX IF NOT EXISTS idx_quality_issues_status ON quality_issues(status);
-CREATE INDEX IF NOT EXISTS idx_warehouse_fulfillment_order ON warehouse_order_fulfillment(order_id);
+CREATE INDEX IF NOT EXISTS idx_warehouse_movements_type ON warehouse_stock_movements(type);
+CREATE INDEX IF NOT EXISTS idx_warehouse_movements_branch ON warehouse_stock_movements(branch_id);
+CREATE INDEX IF NOT EXISTS idx_finished_goods_branch ON finished_goods_stock(branch_id);
+CREATE INDEX IF NOT EXISTS idx_finished_goods_variant ON finished_goods_stock(variant_id);
+
+-- Chat
+CREATE INDEX IF NOT EXISTS idx_chat_users_employee ON chat_users(employee_id);
+CREATE INDEX IF NOT EXISTS idx_chat_members_chat ON chat_members(chat_id);
+CREATE INDEX IF NOT EXISTS idx_chat_members_user ON chat_members(user_id);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_chat ON chat_messages(chat_id);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_sender ON chat_messages(sender_id);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_timestamp ON chat_messages(timestamp);
+
+-- Audit
+CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON audit_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_module ON audit_logs(module);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_branch ON audit_logs(branch_id);
+
+-- Notifications
+CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_category ON notifications(category);
+CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(read);
+CREATE INDEX IF NOT EXISTS idx_logistics_alerts_type ON logistics_alerts(type);
+CREATE INDEX IF NOT EXISTS idx_warehouse_alerts_type ON warehouse_alerts(type);
+CREATE INDEX IF NOT EXISTS idx_agent_alerts_agent ON agent_alerts(agent_id);
+
+-- Calendar
+CREATE INDEX IF NOT EXISTS idx_calendar_events_date ON calendar_events(event_date);
+CREATE INDEX IF NOT EXISTS idx_calendar_events_branch ON calendar_events(branch_id);
+CREATE INDEX IF NOT EXISTS idx_calendar_events_type ON calendar_events(type);
+
+-- Reports
+CREATE INDEX IF NOT EXISTS idx_branch_performance_branch ON branch_performance(branch_id);
+CREATE INDEX IF NOT EXISTS idx_branch_performance_period ON branch_performance(period);
+CREATE INDEX IF NOT EXISTS idx_agent_perf_snapshot_agent ON agent_performance_snapshots(agent_id);
+CREATE INDEX IF NOT EXISTS idx_agent_perf_snapshot_period ON agent_performance_snapshots(period);
+CREATE INDEX IF NOT EXISTS idx_executive_kpi_period ON executive_kpi_snapshots(period);
+
+-- Agent
+CREATE INDEX IF NOT EXISTS idx_agent_targets_employee ON agent_targets(employee_id);
+CREATE INDEX IF NOT EXISTS idx_agent_commissions_employee ON agent_commissions(employee_id);
+CREATE INDEX IF NOT EXISTS idx_customer_assignments_employee ON customer_assignments(employee_id);
+CREATE INDEX IF NOT EXISTS idx_customer_assignments_customer ON customer_assignments(customer_id);
+CREATE INDEX IF NOT EXISTS idx_agent_purchase_requests_agent ON agent_purchase_requests(agent_id);
+CREATE INDEX IF NOT EXISTS idx_pod_collections_order ON pod_collections(order_id);
+CREATE INDEX IF NOT EXISTS idx_pod_collections_agent ON pod_collections(agent_id);
 
 
 -- ============================================================================
--- SECTION 21: UPDATED_AT TRIGGER FUNCTION
--- Auto-update updated_at on any row modification
+-- SECTION 24: TRIGGER - Auto-update updated_at
 -- ============================================================================
 
-CREATE OR REPLACE FUNCTION update_updated_at_column()
+CREATE OR REPLACE FUNCTION update_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
   NEW.updated_at = NOW();
@@ -1900,129 +2487,141 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Apply trigger to all tables with updated_at
-DO $$
-DECLARE
+-- Apply updated_at trigger to all tables that have the column
+DO $$ 
+DECLARE 
   tbl TEXT;
-  trg_name TEXT;
 BEGIN
   FOR tbl IN
-    SELECT table_name FROM information_schema.columns
-    WHERE column_name = 'updated_at'
+    SELECT table_name 
+    FROM information_schema.columns 
+    WHERE column_name = 'updated_at' 
       AND table_schema = 'public'
-    GROUP BY table_name
   LOOP
-    trg_name := 'trg_' || tbl || '_updated_at';
-    IF NOT EXISTS (
-      SELECT 1 FROM information_schema.triggers
-      WHERE trigger_name = trg_name AND event_object_table = tbl
-    ) THEN
-      EXECUTE format(
-        'CREATE TRIGGER %I BEFORE UPDATE ON %I FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()',
-        trg_name, tbl
-      );
-    END IF;
+    EXECUTE format(
+      'DROP TRIGGER IF EXISTS trigger_updated_at ON %I; 
+       CREATE TRIGGER trigger_updated_at 
+       BEFORE UPDATE ON %I 
+       FOR EACH ROW EXECUTE FUNCTION update_updated_at();',
+      tbl, tbl
+    );
   END LOOP;
 END $$;
 
 
 -- ============================================================================
--- SECTION 22: ROW LEVEL SECURITY (RLS) - Scaffolding
--- Enable RLS on sensitive tables. Policies to be defined per app auth logic.
+-- SECTION 25: ROW LEVEL SECURITY (RLS)
+-- Enable RLS on ALL tables and grant full access to authenticated users.
+-- Supabase requires RLS to be enabled; without policies, no data is accessible.
+-- These policies allow any authenticated user full CRUD on all tables.
+-- Refine per-role policies as needed in modifications.sql.
 -- ============================================================================
 
-ALTER TABLE employees ENABLE ROW LEVEL SECURITY;
-ALTER TABLE employee_personal_info ENABLE ROW LEVEL SECURITY;
-ALTER TABLE employee_bank_details ENABLE ROW LEVEL SECURITY;
-ALTER TABLE employee_government_ids ENABLE ROW LEVEL SECURITY;
-ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
-ALTER TABLE invoices ENABLE ROW LEVEL SECURITY;
-ALTER TABLE customers ENABLE ROW LEVEL SECURITY;
-ALTER TABLE payment_transactions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE payment_records ENABLE ROW LEVEL SECURITY;
-ALTER TABLE chat_messages ENABLE ROW LEVEL SECURITY;
-ALTER TABLE audit_logs ENABLE ROW LEVEL SECURITY;
-
--- Permissive policy for service_role (server-side) - allows full access
--- Individual user policies should be added when auth is implemented
 DO $$
 DECLARE
   tbl TEXT;
-  pol_name TEXT;
 BEGIN
+  -- Enable RLS on every public table
   FOR tbl IN
-    VALUES ('employees'), ('employee_personal_info'), ('employee_bank_details'),
-           ('employee_government_ids'), ('orders'), ('invoices'), ('customers'),
-           ('payment_transactions'), ('payment_records'), ('chat_messages'), ('audit_logs')
+    SELECT tablename FROM pg_tables WHERE schemaname = 'public'
   LOOP
-    pol_name := 'allow_service_role_' || tbl;
-    IF NOT EXISTS (
-      SELECT 1 FROM pg_policies WHERE policyname = pol_name AND tablename = tbl
-    ) THEN
+    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', tbl);
+  END LOOP;
+
+  -- Create a full-access policy for authenticated users on every public table
+  FOR tbl IN
+    SELECT tablename FROM pg_tables WHERE schemaname = 'public'
+  LOOP
+    -- SELECT
+    BEGIN
       EXECUTE format(
-        'CREATE POLICY %I ON %I FOR ALL TO service_role USING (true) WITH CHECK (true)',
-        pol_name, tbl
+        'CREATE POLICY %I ON %I FOR SELECT USING (auth.role() = ''authenticated'')',
+        'auth_select_' || tbl, tbl
       );
-    END IF;
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END;
+    -- INSERT
+    BEGIN
+      EXECUTE format(
+        'CREATE POLICY %I ON %I FOR INSERT WITH CHECK (auth.role() = ''authenticated'')',
+        'auth_insert_' || tbl, tbl
+      );
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END;
+    -- UPDATE
+    BEGIN
+      EXECUTE format(
+        'CREATE POLICY %I ON %I FOR UPDATE USING (auth.role() = ''authenticated'')',
+        'auth_update_' || tbl, tbl
+      );
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END;
+    -- DELETE
+    BEGIN
+      EXECUTE format(
+        'CREATE POLICY %I ON %I FOR DELETE USING (auth.role() = ''authenticated'')',
+        'auth_delete_' || tbl, tbl
+      );
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END;
   END LOOP;
 END $$;
 
 
 -- ============================================================================
--- SECTION 23: SEED DEFAULT DATA
+-- SECTION 26: SEED DATA
 -- ============================================================================
 
--- Default branches
-INSERT INTO branches (name, location)
-VALUES
-  ('Branch A', 'Metro Manila'),
-  ('Branch B', 'Cebu'),
-  ('Branch C', 'Davao')
+-- Branches
+INSERT INTO branches (code, name, address) VALUES
+  ('A', 'Branch A', 'Main Warehouse, Industrial Zone'),
+  ('B', 'Branch B', 'Regional Hub, Commercial District'),
+  ('C', 'Branch C', 'Production Facility, Factory Area')
+ON CONFLICT (code) DO NOTHING;
+
+-- Product categories
+INSERT INTO product_categories (name, slug, sort_order) VALUES
+  ('HDPE Pipes', 'hdpe-pipes', 1),
+  ('HDPE Fittings', 'hdpe-fittings', 2),
+  ('UPVC Sanitary', 'upvc-sanitary', 3),
+  ('UPVC Electrical', 'upvc-electrical', 4),
+  ('UPVC Potable Water', 'upvc-potable-water', 5),
+  ('UPVC Pressurized', 'upvc-pressurized', 6),
+  ('PPR Pipes', 'ppr-pipes', 7),
+  ('PPR Fittings', 'ppr-fittings', 8),
+  ('Telecom Pipes', 'telecom-pipes', 9),
+  ('Garden Hoses', 'garden-hoses', 10),
+  ('Flexible Hoses', 'flexible-hoses', 11),
+  ('Others', 'others', 12)
 ON CONFLICT (name) DO NOTHING;
 
--- Default product categories
-INSERT INTO product_categories (name, description) VALUES
-  ('HDPE Pipes', 'High-Density Polyethylene pipes'),
-  ('HDPE Fittings', 'HDPE pipe fittings and connectors'),
-  ('UPVC Sanitary', 'UPVC sanitary drainage pipes'),
-  ('UPVC Electrical', 'UPVC electrical conduit pipes'),
-  ('UPVC Potable Water', 'UPVC potable water supply pipes'),
-  ('UPVC Pressurized', 'UPVC pressurized line pipes'),
-  ('PPR Pipes', 'Polypropylene Random Copolymer pipes'),
-  ('PPR Fittings', 'PPR pipe fittings'),
-  ('Telecom Pipes', 'Telecommunications conduit pipes'),
-  ('Garden Hoses', 'Flexible garden hoses'),
-  ('Flexible Hoses', 'Flexible connection hoses'),
-  ('Others', 'Miscellaneous products')
+-- Material categories
+INSERT INTO material_categories (name, slug, sort_order) VALUES
+  ('PVC Resin', 'pvc-resin', 1),
+  ('HDPE Resin', 'hdpe-resin', 2),
+  ('PPR Resin', 'ppr-resin', 3),
+  ('Stabilizers', 'stabilizers', 4),
+  ('Plasticizers', 'plasticizers', 5),
+  ('Lubricants', 'lubricants', 6),
+  ('Colorants', 'colorants', 7),
+  ('Additives', 'additives', 8),
+  ('Packaging Materials', 'packaging-materials', 9),
+  ('Other', 'other', 10)
 ON CONFLICT (name) DO NOTHING;
 
--- Default material categories
-INSERT INTO material_categories (name, description) VALUES
-  ('PVC Resin', 'Polyvinyl chloride resin for pipe manufacturing'),
-  ('HDPE Resin', 'High-density polyethylene for durable products'),
-  ('PPR Resin', 'Polypropylene random copolymer resin'),
-  ('Stabilizers', 'Heat and UV stabilizers for material protection'),
-  ('Plasticizers', 'Additives for flexibility and workability'),
-  ('Lubricants', 'Processing aids and lubricants'),
-  ('Colorants', 'Pigments and color masterbatches'),
-  ('Additives', 'Performance-enhancing additives'),
-  ('Packaging Materials', 'Packaging supplies and materials'),
-  ('Other', 'Miscellaneous raw materials')
-ON CONFLICT (name) DO NOTHING;
-
--- Default payment method fee configurations
+-- Payment method fees (default configuration)
 INSERT INTO payment_method_fees (method, gateway_fee_percent, gateway_fee_fixed, service_fee_percent, service_fee_fixed, enabled, description) VALUES
-  ('GCash',         1.50, 0,   0.75, 200, TRUE,  'Pay via GCash wallet - instant confirmation'),
-  ('Maya',          1.50, 0,   0.75, 200, TRUE,  'Pay via Maya wallet - instant confirmation'),
-  ('Bank Transfer', 0.00, 500, 0.50, 300, TRUE,  'Direct bank transfer - processed within 24 hours'),
-  ('Credit Card',   2.50, 0,   0.75, 200, TRUE,  'Pay with Visa, Mastercard, JCB - instant confirmation'),
-  ('Debit Card',    2.00, 0,   0.75, 200, TRUE,  'Pay with debit card - instant confirmation'),
-  ('Cash',          0.00, 0,   0.00, 0,   TRUE,  'Cash payment'),
-  ('Check',         0.00, 0,   0.00, 0,   TRUE,  'Check payment')
+  ('GCash', 1.50, 0, 0.75, 200, TRUE, 'Pay via GCash wallet - instant confirmation'),
+  ('Maya', 1.50, 0, 0.75, 200, TRUE, 'Pay via Maya (PayMaya) wallet - instant confirmation'),
+  ('Bank Transfer', 0, 500, 0.50, 300, TRUE, 'Direct bank transfer - processed within 24 hours'),
+  ('Credit Card', 2.50, 0, 0.75, 200, TRUE, 'Pay with Visa, Mastercard, JCB - instant confirmation'),
+  ('Debit Card', 2.00, 0, 0.75, 200, TRUE, 'Pay with debit card - instant confirmation'),
+  ('Cash', 0, 0, 0, 0, TRUE, 'Cash payment - no additional fees'),
+  ('Check', 0, 0, 0, 0, TRUE, 'Check payment - cleared after processing')
 ON CONFLICT (method) DO NOTHING;
 
 
 -- ============================================================================
--- DONE! Schema creation complete.
--- Total: ~60 tables, ~100 enums, indexes, triggers, RLS scaffolding, seed data
+-- SCHEMA COMPLETE
+-- Total: ~70 tables, ~120 enums, ~150 indexes, auto-trigger, RLS, seed data
 -- ============================================================================
