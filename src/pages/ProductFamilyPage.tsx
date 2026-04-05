@@ -4,7 +4,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { useAppContext } from '../store/AppContext';
-import BulkDiscountModal from '../components/products/BulkDiscountModal';
 import ImageGalleryModal from '../components/ImageGalleryModal';
 import StockAdjustmentModal from '../components/warehouse/StockAdjustmentModal';
 import {
@@ -93,6 +92,8 @@ const mockVariants = [
     monthlyUsage: 180,
     unitsSold: 1240,
     status: 'In Stock',
+    monthlyProductionQuota: 2000,
+    currentMonthProduced: 1450,
     rawMaterials: [
       { name: 'HDPE Resin', quantity: 12.5, unit: 'kg', cost: 180 },
       { name: 'UV Stabilizer', quantity: 0.8, unit: 'kg', cost: 45 },
@@ -121,6 +122,8 @@ const mockVariants = [
     monthlyUsage: 220,
     unitsSold: 1580,
     status: 'In Stock',
+    monthlyProductionQuota: 2500,
+    currentMonthProduced: 2100,
     rawMaterials: [
       { name: 'HDPE Resin', quantity: 19.5, unit: 'kg', cost: 280 },
       { name: 'UV Stabilizer', quantity: 1.2, unit: 'kg', cost: 68 },
@@ -149,6 +152,8 @@ const mockVariants = [
     monthlyUsage: 250,
     unitsSold: 1820,
     status: 'In Stock',
+    monthlyProductionQuota: 3000,
+    currentMonthProduced: 2650,
     rawMaterials: [
       { name: 'HDPE Resin', quantity: 26.8, unit: 'kg', cost: 385 },
       { name: 'UV Stabilizer', quantity: 1.6, unit: 'kg', cost: 90 },
@@ -177,6 +182,8 @@ const mockVariants = [
     monthlyUsage: 180,
     unitsSold: 1150,
     status: 'Low Stock',
+    monthlyProductionQuota: 1800,
+    currentMonthProduced: 1200,
     rawMaterials: [
       { name: 'HDPE Resin', quantity: 44.2, unit: 'kg', cost: 635 },
       { name: 'UV Stabilizer', quantity: 2.6, unit: 'kg', cost: 148 },
@@ -205,6 +212,8 @@ const mockVariants = [
     monthlyUsage: 150,
     unitsSold: 980,
     status: 'In Stock',
+    monthlyProductionQuota: 1500,
+    currentMonthProduced: 1380,
     rawMaterials: [
       { name: 'HDPE Resin', quantity: 65.0, unit: 'kg', cost: 935 },
       { name: 'UV Stabilizer', quantity: 3.8, unit: 'kg', cost: 215 },
@@ -233,6 +242,8 @@ const mockVariants = [
     monthlyUsage: 95,
     unitsSold: 620,
     status: 'Critical',
+    monthlyProductionQuota: 1000,
+    currentMonthProduced: 580,
     rawMaterials: [
       { name: 'HDPE Resin', quantity: 118.0, unit: 'kg', cost: 1695 },
       { name: 'UV Stabilizer', quantity: 6.8, unit: 'kg', cost: 385 },
@@ -261,6 +272,8 @@ const mockVariants = [
     monthlyUsage: 75,
     unitsSold: 480,
     status: 'In Stock',
+    monthlyProductionQuota: 800,
+    currentMonthProduced: 620,
     rawMaterials: [
       { name: 'HDPE Resin', quantity: 170.0, unit: 'kg', cost: 2445 },
       { name: 'UV Stabilizer', quantity: 9.8, unit: 'kg', cost: 555 },
@@ -289,6 +302,8 @@ const mockVariants = [
     monthlyUsage: 45,
     unitsSold: 280,
     status: 'Critical',
+    monthlyProductionQuota: 500,
+    currentMonthProduced: 180,
     rawMaterials: [
       { name: 'HDPE Resin', quantity: 308.0, unit: 'kg', cost: 4425 },
       { name: 'UV Stabilizer', quantity: 17.6, unit: 'kg', cost: 998 },
@@ -321,7 +336,6 @@ export default function ProductFamilyPage() {
   const [comparisonView, setComparisonView] = useState<'table' | 'chart'>('table'); // Toggle between table and chart
   const [isEditingVariant, setIsEditingVariant] = useState(false);
   const [editedVariant, setEditedVariant] = useState<any>(null);
-  const [showBulkDiscountModal, setShowBulkDiscountModal] = useState(false);
   const [showImageGalleryModal, setShowImageGalleryModal] = useState(false);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [showStockAdjustmentModal, setShowStockAdjustmentModal] = useState(false);
@@ -428,14 +442,6 @@ export default function ProductFamilyPage() {
         unit: selectedMaterial.unit,
       };
       setEditedVariant({ ...editedVariant, rawMaterials: updatedMaterials });
-    }
-  };
-
-  const handleSaveBulkDiscounts = (discounts: any[]) => {
-    if (isEditingVariant) {
-      setEditedVariant({ ...editedVariant, bulkDiscounts: discounts });
-    } else {
-      setSelectedVariant({ ...selectedVariant, bulkDiscounts: discounts });
     }
   };
 
@@ -1007,98 +1013,6 @@ export default function ProductFamilyPage() {
           </CardContent>
         </Card>
 
-        {/* Bulk Order Discounts */}
-        <Card className="border-orange-200 bg-gradient-to-br from-orange-50 to-white">
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-base flex items-center gap-2">
-                <Percent className="w-4 h-4 text-orange-600" />
-                Bulk Order Discounts
-              </CardTitle>
-              <Button 
-                variant="outline" 
-                className="text-xs h-7 px-2"
-                onClick={() => setShowBulkDiscountModal(true)}
-              >
-                <Edit className="w-3 h-3 mr-1" />
-                Edit Rules
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent>
-            {displayVariant.bulkDiscounts && displayVariant.bulkDiscounts.length > 0 ? (
-              <div className="space-y-2">
-                {displayVariant.bulkDiscounts.map((tier, index) => {
-                  const savings = tier.discount > 0 
-                    ? displayVariant.price - tier.pricePerUnit 
-                    : 0;
-                  
-                  return (
-                    <div
-                      key={index}
-                      className="p-3 rounded-lg border-2 bg-white border-gray-200 hover:border-gray-300 transition-all"
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className="flex items-center justify-center w-8 h-8 rounded-full bg-orange-100 text-orange-600 font-bold text-sm">
-                            {tier.minQty}+
-                          </div>
-                          <div>
-                            <p className="text-sm font-semibold text-gray-900">
-                              Buy {tier.minQty}+ units
-                            </p>
-                            {tier.discount > 0 && (
-                              <p className="text-xs text-gray-600 mt-0.5">
-                                Save ₱{savings.toLocaleString()} per unit
-                              </p>
-                            )}
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-lg font-bold text-gray-900">
-                            ₱{tier.pricePerUnit.toLocaleString()}
-                            <span className="text-xs font-normal text-gray-500">/unit</span>
-                          </p>
-                          {tier.discount > 0 ? (
-                            <p className="text-xs font-medium text-orange-600 mt-0.5">
-                              -{tier.discount}%
-                            </p>
-                          ) : (
-                            <p className="text-xs text-gray-500 mt-0.5">
-                              Base price
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-                
-                {/* Info Note */}
-                <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-start gap-2">
-                  <Info className="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" />
-                  <div>
-                    <p className="text-sm text-blue-900">
-                      These discount tiers are automatically applied when creating purchase orders based on quantity.
-                    </p>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="text-center py-8">
-                <p className="text-sm text-gray-500 mb-3">No bulk discount rules configured</p>
-                <Button 
-                  variant="outline"
-                  onClick={() => setShowBulkDiscountModal(true)}
-                >
-                  <Percent className="w-4 h-4 mr-2" />
-                  Set Up Discounts
-                </Button>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
         {/* Technical Specs */}
         <Card>
           <CardHeader>
@@ -1240,6 +1154,114 @@ export default function ProductFamilyPage() {
               <div className="flex items-center gap-2 text-sm font-medium text-blue-600">
                 <Calendar className="w-4 h-4" />
                 <span>Feb 15, 2026</span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Monthly Production Quota */}
+        <Card className="border-blue-200 bg-gradient-to-br from-blue-50 to-white">
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Factory className="w-4 h-4 text-blue-600" />
+              Monthly Production Quota
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs text-gray-500 uppercase">Target Quota</p>
+                {isEditingVariant ? (
+                  <input
+                    type="number"
+                    value={editedVariant.monthlyProductionQuota}
+                    onChange={(e) => handleInputChange('monthlyProductionQuota', parseInt(e.target.value) || 0)}
+                    className="border rounded px-3 py-1 text-xl font-bold w-32 text-right"
+                  />
+                ) : (
+                  <p className="text-xl font-bold text-blue-600">
+                    {displayVariant.monthlyProductionQuota?.toLocaleString() || 0} units
+                  </p>
+                )}
+              </div>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs text-gray-500">Produced This Month</p>
+                {isEditingVariant ? (
+                  <input
+                    type="number"
+                    value={editedVariant.currentMonthProduced}
+                    onChange={(e) => handleInputChange('currentMonthProduced', parseInt(e.target.value) || 0)}
+                    className="border rounded px-2 py-1 text-sm font-semibold w-28 text-right"
+                  />
+                ) : (
+                  <p className="text-sm font-semibold text-gray-900">
+                    {displayVariant.currentMonthProduced?.toLocaleString() || 0} units
+                  </p>
+                )}
+              </div>
+              {/* Progress Bar */}
+              <div className="w-full bg-gray-200 rounded-full h-3 mb-2">
+                <div
+                  className={`h-3 rounded-full transition-all ${
+                    ((displayVariant.currentMonthProduced || 0) / (displayVariant.monthlyProductionQuota || 1)) >= 1
+                      ? 'bg-green-500'
+                      : ((displayVariant.currentMonthProduced || 0) / (displayVariant.monthlyProductionQuota || 1)) >= 0.7
+                      ? 'bg-blue-500'
+                      : ((displayVariant.currentMonthProduced || 0) / (displayVariant.monthlyProductionQuota || 1)) >= 0.4
+                      ? 'bg-yellow-500'
+                      : 'bg-red-500'
+                  }`}
+                  style={{
+                    width: `${Math.min(
+                      ((displayVariant.currentMonthProduced || 0) / (displayVariant.monthlyProductionQuota || 1)) * 100,
+                      100
+                    )}%`,
+                  }}
+                ></div>
+              </div>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-gray-500">
+                  {(((displayVariant.currentMonthProduced || 0) / (displayVariant.monthlyProductionQuota || 1)) * 100).toFixed(1)}% complete
+                </span>
+                <span className={`font-semibold ${
+                  (displayVariant.currentMonthProduced || 0) >= (displayVariant.monthlyProductionQuota || 0)
+                    ? 'text-green-600'
+                    : 'text-orange-600'
+                }`}>
+                  {Math.max(0, (displayVariant.monthlyProductionQuota || 0) - (displayVariant.currentMonthProduced || 0)).toLocaleString()} remaining
+                </span>
+              </div>
+            </div>
+
+            {/* Status Alert */}
+            {(displayVariant.currentMonthProduced || 0) >= (displayVariant.monthlyProductionQuota || 0) ? (
+              <div className="flex items-start gap-2 p-3 rounded-lg bg-green-50 border border-green-200">
+                <CheckCircle2 className="w-4 h-4 text-green-600 flex-shrink-0 mt-0.5" />
+                <div className="text-xs text-green-700">
+                  <span className="font-semibold">Quota Achieved!</span> This month's production target has been met.
+                </div>
+              </div>
+            ) : ((displayVariant.currentMonthProduced || 0) / (displayVariant.monthlyProductionQuota || 1)) < 0.5 ? (
+              <div className="flex items-start gap-2 p-3 rounded-lg bg-orange-50 border border-orange-200">
+                <AlertTriangle className="w-4 h-4 text-orange-600 flex-shrink-0 mt-0.5" />
+                <div className="text-xs text-orange-700">
+                  <span className="font-semibold">Behind Schedule</span> - Less than 50% of monthly quota achieved.
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-start gap-2 p-3 rounded-lg bg-blue-50 border border-blue-200">
+                <TrendingUp className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
+                <div className="text-xs text-blue-700">
+                  <span className="font-semibold">On Track</span> - Production progressing as planned.
+                </div>
+              </div>
+            )}
+
+            {/* Month Info */}
+            <div className="pt-3 border-t border-blue-200">
+              <div className="flex items-center justify-between text-xs text-gray-600">
+                <span>Current Period:</span>
+                <span className="font-medium">April 2026</span>
               </div>
             </div>
           </CardContent>
@@ -1439,16 +1461,6 @@ export default function ProductFamilyPage() {
           </CardContent>
         </Card>
       )}
-
-      {/* Bulk Discount Modal */}
-      <BulkDiscountModal
-        isOpen={showBulkDiscountModal}
-        onClose={() => setShowBulkDiscountModal(false)}
-        onSave={handleSaveBulkDiscounts}
-        currentDiscounts={displayVariant.bulkDiscounts || []}
-        basePrice={displayVariant.price || 0}
-        variantName={displayVariant.size || displayVariant.variantName || 'this variant'}
-      />
 
       {/* Image Gallery Modal */}
       <ImageGalleryModal

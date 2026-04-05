@@ -215,15 +215,28 @@ export function CustomerDetailPage() {
               <Badge variant={customer.riskLevel === 'High' ? 'danger' : customer.riskLevel === 'Medium' ? 'warning' : 'success'} className="hidden min-[601px]:inline-flex">
                 {customer.riskLevel} Risk
               </Badge>
+              <Badge 
+                variant={customer.clientType === 'Personal' ? 'primary' : 'secondary'} 
+                className="hidden min-[601px]:inline-flex"
+                title={customer.clientType === 'Personal' ? '1.5% commission' : '0.5% commission'}
+              >
+                {customer.clientType} Client • {customer.clientType === 'Personal' ? '1.5%' : '0.5%'} Commission
+              </Badge>
             </div>
             <p className="text-sm text-gray-500 mt-1">{customer.id} • {customer.type}</p>
             {/* Badges below ID and type on screens ≤600px */}
-            <div className="flex items-center gap-2 mt-2 min-[601px]:hidden">
+            <div className="flex items-center gap-2 mt-2 min-[601px]:hidden flex-wrap">
               <Badge variant={customer.status === 'Active' ? 'success' : 'default'}>
                 {customer.status}
               </Badge>
               <Badge variant={customer.riskLevel === 'High' ? 'danger' : customer.riskLevel === 'Medium' ? 'warning' : 'success'}>
                 {customer.riskLevel} Risk
+              </Badge>
+              <Badge 
+                variant={customer.clientType === 'Personal' ? 'primary' : 'secondary'}
+                title={customer.clientType === 'Personal' ? '1.5% commission' : '0.5% commission'}
+              >
+                {customer.clientType} • {customer.clientType === 'Personal' ? '1.5%' : '0.5%'}
               </Badge>
             </div>
           </div>
@@ -360,6 +373,22 @@ export function CustomerDetailPage() {
                   <div className="text-xs text-gray-500 mb-1">Overdue Amount</div>
                   <div className={`text-lg font-semibold ${customer.overdueAmount > 0 ? 'text-red-600' : 'text-green-600'}`}>
                     ₱{(customer.overdueAmount / 1000).toFixed(0)}K
+                  </div>
+                </div>
+                <div className="col-span-2 md:col-span-3 pt-3 border-t border-gray-200">
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs text-gray-500">
+                      Commission Rate ({customer.clientType} Client)
+                    </div>
+                    <Badge variant={customer.clientType === 'Personal' ? 'primary' : 'secondary'}>
+                      {customer.clientType === 'Personal' ? '1.5%' : '0.5%'}
+                    </Badge>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between">
+                    <div className="text-xs text-gray-500">Estimated YTD Commission</div>
+                    <div className="text-lg font-semibold text-blue-600">
+                      ₱{((customer.totalPurchasesYTD * (customer.clientType === 'Personal' ? 0.015 : 0.005)) / 1000).toFixed(0)}K
+                    </div>
                   </div>
                 </div>
               </CardContent>

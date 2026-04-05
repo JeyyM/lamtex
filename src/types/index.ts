@@ -2,7 +2,8 @@ export type UserRole =
   | 'Executive' 
   | 'Warehouse' 
   | 'Logistics' 
-  | 'Agent';
+  | 'Agent'
+  | 'Driver';
 
 export type Branch = 'All' | 'Branch A' | 'Branch B' | 'Branch C';
 

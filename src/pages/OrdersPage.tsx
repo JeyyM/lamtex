@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { CreateOrderModal } from '@/src/components/orders/CreateOrderModal';
+import { ProofOfDeliveryModal } from '@/src/components/orders/ProofOfDeliveryModal';
 import { getOrdersByBranch } from '@/src/mock/orders';
 import { getCustomersByBranch } from '@/src/mock/customers';
 import { useAppContext } from '@/src/store/AppContext';
@@ -20,17 +21,22 @@ import {
   FileText,
   XCircle,
   Edit2,
+  Camera,
+  MapPin,
+  Calendar,
 } from 'lucide-react';
 
 type OrderTab = 'all' | 'draft' | 'pending' | 'approved' | 'intransit' | 'delivered' | 'rejected';
 
 export function OrdersPage() {
   const navigate = useNavigate();
-  const { branch, addAuditLog } = useAppContext();
+  const { branch, addAuditLog, role } = useAppContext();
   const [activeTab, setActiveTab] = useState<OrderTab>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState<{ id: string; name: string } | null>(null);
+  const [showProofModal, setShowProofModal] = useState(false);
+  const [selectedOrderForProof, setSelectedOrderForProof] = useState<{ id: string; customer: string } | null>(null);
   
   const allOrders = getOrdersByBranch(branch);
   const customers = getCustomersByBranch(branch);
@@ -77,6 +83,17 @@ export function OrdersPage() {
     setShowCreateModal(true);
   };
 
+  const handleSendProof = (orderId: string, customer: string) => {
+    setSelectedOrderForProof({ id: orderId, customer });
+    setShowProofModal(true);
+  };
+
+  const handleProofSubmit = (orderId: string, imageFile: File) => {
+    // Mock handling - in real app would upload to server
+    console.log('Proof of delivery uploaded for order:', orderId, imageFile.name);
+    addAuditLog('Uploaded Proof of Delivery', 'Order', `Uploaded delivery proof for order ${orderId}`);
+  };
+
   const tabCounts = {
     all: allOrders.length,
     draft: allOrders.filter(o => o.status === 'Draft').length,
@@ -87,6 +104,146 @@ export function OrdersPage() {
     rejected: allOrders.filter(o => ['Rejected', 'Cancelled'].includes(o.status)).length,
   };
 
+  // Driver Simplified View
+  if (role === 'Driver') {
+    // Filter only In Transit and Delivered orders for drivers
+    const driverOrders = allOrders.filter(order => 
+      order.status === 'In Transit' || ['Delivered', 'Completed'].includes(order.status)
+    ).filter(order => 
+      order.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      order.customer.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+
+    return (
+      <div className="space-y-6">
+        {/* Header */}
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">My Deliveries</h1>
+          <p className="text-sm text-gray-500 mt-1">Track and complete your assigned deliveries</p>
+        </div>
+
+        {/* Search */}
+        <Card>
+          <CardHeader>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Search by order # or customer..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
+              />
+            </div>
+          </CardHeader>
+        </Card>
+
+        {/* Delivery Cards */}
+        <div className="grid gap-4">
+          {driverOrders.map((order) => (
+            <Card key={order.id} className="hover:shadow-md transition-shadow">
+              <CardContent className="p-6">
+                <div className="space-y-4">
+                  {/* Header */}
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <h3 className="text-lg font-semibold text-gray-900">Order #{order.id}</h3>
+                        <Badge variant={getStatusBadgeVariant(order.status)} className="text-xs">
+                          {order.status}
+                        </Badge>
+                      </div>
+                      <p className="text-sm text-gray-500">Customer: {order.customer}</p>
+                    </div>
+                    {order.status === 'In Transit' && (
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        className="gap-2 flex-shrink-0"
+                        onClick={() => handleSendProof(order.id, order.customer)}
+                      >
+                        <Camera className="w-4 h-4" />
+                        Send Proof
+                      </Button>
+                    )}
+                  </div>
+
+                  {/* Delivery Details */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 p-4 bg-gray-50 rounded-lg">
+                    <div className="flex items-start gap-3">
+                      <MapPin className="w-5 h-5 text-gray-400 flex-shrink-0 mt-0.5" />
+                      <div className="min-w-0">
+                        <p className="text-xs text-gray-500 mb-0.5">Delivery Address</p>
+                        <p className="text-sm font-medium text-gray-900 break-words">
+                          See customer details
+                        </p>
+                      </div>
+                    </div>
+                    
+                    <div className="flex items-start gap-3">
+                      <Calendar className="w-5 h-5 text-gray-400 flex-shrink-0 mt-0.5" />
+                      <div className="min-w-0">
+                        <p className="text-xs text-gray-500 mb-0.5">Required Date</p>
+                        <p className="text-sm font-medium text-gray-900">{order.requiredDate}</p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-start gap-3">
+                      <Package className="w-5 h-5 text-gray-400 flex-shrink-0 mt-0.5" />
+                      <div className="min-w-0">
+                        <p className="text-xs text-gray-500 mb-0.5">Order Items</p>
+                        <p className="text-sm font-medium text-gray-900">
+                          {order.items?.length || 0} items
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex flex-col sm:flex-row gap-2 pt-2 border-t border-gray-200">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-2 flex-1 sm:flex-initial"
+                      onClick={() => handleViewOrder(order.id)}
+                    >
+                      <FileText className="w-4 h-4" />
+                      View Details
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+
+          {driverOrders.length === 0 && (
+            <Card>
+              <CardContent className="py-12 text-center text-gray-500">
+                <Truck className="w-12 h-12 mx-auto mb-3 text-gray-400" />
+                <p className="font-medium">No deliveries found</p>
+                <p className="text-sm mt-1">You have no active or completed deliveries</p>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+
+        {/* Proof of Delivery Modal */}
+        {showProofModal && selectedOrderForProof && (
+          <ProofOfDeliveryModal
+            orderId={selectedOrderForProof.id}
+            customerName={selectedOrderForProof.customer}
+            onClose={() => {
+              setShowProofModal(false);
+              setSelectedOrderForProof(null);
+            }}
+            onSubmit={handleProofSubmit}
+          />
+        )}
+      </div>
+    );
+  }
+
+  // Regular view for other roles
   return (
     <div className="space-y-6">
       {/* Header */}

@@ -4,11 +4,13 @@ export type CustomerType = 'Hardware Store' | 'Construction Company' | 'Contract
 export type CustomerStatus = 'Active' | 'Inactive' | 'Suspended' | 'Dormant' | 'On Hold';
 export type RiskLevel = 'Low' | 'Medium' | 'High';
 export type PaymentBehavior = 'Good' | 'Watchlist' | 'Risk';
+export type ClientType = 'Office' | 'Personal'; // Office = 0.5% commission, Personal = 1.5% commission
 
 export interface CustomerDetail {
   id: string;
   name: string;
   type: CustomerType;
+  clientType: ClientType; // Office or Personal client
   status: CustomerStatus;
   riskLevel: RiskLevel;
   paymentBehavior: PaymentBehavior;

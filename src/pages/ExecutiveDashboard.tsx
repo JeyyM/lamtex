@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
+import { OrderApprovalModal } from '@/src/components/orders/OrderApprovalModal';
 import { 
   TrendingUp, 
   TrendingDown,
@@ -48,9 +49,64 @@ import {
 } from '@/src/mock/executiveDashboard';
 import type { ApprovalOrder } from '@/src/types/executive';
 
+// Sample order with discounts for illustration
+const SAMPLE_ORDER_ITEMS = [
+  {
+    productName: 'UPVC Sanitary Pipe',
+    variantSize: '4" x 10ft',
+    variantDescription: 'Standard white, for sewage and main drains',
+    quantity: 50,
+    basePrice: 950,
+    negotiatedPrice: 900,
+    discounts: [
+      { name: 'Bulk Order Discount', percentage: 10 },
+      { name: 'Loyal Customer', percentage: 5 },
+    ],
+    finalPrice: 769.5,
+    subtotal: 38475,
+  },
+  {
+    productName: 'UPVC Pressure Pipe',
+    variantSize: '1" x 10ft',
+    variantDescription: 'High pressure rating, blue color for water lines',
+    quantity: 30,
+    basePrice: 780,
+    negotiatedPrice: 780,
+    discounts: [
+      { name: 'Holiday Promo', percentage: 8 },
+    ],
+    finalPrice: 717.6,
+    subtotal: 21528,
+  },
+  {
+    productName: 'HDPE Pipe',
+    variantSize: '2" x 20ft',
+    variantDescription: 'Flexible black pipe, PE100 grade',
+    quantity: 25,
+    basePrice: 1850,
+    negotiatedPrice: 1700,
+    discounts: [
+      { name: 'Senior Citizen Discount', percentage: 15 },
+    ],
+    finalPrice: 1445,
+    subtotal: 36125,
+  },
+];
+
+// Sample customer data for illustration
+const SAMPLE_CUSTOMER_DATA = {
+  trustRating: 85, // Excellent rating
+  hasOverdueBalance: true,
+  overdueAmount: 125000,
+};
+
 export function ExecutiveDashboard() {
   const { branch } = useAppContext();
   const navigate = useNavigate();
+  
+  // Modal state
+  const [showOrderModal, setShowOrderModal] = useState(false);
+  const [selectedOrder, setSelectedOrder] = useState<ApprovalOrder | null>(null);
 
   // Get branch-specific data (all data for filtering)
   const kpis = getKPIsByBranch(branch);
@@ -278,18 +334,15 @@ export function ExecutiveDashboard() {
                 <div
                   key={approval.id}
                   className="bg-white rounded-lg border border-red-200 p-4 hover:border-red-300 transition-colors cursor-pointer"
-                  onClick={() => navigate(`/orders/${approval.orderNumber}`)}
+                  onClick={() => {
+                    setSelectedOrder(approval);
+                    setShowOrderModal(true);
+                  }}
                 >
                   <div className="space-y-3">
-                    {/* Top Section: Badges */}
+                    {/* Top Section: Order Number */}
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-semibold text-gray-900">{approval.orderNumber}</span>
-                      <Badge variant="danger">Urgency: {approval.urgencyScore}/100</Badge>
-                      <Badge 
-                        className={`border ${getMarginImpactColor(approval.marginImpact)}`}
-                      >
-                        {approval.marginImpact} Margin Impact
-                      </Badge>
                     </div>
                     
                     {/* Middle Section: Details Grid */}
@@ -569,6 +622,26 @@ export function ExecutiveDashboard() {
         {/* Empty spacer div for 2xl breakpoint to maintain layout */}
         <div className="hidden 2xl:block"></div>
       </div>
+
+      {/* Order Approval Modal */}
+      {showOrderModal && selectedOrder && (
+        <OrderApprovalModal
+          orderNumber={selectedOrder.orderNumber}
+          customer={selectedOrder.customer}
+          agent={selectedOrder.agent}
+          orderValue={selectedOrder.totalAmount}
+          requestedDiscount={selectedOrder.requestedDiscount}
+          deliveryDate={selectedOrder.requestedDeliveryDate}
+          customerTrustRating={SAMPLE_CUSTOMER_DATA.trustRating}
+          hasOverdueBalance={SAMPLE_CUSTOMER_DATA.hasOverdueBalance}
+          overdueAmount={SAMPLE_CUSTOMER_DATA.overdueAmount}
+          items={SAMPLE_ORDER_ITEMS}
+          onClose={() => {
+            setShowOrderModal(false);
+            setSelectedOrder(null);
+          }}
+        />
+      )}
     </div>
   );
 }

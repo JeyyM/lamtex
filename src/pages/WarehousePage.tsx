@@ -1745,14 +1745,18 @@ export default function WarehousePage() {
                     Schedule Calendar (14 Days)
                   </h3>
                   <div className="flex flex-wrap items-center gap-3 text-xs">
-                    <div className="flex items-center gap-1">
-                      <div className="w-3 h-3 rounded-full bg-green-500"></div>
-                      <span className="text-gray-600">Production</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <div className="w-3 h-3 rounded-full bg-blue-500"></div>
-                      <span className="text-gray-600">Material Arrival</span>
-                    </div>
+                    {requestType === 'production' && (
+                      <div className="flex items-center gap-1">
+                        <div className="w-3 h-3 rounded-full bg-green-500"></div>
+                        <span className="text-gray-600">Production</span>
+                      </div>
+                    )}
+                    {requestType === 'purchase' && (
+                      <div className="flex items-center gap-1">
+                        <div className="w-3 h-3 rounded-full bg-blue-500"></div>
+                        <span className="text-gray-600">Material Arrival</span>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -1770,36 +1774,40 @@ export default function WarehousePage() {
                     // Map requests to calendar events
                     const eventsByDate: Record<string, any[]> = {};
                     
-                    // Add production requests
-                    mockProductionRequests.forEach(req => {
-                      const dateKey = req.scheduledDate;
-                      if (!eventsByDate[dateKey]) eventsByDate[dateKey] = [];
-                      eventsByDate[dateKey].push({
-                        type: 'production',
-                        title: req.productName,
-                        requestNumber: req.requestNumber,
-                        quantity: req.quantity,
-                        unit: req.unit,
-                        priority: req.priority,
-                        status: req.status
+                    // Add production requests (only if production tab is active)
+                    if (requestType === 'production') {
+                      mockProductionRequests.forEach(req => {
+                        const dateKey = req.scheduledDate;
+                        if (!eventsByDate[dateKey]) eventsByDate[dateKey] = [];
+                        eventsByDate[dateKey].push({
+                          type: 'production',
+                          title: req.productName,
+                          requestNumber: req.requestNumber,
+                          quantity: req.quantity,
+                          unit: req.unit,
+                          priority: req.priority,
+                          status: req.status
+                        });
                       });
-                    });
+                    }
 
-                    // Add purchase requests  
-                    mockPurchaseRequests.forEach(req => {
-                      const dateKey = req.estimatedArrival;
-                      if (!eventsByDate[dateKey]) eventsByDate[dateKey] = [];
-                      eventsByDate[dateKey].push({
-                        type: 'purchase',
-                        title: req.materialName,
-                        requestNumber: req.requestNumber,
-                        quantity: req.quantity,
-                        unit: req.unit,
-                        supplier: req.supplier,
-                        priority: req.priority,
-                        status: req.status
+                    // Add purchase requests (only if purchase tab is active)
+                    if (requestType === 'purchase') {
+                      mockPurchaseRequests.forEach(req => {
+                        const dateKey = req.estimatedArrival;
+                        if (!eventsByDate[dateKey]) eventsByDate[dateKey] = [];
+                        eventsByDate[dateKey].push({
+                          type: 'purchase',
+                          title: req.materialName,
+                          requestNumber: req.requestNumber,
+                          quantity: req.quantity,
+                          unit: req.unit,
+                          supplier: req.supplier,
+                          priority: req.priority,
+                          status: req.status
+                        });
                       });
-                    });
+                    }
 
                     const formatDate = (date: Date) => date.toISOString().split('T')[0];
                     const isToday = (date: Date) => formatDate(date) === formatDate(today);

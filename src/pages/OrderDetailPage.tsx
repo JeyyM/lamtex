@@ -9,6 +9,7 @@ import { OrderDetail, OrderStatus, OrderLineItem, OrderLog, ProofDocument } from
 import { PaymentLink } from '@/src/types/payments';
 import { PaymentLinkModal } from '@/src/components/payments/PaymentLinkModal';
 import { CancelOrderModal, CancellationData } from '@/src/components/orders/CancelOrderModal';
+import { FulfillOrderModal, FulfillmentData } from '@/src/components/orders/FulfillOrderModal';
 import {
   ArrowLeft,
   Edit,
@@ -159,6 +160,9 @@ export function OrderDetailPage() {
   // Cancel order state
   const [showCancelModal, setShowCancelModal] = useState(false);
   
+  // Fulfill order state
+  const [showFulfillModal, setShowFulfillModal] = useState(false);
+  
   // Invoice and Proof states
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
   const [showProofModal, setShowProofModal] = useState(false);
@@ -251,6 +255,42 @@ export function OrderDetailPage() {
       alert(`Resubmitting order ${order.id} for approval`);
       addAuditLog('Resubmitted Order', 'Order', `Resubmitted order ${order.id} after revision`);
     }
+  };
+
+  const handleFulfillOrder = (fulfillmentData: FulfillmentData[]) => {
+    // Check if any item is partially fulfilled
+    const hasPartialFulfillment = fulfillmentData.some(
+      item => item.deliveredQuantity < item.orderedQuantity && item.deliveredQuantity > 0
+    );
+    
+    const isFullyFulfilled = fulfillmentData.every(
+      item => item.deliveredQuantity === item.orderedQuantity
+    );
+
+    const newStatus = isFullyFulfilled ? 'Delivered' : 'Partially Fulfilled';
+    
+    // Create detailed log message
+    const fulfillmentDetails = fulfillmentData.map(item => {
+      const orderItem = order.items.find(i => i.id === item.itemId);
+      return `${orderItem?.productName}: ${item.deliveredQuantity}/${item.orderedQuantity}`;
+    }).join(', ');
+
+    addAuditLog(
+      'Fulfilled Order',
+      'Order',
+      `Order ${order.id} marked as ${newStatus}. Items: ${fulfillmentDetails}`
+    );
+
+    alert(
+      `Order ${order.id} has been ${hasPartialFulfillment ? 'partially fulfilled' : 'fulfilled'}.\n\n` +
+      `Status: ${newStatus}\n\n` +
+      `Fulfillment Details:\n${fulfillmentData.map(item => {
+        const orderItem = order.items.find(i => i.id === item.itemId);
+        return `• ${orderItem?.productName}: ${item.deliveredQuantity} of ${item.orderedQuantity} delivered`;
+      }).join('\n')}`
+    );
+
+    setShowFulfillModal(false);
   };
 
   const handleSave = () => {
@@ -500,6 +540,12 @@ export function OrderDetailPage() {
                 <Edit className="w-4 h-4" />
                 Edit Order
               </Button>
+              {['Approved', 'In Transit', 'Processing'].includes(order.status) && (
+                <Button variant="primary" onClick={() => setShowFulfillModal(true)} className="gap-2">
+                  <Package className="w-4 h-4" />
+                  Fulfill Order
+                </Button>
+              )}
               {order.status === 'Rejected' && (
                 <Button variant="primary" onClick={handleResubmit} className="gap-2">
                   <Send className="w-4 h-4" />
@@ -1792,6 +1838,17 @@ export function OrderDetailPage() {
           orderAmount={order.totalAmount}
           onClose={() => setShowCancelModal(false)}
           onConfirm={handleConfirmCancellation}
+        />
+      )}
+
+      {/* Fulfill Order Modal */}
+      {showFulfillModal && (
+        <FulfillOrderModal
+          isOpen={showFulfillModal}
+          onClose={() => setShowFulfillModal(false)}
+          orderNumber={order.id}
+          items={order.items}
+          onFulfill={handleFulfillOrder}
         />
       )}
     </div>

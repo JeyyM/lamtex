@@ -22,13 +22,6 @@ import {
   Phone,
 } from 'lucide-react';
 
-// Batch pricing tiers for bulk orders
-interface PriceTier {
-  minQty: number;
-  pricePerUnit: number;
-  discount: number; // percentage off from base price
-}
-
 // Mock PVC Pipes and Plastic Tubes Products
 const MOCK_PIPE_PRODUCTS = [
   {
@@ -277,8 +270,9 @@ interface OrderItem {
   variantDescription: string;
   quantity: number;
   price: number;
-  originalPrice: number; // List price before negotiation
-  negotiatedPrice: number; // Price after customer haggling
+  originalPrice: number; // Base price of variant
+  negotiatedPrice: number; // Price set by agent (can be custom)
+  discounts: Array<{ name: string; percentage: number }>; // Applied discounts
   subtotal: number;
   stockAvailable: number;
 }
@@ -299,6 +293,9 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
   const [selectedProduct, setSelectedProduct] = useState<typeof MOCK_PIPE_PRODUCTS[0] | null>(null);
   const [selectedVariant, setSelectedVariant] = useState<typeof MOCK_PIPE_PRODUCTS[0]['variants'][0] | null>(null);
   const [variantQuantity, setVariantQuantity] = useState(1);
+  const [variantPrice, setVariantPrice] = useState(0);
+  const [variantDiscounts, setVariantDiscounts] = useState<Array<{ name: string; percentage: number }>>([]);
+  const [editingItemIndex, setEditingItemIndex] = useState<number | null>(null); // Track if editing existing item
   const [deliveryDate, setDeliveryDate] = useState('');
   const [deliveryAddress, setDeliveryAddress] = useState('');
   const [contactPerson, setContactPerson] = useState('');
@@ -326,25 +323,6 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
     setCustomerSearchQuery('');
   };
 
-  // Calculate best price tier based on quantity
-  const getBestPriceTier = (variant: typeof MOCK_PIPE_PRODUCTS[0]['variants'][0], quantity: number): PriceTier | null => {
-    if (!('priceTiers' in variant) || !variant.priceTiers) return null;
-    
-    // Find the highest tier that the quantity qualifies for
-    const qualifyingTiers = variant.priceTiers.filter(tier => quantity >= tier.minQty);
-    if (qualifyingTiers.length === 0) return null;
-    
-    return qualifyingTiers[qualifyingTiers.length - 1];
-  };
-
-  // Get the next price tier to show savings opportunity
-  const getNextPriceTier = (variant: typeof MOCK_PIPE_PRODUCTS[0]['variants'][0], currentQuantity: number): PriceTier | null => {
-    if (!('priceTiers' in variant) || !variant.priceTiers) return null;
-    
-    const nextTier = variant.priceTiers.find(tier => tier.minQty > currentQuantity);
-    return nextTier || null;
-  };
-
   // Filter products based on search
   const filteredProducts = searchQuery.trim() === '' 
     ? MOCK_PIPE_PRODUCTS 
@@ -354,59 +332,95 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
       );
 
   const addItemFromVariant = (product: typeof MOCK_PIPE_PRODUCTS[0], variant: typeof MOCK_PIPE_PRODUCTS[0]['variants'][0], quantity: number = 1) => {
-    // Check if item already exists
-    const existingIndex = orderItems.findIndex(
-      item => item.productId === product.id && item.variantId === variant.id
-    );
-
-    if (existingIndex >= 0) {
-      // Increment quantity and recalculate price based on tier
+    // Apply discounts multiplicatively to get final price
+    const finalPrice = variantDiscounts.reduce((currentPrice, discount) => {
+      return currentPrice * (1 - discount.percentage / 100);
+    }, variantPrice);
+    
+    const itemData: OrderItem = {
+      productId: product.id,
+      variantId: variant.id,
+      productName: product.name,
+      variantSize: variant.size,
+      variantDescription: variant.description,
+      quantity: quantity,
+      price: variant.price, // Base price of variant
+      originalPrice: variant.price, // Base price
+      negotiatedPrice: variantPrice, // Agent-set price
+      discounts: [...variantDiscounts], // Copy of applied discounts
+      subtotal: finalPrice * quantity,
+      stockAvailable: variant.stock,
+    };
+    
+    if (editingItemIndex !== null) {
+      // Update existing item
       const newItems = [...orderItems];
-      newItems[existingIndex].quantity += quantity;
-      
-      // Apply batch pricing if available
-      const priceTier = getBestPriceTier(variant, newItems[existingIndex].quantity);
-      if (priceTier) {
-        newItems[existingIndex].negotiatedPrice = priceTier.pricePerUnit;
-      }
-      
-      newItems[existingIndex].subtotal = newItems[existingIndex].quantity * newItems[existingIndex].negotiatedPrice;
+      newItems[editingItemIndex] = itemData;
       setOrderItems(newItems);
+      setEditingItemIndex(null);
     } else {
-      // Add new item
-      // Calculate original price: if discount exists on product, calculate back; otherwise use variant's originalPrice or current price
-      let originalPrice = variant.price;
-      if ('originalPrice' in variant && variant.originalPrice) {
-        originalPrice = variant.originalPrice;
-      } else if (product.discount) {
-        // Calculate back from discounted price
-        originalPrice = variant.price / (1 - product.discount / 100);
+      // Check if item already exists
+      const existingIndex = orderItems.findIndex(
+        item => item.productId === product.id && item.variantId === variant.id
+      );
+
+      if (existingIndex >= 0) {
+        // Increment quantity
+        const newItems = [...orderItems];
+        newItems[existingIndex].quantity += quantity;
+        newItems[existingIndex].subtotal = newItems[existingIndex].quantity * newItems[existingIndex].negotiatedPrice;
+        setOrderItems(newItems);
+      } else {
+        // Add new item
+        setOrderItems([...orderItems, itemData]);
       }
-      
-      // Apply batch pricing if available
-      const priceTier = getBestPriceTier(variant, quantity);
-      const effectivePrice = priceTier ? priceTier.pricePerUnit : variant.price;
-      
-      const newItem: OrderItem = {
-        productId: product.id,
-        variantId: variant.id,
-        productName: product.name,
-        variantSize: variant.size,
-        variantDescription: variant.description,
-        quantity: quantity,
-        price: variant.price, // List price (possibly discounted)
-        originalPrice: Math.round(originalPrice), // Original list price before any discount
-        negotiatedPrice: effectivePrice, // Start with tier price or list price
-        subtotal: effectivePrice * quantity,
-        stockAvailable: variant.stock,
-      };
-      setOrderItems([...orderItems, newItem]);
     }
 
     // Close product detail modal and reset
     setSelectedProduct(null);
     setSelectedVariant(null);
     setVariantQuantity(1);
+    setVariantPrice(0);
+    setVariantDiscounts([]);
+  };
+
+  const addDiscount = () => {
+    setVariantDiscounts([...variantDiscounts, { name: '', percentage: 0 }]);
+  };
+
+  const updateDiscount = (index: number, field: 'name' | 'percentage', value: string | number) => {
+    const newDiscounts = [...variantDiscounts];
+    if (field === 'name') {
+      newDiscounts[index].name = value as string;
+    } else {
+      newDiscounts[index].percentage = Math.max(0, Math.min(100, Number(value) || 0));
+    }
+    setVariantDiscounts(newDiscounts);
+  };
+
+  const removeDiscount = (index: number) => {
+    setVariantDiscounts(variantDiscounts.filter((_, i) => i !== index));
+  };
+
+  const calculateTotalDiscount = () => {
+    // Calculate effective discount percentage from cascading discounts
+    const subtotal = variantPrice * variantQuantity;
+    if (subtotal === 0) return 0;
+    
+    const finalPrice = variantDiscounts.reduce((currentPrice, discount) => {
+      return currentPrice * (1 - discount.percentage / 100);
+    }, subtotal);
+    
+    const totalDiscountAmount = subtotal - finalPrice;
+    return (totalDiscountAmount / subtotal) * 100;
+  };
+
+  const calculateFinalPrice = () => {
+    const subtotal = variantPrice * variantQuantity;
+    // Apply discounts multiplicatively (cascading)
+    return variantDiscounts.reduce((currentPrice, discount) => {
+      return currentPrice * (1 - discount.percentage / 100);
+    }, subtotal);
   };
 
   const updateQuantity = (index: number, newQuantity: number) => {
@@ -416,27 +430,36 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
     }
 
     const newItems = [...orderItems];
-    const item = newItems[index];
     newItems[index].quantity = newQuantity;
-    
-    // Find the variant to check for batch pricing
-    const product = MOCK_PIPE_PRODUCTS.find(p => p.id === item.productId);
-    if (product) {
-      const variant = product.variants.find(v => v.id === item.variantId);
-      if (variant) {
-        const priceTier = getBestPriceTier(variant, newQuantity);
-        if (priceTier) {
-          newItems[index].negotiatedPrice = priceTier.pricePerUnit;
-        }
-      }
-    }
-    
     newItems[index].subtotal = newQuantity * newItems[index].negotiatedPrice;
     setOrderItems(newItems);
   };
 
   const removeItem = (index: number) => {
     setOrderItems(orderItems.filter((_, i) => i !== index));
+  };
+
+  const editOrderItem = (index: number) => {
+    const item = orderItems[index];
+    
+    // Find the product and variant
+    const product = filteredProducts.find(p => p.id === item.productId);
+    if (!product) return;
+    
+    const variant = product.variants?.find(v => v.id === item.variantId);
+    if (!variant) return;
+    
+    // Set the product and variant to open the modal
+    setSelectedProduct(product);
+    setSelectedVariant(variant);
+    
+    // Preset all values from the existing order item
+    setVariantQuantity(item.quantity);
+    setVariantPrice(item.negotiatedPrice);
+    setVariantDiscounts([...item.discounts]);
+    
+    // Track that we're editing this item (don't remove it yet)
+    setEditingItemIndex(index);
   };
 
   const calculateTotal = () => {
@@ -487,7 +510,6 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
   return (
     <div 
       className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-0 lg:p-4"
-      onClick={onClose}
     >
       <div 
         className="bg-white w-full h-full max-h-screen overflow-hidden flex flex-col lg:rounded-lg lg:h-auto lg:max-w-5xl lg:max-h-[90vh]"
@@ -529,6 +551,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                     <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
                     <input
                       type="text"
+                      name="customer-search-field-lamtex"
                       placeholder="Search customers by name or email..."
                       value={customerSearchQuery}
                       onChange={(e) => {
@@ -536,6 +559,11 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                         setShowCustomerDropdown(true);
                       }}
                       onFocus={() => setShowCustomerDropdown(true)}
+                      autoComplete="new-password"
+                      autoCorrect="off"
+                      autoCapitalize="off"
+                      spellCheck="false"
+                      data-form-type="other"
                       className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 text-base"
                     />
                     
@@ -640,19 +668,10 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                         setSelectedProduct(product);
                         setSelectedVariant(product.variants[0]);
                         setVariantQuantity(1);
+                        setVariantPrice(product.variants[0].price);
                       }}
                       className="flex flex-col items-center p-3 border border-gray-200 rounded-lg hover:border-red-500 hover:bg-red-50 transition-all group relative"
                     >
-                      {product.discount && (
-                        <div className="absolute -top-2 -right-2 bg-red-500 text-white text-xs px-1.5 py-0.5 rounded-full font-bold shadow-sm z-10">
-                          -{product.discount}%
-                        </div>
-                      )}
-                      {product.batchEnabled && (
-                        <div className="absolute -top-2 -left-2 bg-amber-500 text-white text-xs px-1.5 py-0.5 rounded-full font-bold shadow-sm z-10">
-                          BULK
-                        </div>
-                      )}
                       <div className="w-12 h-12 bg-gray-100 rounded-lg flex items-center justify-center mb-2 group-hover:bg-red-100 transition-colors">
                         <Package className="w-6 h-6 text-gray-600 group-hover:text-red-600" />
                       </div>
@@ -672,107 +691,73 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                 ) : (
                   <div className="space-y-3">
                     {orderItems.map((item, idx) => (
-                      <div key={idx} className="flex items-center gap-4 p-4 bg-gray-50 rounded-lg">
+                      <div 
+                        key={idx} 
+                        className="flex items-center gap-4 p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors cursor-pointer group"
+                        onClick={() => editOrderItem(idx)}
+                      >
                         <div className="flex-1">
                           <div className="flex items-center gap-2">
-                            <span className="font-semibold text-gray-900">{item.productName}</span>
+                            <span className="font-semibold text-gray-900 group-hover:text-red-600 transition-colors">{item.productName}</span>
                             <Badge variant="default" className="text-xs">{item.variantSize}</Badge>
-                            {item.originalPrice > item.negotiatedPrice && (
-                              <Badge variant="destructive" className="text-xs">
-                                {Math.round(((item.originalPrice - item.negotiatedPrice) / item.originalPrice) * 100)}% OFF
-                              </Badge>
-                            )}
-                            {(() => {
-                              // Check if item qualifies for batch pricing
-                              const product = MOCK_PIPE_PRODUCTS.find(p => p.id === item.productId);
-                              if (product?.batchEnabled) {
-                                const variant = product.variants.find(v => v.id === item.variantId);
-                                if (variant && 'priceTiers' in variant && variant.priceTiers) {
-                                  const tier = getBestPriceTier(variant, item.quantity);
-                                  if (tier && tier.discount > 0) {
-                                    return (
-                                      <Badge className="text-xs bg-amber-500 hover:bg-amber-600">
-                                        🎯 Bulk {tier.discount}%
-                                      </Badge>
-                                    );
-                                  }
-                                }
-                              }
-                              return null;
-                            })()}
                           </div>
                           <div className="text-sm text-gray-600 mt-1">{item.variantDescription}</div>
                           <div className="flex items-center gap-2 mt-2">
                             <div className="text-xs text-gray-500">
-                              List: ₱{item.price.toLocaleString()}/unit
-                              {item.originalPrice > item.price && (
-                                <span className="ml-1 line-through text-gray-400">₱{item.originalPrice.toLocaleString()}</span>
-                              )}
+                              Base: ₱{item.price.toLocaleString()}/unit
                             </div>
-                            <div className="text-xs text-gray-400">•</div>
-                            <div className="flex items-center gap-1">
-                              <span className="text-xs text-gray-600 font-medium">Negotiated:</span>
-                              <span className="text-xs text-gray-500">₱</span>
-                              <input
-                                type="number"
-                                min="0"
-                                step="1"
-                                value={item.negotiatedPrice}
-                                onChange={(e) => {
-                                  const newPrice = parseFloat(e.target.value) || 0;
-                                  const newItems = [...orderItems];
-                                  newItems[idx].negotiatedPrice = newPrice;
-                                  newItems[idx].subtotal = newPrice * newItems[idx].quantity;
-                                  setOrderItems(newItems);
-                                }}
-                                className="w-24 px-2 py-0.5 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-red-500 font-semibold text-red-600"
-                              />
-                              <span className="text-xs text-gray-500">/unit</span>
-                            </div>
+                            {item.negotiatedPrice !== item.price && (
+                              <>
+                                <div className="text-xs text-gray-400">•</div>
+                                <div className="text-xs text-red-600 font-medium">
+                                  Custom: ₱{item.negotiatedPrice.toLocaleString()}/unit
+                                </div>
+                              </>
+                            )}
                           </div>
-                          <div className="text-xs mt-1">
+                          {item.discounts && item.discounts.length > 0 && (
+                            <div className="flex items-center gap-1 mt-1 flex-wrap">
+                              <span className="text-xs text-gray-500">Discounts:</span>
+                              {item.discounts.map((discount, dIdx) => (
+                                <Badge key={dIdx} variant="secondary" className="text-xs">
+                                  {discount.name} ({discount.percentage}%)
+                                </Badge>
+                              ))}
+                            </div>
+                          )}
+                          <div className="flex items-center gap-2 mt-1">
+                            <div className="text-xs text-gray-500">
+                              Qty: {item.quantity} × ₱{(item.subtotal / item.quantity).toLocaleString()}/unit
+                            </div>
                             {item.quantity > item.stockAvailable && (
-                              <span className="text-red-600 font-medium">
-                                ⚠️ Exceeds available stock ({item.stockAvailable})
-                              </span>
+                              <>
+                                <div className="text-xs text-gray-400">•</div>
+                                <span className="text-xs text-red-600 font-medium">
+                                  ⚠️ Exceeds stock ({item.stockAvailable})
+                                </span>
+                              </>
                             )}
                           </div>
                         </div>
 
-                        {/* Quantity Controls */}
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => updateQuantity(idx, item.quantity - 1)}
-                            className="w-8 h-8 flex items-center justify-center border border-gray-300 rounded-lg hover:bg-gray-100 transition-colors"
-                          >
-                            <Minus className="w-4 h-4" />
-                          </button>
-                          <input
-                            type="number"
-                            min="1"
-                            value={item.quantity}
-                            onChange={(e) => updateQuantity(idx, parseInt(e.target.value) || 1)}
-                            className="w-20 text-center px-2 py-1 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => updateQuantity(idx, item.quantity + 1)}
-                            className="w-8 h-8 flex items-center justify-center border border-gray-300 rounded-lg hover:bg-gray-100 transition-colors"
-                          >
-                            <Plus className="w-4 h-4" />
-                          </button>
-                        </div>
-
                         {/* Subtotal */}
                         <div className="w-32 text-right">
-                          <div className="font-semibold text-gray-900">₱{item.subtotal.toLocaleString()}</div>
+                          <div className="text-sm text-gray-600 font-medium mb-1">Total</div>
+                          {item.discounts && item.discounts.length > 0 && (
+                            <div className="text-xs text-gray-400 line-through mb-0.5">
+                              ₱{(item.negotiatedPrice * item.quantity).toLocaleString()}
+                            </div>
+                          )}
+                          <div className="font-semibold text-gray-900 text-lg">₱{item.subtotal.toLocaleString()}</div>
                         </div>
 
                         {/* Remove Button */}
                         <button
                           type="button"
-                          onClick={() => removeItem(idx)}
+                          onClick={(e) => {
+                            e.stopPropagation(); // Prevent triggering edit
+                            removeItem(idx);
+                          }}
                           className="text-red-600 hover:text-red-700 transition-colors"
                         >
                           <Trash2 className="w-5 h-5" />
@@ -915,6 +900,9 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                 setSelectedProduct(null);
                 setSelectedVariant(null);
                 setVariantQuantity(1);
+                setVariantPrice(0);
+                setVariantDiscounts([]);
+                setEditingItemIndex(null); // Cancel editing
               }}
               className="absolute top-4 right-4 z-20 p-2 bg-white rounded-full shadow-lg hover:bg-gray-100 transition-colors"
             >
@@ -930,11 +918,25 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                   <div className="aspect-square bg-gradient-to-br from-gray-50 to-gray-100 rounded-xl flex items-center justify-center border-2 border-gray-200">
                     <Package className="w-32 h-32 text-gray-300" />
                   </div>
-                  <div className="bg-green-50 border border-green-200 rounded-lg p-3">
-                    <div className="flex items-center gap-2 text-green-700">
-                      <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                      <span className="text-sm font-medium">In Stock - Branch {branch}</span>
+                  
+                  {/* Price */}
+                  <div className="bg-gray-50 rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="text-sm text-gray-600">Price per unit</div>
                     </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-2xl font-bold text-gray-900">₱</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={variantPrice}
+                        onChange={(e) => setVariantPrice(Math.max(0, parseFloat(e.target.value) || 0))}
+                        onWheel={(e) => e.currentTarget.blur()}
+                        className="flex-1 min-w-0 text-4xl font-bold text-gray-900 bg-white px-3 py-2 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                      />
+                    </div>
+                    <p className="text-xs text-gray-500 mt-2">Base price: ₱{selectedVariant.price.toLocaleString()}</p>
                   </div>
                 </div>
 
@@ -968,6 +970,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                           onClick={() => {
                             setSelectedVariant(variant);
                             setVariantQuantity(1);
+                            setVariantPrice(variant.price);
                           }}
                           className={`px-4 py-3 border-2 rounded-lg font-medium transition-all text-left relative ${
                             selectedVariant.id === variant.id
@@ -975,45 +978,14 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                               : 'border-gray-200 hover:border-gray-300 text-gray-700'
                           }`}
                         >
-                          {selectedProduct.discount && (
-                            <div className="absolute -top-2 -right-2 bg-red-500 text-white text-xs px-1.5 py-0.5 rounded-full font-bold shadow-sm">
-                              -{selectedProduct.discount}%
-                            </div>
-                          )}
                           <div className="font-semibold">{variant.size}</div>
                           <div className="flex items-baseline gap-1 mt-1">
                             <span className="text-sm font-bold">₱{variant.price.toLocaleString()}</span>
-                            {selectedProduct.discount && 'originalPrice' in variant && variant.originalPrice && (
-                              <span className="text-xs text-gray-400 line-through">₱{variant.originalPrice.toLocaleString()}</span>
-                            )}
                           </div>
                           <div className="text-xs text-gray-500 mt-1">Stock: {variant.stock}</div>
                         </button>
                       ))}
                     </div>
-                  </div>
-
-                  {/* Price */}
-                  <div className="bg-gray-50 rounded-lg p-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="text-sm text-gray-600">Price per unit</div>
-                      {selectedProduct.discount && (
-                        <Badge variant="destructive" className="text-xs">
-                          {selectedProduct.discount}% OFF
-                        </Badge>
-                      )}
-                    </div>
-                    <div className="flex items-baseline gap-3">
-                      <div className="text-4xl font-bold text-gray-900">₱{selectedVariant.price.toLocaleString()}</div>
-                      {selectedProduct.discount && 'originalPrice' in selectedVariant && selectedVariant.originalPrice && (
-                        <div className="text-xl text-gray-400 line-through">₱{selectedVariant.originalPrice.toLocaleString()}</div>
-                      )}
-                    </div>
-                    {selectedProduct.discount && (
-                      <div className="text-xs text-green-600 font-medium mt-1">
-                        You save ₱{(('originalPrice' in selectedVariant && selectedVariant.originalPrice ? selectedVariant.originalPrice : selectedVariant.price) - selectedVariant.price).toLocaleString()} per unit
-                      </div>
-                    )}
                   </div>
 
                   {/* Quantity Selector */}
@@ -1046,110 +1018,108 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                     {variantQuantity > selectedVariant.stock && (
                       <p className="text-sm text-red-600 mt-2">⚠️ Quantity exceeds available stock</p>
                     )}
+                  </div>
+
+                  {/* Discounts Section */}
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <label className="block text-sm font-semibold text-gray-900">Discounts</label>
+                      <button
+                        type="button"
+                        onClick={addDiscount}
+                        className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium text-red-600 border border-red-600 rounded-lg hover:bg-red-50 transition-colors"
+                      >
+                        <Plus className="w-4 h-4" />
+                        Add Discount
+                      </button>
+                    </div>
                     
-                    {/* Batch Pricing Tiers Display */}
-                    {('priceTiers' in selectedVariant && selectedVariant.priceTiers) && (
-                      <div className="mt-4 bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-lg p-4">
-                        <div className="flex items-center gap-2 mb-3">
-                          <div className="w-5 h-5 bg-amber-500 rounded-full flex items-center justify-center">
-                            <span className="text-white text-xs font-bold">%</span>
+                    {variantDiscounts.length > 0 ? (
+                      <div className="space-y-2">
+                        {variantDiscounts.map((discount, index) => (
+                          <div key={index} className="flex items-center gap-2">
+                            <input
+                              type="text"
+                              placeholder="Discount name"
+                              value={discount.name}
+                              onChange={(e) => updateDiscount(index, 'name', e.target.value)}
+                              className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                            />
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="number"
+                                min="0"
+                                max="100"
+                                step="0.1"
+                                placeholder="0"
+                                value={discount.percentage || ''}
+                                onChange={(e) => updateDiscount(index, 'percentage', e.target.value)}
+                                onWheel={(e) => e.currentTarget.blur()}
+                                className="w-20 px-3 py-2 text-sm text-center border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                              />
+                              <span className="text-sm text-gray-600">%</span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => removeDiscount(index)}
+                              className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
                           </div>
-                          <span className="text-sm font-bold text-amber-900">Bulk Order Discounts</span>
-                        </div>
-                        <div className="space-y-2">
-                          {selectedVariant.priceTiers.map((tier, idx) => {
-                            const isActive = variantQuantity >= tier.minQty;
-                            const isNext = !isActive && (idx === 0 || variantQuantity >= selectedVariant.priceTiers[idx - 1].minQty);
-                            
-                            return (
-                              <div
-                                key={idx}
-                                className={`flex items-center justify-between px-3 py-2 rounded-lg transition-all ${
-                                  isActive 
-                                    ? 'bg-green-100 border-2 border-green-500 shadow-sm' 
-                                    : isNext
-                                    ? 'bg-blue-50 border border-blue-300'
-                                    : 'bg-white border border-gray-200 opacity-60'
-                                }`}
-                              >
-                                <div className="flex items-center gap-2">
-                                  {isActive && (
-                                    <div className="w-5 h-5 bg-green-500 rounded-full flex items-center justify-center">
-                                      <Check className="w-3 h-3 text-white" />
-                                    </div>
-                                  )}
-                                  {isNext && !isActive && (
-                                    <div className="w-5 h-5 bg-blue-500 rounded-full flex items-center justify-center">
-                                      <ArrowUp className="w-3 h-3 text-white" />
-                                    </div>
-                                  )}
-                                  <span className={`text-sm font-semibold ${
-                                    isActive ? 'text-green-900' : isNext ? 'text-blue-900' : 'text-gray-600'
-                                  }`}>
-                                    Buy {tier.minQty}+ units
-                                  </span>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <span className={`text-sm font-bold ${
-                                    isActive ? 'text-green-700' : isNext ? 'text-blue-700' : 'text-gray-600'
-                                  }`}>
-                                    ₱{tier.pricePerUnit.toLocaleString()}/unit
-                                  </span>
-                                  {tier.discount > 0 && (
-                                    <Badge variant={isActive ? "default" : "outline"} className="text-xs">
-                                      -{tier.discount}%
-                                    </Badge>
-                                  )}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                        {(() => {
-                          const nextTier = getNextPriceTier(selectedVariant, variantQuantity);
-                          if (nextTier) {
-                            const unitsNeeded = nextTier.minQty - variantQuantity;
-                            const additionalSavings = (selectedVariant.price - nextTier.pricePerUnit) * variantQuantity;
-                            return (
-                              <div className="mt-3 pt-3 border-t border-amber-300">
-                                <p className="text-xs text-amber-800">
-                                  💡 <strong>Add {unitsNeeded} more unit{unitsNeeded > 1 ? 's' : ''}</strong> to save an additional <strong>₱{additionalSavings.toLocaleString()}</strong>!
-                                </p>
-                              </div>
-                            );
-                          }
-                          return null;
-                        })()}
+                        ))}
+                        {calculateTotalDiscount() > 0 && (
+                          <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded-lg">
+                            <p className="text-sm text-green-700 font-medium">
+                              Total Discount: {calculateTotalDiscount().toFixed(1)}%
+                            </p>
+                          </div>
+                        )}
                       </div>
+                    ) : (
+                      <p className="text-sm text-gray-500 italic">No discounts applied</p>
                     )}
                   </div>
 
                   {/* Subtotal */}
-                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-2">
                     <div className="flex items-center justify-between">
                       <span className="text-sm font-medium text-blue-900">Subtotal</span>
-                      <span className="text-2xl font-bold text-blue-900">
-                        {(() => {
-                          const priceTier = getBestPriceTier(selectedVariant, variantQuantity);
-                          const effectivePrice = priceTier ? priceTier.pricePerUnit : selectedVariant.price;
-                          return `₱${(effectivePrice * variantQuantity).toLocaleString()}`;
-                        })()}
+                      <span className="text-lg font-bold text-blue-900">
+                        ₱{(variantPrice * variantQuantity).toLocaleString()}
                       </span>
                     </div>
-                    {(() => {
-                      const priceTier = getBestPriceTier(selectedVariant, variantQuantity);
-                      if (priceTier && priceTier.discount > 0) {
-                        const regularTotal = selectedVariant.price * variantQuantity;
-                        const discountedTotal = priceTier.pricePerUnit * variantQuantity;
-                        const savings = regularTotal - discountedTotal;
-                        return (
-                          <div className="text-xs text-green-600 font-medium mt-1">
-                            💰 Bulk discount saves you ₱{savings.toLocaleString()}!
+                    {variantDiscounts.length > 0 && (
+                      <>
+                        {(() => {
+                          let currentPrice = variantPrice * variantQuantity;
+                          return variantDiscounts.map((discount, index) => {
+                            const priceBeforeDiscount = currentPrice;
+                            const discountAmount = currentPrice * (discount.percentage / 100);
+                            currentPrice = currentPrice - discountAmount;
+                            
+                            return (
+                              <div key={index} className="flex items-center justify-between text-sm">
+                                <span className="text-green-700">
+                                  {discount.name || `Discount ${index + 1}`} ({discount.percentage}%)
+                                </span>
+                                <span className="text-green-700 font-semibold">
+                                  -₱{discountAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </span>
+                              </div>
+                            );
+                          });
+                        })()}
+                        <div className="pt-2 border-t border-blue-300">
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-bold text-blue-900">Final Cost</span>
+                            <span className="text-2xl font-bold text-blue-900">
+                              ₱{calculateFinalPrice().toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </span>
                           </div>
-                        );
-                      }
-                      return null;
-                    })()}
+                        </div>
+                      </>
+                    )}
                   </div>
 
                   {/* Add to Order Button */}

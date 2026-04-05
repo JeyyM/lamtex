@@ -16,7 +16,7 @@ export function Topbar() {
   const [dateTo, setDateTo] = useState('');
   const [dateError, setDateError] = useState('');
 
-  const roles: UserRole[] = ['Executive', 'Warehouse', 'Logistics', 'Agent'];
+  const roles: UserRole[] = ['Executive', 'Warehouse', 'Logistics', 'Agent', 'Driver'];
   const branches: Branch[] = ['All', 'Branch A', 'Branch B', 'Branch C'];
 
   // Get today's date in YYYY-MM-DD format

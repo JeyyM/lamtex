@@ -82,8 +82,6 @@ export function TruckDetailPage() {
     return 'default';
   };
 
-  const primaryDriver = drivers.find(d => d.isPrimary);
-
   // Calculate financial metrics
   const totalRevenue = tripHistory.reduce((sum, trip) => sum + trip.revenue, 0);
   const totalFuelCost = tripHistory.reduce((sum, trip) => sum + trip.fuelCost, 0);
@@ -487,41 +485,8 @@ export function TruckDetailPage() {
               </Card>
             </div>
 
-            {/* Right Column - Driver & Maintenance */}
+            {/* Right Column - Maintenance */}
             <div className="space-y-6">
-              {/* Primary Driver */}
-              {primaryDriver && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Primary Driver</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="flex items-center gap-4 mb-4">
-                      <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center">
-                        <User className="w-6 h-6 text-blue-600" />
-                      </div>
-                      <div>
-                        <p className="font-semibold text-gray-900">{primaryDriver.driverName}</p>
-                        <p className="text-sm text-gray-500">{primaryDriver.driverId}</p>
-                      </div>
-                    </div>
-                    <div className="space-y-3 pt-3 border-t border-gray-200">
-                      <div className="flex justify-between">
-                        <span className="text-sm text-gray-600">Total Trips</span>
-                        <span className="text-sm font-medium text-gray-900">{primaryDriver.totalTrips}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-sm text-gray-600">On-Time Rate</span>
-                        <span className="text-sm font-medium text-green-600">{primaryDriver.onTimeRate}%</span>
-                      </div>
-                    </div>
-                    <Button variant="outline" size="sm" className="w-full mt-4">
-                      View Driver Profile
-                    </Button>
-                  </CardContent>
-                </Card>
-              )}
-
               {/* Maintenance Status */}
               <Card>
                 <CardHeader>
