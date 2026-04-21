@@ -160,18 +160,12 @@ DO $$ BEGIN CREATE TYPE address_type AS ENUM ('Main Office', 'Warehouse', 'Facto
 
 -- Branches
 CREATE TABLE IF NOT EXISTS branches (
-  id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  code         VARCHAR(10)  NOT NULL UNIQUE,  -- 'A', 'B', 'C'
-  name         VARCHAR(100) NOT NULL,          -- 'Branch A', 'Branch B', 'Branch C'
-  address      TEXT,
-  city         VARCHAR(100),
-  province     VARCHAR(100),
-  phone        VARCHAR(50),
-  email        VARCHAR(255),
-  manager_name VARCHAR(200),
-  is_active    BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  code       VARCHAR(10)  NOT NULL UNIQUE,  -- 'MNL', 'CEB', 'BTG'
+  name       VARCHAR(100) NOT NULL,          -- 'Manila', 'Cebu', 'Batangas'
+  is_active  BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 
@@ -554,10 +548,7 @@ CREATE TABLE IF NOT EXISTS product_variants (
   retail_price    NUMERIC(12,2),
   cost_price      NUMERIC(12,2),
   
-  -- Stock per branch
-  stock_branch_a  INT NOT NULL DEFAULT 0,
-  stock_branch_b  INT NOT NULL DEFAULT 0,
-  stock_branch_c  INT NOT NULL DEFAULT 0,
+  -- Aggregate stock (sum of all branch quantities)
   total_stock     INT NOT NULL DEFAULT 0,
   reorder_point   INT NOT NULL DEFAULT 0,
   safety_stock    INT NOT NULL DEFAULT 0,
@@ -668,13 +659,10 @@ CREATE TABLE IF NOT EXISTS raw_materials (
   category_id         UUID REFERENCES material_categories(id) ON DELETE SET NULL,
   description         TEXT,
   image_url           TEXT,
-  specifications      JSONB DEFAULT '{}'::jsonb,  -- Flexible key/value specs
+  specifications      JSONB DEFAULT '[]'::jsonb,  -- Array of {label, value} objects e.g. [{"label":"Density","value":"1.35 g/cm³"}]
   unit_of_measure     unit_of_measure NOT NULL DEFAULT 'kg',
   
-  -- Stock per branch
-  stock_branch_a      NUMERIC(14,4) DEFAULT 0,
-  stock_branch_b      NUMERIC(14,4) DEFAULT 0,
-  stock_branch_c      NUMERIC(14,4) DEFAULT 0,
+  -- Aggregate stock (sum of all branch quantities)
   total_stock         NUMERIC(14,4) DEFAULT 0,
   reorder_point       NUMERIC(14,4) DEFAULT 0,
   safety_stock        NUMERIC(14,4) DEFAULT 0,
@@ -719,6 +707,28 @@ DO $$ BEGIN
     FOREIGN KEY (raw_material_id) REFERENCES raw_materials(id) ON DELETE SET NULL;
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
+
+-- 6b-ii: Per-branch stock for raw materials
+CREATE TABLE IF NOT EXISTS material_stock (
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  material_id UUID NOT NULL REFERENCES raw_materials(id) ON DELETE CASCADE,
+  branch_id   UUID NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
+  quantity    NUMERIC(14,4) NOT NULL DEFAULT 0,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (material_id, branch_id)
+);
+
+-- 6b-iii: Per-branch stock for product variants
+CREATE TABLE IF NOT EXISTS product_variant_stock (
+  id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  variant_id UUID NOT NULL REFERENCES product_variants(id) ON DELETE CASCADE,
+  branch_id  UUID NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
+  quantity   INT NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (variant_id, branch_id)
+);
 
 -- 6c: Material batches / lots
 CREATE TABLE IF NOT EXISTS material_batches (
@@ -2511,9 +2521,9 @@ END $$;
 
 -- ============================================================================
 -- SECTION 25: ROW LEVEL SECURITY (RLS)
--- Enable RLS on ALL tables and grant full access to authenticated users.
+-- Enable RLS on ALL tables and grant full CRUD to any logged-in user.
 -- Supabase requires RLS to be enabled; without policies, no data is accessible.
--- These policies allow any authenticated user full CRUD on all tables.
+-- Policy check: auth.uid() IS NOT NULL — true for any authenticated session.
 -- Refine per-role policies as needed in modifications.sql.
 -- ============================================================================
 
@@ -2528,14 +2538,14 @@ BEGIN
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', tbl);
   END LOOP;
 
-  -- Create a full-access policy for authenticated users on every public table
+  -- Create a full-access policy for any logged-in user on every public table
   FOR tbl IN
     SELECT tablename FROM pg_tables WHERE schemaname = 'public'
   LOOP
     -- SELECT
     BEGIN
       EXECUTE format(
-        'CREATE POLICY %I ON %I FOR SELECT USING (auth.role() = ''authenticated'')',
+        'CREATE POLICY %I ON %I FOR SELECT USING (auth.uid() IS NOT NULL)',
         'auth_select_' || tbl, tbl
       );
     EXCEPTION WHEN duplicate_object THEN NULL;
@@ -2543,7 +2553,7 @@ BEGIN
     -- INSERT
     BEGIN
       EXECUTE format(
-        'CREATE POLICY %I ON %I FOR INSERT WITH CHECK (auth.role() = ''authenticated'')',
+        'CREATE POLICY %I ON %I FOR INSERT WITH CHECK (auth.uid() IS NOT NULL)',
         'auth_insert_' || tbl, tbl
       );
     EXCEPTION WHEN duplicate_object THEN NULL;
@@ -2551,7 +2561,7 @@ BEGIN
     -- UPDATE
     BEGIN
       EXECUTE format(
-        'CREATE POLICY %I ON %I FOR UPDATE USING (auth.role() = ''authenticated'')',
+        'CREATE POLICY %I ON %I FOR UPDATE USING (auth.uid() IS NOT NULL)',
         'auth_update_' || tbl, tbl
       );
     EXCEPTION WHEN duplicate_object THEN NULL;
@@ -2559,7 +2569,7 @@ BEGIN
     -- DELETE
     BEGIN
       EXECUTE format(
-        'CREATE POLICY %I ON %I FOR DELETE USING (auth.role() = ''authenticated'')',
+        'CREATE POLICY %I ON %I FOR DELETE USING (auth.uid() IS NOT NULL)',
         'auth_delete_' || tbl, tbl
       );
     EXCEPTION WHEN duplicate_object THEN NULL;

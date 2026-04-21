@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
@@ -20,19 +20,16 @@ import {
   ShoppingCart,
   Users,
   Edit,
+  Loader2,
 } from 'lucide-react';
-import {
-  getAllRawMaterials,
-  getLowStockMaterials,
-  getTotalInventoryValue,
-  getMaterialsRequiringReorder,
-} from '@/src/mock/rawMaterials';
+import { getAllRawMaterials } from '@/src/mock/rawMaterials';
 import type { MaterialCategory, MaterialStatus, StockOutRisk } from '@/src/types/materials';
 import { ReceiveMaterialModal } from '@/src/components/materials/ReceiveMaterialModal';
 import { StockTransferModal } from '@/src/components/materials/StockTransferModal';
 import AddMaterialCategoryModal, { MaterialCategoryFormData } from '@/src/components/materials/AddMaterialCategoryModal';
+import { supabase } from '@/src/lib/supabase';
 
-// Import raw material images
+// Import raw material images (local fallbacks)
 import whitePelletsImg from '@/src/assets/raw-materials/White Pellets.webp';
 import resinPowderImg from '@/src/assets/raw-materials/Resin Powder.avif';
 import pvcImg from '@/src/assets/raw-materials/Polyvinyl-Chloride.avif';
@@ -41,24 +38,161 @@ import petImg from '@/src/assets/raw-materials/Polyethylene Terephthalate.jpg';
 import ldpeImg from '@/src/assets/raw-materials/Low Density Polyethylene.jpg';
 import j70Img from '@/src/assets/raw-materials/J-70.jfif';
 
+// Fallback image map: slug → local image asset
+const categoryImageMap: Record<string, string> = {
+  'pvc-resin': pvcImg,
+  'hdpe-resin': ldpeImg,
+  'ppr-resin': polypropyleneImg,
+  'stabilizers': whitePelletsImg,
+  'plasticizers': j70Img,
+  'lubricants': resinPowderImg,
+  'colorants': petImg,
+  'additives': whitePelletsImg,
+  'packaging-materials': resinPowderImg,
+  'other': pvcImg,
+};
+
+// Supabase row shape
+interface MaterialCategoryRow {
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  image_url: string | null;
+  sort_order: number;
+  is_active: boolean;
+}
+
 export function RawMaterialsPage() {
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('All');
   const [riskFilter, setRiskFilter] = useState<string>('All');
-  const { role } = useAppContext();
+  const { role, branch } = useAppContext();
   
   // Modal states
   const [showReceiveModal, setShowReceiveModal] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [showAddCategoryModal, setShowAddCategoryModal] = useState(false);
   const [editingCategory, setEditingCategory] = useState<MaterialCategoryFormData | null>(null);
+  const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
   const [isEditMode, setIsEditMode] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  // Supabase categories state
+  const [categories, setCategories] = useState<MaterialCategoryRow[]>([]);
+  const [categoriesLoading, setCategoriesLoading] = useState(true);
+  const [categoriesError, setCategoriesError] = useState<string | null>(null);
+
+  // Live material counts per category from Supabase
+  interface MaterialCountRow { category_id: string; status: string; }
+  const [materialCounts, setMaterialCounts] = useState<MaterialCountRow[]>([]);
+
+  // Live summary stats from Supabase (branch-aware)
+  interface SummaryStats {
+    totalMaterials: number;
+    totalValue: number;
+    lowStockCount: number;
+    reorderCount: number;
+  }
+  const [summaryStats, setSummaryStats] = useState<SummaryStats>({
+    totalMaterials: 0,
+    totalValue: 0,
+    lowStockCount: 0,
+    reorderCount: 0,
+  });
+  const [summaryLoading, setSummaryLoading] = useState(true);
 
   const allMaterials = getAllRawMaterials();
-  const lowStockMaterials = getLowStockMaterials();
-  const totalValue = getTotalInventoryValue();
-  const materialsRequiringReorder = getMaterialsRequiringReorder();
+
+  // Fetch material categories from Supabase
+  const fetchCategories = async () => {
+    setCategoriesLoading(true);
+    setCategoriesError(null);
+
+    const [catResult, countResult] = await Promise.all([
+      supabase
+        .from('material_categories')
+        .select('*')
+        .eq('is_active', true)
+        .order('sort_order', { ascending: true }),
+      supabase
+        .from('raw_materials')
+        .select('category_id, status'),
+    ]);
+
+    if (catResult.error) {
+      console.error('Failed to fetch material categories:', catResult.error);
+      setCategoriesError(catResult.error.message);
+    } else {
+      setCategories(catResult.data ?? []);
+    }
+
+    if (!countResult.error) {
+      setMaterialCounts(countResult.data ?? []);
+    }
+
+    setCategoriesLoading(false);
+  };
+
+  // Fetch branch-aware summary stats from Supabase
+  // Uses category_id filtering (consistent with what category cards show) rather than SKU prefix
+  const fetchSummaryStats = async (currentBranch: string, allCategories: MaterialCategoryRow[]) => {
+    setSummaryLoading(true);
+
+    // Collect the IDs of categories that belong to this branch (e.g. M_ prefix)
+    const catPrefix = currentBranch ? currentBranch.charAt(0).toUpperCase() + '_' : null;
+    const branchCategoryIds = catPrefix
+      ? allCategories.filter(c => c.name.startsWith(catPrefix)).map(c => c.id)
+      : allCategories.map(c => c.id);
+
+    if (branchCategoryIds.length === 0) {
+      setSummaryStats({ totalMaterials: 0, totalValue: 0, lowStockCount: 0, reorderCount: 0 });
+      setSummaryLoading(false);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from('raw_materials')
+      .select('total_stock, total_value, reorder_point, status, category_id')
+      .in('category_id', branchCategoryIds);
+
+    if (error || !data) {
+      setSummaryLoading(false);
+      return;
+    }
+
+    const totalMaterials = data.length;
+    const totalValue = data.reduce((sum, m) => sum + (Number(m.total_value) || 0), 0);
+    const lowStockCount = data.filter(m => m.status === 'Low Stock' || m.status === 'Out of Stock').length;
+    const reorderCount = data.filter(m => Number(m.total_stock) <= Number(m.reorder_point)).length;
+
+    setSummaryStats({ totalMaterials, totalValue, lowStockCount, reorderCount });
+    setSummaryLoading(false);
+  };
+
+  useEffect(() => {
+    fetchCategories();
+  }, []);
+
+  useEffect(() => {
+    if (branch) fetchSummaryStats(branch, categories);
+  }, [branch, categories]);
+
+  // Map branch name to category prefix (M_ / C_ / B_)
+  const branchPrefix = branch ? branch.charAt(0).toUpperCase() + '_' : null;
+
+  const visibleCategories = branchPrefix
+    ? categories.filter(c => c.name.startsWith(branchPrefix))
+    : categories;
+
+  // Resolve image: use image_url from DB if set, otherwise fall back to local asset map
+  // Strip branch prefix from slug (e.g. "m-pvc-resin" -> "pvc-resin") for the fallback lookup
+  const getCategoryImage = (cat: MaterialCategoryRow): string => {
+    if (cat.image_url) return cat.image_url;
+    const baseSlug = cat.slug.replace(/^[a-z]-/, '');
+    return categoryImageMap[baseSlug] ?? pvcImg;
+  };
 
   // Apply search and category filters first
   const filteredBySearchAndCategory = allMaterials.filter(material => {
@@ -85,47 +219,111 @@ export function RawMaterialsPage() {
     return 'success';
   };
 
-  const categories = [
-    { name: 'PVC Resin', image: pvcImg, icon: 'science', description: 'Polyvinyl chloride resin for pipe manufacturing' },
-    { name: 'HDPE Resin', image: ldpeImg, icon: 'inventory_2', description: 'High-density polyethylene for durable products' },
-    { name: 'PPR Resin', image: polypropyleneImg, icon: 'layers', description: 'Polypropylene random copolymer resin' },
-    { name: 'Stabilizers', image: whitePelletsImg, icon: 'shield', description: 'Heat and UV stabilizers for material protection' },
-    { name: 'Plasticizers', image: j70Img, icon: 'water_drop', description: 'Additives for flexibility and workability' },
-    { name: 'Lubricants', image: resinPowderImg, icon: 'oil_barrel', description: 'Processing aids and lubricants' },
-    { name: 'Colorants', image: petImg, icon: 'palette', description: 'Pigments and color masterbatches' },
-    { name: 'Additives', image: whitePelletsImg, icon: 'add_circle', description: 'Performance-enhancing additives' },
-    { name: 'Packaging Materials', image: resinPowderImg, icon: 'package_2', description: 'Packaging supplies and materials' },
-    { name: 'Other', image: pvcImg, icon: 'category', description: 'Miscellaneous raw materials' },
-  ];
-
   const riskLevels: (StockOutRisk | 'All')[] = ['All', 'OK', 'Risky', 'Critical'];
 
   // Handler functions for category management
-  const handleEditCategory = (category: { name: string; image: string; icon?: string; description?: string }) => {
+  const handleEditCategory = (category: MaterialCategoryRow) => {
     const categoryData: MaterialCategoryFormData = {
       name: category.name,
       description: category.description || '',
-      imageUrl: category.image,
-      icon: category.icon || 'inventory_2',
+      imageUrl: category.image_url || getCategoryImage(category),
+      icon: 'inventory_2',
     };
     setEditingCategory(categoryData);
+    setEditingCategoryId(category.id);
     setIsEditMode(true);
   };
 
   const handleCloseModal = () => {
     setShowAddCategoryModal(false);
     setEditingCategory(null);
+    setEditingCategoryId(null);
     setIsEditMode(false);
   };
 
-  const handleSaveCategory = (categoryData: MaterialCategoryFormData) => {
-    console.log('Material category saved:', categoryData);
-    handleCloseModal();
+  const handleSaveCategory = async (categoryData: MaterialCategoryFormData) => {
+    setSaving(true);
+    try {
+      // Generate a slug from the name
+      const slug = categoryData.name
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+
+      if (isEditMode && editingCategoryId) {
+        // ── UPDATE existing category ──
+        const { error } = await supabase
+          .from('material_categories')
+          .update({
+            name: categoryData.name.trim(),
+            slug,
+            description: categoryData.description.trim() || null,
+            image_url: categoryData.imageUrl || null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', editingCategoryId);
+
+        if (error) throw error;
+      } else {
+        // ── INSERT new category ──
+        // Auto-prefix name and slug with the current branch prefix (M_, C_, B_)
+        const branchPrefix = branch ? branch.charAt(0).toUpperCase() + '_' : '';
+        const prefixedName = branchPrefix
+          ? (categoryData.name.trim().startsWith(branchPrefix)
+              ? categoryData.name.trim()
+              : branchPrefix + categoryData.name.trim())
+          : categoryData.name.trim();
+        const branchSlugPrefix = branch ? branch.charAt(0).toLowerCase() + '-' : '';
+        const prefixedSlug = branchSlugPrefix + slug;
+
+        const nextSortOrder = categories.length > 0
+          ? Math.max(...categories.map(c => c.sort_order)) + 1
+          : 1;
+
+        const { error } = await supabase
+          .from('material_categories')
+          .insert({
+            name: prefixedName,
+            slug: prefixedSlug,
+            description: categoryData.description.trim() || null,
+            image_url: categoryData.imageUrl || null,
+            sort_order: nextSortOrder,
+          });
+
+        if (error) throw error;
+      }
+
+      // Refresh the categories list from the DB
+      await fetchCategories();
+      handleCloseModal();
+    } catch (err: any) {
+      console.error('Failed to save material category:', err);
+      alert(`Failed to save category: ${err.message ?? 'Unknown error'}`);
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const handleDeleteCategory = () => {
-    console.log('Material category deleted');
-    handleCloseModal();
+  const handleDeleteCategory = async () => {
+    if (!editingCategoryId) return;
+    setSaving(true);
+    try {
+      const { error } = await supabase
+        .from('material_categories')
+        .delete()
+        .eq('id', editingCategoryId);
+
+      if (error) throw error;
+
+      await fetchCategories();
+      handleCloseModal();
+    } catch (err: any) {
+      console.error('Failed to delete material category:', err);
+      alert(`Failed to delete category: ${err.message ?? 'Unknown error'}`);
+    } finally {
+      setSaving(false);
+    }
   };
 
   // Derived calculations for enhanced materials (immutable operations)
@@ -246,7 +444,9 @@ export function RawMaterialsPage() {
                   </div>
                   <div>
                     <p className="text-sm text-gray-500">Total Materials</p>
-                    <p className="text-2xl font-bold text-gray-900">{allMaterials.length}</p>
+                    <p className="text-2xl font-bold text-gray-900">
+                      {summaryLoading ? '…' : summaryStats.totalMaterials}
+                    </p>
                   </div>
                 </div>
               </CardContent>
@@ -261,7 +461,11 @@ export function RawMaterialsPage() {
                   <div>
                     <p className="text-sm text-gray-500">Total Inventory Value</p>
                     <p className="text-2xl font-bold text-gray-900">
-                      ₱{(totalValue / 1000000).toFixed(2)}M
+                      {summaryLoading
+                        ? '…'
+                        : summaryStats.totalValue >= 1_000_000
+                          ? `₱${(summaryStats.totalValue / 1_000_000).toFixed(2)}M`
+                          : `₱${summaryStats.totalValue.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                     </p>
                   </div>
                 </div>
@@ -276,7 +480,9 @@ export function RawMaterialsPage() {
                   </div>
                   <div>
                     <p className="text-sm text-gray-500">Low Stock Items</p>
-                    <p className="text-2xl font-bold text-gray-900">{lowStockMaterials.length}</p>
+                    <p className="text-2xl font-bold text-gray-900">
+                      {summaryLoading ? '…' : summaryStats.lowStockCount}
+                    </p>
                   </div>
                 </div>
               </CardContent>
@@ -290,7 +496,9 @@ export function RawMaterialsPage() {
                   </div>
                   <div>
                     <p className="text-sm text-gray-500">Reorder Required</p>
-                    <p className="text-2xl font-bold text-gray-900">{materialsRequiringReorder.length}</p>
+                    <p className="text-2xl font-bold text-gray-900">
+                      {summaryLoading ? '…' : summaryStats.reorderCount}
+                    </p>
                   </div>
                 </div>
               </CardContent>
@@ -412,15 +620,36 @@ export function RawMaterialsPage() {
           </div>
         </CardHeader>
         <CardContent>
+          {categoriesLoading ? (
+            <div className="flex flex-col items-center justify-center py-16 text-gray-500">
+              <Loader2 className="w-8 h-8 animate-spin mb-3 text-red-500" />
+              <p className="text-sm">Loading categories…</p>
+            </div>
+          ) : categoriesError ? (
+            <div className="flex flex-col items-center justify-center py-16 text-gray-500">
+              <AlertTriangle className="w-8 h-8 mb-3 text-orange-500" />
+              <p className="text-sm font-medium text-gray-700">Failed to load categories</p>
+              <p className="text-xs text-gray-400 mt-1">{categoriesError}</p>
+              <Button variant="outline" className="mt-4" onClick={fetchCategories}>
+                <RefreshCw className="w-4 h-4 mr-2" />
+                Retry
+              </Button>
+            </div>
+          ) : visibleCategories.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 text-gray-500">
+              <Package className="w-8 h-8 mb-3 text-gray-400" />
+              <p className="text-sm font-medium text-gray-700">No categories for this branch</p>
+              <p className="text-xs text-gray-400 mt-1">Switch branches or add a category to get started.</p>
+            </div>
+          ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-4">
-            {categories.map((category) => {
-              const categoryMaterials = allMaterials.filter(m => m.category === category.name);
+            {visibleCategories.map((category) => {
+              const categoryMaterials = materialCounts.filter(m => m.category_id === category.id);
               const categoryCount = categoryMaterials.length;
               const lowStockCount = categoryMaterials.filter(m => m.status === 'Low Stock' || m.status === 'Out of Stock').length;
-              
               return (
                 <div
-                  key={category.name}
+                  key={category.id}
                   className="group relative overflow-hidden border-2 border-gray-200 rounded-lg hover:border-red-500 hover:shadow-lg transition-all duration-200"
                 >
                   {/* Edit Button - Top Right - Always visible, more prominent on hover */}
@@ -437,13 +666,13 @@ export function RawMaterialsPage() {
 
                   {/* Category Card - Clickable Area */}
                   <button
-                    onClick={() => navigate(`/materials/category/${category.name.toLowerCase().replace(/\s+/g, '-')}`)}
+                    onClick={() => navigate(`/materials/category/${category.slug}`)}
                     className="w-full text-left"
                   >
                     {/* Category Image */}
                     <div className="aspect-video w-full overflow-hidden bg-gray-100">
                       <img 
-                        src={category.image} 
+                        src={getCategoryImage(category)} 
                         alt={category.name}
                         className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
                       />
@@ -454,20 +683,26 @@ export function RawMaterialsPage() {
                       <h3 className="font-semibold text-gray-900 group-hover:text-red-600 transition-colors">
                         {category.name}
                       </h3>
-                      <p className="text-sm text-gray-500 mt-1">
-                        {categoryCount} {categoryCount === 1 ? 'item' : 'items'}
-                      </p>
-                      {lowStockCount > 0 && (
-                        <Badge variant="warning" size="sm" className="mt-2">
-                          {lowStockCount} low stock
-                        </Badge>
+                      {category.description && (
+                        <p className="text-xs text-gray-400 mt-0.5 line-clamp-1">{category.description}</p>
                       )}
+                      <div className="flex items-center gap-2 mt-1 flex-wrap-none">
+                        <p className="text-sm text-gray-500 shrink-0">
+                          {categoryCount} {categoryCount === 1 ? 'item' : 'items'}
+                        </p>
+                        {lowStockCount > 0 && (
+                          <Badge variant="warning" size="sm" className="whitespace-nowrap shrink-0">
+                            {lowStockCount} low stock
+                          </Badge>
+                        )}
+                      </div>
                     </div>
                   </button>
                 </div>
               );
             })}
           </div>
+          )}
         </CardContent>
       </Card>
       

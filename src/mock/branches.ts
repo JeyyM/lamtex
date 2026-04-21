@@ -10,24 +10,24 @@ export interface BranchData {
 
 export const BRANCHES: BranchData[] = [
   {
-    id: 'branch-a',
-    name: 'Branch A',
-    location: 'Quezon City, Metro Manila',
-    warehouseManager: 'Carlos Mendoza',
+    id: 'branch-mnl',
+    name: 'Manila',
+    location: 'Valenzuela City, Metro Manila',
+    warehouseManager: 'Ricardo Santos',
     logisticsManager: 'Ana Rivera'
   },
   {
-    id: 'branch-b',
-    name: 'Branch B',
+    id: 'branch-ceb',
+    name: 'Cebu',
     location: 'Cebu City, Cebu',
-    warehouseManager: 'Roberto Santos',
+    warehouseManager: 'Maria Dela Cruz',
     logisticsManager: 'Elena Cruz'
   },
   {
-    id: 'branch-c',
-    name: 'Branch C',
-    location: 'Davao City, Davao',
-    warehouseManager: 'Miguel Torres',
+    id: 'branch-btg',
+    name: 'Batangas',
+    location: 'Batangas City, Batangas',
+    warehouseManager: 'Jose Reyes',
     logisticsManager: 'Sofia Reyes'
   }
 ];

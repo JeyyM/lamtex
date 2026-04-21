@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { X, Upload, Image as ImageIcon, Trash2 } from 'lucide-react';
+import { X, Upload, Image as ImageIcon, Trash2, Loader2 } from 'lucide-react';
 import ImageGalleryModal from '../ImageGalleryModal';
 import CategoryIconModal from '../products/CategoryIconModal';
 
 interface AddMaterialCategoryModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave?: (categoryData: MaterialCategoryFormData) => void;
-  onDelete?: () => void;
+  onSave?: (categoryData: MaterialCategoryFormData) => void | Promise<void>;
+  onDelete?: () => void | Promise<void>;
   initialData?: MaterialCategoryFormData;
   isEditMode?: boolean;
 }
@@ -52,6 +52,7 @@ const AddMaterialCategoryModal: React.FC<AddMaterialCategoryModalProps> = ({
   const [showImageGallery, setShowImageGallery] = useState(false);
   const [showIconModal, setShowIconModal] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
 
   const handleInputChange = (field: keyof MaterialCategoryFormData, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }));
@@ -91,28 +92,19 @@ const AddMaterialCategoryModal: React.FC<AddMaterialCategoryModalProps> = ({
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!validateForm()) {
       return;
     }
 
     if (onSave) {
-      onSave(formData);
+      setSaving(true);
+      try {
+        await onSave(formData);
+      } finally {
+        setSaving(false);
+      }
     }
-
-    // Show success message (demo mode)
-    alert(
-      `✓ Material Category ${isEditMode ? 'Updated' : 'Created'} Successfully!\n\n` +
-      `Category Name: ${formData.name}\n` +
-      `Description: ${formData.description}\n` +
-      `Icon: ${formData.icon}\n` +
-      `Image Selected: ${formData.imageUrl ? 'Yes' : 'No'}\n\n` +
-      `(Demo mode - Category not actually saved to database)`
-    );
-
-    // Reset form and close
-    handleReset();
-    onClose();
   };
 
   const handleReset = () => {
@@ -136,26 +128,18 @@ const AddMaterialCategoryModal: React.FC<AddMaterialCategoryModalProps> = ({
     onClose();
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     const confirmDelete = window.confirm(
       `Are you sure you want to delete the material category "${formData.name}"?\n\nThis action cannot be undone. All materials in this category will need to be reassigned.`
     );
     
-    if (confirmDelete) {
-      if (onDelete) {
-        onDelete();
+    if (confirmDelete && onDelete) {
+      setSaving(true);
+      try {
+        await onDelete();
+      } finally {
+        setSaving(false);
       }
-      
-      // Show success message (demo mode)
-      alert(
-        `✓ Material Category Deleted Successfully!\n\n` +
-        `Category "${formData.name}" has been deleted.\n` +
-        `Materials in this category will need reassignment.\n\n` +
-        `(Demo mode - Category not actually deleted from database)`
-      );
-      
-      handleReset();
-      onClose();
     }
   };
 
@@ -318,15 +302,13 @@ const AddMaterialCategoryModal: React.FC<AddMaterialCategoryModalProps> = ({
           <div className="p-4 md:p-6 border-t border-gray-200 bg-gray-50 md:rounded-b-xl">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
               <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4 order-2 md:order-1">
-                <div className="text-sm text-gray-600">
-                  <span className="text-red-600">*</span> Required fields
-                </div>
                 {isEditMode && (
                   <button
                     onClick={handleDelete}
-                    className="w-full sm:w-auto px-4 py-2.5 rounded-lg border border-red-200 bg-white font-medium text-red-600 hover:bg-red-50 transition-all flex items-center justify-center gap-2"
+                    disabled={saving}
+                    className="w-full sm:w-auto px-4 py-2.5 rounded-lg border border-red-200 bg-white font-medium text-red-600 hover:bg-red-50 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    <Trash2 className="w-4 h-4" />
+                    {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
                     Delete Category
                   </button>
                 )}
@@ -334,14 +316,17 @@ const AddMaterialCategoryModal: React.FC<AddMaterialCategoryModalProps> = ({
               <div className="flex gap-3 order-1 md:order-2">
                 <button
                   onClick={handleClose}
-                  className="flex-1 md:flex-none px-5 py-2.5 rounded-lg border border-gray-300 bg-white font-medium text-gray-700 hover:bg-gray-50 transition-all"
+                  disabled={saving}
+                  className="flex-1 md:flex-none px-5 py-2.5 rounded-lg border border-gray-300 bg-white font-medium text-gray-700 hover:bg-gray-50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleSubmit}
-                  className="flex-1 md:flex-none px-5 py-2.5 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 transition-all"
+                  disabled={saving}
+                  className="flex-1 md:flex-none px-5 py-2.5 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                 >
+                  {saving && <Loader2 className="w-4 h-4 animate-spin" />}
                   {isEditMode ? 'Update' : 'Create'}
                 </button>
               </div>

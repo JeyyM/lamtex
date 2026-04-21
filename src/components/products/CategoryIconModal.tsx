@@ -86,7 +86,7 @@ const CategoryIconModal: React.FC<CategoryIconModalProps> = ({
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] flex flex-col">
+      <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full max-h-[85vh] flex flex-col">
         {/* Header */}
         <div className="p-6 border-b border-gray-200">
           <div className="flex items-center justify-between mb-4">
@@ -118,7 +118,7 @@ const CategoryIconModal: React.FC<CategoryIconModalProps> = ({
         </div>
         
         {/* Icon Grid */}
-        <div className="flex-1 overflow-hidden p-6">
+        <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3">
           {filteredIcons.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-center">
               <span className="material-symbols-outlined text-6xl text-gray-300 mb-4">search_off</span>
@@ -126,24 +126,24 @@ const CategoryIconModal: React.FC<CategoryIconModalProps> = ({
               <p className="text-sm text-gray-400 mt-1">Try a different search term</p>
             </div>
           ) : (
-            <div className="grid grid-cols-5 gap-3 h-full overflow-y-auto">
+            <div className="grid grid-cols-5 gap-2">
               {currentIcons.map((icon) => (
                 <button
                   key={icon}
                   onClick={() => handleIconSelect(icon)}
-                  className={`aspect-square rounded-xl border-2 p-3 transition-all hover:scale-105 flex flex-col items-center justify-center gap-1 group ${
+                  className={`aspect-square rounded-lg border-2 p-2 transition-all hover:scale-105 flex flex-col items-center justify-center gap-0.5 group ${
                     selectedIcon === icon 
                       ? 'border-red-600 bg-red-50 text-red-600' 
                       : 'border-gray-200 bg-white hover:border-red-300 hover:bg-red-50 text-gray-600'
                   }`}
                   title={icon.replace(/_/g, ' ')}
                 >
-                  <span className={`material-symbols-outlined text-2xl ${
+                  <span className={`material-symbols-outlined text-xl ${
                     selectedIcon === icon ? 'text-red-600' : 'text-gray-600 group-hover:text-red-600'
                   }`}>
                     {icon}
                   </span>
-                  <span className={`text-[10px] leading-tight text-center line-clamp-2 ${
+                  <span className={`text-[9px] leading-tight text-center line-clamp-2 ${
                     selectedIcon === icon ? 'text-red-600 font-medium' : 'text-gray-500 group-hover:text-red-600'
                   }`}>
                     {icon.replace(/_/g, ' ')}

@@ -21,7 +21,7 @@ export const MOCK_ORDERS: Order[] = [
     orderDate: '2026-02-24',
     requiredDate: '2026-02-26',
     totalAmount: 45000,
-    status: 'Pending Approval',
+    status: 'Pending',
     paymentStatus: 'Unbilled',
     paymentMethod: 'Offline'
   },

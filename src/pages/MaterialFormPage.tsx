@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Button } from '@/src/components/ui/Button';
-import { ArrowLeft, Save, X } from 'lucide-react';
+import { ArrowLeft, Save, X, Plus } from 'lucide-react';
 import { getRawMaterialById } from '@/src/mock/rawMaterials';
 import type { MaterialCategory, UnitOfMeasure, MaterialStatus } from '@/src/types/materials';
 
@@ -40,15 +40,10 @@ export function MaterialFormPage() {
     shelfLifeDays: existingMaterial?.shelfLifeDays || undefined,
     batchTracking: existingMaterial?.batchTracking || false,
     
-    // Specifications
-    specifications: {
-      grade: existingMaterial?.specifications?.grade || '',
-      purity: existingMaterial?.specifications?.purity || '',
-      density: existingMaterial?.specifications?.density || '',
-      meltFlowIndex: existingMaterial?.specifications?.meltFlowIndex || '',
-      color: existingMaterial?.specifications?.color || '',
-      standard: existingMaterial?.specifications?.standard || '',
-    },
+    // Specifications – dynamic array of {label, value}
+    specifications: Array.isArray(existingMaterial?.specifications)
+      ? (existingMaterial.specifications as { label: string; value: string }[])
+      : [],
   });
 
   const categories: MaterialCategory[] = [
@@ -83,13 +78,26 @@ export function MaterialFormPage() {
     }));
   };
 
-  const handleSpecChange = (field: string, value: string) => {
+  // ── Spec helpers ──────────────────────────────────────────
+  const addSpec = () => {
     setFormData(prev => ({
       ...prev,
-      specifications: {
-        ...prev.specifications,
-        [field]: value,
-      },
+      specifications: [...prev.specifications, { label: '', value: '' }],
+    }));
+  };
+
+  const updateSpec = (index: number, field: 'label' | 'value', val: string) => {
+    setFormData(prev => {
+      const updated = [...prev.specifications];
+      updated[index] = { ...updated[index], [field]: val };
+      return { ...prev, specifications: updated };
+    });
+  };
+
+  const removeSpec = (index: number) => {
+    setFormData(prev => ({
+      ...prev,
+      specifications: prev.specifications.filter((_, i) => i !== index),
     }));
   };
 
@@ -217,88 +225,59 @@ export function MaterialFormPage() {
         {/* Specifications */}
         <Card>
           <CardHeader>
-            <CardTitle>Material Specifications</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Grade
-                </label>
-                <input
-                  type="text"
-                  value={formData.specifications.grade}
-                  onChange={(e) => handleSpecChange('grade', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
-                  placeholder="e.g., SG-5, PE100, Type III"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Purity
-                </label>
-                <input
-                  type="text"
-                  value={formData.specifications.purity}
-                  onChange={(e) => handleSpecChange('purity', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
-                  placeholder="e.g., 99.5%, 98%"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Density
-                </label>
-                <input
-                  type="text"
-                  value={formData.specifications.density}
-                  onChange={(e) => handleSpecChange('density', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
-                  placeholder="e.g., 1.4 g/cm³"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Melt Flow Index
-                </label>
-                <input
-                  type="text"
-                  value={formData.specifications.meltFlowIndex}
-                  onChange={(e) => handleSpecChange('meltFlowIndex', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
-                  placeholder="e.g., K-67, 0.3-0.5 g/10min"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Color
-                </label>
-                <input
-                  type="text"
-                  value={formData.specifications.color}
-                  onChange={(e) => handleSpecChange('color', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
-                  placeholder="e.g., White Powder, Transparent Liquid"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Standard/Certification
-                </label>
-                <input
-                  type="text"
-                  value={formData.specifications.standard}
-                  onChange={(e) => handleSpecChange('standard', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
-                  placeholder="e.g., ASTM D1755, ISO 4427"
-                />
-              </div>
+            <div className="flex items-center justify-between">
+              <CardTitle>Material Specifications</CardTitle>
+              <button
+                type="button"
+                onClick={addSpec}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-red-600 border border-red-200 rounded-lg hover:bg-red-50 transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                Add Row
+              </button>
             </div>
+          </CardHeader>
+          <CardContent>
+            {formData.specifications.length === 0 ? (
+              <div className="text-sm text-gray-400 italic border border-dashed border-gray-200 rounded-lg px-4 py-4 text-center">
+                No specifications yet — click "Add Row" to define custom properties.
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {/* Column headers */}
+                <div className="grid grid-cols-[1fr_1fr_auto] gap-3 px-1">
+                  <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Label</span>
+                  <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Value</span>
+                  <span className="w-8" />
+                </div>
+                {formData.specifications.map((spec, i) => (
+                  <div key={i} className="grid grid-cols-[1fr_1fr_auto] gap-3 items-center">
+                    <input
+                      type="text"
+                      value={spec.label}
+                      onChange={(e) => updateSpec(i, 'label', e.target.value)}
+                      placeholder="e.g. Density"
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                    />
+                    <input
+                      type="text"
+                      value={spec.value}
+                      onChange={(e) => updateSpec(i, 'value', e.target.value)}
+                      placeholder="e.g. 1.35 g/cm³"
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeSpec(i)}
+                      className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                      title="Remove row"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
 

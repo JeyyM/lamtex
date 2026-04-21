@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { X, Upload, Image as ImageIcon, Trash2 } from 'lucide-react';
+import { X, Upload, Image as ImageIcon, Trash2, Loader2, Plus } from 'lucide-react';
 import ImageGalleryModal from '../ImageGalleryModal';
 
 interface AddMaterialModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave?: (materialData: MaterialFormData) => void;
-  onDelete?: () => void;
+  onSave?: (materialData: MaterialFormData) => void | Promise<void>;
+  onDelete?: () => void | Promise<void>;
   initialData?: MaterialFormData;
   isEditMode?: boolean;
   categoryName?: string;
@@ -16,12 +16,14 @@ export interface MaterialFormData {
   id?: string;
   name: string;
   sku: string;
+  brand: string;
   description: string;
   imageUrl: string;
   category: string;
   unitOfMeasure: string;
   costPerUnit: number;
   reorderPoint: number;
+  specifications: { label: string; value: string }[];
 }
 
 const AddMaterialModal: React.FC<AddMaterialModalProps> = ({
@@ -36,12 +38,14 @@ const AddMaterialModal: React.FC<AddMaterialModalProps> = ({
   const [formData, setFormData] = useState<MaterialFormData>({
     name: '',
     sku: '',
+    brand: '',
     description: '',
     imageUrl: '',
     category: categoryName,
     unitOfMeasure: 'kg',
     costPerUnit: 0,
-    reorderPoint: 0
+    reorderPoint: 0,
+    specifications: [],
   });
 
   // Update form data when initialData changes (for edit mode)
@@ -53,18 +57,21 @@ const AddMaterialModal: React.FC<AddMaterialModalProps> = ({
       setFormData({
         name: '',
         sku: '',
+        brand: '',
         description: '',
         imageUrl: '',
         category: categoryName,
         unitOfMeasure: 'kg',
         costPerUnit: 0,
-        reorderPoint: 0
+        reorderPoint: 0,
+        specifications: [],
       });
     }
   }, [initialData, isEditMode, isOpen, categoryName]);
 
   const [showImageGallery, setShowImageGallery] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
 
   const handleInputChange = (field: keyof MaterialFormData, value: string | number) => {
     setFormData(prev => ({ ...prev, [field]: value }));
@@ -114,44 +121,28 @@ const AddMaterialModal: React.FC<AddMaterialModalProps> = ({
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = () => {
-    if (!validateForm()) {
-      return;
+  const handleSubmit = async () => {
+    if (!validateForm()) return;
+    setSaving(true);
+    try {
+      if (onSave) await onSave(formData);
+    } finally {
+      setSaving(false);
     }
-
-    if (onSave) {
-      onSave(formData);
-    }
-
-    // Show success message (demo mode)
-    alert(
-      `✓ Material ${isEditMode ? 'Updated' : 'Created'} Successfully!\n\n` +
-      `Material Name: ${formData.name}\n` +
-      `SKU: ${formData.sku}\n` +
-      `Category: ${formData.category}\n` +
-      `Unit of Measure: ${formData.unitOfMeasure}\n` +
-      `Cost per Unit: ₱${formData.costPerUnit}\n` +
-      `Reorder Point: ${formData.reorderPoint}\n` +
-      `Description: ${formData.description}\n` +
-      `Image Selected: ${formData.imageUrl ? 'Yes' : 'No'}\n\n` +
-      `(Demo mode - Material not actually saved to database)`
-    );
-
-    // Reset form and close
-    handleReset();
-    onClose();
   };
 
   const handleReset = () => {
     setFormData({
       name: '',
       sku: '',
+      brand: '',
       description: '',
       imageUrl: '',
       category: categoryName,
       unitOfMeasure: 'kg',
       costPerUnit: 0,
-      reorderPoint: 0
+      reorderPoint: 0,
+      specifications: [],
     });
     setErrors({});
   };
@@ -167,27 +158,40 @@ const AddMaterialModal: React.FC<AddMaterialModalProps> = ({
     onClose();
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     const confirmDelete = window.confirm(
-      `Are you sure you want to delete the material "${formData.name}"?\n\nThis action cannot be undone. All stock records for this material will be affected.`
+      `Are you sure you want to delete the material "${formData.name}"?\n\nThis action cannot be undone.`
     );
-    
-    if (confirmDelete) {
-      if (onDelete) {
-        onDelete();
-      }
-      
-      // Show success message (demo mode)
-      alert(
-        `✓ Material Deleted Successfully!\n\n` +
-        `Material "${formData.name}" has been deleted.\n` +
-        `Stock records have been updated.\n\n` +
-        `(Demo mode - Material not actually deleted from database)`
-      );
-      
-      handleReset();
-      onClose();
+    if (!confirmDelete) return;
+    setSaving(true);
+    try {
+      if (onDelete) await onDelete();
+    } finally {
+      setSaving(false);
     }
+  };
+
+  // ── Specifications helpers ────────────────────────────────
+  const addSpec = () => {
+    setFormData(prev => ({
+      ...prev,
+      specifications: [...prev.specifications, { label: '', value: '' }],
+    }));
+  };
+
+  const updateSpec = (index: number, field: 'label' | 'value', val: string) => {
+    setFormData(prev => {
+      const updated = [...prev.specifications];
+      updated[index] = { ...updated[index], [field]: val };
+      return { ...prev, specifications: updated };
+    });
+  };
+
+  const removeSpec = (index: number) => {
+    setFormData(prev => ({
+      ...prev,
+      specifications: prev.specifications.filter((_, i) => i !== index),
+    }));
   };
 
   if (!isOpen) return null;
@@ -242,25 +246,40 @@ const AddMaterialModal: React.FC<AddMaterialModalProps> = ({
               )}
             </div>
 
-            {/* SKU */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                SKU <span className="text-red-600">*</span>
-              </label>
-              <input
-                type="text"
-                value={formData.sku}
-                onChange={(e) => handleInputChange('sku', e.target.value)}
-                placeholder="e.g., RES-001, PVC-100"
-                className={`w-full px-4 py-2.5 border rounded-lg focus:outline-none focus:ring-2 transition-all font-mono ${
-                  errors.sku
-                    ? 'border-red-300 focus:ring-red-500'
-                    : 'border-gray-300 focus:ring-red-500'
-                }`}
-              />
-              {errors.sku && (
-                <p className="text-sm text-red-600 mt-1">{errors.sku}</p>
-              )}
+            {/* SKU + Brand */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  SKU <span className="text-red-600">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={formData.sku}
+                  onChange={(e) => handleInputChange('sku', e.target.value)}
+                  placeholder="e.g., RES-001, PVC-100"
+                  className={`w-full px-4 py-2.5 border rounded-lg focus:outline-none focus:ring-2 transition-all font-mono ${
+                    errors.sku
+                      ? 'border-red-300 focus:ring-red-500'
+                      : 'border-gray-300 focus:ring-red-500'
+                  }`}
+                />
+                {errors.sku && (
+                  <p className="text-sm text-red-600 mt-1">{errors.sku}</p>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Brand
+                </label>
+                <input
+                  type="text"
+                  value={formData.brand}
+                  onChange={(e) => handleInputChange('brand', e.target.value)}
+                  placeholder="e.g., Sinopec, LG Chem"
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 transition-all"
+                />
+              </div>
             </div>
 
             {/* Description */}
@@ -355,6 +374,64 @@ const AddMaterialModal: React.FC<AddMaterialModalProps> = ({
               )}
             </div>
 
+            {/* Specifications */}
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <label className="block text-sm font-medium text-gray-700">
+                  Specifications
+                </label>
+                <button
+                  type="button"
+                  onClick={addSpec}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-red-600 border border-red-200 rounded-lg hover:bg-red-50 transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                  Add Row
+                </button>
+              </div>
+
+              {formData.specifications.length === 0 ? (
+                <div className="text-sm text-gray-400 italic border border-dashed border-gray-200 rounded-lg px-4 py-3">
+                  No specifications yet — click "Add Row" to define custom properties.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {/* Header */}
+                  <div className="grid grid-cols-[1fr_1fr_auto] gap-2 px-1">
+                    <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Label</span>
+                    <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Value</span>
+                    <span className="w-8" />
+                  </div>
+                  {formData.specifications.map((spec, i) => (
+                    <div key={i} className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
+                      <input
+                        type="text"
+                        value={spec.label}
+                        onChange={(e) => updateSpec(i, 'label', e.target.value)}
+                        placeholder="e.g. Density"
+                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                      />
+                      <input
+                        type="text"
+                        value={spec.value}
+                        onChange={(e) => updateSpec(i, 'value', e.target.value)}
+                        placeholder="e.g. 1.35 g/cm³"
+                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeSpec(i)}
+                        className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                        title="Remove row"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
             {/* Image Selection */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -419,9 +496,10 @@ const AddMaterialModal: React.FC<AddMaterialModalProps> = ({
               {isEditMode && (
                 <button
                   onClick={handleDelete}
-                  className="px-4 py-2.5 rounded-lg border border-red-200 bg-white font-medium text-red-600 hover:bg-red-50 transition-all flex items-center gap-2"
+                  disabled={saving}
+                  className="px-4 py-2.5 rounded-lg border border-red-200 bg-white font-medium text-red-600 hover:bg-red-50 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <Trash2 className="w-4 h-4" />
+                  {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
                   Delete Material
                 </button>
               )}
@@ -429,14 +507,17 @@ const AddMaterialModal: React.FC<AddMaterialModalProps> = ({
             <div className="flex gap-3">
               <button
                 onClick={handleClose}
-                className="px-5 py-2.5 rounded-lg border border-gray-300 bg-white font-medium text-gray-700 hover:bg-gray-50 transition-all"
+                disabled={saving}
+                className="px-5 py-2.5 rounded-lg border border-gray-300 bg-white font-medium text-gray-700 hover:bg-gray-50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Cancel
               </button>
               <button
                 onClick={handleSubmit}
-                className="px-5 py-2.5 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 transition-all"
+                disabled={saving}
+                className="px-5 py-2.5 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
               >
+                {saving && <Loader2 className="w-4 h-4 animate-spin" />}
                 {isEditMode ? 'Update Material' : 'Create Material'}
               </button>
             </div>

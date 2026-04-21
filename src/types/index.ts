@@ -5,7 +5,9 @@ export type UserRole =
   | 'Agent'
   | 'Driver';
 
-export type Branch = 'All' | 'Branch A' | 'Branch B' | 'Branch C';
+// Branch is a plain string so new branches added to the DB work without code changes.
+// 'All' is the sentinel value meaning no branch filter.
+export type Branch = string;
 
 export interface AuditLog {
   id: string;

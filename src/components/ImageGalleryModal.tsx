@@ -1,30 +1,17 @@
-import React, { useState, useEffect } from 'react';
-import { X, Upload, Search } from 'lucide-react';
-
-// Import available product images
-import hdpePipeImg from '../assets/product-images/HDPE Pipe.webp';
-import pipesImg from '../assets/product-images/Pipes.webp';
-import pressureLineImg from '../assets/product-images/Pressure Line Pipe.webp';
-import ballValveImg from '../assets/product-images/Ball Valve.webp';
-import couplingImg from '../assets/product-images/Coupling.webp';
-import elbowPipeImg from '../assets/product-images/Elbow Pipe.webp';
-import electricConduitImg from '../assets/product-images/Electric Conduit Pipe.webp';
-import gardenHoseImg from '../assets/product-images/Garden Hose.webp';
-import inHousePipeImg from '../assets/product-images/In House Pipe.webp';
-import junctionBoxImg from '../assets/product-images/Junction Box.webp';
-import pvcCementImg from '../assets/product-images/PVC Cement.webp';
-import sanitaryPipeImg from '../assets/product-images/Sanitary Pipe.webp';
-import teePipeImg from '../assets/product-images/Tee Pipe.webp';
+import React, { useState, useEffect, useCallback } from 'react';
+import { X, Upload, Search, Loader2, AlertTriangle, RefreshCw } from 'lucide-react';
+import { supabase } from '@/src/lib/supabase';
 
 interface ImageGalleryModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSelectImages?: (imageUrls: string[]) => void; // New: for multi-select
-  onSelectImage?: (imageUrl: string) => void; // Legacy: single select
+  onSelectImages?: (imageUrls: string[]) => void; // For multi-select
+  onSelectImage?: (imageUrl: string) => void;      // Single select
   onUploadNew?: (file: File) => Promise<void>;
   currentImageUrl?: string;
-  maxImages?: number; // Maximum number of images to select (default: 1)
-  currentImages?: string[]; // Currently selected images for multi-select mode
+  maxImages?: number;
+  currentImages?: string[];
+  folder?: string; // Supabase Storage folder inside the "images" bucket
 }
 
 interface StorageImage {
@@ -34,22 +21,7 @@ interface StorageImage {
   size: number;
 }
 
-// Mock images data
-const mockImages: StorageImage[] = [
-  { name: 'HDPE Pipe.webp', url: hdpePipeImg, created_at: '2026-01-15T10:30:00Z', size: 245000 },
-  { name: 'Pipes.webp', url: pipesImg, created_at: '2026-01-20T14:15:00Z', size: 312000 },
-  { name: 'Pressure Line Pipe.webp', url: pressureLineImg, created_at: '2026-01-25T09:45:00Z', size: 289000 },
-  { name: 'Ball Valve.webp', url: ballValveImg, created_at: '2026-02-01T11:20:00Z', size: 198000 },
-  { name: 'Coupling.webp', url: couplingImg, created_at: '2026-02-05T16:30:00Z', size: 156000 },
-  { name: 'Elbow Pipe.webp', url: elbowPipeImg, created_at: '2026-02-10T13:45:00Z', size: 223000 },
-  { name: 'Electric Conduit Pipe.webp', url: electricConduitImg, created_at: '2026-02-15T08:30:00Z', size: 267000 },
-  { name: 'Garden Hose.webp', url: gardenHoseImg, created_at: '2026-02-20T15:00:00Z', size: 334000 },
-  { name: 'In House Pipe.webp', url: inHousePipeImg, created_at: '2026-02-25T10:15:00Z', size: 278000 },
-  { name: 'Junction Box.webp', url: junctionBoxImg, created_at: '2026-03-01T12:00:00Z', size: 189000 },
-  { name: 'PVC Cement.webp', url: pvcCementImg, created_at: '2026-03-02T14:30:00Z', size: 201000 },
-  { name: 'Sanitary Pipe.webp', url: sanitaryPipeImg, created_at: '2026-03-03T09:00:00Z', size: 256000 },
-  { name: 'Tee Pipe.webp', url: teePipeImg, created_at: '2026-03-04T11:45:00Z', size: 234000 },
-];
+const BUCKET = 'images';
 
 const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
   isOpen,
@@ -59,54 +31,116 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
   onUploadNew,
   currentImageUrl,
   maxImages = 1,
-  currentImages = []
+  currentImages = [],
+  folder = '',
 }) => {
-  const [images, setImages] = useState<StorageImage[]>(mockImages);
+  const [images, setImages] = useState<StorageImage[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [selectedImage, setSelectedImage] = useState<string | null>(currentImageUrl || null);
   const [selectedImagesOrder, setSelectedImagesOrder] = useState<string[]>(currentImages);
   const [uploading, setUploading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Multi-select mode enabled when maxImages > 1
   const isMultiSelect = maxImages > 1;
 
-  // Update selected images when modal opens with new currentImages
+  // Fetch images from Supabase Storage
+  const fetchImages = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      const path = folder || '';
+      const { data, error: listError } = await supabase.storage
+        .from(BUCKET)
+        .list(path, { limit: 200, sortBy: { column: 'created_at', order: 'desc' } });
+
+      if (listError) {
+        throw listError;
+      }
+
+      // Filter out folder placeholders and Supabase's .emptyFolderPlaceholder — only real image files
+      const imageExtensions = ['.jpg', '.jpeg', '.png', '.webp', '.avif', '.gif', '.jfif', '.bmp'];
+      const files = (data ?? []).filter(f =>
+        f.id &&
+        f.name &&
+        !f.name.startsWith('.') &&
+        imageExtensions.some(ext => f.name.toLowerCase().endsWith(ext))
+      );
+
+      const mapped: StorageImage[] = files.map(f => {
+        const filePath = folder ? `${folder}/${f.name}` : f.name;
+        const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(filePath);
+        return {
+          name: f.name,
+          url: urlData.publicUrl,
+          created_at: f.created_at ?? new Date().toISOString(),
+          size: (f.metadata as any)?.size ?? 0,
+        };
+      });
+
+      setImages(mapped);
+    } catch (err: any) {
+      console.error('Failed to load images from storage:', err);
+      setError(err.message ?? 'Failed to load images');
+    } finally {
+      setLoading(false);
+    }
+  }, [folder]);
+
+  // Load images when modal opens
   useEffect(() => {
     if (isOpen) {
+      fetchImages();
       setSelectedImagesOrder(currentImages);
       setSelectedImage(currentImageUrl || null);
+      setSearchQuery('');
     }
-  }, [isOpen, currentImages, currentImageUrl]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
 
+  // Upload handler
   const handleFileSelect = async () => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = 'image/jpeg,image/jpg,image/png,image/webp';
+    input.accept = 'image/jpeg,image/jpg,image/png,image/webp,image/avif';
     input.onchange = async (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (!file) return;
 
-      // Validate file
       if (file.size > 5 * 1024 * 1024) {
         alert('Image too large! Please select an image under 5MB.');
         return;
       }
 
       if (!file.type.startsWith('image/')) {
-        alert('Please select an image file (JPEG, PNG, WebP)');
+        alert('Please select an image file (JPEG, PNG, WebP, AVIF)');
         return;
       }
 
       try {
         setUploading(true);
-        if (onUploadNew) {
-          await onUploadNew(file);
+
+        // Sanitise filename: replace spaces with hyphens, keep extension
+        const safeName = file.name.replace(/\s+/g, '-').toLowerCase();
+        const filePath = folder ? `${folder}/${safeName}` : safeName;
+
+        const { error: uploadError } = await supabase.storage
+          .from(BUCKET)
+          .upload(filePath, file, {
+            cacheControl: '3600',
+            upsert: true, // Overwrite if same name
+          });
+
+        if (uploadError) {
+          throw uploadError;
         }
-        // In a real app, would reload the gallery here
-        alert('Image uploaded successfully! (Demo mode - image not actually saved)');
-      } catch (error) {
-        alert('Failed to upload image. Please try again.');
+
+        // Refresh the gallery after upload
+        await fetchImages();
+      } catch (err: any) {
+        console.error('Upload failed:', err);
+        alert(`Upload failed: ${err.message ?? 'Unknown error'}`);
       } finally {
         setUploading(false);
       }
@@ -114,19 +148,15 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
     input.click();
   };
 
-  // Handle image click (toggle selection in multi-select mode)
+  // Handle image click
   const handleImageClick = (imageUrl: string) => {
     if (isMultiSelect) {
-      // Multi-select mode: toggle selection
       if (selectedImagesOrder.includes(imageUrl)) {
-        // Deselect: remove from array
         setSelectedImagesOrder(prev => prev.filter(url => url !== imageUrl));
       } else {
-        // Select: add to array (no limit)
         setSelectedImagesOrder(prev => [...prev, imageUrl]);
       }
     } else {
-      // Single select mode: set as selected
       setSelectedImage(imageUrl);
     }
   };
@@ -156,7 +186,7 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
     return selectedImage === imageUrl;
   };
 
-  const filteredImages = images.filter(img => 
+  const filteredImages = images.filter(img =>
     img.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
@@ -171,7 +201,7 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
             <div>
               <h2 className="text-xl sm:text-2xl font-bold text-gray-900">Image Gallery</h2>
               <p className="text-sm text-gray-500 mt-1">
-                Select images for your product
+                {folder ? `Browsing: ${folder}` : 'Select an image'}
               </p>
             </div>
             <button 
@@ -210,9 +240,22 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
           {loading ? (
             <div className="flex items-center justify-center h-64">
               <div className="text-center">
-                <div className="animate-spin rounded-full h-12 w-12 border-4 border-gray-200 border-t-red-600 mx-auto"></div>
+                <Loader2 className="w-12 h-12 animate-spin text-red-500 mx-auto" />
                 <p className="mt-4 text-gray-500">Loading images...</p>
               </div>
+            </div>
+          ) : error ? (
+            <div className="flex flex-col items-center justify-center h-64 text-center">
+              <AlertTriangle className="w-12 h-12 text-orange-500 mb-3" />
+              <h3 className="text-lg font-semibold text-gray-900 mb-1">Failed to load images</h3>
+              <p className="text-sm text-gray-500 mb-4 max-w-md">{error}</p>
+              <button
+                onClick={fetchImages}
+                className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 transition-all"
+              >
+                <RefreshCw className="w-4 h-4" />
+                Retry
+              </button>
             </div>
           ) : filteredImages.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-64 text-center">

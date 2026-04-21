@@ -1,6 +1,6 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import { AppProvider } from './store/AppContext';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { AppProvider, useAppContext } from './store/AppContext';
 import { AppLayout } from './components/layout/AppLayout';
 import { Dashboard } from './pages/Dashboard';
 import { OrdersPage } from './pages/OrdersPage';
@@ -36,20 +36,61 @@ import { PurchaseOrdersPage } from './pages/PurchaseOrdersPage';
 import { TruckDetailPage } from './pages/TruckDetailPage';
 import WarehousePage from './pages/WarehousePage';
 import ChatsPage from './pages/ChatsPage';
+import LoginPage from './pages/LoginPage';
+import { Loader2 } from 'lucide-react';
 
-export default function App() {
+/** Requires a valid Supabase session — otherwise redirects to /login */
+function RequireAuth({ children }: { children: React.ReactNode }) {
+  const { session, sessionLoading } = useAppContext();
+
+  if (sessionLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <Loader2 className="w-8 h-8 animate-spin text-red-500" />
+      </div>
+    );
+  }
+
+  if (!session) {
+    return <Navigate to="/login" replace />;
+  }
+
+  return <>{children}</>;
+}
+
+/** Redirect away from /login if already signed in */
+function GuestOnly({ children }: { children: React.ReactNode }) {
+  const { session, sessionLoading } = useAppContext();
+
+  if (sessionLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <Loader2 className="w-8 h-8 animate-spin text-red-500" />
+      </div>
+    );
+  }
+
+  if (session) {
+    return <Navigate to="/" replace />;
+  }
+
+  return <>{children}</>;
+}
+
+function AppRoutes() {
   return (
-    <AppProvider>
-      <BrowserRouter>
-        <Routes>
-          {/* Public Routes - No Auth Required */}
-          <Route path="/pay/:token" element={<PaymentPage />} />
-          <Route path="/payment-success/:token" element={<PaymentSuccessPage />} />
-          <Route path="/receipt/:id" element={<ReceiptPage />} />
-          <Route path="/invoice/:orderId" element={<InvoicePreviewPage />} />
-          
-          {/* Protected Routes - Require Auth */}
-          <Route path="/" element={<AppLayout />}>
+    <Routes>
+      {/* Login */}
+      <Route path="/login" element={<GuestOnly><LoginPage /></GuestOnly>} />
+
+      {/* Public Routes - No Auth Required */}
+      <Route path="/pay/:token" element={<PaymentPage />} />
+      <Route path="/payment-success/:token" element={<PaymentSuccessPage />} />
+      <Route path="/receipt/:id" element={<ReceiptPage />} />
+      <Route path="/invoice/:orderId" element={<InvoicePreviewPage />} />
+      
+      {/* Protected Routes - Require Auth */}
+      <Route path="/" element={<RequireAuth><AppLayout /></RequireAuth>}>
             <Route index element={<Dashboard />} />
             <Route path="chats" element={<ChatsPage />} />
             <Route path="chats/:chatId" element={<ChatsPage />} />
@@ -89,6 +130,14 @@ export default function App() {
             <Route path="/purchase-orders" element={<PurchaseOrdersPage />} />
           </Route>
         </Routes>
+  );
+}
+
+export default function App() {
+  return (
+    <AppProvider>
+      <BrowserRouter>
+        <AppRoutes />
       </BrowserRouter>
     </AppProvider>
   );

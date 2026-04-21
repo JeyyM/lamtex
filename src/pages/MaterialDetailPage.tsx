@@ -1,10 +1,12 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { useAppContext } from '@/src/store/AppContext';
 import StockAdjustmentModal from '@/src/components/warehouse/StockAdjustmentModal';
+import AddMaterialModal, { MaterialFormData } from '@/src/components/materials/AddMaterialModal';
+import { supabase } from '@/src/lib/supabase';
 import {
   Package,
   ArrowLeft,
@@ -25,6 +27,7 @@ import {
   Layers,
   Factory,
   Edit3,
+  Loader2,
 } from 'lucide-react';
 import {
   BarChart,
@@ -38,14 +41,36 @@ import {
   Legend,
   ResponsiveContainer,
 } from 'recharts';
-import {
-  getRawMaterialById,
-  getBatchesByMaterialId,
-} from '@/src/mock/rawMaterials';
 import type { MaterialStatus } from '@/src/types/materials';
 
+interface MaterialStockRow {
+  quantity: number;
+  branches: { code: string; name: string } | null;
+}
+
+interface RawMaterialRow {
+  id: string;
+  name: string;
+  sku: string;
+  brand: string | null;
+  category_id: string | null;
+  category_name: string | null;
+  description: string | null;
+  image_url: string | null;
+  unit_of_measure: string;
+  total_stock: number;
+  reorder_point: number;
+  safety_stock: number;
+  cost_per_unit: number;
+  monthly_consumption: number;
+  status: string;
+  created_at: string | null;
+  specifications: { label: string; value: string }[] | null;
+  material_stock: MaterialStockRow[];
+}
+
 export function MaterialDetailPage() {
-  const { id } = useParams<{ id: string }>();
+  const { id, categoryName } = useParams<{ id: string; categoryName: string }>();
   const navigate = useNavigate();
   const { selectedBranch } = useAppContext();
   const [activeTab, setActiveTab] = useState<'overview' | 'batches' | 'analytics'>('overview');
@@ -54,16 +79,65 @@ export function MaterialDetailPage() {
   const [showStockAdjustmentModal, setShowStockAdjustmentModal] = useState(false);
   const [selectedItemForAdjustment, setSelectedItemForAdjustment] = useState<any>(null);
 
-  const material = getRawMaterialById(id || '');
-  const batches = getBatchesByMaterialId(id || '');
+  // Edit modal states
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [savingEdit, setSavingEdit] = useState(false);
 
-  if (!material) {
+  // Supabase state
+  const [material, setMaterial] = useState<RawMaterialRow | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchMaterial = useCallback(async () => {
+    if (!id) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const { data, error: err } = await supabase
+        .from('raw_materials')
+        .select(`
+          id, name, sku, brand, category_id, description, image_url,
+          unit_of_measure, total_stock, reorder_point, safety_stock,
+          cost_per_unit, monthly_consumption, status, created_at,
+          specifications,
+          material_stock ( quantity, branches ( code, name ) ),
+          material_categories ( name )
+        `)
+        .eq('id', id)
+        .single();
+
+      if (err || !data) {
+        setError('Material not found');
+        return;
+      }
+      const cat = (data.material_categories as unknown as { name: string } | null);
+      setMaterial({ ...data, category_name: cat?.name ?? null } as unknown as RawMaterialRow);
+    } catch (e: any) {
+      setError(e.message ?? 'Failed to load material');
+    } finally {
+      setLoading(false);
+    }
+  }, [id]);
+
+  useEffect(() => { fetchMaterial(); }, [fetchMaterial]);
+
+  const batches: any[] = []; // Batches not yet in Supabase schema
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <Loader2 className="w-8 h-8 animate-spin text-red-500" />
+      </div>
+    );
+  }
+
+  if (error || !material) {
     return (
       <div className="flex items-center justify-center h-96">
         <div className="text-center">
           <Package className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-          <p className="text-gray-500">Material not found</p>
-          <Button variant="outline" className="mt-4" onClick={() => navigate('/materials')}>
+          <p className="text-gray-500">{error ?? 'Material not found'}</p>
+          <Button variant="outline" className="mt-4" onClick={() => navigate(categoryName ? `/materials/category/${categoryName}` : '/materials')}>
             Back to Materials
           </Button>
         </div>
@@ -87,80 +161,31 @@ export function MaterialDetailPage() {
 
   // Get stock for selected branch
   const getStockForBranch = () => {
-    if (selectedBranch === 'A') return material.stockBranchA;
-    if (selectedBranch === 'B') return material.stockBranchB;
-    if (selectedBranch === 'C') return material.stockBranchC;
-    return material.totalStock;
+    if (!selectedBranch) return material.total_stock;
+    const row = material.material_stock.find(s => s.branches?.name === selectedBranch);
+    return row?.quantity ?? 0;
   };
 
   const currentStock = getStockForBranch();
-  const avgDailyUsage = material.monthlyConsumption / 30;
+  const avgDailyUsage = material.monthly_consumption / 30;
   const daysOfCover = avgDailyUsage > 0 ? currentStock / avgDailyUsage : Infinity;
 
-  // Prepare chart data
-  const stockByBranchData = [
-    { branch: 'Branch A', stock: material.stockBranchA },
-    { branch: 'Branch B', stock: material.stockBranchB },
-    { branch: 'Branch C', stock: material.stockBranchC },
-  ];
+  // Prepare chart data — dynamic from material_stock rows
+  const stockByBranchData = material.material_stock.map(s => ({
+    branch: s.branches?.name ?? 'Unknown',
+    stock: s.quantity,
+  }));
 
-  // Usage and Forecast data (6 months historical + 3 months forecast)
-  const today = new Date();
   const forecastData = [
-    { 
-      month: 'Jan', 
-      actual: material.monthlyConsumption * 0.75,
-      forecast: null,
-      date: new Date(today.getFullYear(), today.getMonth() - 5, 1)
-    },
-    { 
-      month: 'Feb', 
-      actual: material.monthlyConsumption * 0.82,
-      forecast: null,
-      date: new Date(today.getFullYear(), today.getMonth() - 4, 1)
-    },
-    { 
-      month: 'Mar', 
-      actual: material.monthlyConsumption * 0.95,
-      forecast: null,
-      date: new Date(today.getFullYear(), today.getMonth() - 3, 1)
-    },
-    { 
-      month: 'Apr', 
-      actual: material.monthlyConsumption * 0.88,
-      forecast: null,
-      date: new Date(today.getFullYear(), today.getMonth() - 2, 1)
-    },
-    { 
-      month: 'May', 
-      actual: material.monthlyConsumption * 1.05,
-      forecast: null,
-      date: new Date(today.getFullYear(), today.getMonth() - 1, 1)
-    },
-    { 
-      month: 'Jun', 
-      actual: material.monthlyConsumption,
-      forecast: material.monthlyConsumption,
-      date: new Date(today.getFullYear(), today.getMonth(), 1)
-    },
-    { 
-      month: 'Jul', 
-      actual: null,
-      forecast: material.monthlyConsumption * 1.08,
-      date: new Date(today.getFullYear(), today.getMonth() + 1, 1)
-    },
-    { 
-      month: 'Aug', 
-      actual: null,
-      forecast: material.monthlyConsumption * 1.12,
-      date: new Date(today.getFullYear(), today.getMonth() + 2, 1)
-    },
-    { 
-      month: 'Sep', 
-      actual: null,
-      forecast: material.monthlyConsumption * 1.15,
-      date: new Date(today.getFullYear(), today.getMonth() + 3, 1)
-    },
+    { month: 'Jan', actual: material.monthly_consumption * 0.75, forecast: null },
+    { month: 'Feb', actual: material.monthly_consumption * 0.82, forecast: null },
+    { month: 'Mar', actual: material.monthly_consumption * 0.95, forecast: null },
+    { month: 'Apr', actual: material.monthly_consumption * 0.88, forecast: null },
+    { month: 'May', actual: material.monthly_consumption * 1.05, forecast: null },
+    { month: 'Jun', actual: material.monthly_consumption, forecast: material.monthly_consumption },
+    { month: 'Jul', actual: null, forecast: material.monthly_consumption * 1.08 },
+    { month: 'Aug', actual: null, forecast: material.monthly_consumption * 1.12 },
+    { month: 'Sep', actual: null, forecast: material.monthly_consumption * 1.15 },
   ];
 
   // Stock adjustment handlers
@@ -169,9 +194,9 @@ export function MaterialDetailPage() {
       id: material.id,
       name: material.name,
       sku: material.sku,
-      currentStock: material.totalStock,
-      unit: material.unitOfMeasure,
-      reorderPoint: material.reorderPoint,
+      currentStock: material.total_stock,
+      unit: material.unit_of_measure,
+      reorderPoint: material.reorder_point,
     });
     setShowStockAdjustmentModal(true);
   };
@@ -189,19 +214,48 @@ export function MaterialDetailPage() {
     alert(message);
   };
 
+  // Edit material save handler
+  const handleSaveEdit = async (formData: MaterialFormData) => {
+    setSavingEdit(true);
+    try {
+      const { error } = await supabase
+        .from('raw_materials')
+        .update({
+          name: formData.name.trim(),
+          sku: formData.sku.trim().toUpperCase(),
+          brand: formData.brand.trim() || null,
+          description: formData.description.trim() || null,
+          image_url: formData.imageUrl || null,
+          unit_of_measure: formData.unitOfMeasure,
+          cost_per_unit: formData.costPerUnit,
+          reorder_point: formData.reorderPoint,
+          specifications: formData.specifications.filter(s => s.label.trim()),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', material.id);
+      if (error) throw error;
+      setShowEditModal(false);
+      await fetchMaterial();
+    } catch (err: any) {
+      alert(`Failed to save: ${err.message ?? 'Unknown error'}`);
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center gap-3 md:gap-4 min-w-0">
-          <Button variant="ghost" size="sm" onClick={() => navigate('/materials')} className="flex-shrink-0">
+          <Button variant="ghost" size="sm" onClick={() => navigate(categoryName ? `/materials/category/${categoryName}` : '/materials')} className="flex-shrink-0">
             <ArrowLeft className="w-4 h-4 mr-2" />
             <span className="hidden sm:inline">Back</span>
             <span className="sm:hidden">Back</span>
           </Button>
           <div className="min-w-0">
             <h1 className="text-xl md:text-2xl font-bold text-gray-900 truncate">{material.name}</h1>
-            <p className="text-sm text-gray-500 mt-1 truncate">{material.category} • {material.sku}</p>
+            <p className="text-sm text-gray-500 mt-1 truncate">{material.category_name ?? 'Materials'} • {material.sku}</p>
           </div>
         </div>
         <div className="flex gap-2 flex-wrap">
@@ -210,7 +264,7 @@ export function MaterialDetailPage() {
             <span className="hidden sm:inline">Create PR</span>
             <span className="sm:hidden">PR</span>
           </Button>
-          <Button variant="outline" onClick={() => navigate(`/materials/${id}/edit`)} className="flex-1 sm:flex-none">
+          <Button variant="outline" onClick={() => setShowEditModal(true)} className="flex-1 sm:flex-none">
             <Edit className="w-4 h-4 mr-2" />
             <span className="hidden sm:inline">Edit Material</span>
             <span className="sm:hidden">Edit</span>
@@ -229,10 +283,10 @@ export function MaterialDetailPage() {
         <div className="lg:row-span-2">
           <Card className="h-full">
             <CardContent className="p-4 h-full flex flex-col">
-              {material.imageUrl ? (
+              {material.image_url ? (
                 <div className="flex-1 rounded-lg overflow-hidden">
                   <img
-                    src={material.imageUrl}
+                    src={material.image_url}
                     alt={material.name}
                     className="w-full h-full object-cover"
                   />
@@ -262,7 +316,7 @@ export function MaterialDetailPage() {
                   <div>
                     <p className="text-sm text-gray-500">Total Stock</p>
                     <p className="text-2xl font-bold text-gray-900">
-                      {material.totalStock.toLocaleString()} <span className="text-sm font-normal uppercase">{material.unitOfMeasure}</span>
+                      {material.total_stock.toLocaleString()} <span className="text-sm font-normal uppercase">{material.unit_of_measure}</span>
                     </p>
                   </div>
                 </div>
@@ -278,7 +332,7 @@ export function MaterialDetailPage() {
                   <div>
                     <p className="text-sm text-gray-500">Inventory Value</p>
                     <p className="text-2xl font-bold text-gray-900">
-                      ₱{(material.totalValue / 1000).toFixed(0)}K
+                      ₱{((material.total_stock * material.cost_per_unit) / 1000).toFixed(0)}K
                     </p>
                   </div>
                 </div>
@@ -294,7 +348,7 @@ export function MaterialDetailPage() {
                   <div>
                     <p className="text-sm text-gray-500">Monthly Consumption</p>
                     <p className="text-2xl font-bold text-gray-900">
-                      {material.monthlyConsumption.toLocaleString()}
+                      {material.monthly_consumption.toLocaleString()}
                     </p>
                   </div>
                 </div>
@@ -304,13 +358,13 @@ export function MaterialDetailPage() {
             <Card>
               <CardContent className="p-4">
                 <div className="flex items-center gap-3">
-                  <div className={`p-3 rounded-lg ${material.totalStock <= material.reorderPoint ? 'bg-orange-100' : 'bg-gray-100'}`}>
-                    <AlertTriangle className={`w-6 h-6 ${material.totalStock <= material.reorderPoint ? 'text-orange-600' : 'text-gray-600'}`} />
+                  <div className={`p-3 rounded-lg ${material.total_stock <= material.reorder_point ? 'bg-orange-100' : 'bg-gray-100'}`}>
+                    <AlertTriangle className={`w-6 h-6 ${material.total_stock <= material.reorder_point ? 'text-orange-600' : 'text-gray-600'}`} />
                   </div>
                   <div>
                     <p className="text-sm text-gray-500">Reorder Point</p>
                     <p className="text-2xl font-bold text-gray-900">
-                      {material.reorderPoint.toLocaleString()}
+                      {material.reorder_point.toLocaleString()}
                     </p>
                   </div>
                 </div>
@@ -328,7 +382,7 @@ export function MaterialDetailPage() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div>
                 <h3 className="text-sm font-medium text-gray-500 mb-2">Description</h3>
-                <p className="text-gray-900">{material.description}</p>
+                <p className="text-gray-900">{material.description ?? '—'}</p>
                 {material.brand && (
                   <div className="mt-3">
                     <h3 className="text-sm font-medium text-gray-500 mb-1">Brand</h3>
@@ -337,27 +391,24 @@ export function MaterialDetailPage() {
                 )}
               </div>
               <div>
-                <h3 className="text-sm font-medium text-gray-500 mb-2">Status & Supplier</h3>
+                <h3 className="text-sm font-medium text-gray-500 mb-2">Status</h3>
                 <div className="space-y-2">
                   <div>
-                    <Badge variant={getStatusColor(material.status)} className="text-sm">
+                    <Badge variant={getStatusColor(material.status as MaterialStatus)} className="text-sm">
                       {material.status}
                     </Badge>
                   </div>
                   <p className="text-sm text-gray-900">
-                    <span className="text-gray-500">Supplier:</span> {material.primarySupplier}
-                  </p>
-                  <p className="text-sm text-gray-900">
-                    <span className="text-gray-500">Lead Time:</span> {material.leadTimeDays} days
+                    <span className="text-gray-500">Unit:</span> {material.unit_of_measure}
                   </p>
                 </div>
               </div>
               <div>
-                <h3 className="text-sm font-medium text-gray-500 mb-2">Last Activity</h3>
+                <h3 className="text-sm font-medium text-gray-500 mb-2">Record Info</h3>
                 <div className="space-y-1">
-                  <p className="text-xs text-gray-500">Last Restock: {material.lastRestockDate}</p>
-                  <p className="text-xs text-gray-500">Last Issued: {material.lastIssuedDate}</p>
-                  <p className="text-xs text-gray-500">Created: {material.createdDate}</p>
+                  <p className="text-xs text-gray-500">
+                    Created: {material.created_at ? new Date(material.created_at).toLocaleDateString() : '—'}
+                  </p>
                 </div>
               </div>
             </div>
@@ -410,55 +461,18 @@ export function MaterialDetailPage() {
               <CardTitle className="text-base">Specifications</CardTitle>
             </CardHeader>
             <CardContent>
-              {material.specifications && Object.keys(material.specifications).length > 0 ? (
+              {Array.isArray(material.specifications) && material.specifications.length > 0 ? (
                 <div className="space-y-3">
-                  {Object.entries(material.specifications).map(([key, value]) => (
-                    <div key={key} className="flex justify-between py-2 border-b border-gray-100 last:border-0">
-                      <span className="text-sm font-medium text-gray-500 capitalize">
-                        {key.replace(/([A-Z])/g, ' $1').trim()}
-                      </span>
-                      <span className="text-sm text-gray-900">{value}</span>
+                  {material.specifications.map((spec, i) => (
+                    <div key={i} className="flex justify-between py-2 border-b border-gray-100 last:border-0">
+                      <span className="text-sm font-medium text-gray-500">{spec.label}</span>
+                      <span className="text-sm text-gray-900">{spec.value}</span>
                     </div>
                   ))}
                 </div>
               ) : (
                 <p className="text-gray-500 text-sm">No specifications available</p>
               )}
-            </CardContent>
-          </Card>
-
-          {/* Stock by Branch */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base flex items-center gap-2">
-                <BarChart3 className="w-4 h-4" />
-                Stock by Branch
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={stockByBranchData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="branch" />
-                  <YAxis />
-                  <Tooltip />
-                  <Bar dataKey="stock" fill="#EF4444" />
-                </BarChart>
-              </ResponsiveContainer>
-              <div className="mt-4 grid grid-cols-3 gap-4 text-sm">
-                <div>
-                  <p className="text-gray-500">Branch A</p>
-                  <p className="font-medium">{material.stockBranchA.toLocaleString()}</p>
-                </div>
-                <div>
-                  <p className="text-gray-500">Branch B</p>
-                  <p className="font-medium">{material.stockBranchB.toLocaleString()}</p>
-                </div>
-                <div>
-                  <p className="text-gray-500">Branch C</p>
-                  <p className="font-medium">{material.stockBranchC.toLocaleString()}</p>
-                </div>
-              </div>
             </CardContent>
           </Card>
 
@@ -471,19 +485,19 @@ export function MaterialDetailPage() {
               <div className="space-y-3">
                 <div className="flex justify-between py-2 border-b border-gray-100">
                   <span className="text-sm font-medium text-gray-500">Current Cost/Unit</span>
-                  <span className="text-sm font-bold text-gray-900">₱{material.costPerUnit.toLocaleString()}</span>
+                  <span className="text-sm font-bold text-gray-900">₱{material.cost_per_unit.toLocaleString()}</span>
                 </div>
                 <div className="flex justify-between py-2 border-b border-gray-100">
                   <span className="text-sm font-medium text-gray-500">Last Purchase Price</span>
-                  <span className="text-sm text-gray-900">₱{material.lastPurchasePrice.toLocaleString()}</span>
+                  <span className="text-sm text-gray-900">—</span>
                 </div>
                 <div className="flex justify-between py-2 border-b border-gray-100">
                   <span className="text-sm font-medium text-gray-500">Average Cost</span>
-                  <span className="text-sm text-gray-900">₱{material.averageCost.toLocaleString()}</span>
+                  <span className="text-sm text-gray-900">₱{material.cost_per_unit.toLocaleString()}</span>
                 </div>
                 <div className="flex justify-between py-2">
                   <span className="text-sm font-medium text-gray-500">Total Inventory Value</span>
-                  <span className="text-sm font-bold text-green-600">₱{material.totalValue.toLocaleString()}</span>
+                  <span className="text-sm font-bold text-green-600">₱{(material.total_stock * material.cost_per_unit).toLocaleString()}</span>
                 </div>
               </div>
             </CardContent>
@@ -498,26 +512,20 @@ export function MaterialDetailPage() {
               <div className="space-y-3">
                 <div className="flex justify-between py-2 border-b border-gray-100">
                   <span className="text-sm font-medium text-gray-500">Monthly Consumption</span>
-                  <span className="text-sm text-gray-900">{material.monthlyConsumption.toLocaleString()} {material.unitOfMeasure}</span>
+                  <span className="text-sm text-gray-900">{material.monthly_consumption.toLocaleString()} {material.unit_of_measure}</span>
                 </div>
                 <div className="flex justify-between py-2 border-b border-gray-100">
                   <span className="text-sm font-medium text-gray-500">Yearly Consumption</span>
-                  <span className="text-sm text-gray-900">{material.yearlyConsumption.toLocaleString()} {material.unitOfMeasure}</span>
+                  <span className="text-sm text-gray-900">{(material.monthly_consumption * 12).toLocaleString()} {material.unit_of_measure}</span>
                 </div>
                 <div className="flex justify-between py-2 border-b border-gray-100">
                   <span className="text-sm font-medium text-gray-500">Reorder Point</span>
-                  <span className="text-sm text-orange-600 font-medium">{material.reorderPoint.toLocaleString()}</span>
+                  <span className="text-sm text-orange-600 font-medium">{material.reorder_point.toLocaleString()}</span>
                 </div>
                 <div className="flex justify-between py-2">
                   <span className="text-sm font-medium text-gray-500">Safety Stock</span>
-                  <span className="text-sm text-gray-900">{material.safetyStock.toLocaleString()}</span>
+                  <span className="text-sm text-gray-900">{material.safety_stock.toLocaleString()}</span>
                 </div>
-                {material.shelfLifeDays && (
-                  <div className="flex justify-between py-2 border-t border-gray-100">
-                    <span className="text-sm font-medium text-gray-500">Shelf Life</span>
-                    <span className="text-sm text-gray-900">{material.shelfLifeDays} days</span>
-                  </div>
-                )}
               </div>
             </CardContent>
           </Card>
@@ -784,7 +792,7 @@ export function MaterialDetailPage() {
                   <YAxis />
                   <Tooltip 
                     formatter={(value: number) => [
-                      `${value.toLocaleString()} ${material.unitOfMeasure}`,
+                      `${value.toLocaleString()} ${material.unit_of_measure}`,
                       ''
                     ]}
                   />
@@ -833,19 +841,21 @@ export function MaterialDetailPage() {
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-gray-500">Average Monthly</span>
                     <span className="text-lg font-bold text-gray-900">
-                      {material.monthlyConsumption.toLocaleString()} {material.unitOfMeasure}
+                      {material.monthly_consumption.toLocaleString()} {material.unit_of_measure}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-gray-500">Yearly Total</span>
                     <span className="text-lg font-bold text-gray-900">
-                      {material.yearlyConsumption.toLocaleString()} {material.unitOfMeasure}
+                      {(material.monthly_consumption * 12).toLocaleString()} {material.unit_of_measure}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-gray-500">Days Until Reorder</span>
                     <span className="text-lg font-bold text-orange-600">
-                      {Math.floor((material.totalStock - material.reorderPoint) / (material.monthlyConsumption / 30))} days
+                      {material.monthly_consumption > 0
+                        ? Math.max(0, Math.floor((material.total_stock - material.reorder_point) / (material.monthly_consumption / 30)))
+                        : '—'} {material.monthly_consumption > 0 ? 'days' : ''}
                     </span>
                   </div>
                 </div>
@@ -857,23 +867,34 @@ export function MaterialDetailPage() {
                 <CardTitle className="text-base">Linked Products</CardTitle>
               </CardHeader>
               <CardContent>
-                {material.linkedProducts && material.linkedProducts.length > 0 ? (
-                  <div className="space-y-2">
-                    {material.linkedProducts.map((productId, idx) => (
-                      <div key={idx} className="flex items-center gap-2 p-2 bg-gray-50 rounded">
-                        <Package className="w-4 h-4 text-gray-400" />
-                        <span className="text-sm text-gray-900">{productId}</span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-sm text-gray-500">No linked products</p>
-                )}
+                <p className="text-sm text-gray-500">No linked products</p>
               </CardContent>
             </Card>
           </div>
         </div>
       )}
+
+      {/* Edit Material Modal */}
+      <AddMaterialModal
+        isOpen={showEditModal}
+        onClose={() => setShowEditModal(false)}
+        onSave={handleSaveEdit}
+        isEditMode={true}
+        categoryName={material.category_name ?? ''}
+        initialData={{
+          id: material.id,
+          name: material.name,
+          sku: material.sku,
+          brand: material.brand ?? '',
+          description: material.description ?? '',
+          imageUrl: material.image_url ?? '',
+          category: material.category_name ?? '',
+          unitOfMeasure: material.unit_of_measure,
+          costPerUnit: material.cost_per_unit,
+          reorderPoint: material.reorder_point,
+          specifications: Array.isArray(material.specifications) ? material.specifications : [],
+        }}
+      />
 
       {/* Stock Adjustment Modal */}
       {showStockAdjustmentModal && selectedItemForAdjustment && (

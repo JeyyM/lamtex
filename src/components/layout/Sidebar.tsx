@@ -1,5 +1,5 @@
 import React from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { 
   LayoutDashboard, 
@@ -17,13 +17,15 @@ import {
   MessageCircle,
   ChevronLeft,
   ChevronRight,
-  X
+  X,
+  LogOut
 } from 'lucide-react';
 import { cn } from '@/src/lib/utils';
 import lamtexLogo from '../../assets/Lamtex Logo.png';
 
 export function Sidebar() {
-  const { role, isSidebarCollapsed, setIsSidebarCollapsed, isMobileMenuOpen, setIsMobileMenuOpen } = useAppContext();
+  const { role, isSidebarCollapsed, setIsSidebarCollapsed, isMobileMenuOpen, setIsMobileMenuOpen, session, signOut } = useAppContext();
+  const navigate = useNavigate();
 
   const navItems = [
     { name: 'Dashboard', path: '/', icon: LayoutDashboard, roles: ['Executive', 'Warehouse', 'Logistics', 'Agent', 'Finance', 'Production', 'Manager'] },
@@ -130,14 +132,30 @@ export function Sidebar() {
       <div className="p-4 border-t border-gray-200">
         <div className={`flex items-center gap-3 ${isSidebarCollapsed && 'lg:justify-center'}`}>
           <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center text-gray-600 font-medium flex-shrink-0">
-            {role.charAt(0)}
+            {session?.user?.email?.charAt(0).toUpperCase() ?? role.charAt(0)}
           </div>
           <div className={cn(
+            "flex-1 min-w-0",
             isSidebarCollapsed && "lg:hidden"
           )}>
-            <p className="text-sm font-medium text-gray-900">{role} User</p>
-            <p className="text-xs text-gray-500">View Profile</p>
+            <p className="text-sm font-medium text-gray-900 truncate">{session?.user?.email ?? `${role} User`}</p>
+            <p className="text-xs text-gray-500">{role}</p>
           </div>
+          {session && (
+            <button
+              onClick={async () => {
+                await signOut();
+                navigate('/login', { replace: true });
+              }}
+              title="Sign out"
+              className={cn(
+                "p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors flex-shrink-0",
+                isSidebarCollapsed && "lg:hidden"
+              )}
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </div>
     </div>
