@@ -99,15 +99,6 @@ const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
       onSave(formData);
     }
 
-    // Show success message (demo mode)
-    alert(
-      `✓ Category Created Successfully!\n\n` +
-      `Category Name: ${formData.name}\n` +
-      `Description: ${formData.description}\n` +
-      `Image Selected: ${formData.imageUrl ? 'Yes' : 'No'}\n\n` +
-      `(Demo mode - Category not actually saved to database)`
-    );
-
     // Reset form and close
     handleReset();
     onClose();
@@ -143,15 +134,7 @@ const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
       if (onDelete) {
         onDelete();
       }
-      
-      // Show success message (demo mode)
-      alert(
-        `✓ Category Deleted Successfully!\n\n` +
-        `Category "${formData.name}" has been deleted.\n` +
-        `Associated products moved to "Unassigned Items".\n\n` +
-        `(Demo mode - Category not actually deleted from database)`
-      );
-      
+
       handleReset();
       onClose();
     }
@@ -161,10 +144,9 @@ const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
 
   return (
     <>
-      <div className="fixed inset-0 z-50 overflow-y-auto">
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
         <div className="fixed inset-0 bg-black/50" onClick={handleClose} />
-        <div className="flex min-h-full items-center justify-center p-4">
-          <div className="bg-white w-full md:max-w-2xl rounded-xl max-h-[90vh] flex flex-col shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="relative z-10 bg-white w-full md:max-w-2xl rounded-xl max-h-[90vh] flex flex-col shadow-xl" onClick={(e) => e.stopPropagation()}>
           {/* Header */}
           <div className="px-4 md:px-6 py-4 md:py-6 border-b border-gray-200">
             <div className="flex items-center justify-between gap-3">
@@ -334,9 +316,6 @@ const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
           {/* Footer */}
           <div className="px-4 md:px-6 py-4 md:py-6 border-t border-gray-200 bg-gray-50 flex flex-col sm:flex-row sm:items-center justify-between gap-3 md:rounded-b-xl">
             <div className="flex flex-col sm:flex-row sm:items-center gap-3 md:gap-4">
-              <div className="text-xs md:text-sm text-gray-600">
-                <span className="text-red-600">*</span> Required fields
-              </div>
               {isEditMode && onDelete && (
                 <button
                   onClick={handleDelete}
@@ -364,7 +343,6 @@ const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
           </div>
         </div>
       </div>
-    </div>
 
       {/* Image Gallery Modal */}
       <ImageGalleryModal

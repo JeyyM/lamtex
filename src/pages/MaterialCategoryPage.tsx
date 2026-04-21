@@ -160,7 +160,7 @@ export default function MaterialCategoryPage() {
           .eq('id', editingMaterialId);
         if (error) throw error;
       } else {
-        const { error } = await supabase
+        const { data: newMaterial, error } = await supabase
           .from('raw_materials')
           .insert({
             name: formData.name.trim(),
@@ -174,8 +174,26 @@ export default function MaterialCategoryPage() {
             reorder_point: formData.reorderPoint,
             specifications: formData.specifications.filter(s => s.label.trim()),
             status: 'Active',
-          });
+          })
+          .select('id')
+          .single();
         if (error) throw error;
+
+        // Create a material_stock row for the current branch
+        if (newMaterial && selectedBranch) {
+          const { data: branchRow } = await supabase
+            .from('branches')
+            .select('id')
+            .eq('name', selectedBranch)
+            .single();
+          if (branchRow) {
+            await supabase.from('material_stock').insert({
+              material_id: newMaterial.id,
+              branch_id: branchRow.id,
+              quantity: 0,
+            });
+          }
+        }
       }
       await fetchMaterials();
       handleCloseModal();

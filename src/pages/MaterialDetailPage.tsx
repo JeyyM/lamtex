@@ -201,17 +201,54 @@ export function MaterialDetailPage() {
     setShowStockAdjustmentModal(true);
   };
 
-  const handleStockAdjustment = (adjustment: any) => {
-    console.log('Stock Adjustment:', {
-      item: selectedItemForAdjustment,
-      adjustment,
-      timestamp: new Date().toISOString(),
-    });
+  const handleStockAdjustment = async (adjustment: { type: 'add' | 'subtract'; quantity: number; notes: string }) => {
+    if (!material) return;
+    const newTotal = adjustment.type === 'add'
+      ? Number(material.total_stock) + adjustment.quantity
+      : Math.max(0, Number(material.total_stock) - adjustment.quantity);
 
-    const notesMessage = adjustment.notes ? `\nNotes: ${adjustment.notes}` : '';
-    const message = `Stock adjusted successfully!\n\n${adjustment.type === 'add' ? '+' : '-'}${adjustment.quantity} ${selectedItemForAdjustment.unit}${notesMessage}\n\nThis would update the database in production.`;
-    
-    alert(message);
+    try {
+      // 1. Update aggregate total_stock
+      const { error: matErr } = await supabase
+        .from('raw_materials')
+        .update({ total_stock: newTotal, updated_at: new Date().toISOString() })
+        .eq('id', material.id);
+      if (matErr) throw matErr;
+
+      // 2. Update branch-specific stock row if it exists
+      if (selectedBranch) {
+        const { data: branchRow } = await supabase
+          .from('branches')
+          .select('id')
+          .eq('name', selectedBranch)
+          .single();
+
+        if (branchRow) {
+          const { data: stockRow } = await supabase
+            .from('material_stock')
+            .select('quantity')
+            .eq('material_id', material.id)
+            .eq('branch_id', branchRow.id)
+            .single();
+
+          if (stockRow) {
+            const branchNewQty = adjustment.type === 'add'
+              ? Number(stockRow.quantity) + adjustment.quantity
+              : Math.max(0, Number(stockRow.quantity) - adjustment.quantity);
+            await supabase
+              .from('material_stock')
+              .update({ quantity: branchNewQty })
+              .eq('material_id', material.id)
+              .eq('branch_id', branchRow.id);
+          }
+        }
+      }
+
+      // 3. Refresh page data
+      await fetchMaterial();
+    } catch (err: any) {
+      alert(`Failed to adjust stock: ${err.message ?? 'Unknown error'}`);
+    }
   };
 
   // Edit material save handler

@@ -109,17 +109,6 @@ const AddProductModal: React.FC<AddProductModalProps> = ({
       onSave(formData);
     }
 
-    // Show success message (demo mode)
-    alert(
-      `✓ Product Family ${isEditMode ? 'Updated' : 'Created'} Successfully!\n\n` +
-      `Product Name: ${formData.name}\n` +
-      `Family Code: ${formData.familyCode}\n` +
-      `Category: ${formData.category}\n` +
-      `Description: ${formData.description}\n` +
-      `Image Selected: ${formData.imageUrl ? 'Yes' : 'No'}\n\n` +
-      `(Demo mode - Product not actually saved to database)`
-    );
-
     // Reset form and close
     handleReset();
     onClose();
@@ -156,15 +145,7 @@ const AddProductModal: React.FC<AddProductModalProps> = ({
       if (onDelete) {
         onDelete();
       }
-      
-      // Show success message (demo mode)
-      alert(
-        `✓ Product Family Deleted Successfully!\n\n` +
-        `Product family "${formData.name}" has been deleted.\n` +
-        `All variants have been removed.\n\n` +
-        `(Demo mode - Product not actually deleted from database)`
-      );
-      
+
       handleReset();
       onClose();
     }

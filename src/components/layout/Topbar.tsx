@@ -8,7 +8,7 @@ import lamtexLogo from '../../assets/Lamtex Logo.png';
 import { supabase } from '@/src/lib/supabase';
 
 export function Topbar() {
-  const { role, setRole, branch, setBranch, isMobileMenuOpen, setIsMobileMenuOpen } = useAppContext();
+  const { role, setRole, branch, setBranch, isMobileMenuOpen, setIsMobileMenuOpen, hideBranchSelector } = useAppContext();
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [isMobileSettingsOpen, setIsMobileSettingsOpen] = useState(false);
   const [notifications, setNotifications] = useState(getNotificationsByBranch(branch));
@@ -215,6 +215,7 @@ export function Topbar() {
           </div>
 
           {/* Branch Switcher */}
+          {!hideBranchSelector && (
           <div className="hidden lg:flex items-center gap-2">
             <span className="text-xs font-medium text-gray-500 uppercase tracking-wider">Branch:</span>
             <select 
@@ -227,6 +228,7 @@ export function Topbar() {
               ))}
             </select>
           </div>
+          )}
 
           {/* Role Switcher (For Prototype) */}
           <div className="hidden lg:flex items-center gap-2 bg-red-50 px-3 py-1.5 rounded-lg border border-red-100">

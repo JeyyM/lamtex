@@ -14,6 +14,8 @@ interface AppContextType {
   setIsSidebarCollapsed: (collapsed: boolean) => void;
   isMobileMenuOpen: boolean;
   setIsMobileMenuOpen: (open: boolean) => void;
+  hideBranchSelector: boolean;
+  setHideBranchSelector: (hidden: boolean) => void;
   // Auth
   session: Session | null;
   sessionLoading: boolean;
@@ -27,6 +29,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [branch, setBranch] = useState<Branch>('');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [hideBranchSelector, setHideBranchSelector] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([
@@ -76,7 +79,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   return (
-    <AppContext.Provider value={{ role, setRole, branch, setBranch, auditLogs, addAuditLog, isSidebarCollapsed, setIsSidebarCollapsed, isMobileMenuOpen, setIsMobileMenuOpen, session, sessionLoading, signOut }}>
+    <AppContext.Provider value={{ role, setRole, branch, setBranch, auditLogs, addAuditLog, isSidebarCollapsed, setIsSidebarCollapsed, isMobileMenuOpen, setIsMobileMenuOpen, hideBranchSelector, setHideBranchSelector, session, sessionLoading, signOut }}>
       {children}
     </AppContext.Provider>
   );  

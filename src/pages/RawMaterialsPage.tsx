@@ -61,6 +61,8 @@ interface MaterialCategoryRow {
   image_url: string | null;
   sort_order: number;
   is_active: boolean;
+  branch_id: string | null;
+  branches: { name: string } | null;
 }
 
 export function RawMaterialsPage() {
@@ -113,7 +115,7 @@ export function RawMaterialsPage() {
     const [catResult, countResult] = await Promise.all([
       supabase
         .from('material_categories')
-        .select('*')
+        .select('*, branches ( name )')
         .eq('is_active', true)
         .order('sort_order', { ascending: true }),
       supabase
@@ -136,15 +138,13 @@ export function RawMaterialsPage() {
   };
 
   // Fetch branch-aware summary stats from Supabase
-  // Uses category_id filtering (consistent with what category cards show) rather than SKU prefix
   const fetchSummaryStats = async (currentBranch: string, allCategories: MaterialCategoryRow[]) => {
     setSummaryLoading(true);
 
-    // Collect the IDs of categories that belong to this branch (e.g. M_ prefix)
-    const catPrefix = currentBranch ? currentBranch.charAt(0).toUpperCase() + '_' : null;
-    const branchCategoryIds = catPrefix
-      ? allCategories.filter(c => c.name.startsWith(catPrefix)).map(c => c.id)
-      : allCategories.map(c => c.id);
+    // Collect category IDs that belong to this branch via branch_id
+    const branchCategoryIds = allCategories
+      .filter(c => c.branches?.name === currentBranch)
+      .map(c => c.id);
 
     if (branchCategoryIds.length === 0) {
       setSummaryStats({ totalMaterials: 0, totalValue: 0, lowStockCount: 0, reorderCount: 0 });
@@ -179,19 +179,14 @@ export function RawMaterialsPage() {
     if (branch) fetchSummaryStats(branch, categories);
   }, [branch, categories]);
 
-  // Map branch name to category prefix (M_ / C_ / B_)
-  const branchPrefix = branch ? branch.charAt(0).toUpperCase() + '_' : null;
-
-  const visibleCategories = branchPrefix
-    ? categories.filter(c => c.name.startsWith(branchPrefix))
+  const visibleCategories = branch
+    ? categories.filter(c => c.branches?.name === branch)
     : categories;
 
   // Resolve image: use image_url from DB if set, otherwise fall back to local asset map
-  // Strip branch prefix from slug (e.g. "m-pvc-resin" -> "pvc-resin") for the fallback lookup
   const getCategoryImage = (cat: MaterialCategoryRow): string => {
     if (cat.image_url) return cat.image_url;
-    const baseSlug = cat.slug.replace(/^[a-z]-/, '');
-    return categoryImageMap[baseSlug] ?? pvcImg;
+    return categoryImageMap[cat.slug] ?? pvcImg;
   };
 
   // Apply search and category filters first
@@ -267,15 +262,16 @@ export function RawMaterialsPage() {
         if (error) throw error;
       } else {
         // ── INSERT new category ──
-        // Auto-prefix name and slug with the current branch prefix (M_, C_, B_)
-        const branchPrefix = branch ? branch.charAt(0).toUpperCase() + '_' : '';
-        const prefixedName = branchPrefix
-          ? (categoryData.name.trim().startsWith(branchPrefix)
-              ? categoryData.name.trim()
-              : branchPrefix + categoryData.name.trim())
-          : categoryData.name.trim();
-        const branchSlugPrefix = branch ? branch.charAt(0).toLowerCase() + '-' : '';
-        const prefixedSlug = branchSlugPrefix + slug;
+        // Resolve branch_id from the current branch name
+        let branchId: string | null = null;
+        if (branch) {
+          const { data: branchRow } = await supabase
+            .from('branches')
+            .select('id')
+            .eq('name', branch)
+            .single();
+          branchId = branchRow?.id ?? null;
+        }
 
         const nextSortOrder = categories.length > 0
           ? Math.max(...categories.map(c => c.sort_order)) + 1
@@ -284,11 +280,12 @@ export function RawMaterialsPage() {
         const { error } = await supabase
           .from('material_categories')
           .insert({
-            name: prefixedName,
-            slug: prefixedSlug,
+            name: categoryData.name.trim(),
+            slug,
             description: categoryData.description.trim() || null,
             image_url: categoryData.imageUrl || null,
             sort_order: nextSortOrder,
+            branch_id: branchId,
           });
 
         if (error) throw error;

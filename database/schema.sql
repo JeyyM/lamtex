@@ -501,12 +501,13 @@ CREATE TABLE IF NOT EXISTS suppliers (
 -- 5a: Product categories
 CREATE TABLE IF NOT EXISTS product_categories (
   id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  name        VARCHAR(200) NOT NULL UNIQUE,
+  name        VARCHAR(200) NOT NULL,
   slug        VARCHAR(200) NOT NULL UNIQUE,
   description TEXT,
   image_url   TEXT,
   sort_order  INT DEFAULT 0,
   is_active   BOOLEAN DEFAULT TRUE,
+  branch      VARCHAR(50) DEFAULT NULL,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -559,6 +560,7 @@ CREATE TABLE IF NOT EXISTS product_variants (
   outer_diameter_mm NUMERIC(10,3),
   inner_diameter_mm NUMERIC(10,3),
   wall_thickness_mm NUMERIC(10,3),
+  specs           JSONB NOT NULL DEFAULT '[]'::jsonb,
   
   -- Status
   status          product_status NOT NULL DEFAULT 'Active',
@@ -571,7 +573,8 @@ CREATE TABLE IF NOT EXISTS product_variants (
   
   -- Supplier
   supplier_id     UUID REFERENCES suppliers(id) ON DELETE SET NULL,
-  lead_time_days  INT,
+  lead_time_days  INT NOT NULL DEFAULT 7,
+  min_order_qty   INT NOT NULL DEFAULT 100,
   
   branch          VARCHAR(10),
   last_restocked  TIMESTAMPTZ,
@@ -646,6 +649,7 @@ CREATE TABLE IF NOT EXISTS material_categories (
   image_url   TEXT,
   sort_order  INT DEFAULT 0,
   is_active   BOOLEAN DEFAULT TRUE,
+  branch_id   UUID REFERENCES branches(id) ON DELETE SET NULL,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -2589,21 +2593,27 @@ INSERT INTO branches (code, name, address) VALUES
   ('C', 'Branch C', 'Production Facility, Factory Area')
 ON CONFLICT (code) DO NOTHING;
 
--- Product categories
-INSERT INTO product_categories (name, slug, sort_order) VALUES
-  ('HDPE Pipes', 'hdpe-pipes', 1),
-  ('HDPE Fittings', 'hdpe-fittings', 2),
-  ('UPVC Sanitary', 'upvc-sanitary', 3),
-  ('UPVC Electrical', 'upvc-electrical', 4),
-  ('UPVC Potable Water', 'upvc-potable-water', 5),
-  ('UPVC Pressurized', 'upvc-pressurized', 6),
-  ('PPR Pipes', 'ppr-pipes', 7),
-  ('PPR Fittings', 'ppr-fittings', 8),
-  ('Telecom Pipes', 'telecom-pipes', 9),
-  ('Garden Hoses', 'garden-hoses', 10),
-  ('Flexible Hoses', 'flexible-hoses', 11),
-  ('Others', 'others', 12)
-ON CONFLICT (name) DO NOTHING;
+-- Product categories (branch-specific; slug is the unique key)
+INSERT INTO product_categories (name, slug, description, sort_order, is_active, branch) VALUES
+  -- Manila
+  ('M_HDPE Pipes',        'm-hdpe-pipes',        'Heavy-duty HDPE piping for industrial use',         1, true, 'Manila'),
+  ('M_HDPE Fittings',     'm-hdpe-fittings',     'Elbows, tees, couplings for HDPE systems',          2, true, 'Manila'),
+  ('M_UPVC Sanitary',     'm-upvc-sanitary',     'Sanitary drainage and sewage pipes',                3, true, 'Manila'),
+  ('M_UPVC Electrical',   'm-upvc-electrical',   'Conduit pipes for electrical wiring',               4, true, 'Manila'),
+  ('M_Pressure Line',     'm-pressure-line',     'High-pressure rated water supply pipes',            5, true, 'Manila'),
+  ('M_PPR Pipes',         'm-ppr-pipes',         'Polypropylene random copolymer hot/cold pipes',     6, true, 'Manila'),
+  -- Cebu
+  ('C_HDPE Pipes',        'c-hdpe-pipes',        'HDPE distribution pipes for Cebu operations',       1, true, 'Cebu'),
+  ('C_PVC Conduits',      'c-pvc-conduits',      'PVC electrical conduit pipes',                       2, true, 'Cebu'),
+  ('C_Sanitary Fittings', 'c-sanitary-fittings', 'Drainage fittings and traps',                        3, true, 'Cebu'),
+  ('C_Garden Hoses',      'c-garden-hoses',      'Flexible garden and irrigation hoses',               4, true, 'Cebu'),
+  -- Batangas
+  ('B_Industrial Pipes',  'b-industrial-pipes',  'Heavy industrial grade piping systems',             1, true, 'Batangas'),
+  ('B_HDPE Fittings',     'b-hdpe-fittings',     'HDPE couplings and reducers',                        2, true, 'Batangas'),
+  ('B_Chemical PVC',      'b-chemical-pvc',      'Chemical-resistant PVC pipe systems',                3, true, 'Batangas'),
+  ('B_Drainage Systems',  'b-drainage-systems',  'Underground drainage and stormwater pipes',          4, true, 'Batangas'),
+  ('B_Flexible Hoses',    'b-flexible-hoses',    'Industrial flexible hose assemblies',                5, true, 'Batangas')
+ON CONFLICT (slug) DO NOTHING;
 
 -- Material categories
 INSERT INTO material_categories (name, slug, sort_order) VALUES
