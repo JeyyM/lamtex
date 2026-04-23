@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAppContext } from '@/src/store/AppContext';
 import { Button } from '@/src/components/ui/Button';
 import { Badge } from '@/src/components/ui/Badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
-import { getCustomersByBranch } from '@/src/mock/customers';
+import { supabase } from '@/src/lib/supabase';
 import {
   X,
   Plus,
@@ -22,238 +22,12 @@ import {
   Phone,
 } from 'lucide-react';
 
-// Mock PVC Pipes and Plastic Tubes Products
-const MOCK_PIPE_PRODUCTS = [
-  {
-    id: 'prod-001',
-    name: 'UPVC Sanitary Pipe',
-    category: 'Sanitary',
-    discount: 10, // 10% discount
-    batchEnabled: true, // Supports batch pricing
-    variants: [
-      { 
-        id: 'var-001', 
-        size: '2" x 10ft', 
-        description: 'Standard white, for waste drainage systems', 
-        price: 450, 
-        originalPrice: 500, 
-        stock: 120,
-        priceTiers: [
-          { minQty: 1, pricePerUnit: 450, discount: 0 },
-          { minQty: 5, pricePerUnit: 428, discount: 5 },
-          { minQty: 10, pricePerUnit: 405, discount: 10 },
-          { minQty: 25, pricePerUnit: 383, discount: 15 },
-        ]
-      },
-      { 
-        id: 'var-002', 
-        size: '3" x 10ft', 
-        description: 'Standard white, for main drain lines', 
-        price: 680, 
-        originalPrice: 755, 
-        stock: 95,
-        priceTiers: [
-          { minQty: 1, pricePerUnit: 680, discount: 0 },
-          { minQty: 5, pricePerUnit: 646, discount: 5 },
-          { minQty: 10, pricePerUnit: 612, discount: 10 },
-          { minQty: 25, pricePerUnit: 578, discount: 15 },
-        ]
-      },
-      { 
-        id: 'var-003', 
-        size: '4" x 10ft', 
-        description: 'Standard white, for sewage and main drains', 
-        price: 950, 
-        originalPrice: 1055, 
-        stock: 78,
-        priceTiers: [
-          { minQty: 1, pricePerUnit: 950, discount: 0 },
-          { minQty: 5, pricePerUnit: 903, discount: 5 },
-          { minQty: 10, pricePerUnit: 855, discount: 10 },
-          { minQty: 25, pricePerUnit: 808, discount: 15 },
-        ]
-      },
-      { 
-        id: 'var-004', 
-        size: '6" x 10ft', 
-        description: 'Heavy duty white, for commercial drainage', 
-        price: 1850, 
-        originalPrice: 2055, 
-        stock: 45,
-        priceTiers: [
-          { minQty: 1, pricePerUnit: 1850, discount: 0 },
-          { minQty: 5, pricePerUnit: 1758, discount: 5 },
-          { minQty: 10, pricePerUnit: 1665, discount: 10 },
-          { minQty: 25, pricePerUnit: 1573, discount: 15 },
-        ]
-      },
-    ],
-  },
-  {
-    id: 'prod-002',
-    name: 'UPVC Pressure Pipe',
-    category: 'Water Supply',
-    batchEnabled: true,
-    variants: [
-      { 
-        id: 'var-005', 
-        size: '1/2" x 10ft', 
-        description: 'Class C (160 PSI), potable water certified', 
-        price: 320, 
-        stock: 200,
-        priceTiers: [
-          { minQty: 1, pricePerUnit: 320, discount: 0 },
-          { minQty: 5, pricePerUnit: 304, discount: 5 },
-          { minQty: 10, pricePerUnit: 288, discount: 10 },
-          { minQty: 25, pricePerUnit: 272, discount: 15 },
-        ]
-      },
-      { 
-        id: 'var-006', 
-        size: '3/4" x 10ft', 
-        description: 'Class C (160 PSI), for residential water lines', 
-        price: 425, 
-        stock: 175,
-        priceTiers: [
-          { minQty: 1, pricePerUnit: 425, discount: 0 },
-          { minQty: 5, pricePerUnit: 404, discount: 5 },
-          { minQty: 10, pricePerUnit: 383, discount: 10 },
-          { minQty: 25, pricePerUnit: 361, discount: 15 },
-        ]
-      },
-      { 
-        id: 'var-007', 
-        size: '1" x 10ft', 
-        description: 'Class C (160 PSI), main water distribution', 
-        price: 580, 
-        stock: 140,
-        priceTiers: [
-          { minQty: 1, pricePerUnit: 580, discount: 0 },
-          { minQty: 5, pricePerUnit: 551, discount: 5 },
-          { minQty: 10, pricePerUnit: 522, discount: 10 },
-          { minQty: 25, pricePerUnit: 493, discount: 15 },
-        ]
-      },
-      { 
-        id: 'var-008', 
-        size: '1-1/2" x 10ft', 
-        description: 'Class C (160 PSI), commercial applications', 
-        price: 920, 
-        stock: 88,
-        priceTiers: [
-          { minQty: 1, pricePerUnit: 920, discount: 0 },
-          { minQty: 5, pricePerUnit: 874, discount: 5 },
-          { minQty: 10, pricePerUnit: 828, discount: 10 },
-          { minQty: 25, pricePerUnit: 782, discount: 15 },
-        ]
-      },
-      { 
-        id: 'var-009', 
-        size: '2" x 10ft', 
-        description: 'Class C (160 PSI), high flow water supply', 
-        price: 1350, 
-        stock: 62,
-        priceTiers: [
-          { minQty: 1, pricePerUnit: 1350, discount: 0 },
-          { minQty: 5, pricePerUnit: 1283, discount: 5 },
-          { minQty: 10, pricePerUnit: 1215, discount: 10 },
-          { minQty: 25, pricePerUnit: 1148, discount: 15 },
-        ]
-      },
-    ],
-  },
-  {
-    id: 'prod-003',
-    name: 'UPVC Electrical Conduit',
-    category: 'Electrical',
-    discount: 15, // 15% discount
-    variants: [
-      { id: 'var-010', size: '1/2" x 10ft', description: 'Orange, for underground/concrete wiring', price: 285, originalPrice: 335, stock: 250 },
-      { id: 'var-011', size: '3/4" x 10ft', description: 'Orange, standard residential conduit', price: 350, originalPrice: 412, stock: 220 },
-      { id: 'var-012', size: '1" x 10ft', description: 'Orange, heavy duty electrical conduit', price: 485, originalPrice: 570, stock: 180 },
-      { id: 'var-013', size: '1-1/2" x 10ft', description: 'Orange, commercial electrical installations', price: 750, originalPrice: 882, stock: 95 },
-    ],
-  },
-  {
-    id: 'prod-004',
-    name: 'HDPE Garden Hose',
-    category: 'Garden & Irrigation',
-    discount: 20, // 20% discount - Summer sale!
-    variants: [
-      { id: 'var-014', size: '1/2" x 50ft', description: 'Green, flexible for home gardens', price: 680, originalPrice: 850, stock: 145 },
-      { id: 'var-015', size: '1/2" x 100ft', description: 'Green, extended reach garden hose', price: 1250, originalPrice: 1562, stock: 92 },
-      { id: 'var-016', size: '3/4" x 50ft', description: 'Green, heavy duty for large gardens', price: 950, originalPrice: 1187, stock: 78 },
-      { id: 'var-017', size: '3/4" x 100ft', description: 'Green, professional grade garden hose', price: 1780, originalPrice: 2225, stock: 54 },
-    ],
-  },
-  {
-    id: 'prod-005',
-    name: 'PPR Pipe',
-    category: 'Hot & Cold Water',
-    variants: [
-      { id: 'var-018', size: '20mm x 4m', description: 'White, heat resistant for hot/cold water', price: 420, stock: 165 },
-      { id: 'var-019', size: '25mm x 4m', description: 'White, standard residential plumbing', price: 580, stock: 142 },
-      { id: 'var-020', size: '32mm x 4m', description: 'White, for main hot water lines', price: 820, stock: 98 },
-      { id: 'var-021', size: '40mm x 4m', description: 'White, commercial hot water systems', price: 1150, stock: 67 },
-    ],
-  },
-  {
-    id: 'prod-006',
-    name: 'Flexible PVC Hose',
-    category: 'Industrial',
-    discount: 5, // 5% discount
-    variants: [
-      { id: 'var-022', size: '1" x 50ft', description: 'Clear reinforced, for water transfer', price: 1450, originalPrice: 1526, stock: 85 },
-      { id: 'var-023', size: '1-1/2" x 50ft', description: 'Clear reinforced, medium duty pumping', price: 2150, originalPrice: 2263, stock: 62 },
-      { id: 'var-024', size: '2" x 50ft', description: 'Clear reinforced, heavy duty industrial', price: 3200, originalPrice: 3368, stock: 45 },
-      { id: 'var-025', size: '3" x 50ft', description: 'Clear reinforced, high volume transfer', price: 5800, originalPrice: 6105, stock: 28 },
-    ],
-  },
-  {
-    id: 'prod-007',
-    name: 'UPVC Fittings - Elbow 90°',
-    category: 'Fittings',
-    variants: [
-      { id: 'var-026', size: '1/2"', description: 'White solvent weld, pressure rated', price: 35, stock: 450 },
-      { id: 'var-027', size: '3/4"', description: 'White solvent weld, pressure rated', price: 45, stock: 380 },
-      { id: 'var-028', size: '1"', description: 'White solvent weld, pressure rated', price: 65, stock: 320 },
-      { id: 'var-029', size: '1-1/2"', description: 'White solvent weld, pressure rated', price: 125, stock: 185 },
-      { id: 'var-030', size: '2"', description: 'White solvent weld, pressure rated', price: 185, stock: 145 },
-    ],
-  },
-  {
-    id: 'prod-008',
-    name: 'UPVC Fittings - Tee Joint',
-    category: 'Fittings',
-    variants: [
-      { id: 'var-031', size: '1/2"', description: 'White solvent weld, 3-way connection', price: 42, stock: 520 },
-      { id: 'var-032', size: '3/4"', description: 'White solvent weld, 3-way connection', price: 58, stock: 445 },
-      { id: 'var-033', size: '1"', description: 'White solvent weld, 3-way connection', price: 85, stock: 380 },
-      { id: 'var-034', size: '1-1/2"', description: 'White solvent weld, 3-way connection', price: 165, stock: 215 },
-    ],
-  },
-  {
-    id: 'prod-009',
-    name: 'PVC Drainage Pipe',
-    category: 'Drainage',
-    variants: [
-      { id: 'var-035', size: '4" x 10ft', description: 'Gray, for underground drainage systems', price: 850, stock: 110 },
-      { id: 'var-036', size: '6" x 10ft', description: 'Gray, for main drainage and sewer lines', price: 1650, stock: 72 },
-      { id: 'var-037', size: '8" x 10ft', description: 'Gray, heavy duty for commercial drainage', price: 2850, stock: 48 },
-      { id: 'var-038', size: '10" x 10ft', description: 'Gray, industrial drainage applications', price: 4200, stock: 32 },
-    ],
-  },
-  {
-    id: 'prod-010',
-    name: 'Corrugated Drainage Pipe',
-    category: 'Drainage',
-    variants: [
-      { id: 'var-039', size: '4" x 25ft', description: 'Black flexible, for yard drainage', price: 1250, stock: 88 },
-      { id: 'var-040', size: '6" x 25ft', description: 'Black flexible, for driveway drainage', price: 2150, stock: 65 },
-      { id: 'var-041', size: '8" x 25ft', description: 'Black flexible, for heavy duty drainage', price: 3650, stock: 42 },
-    ],
-  },
-];
+// ── DB Types ──────────────────────────────────────────────────────────────────
+
+interface DBBulkDiscount { min_qty: number; max_qty: number | null; discount_percent: number; }
+interface DBVariant { id: string; size: string; description: string | null; unit_price: number; stock: number; bulk_discounts: DBBulkDiscount[]; }
+interface DBProduct { id: string; name: string; category_id: string; image_url: string | null; variants: DBVariant[]; }
+interface DBCategory { id: string; name: string; image_url: string | null; }
 
 interface CreateOrderModalProps {
   customerId?: string;
@@ -270,7 +44,7 @@ interface OrderItem {
   variantDescription: string;
   quantity: number;
   price: number;
-  originalPrice: number; // Base price of variant
+  originalPrice: number;
   negotiatedPrice: number; // Price set by agent (can be custom)
   discounts: Array<{ name: string; percentage: number }>; // Applied discounts
   subtotal: number;
@@ -279,7 +53,27 @@ interface OrderItem {
 
 export function CreateOrderModal({ customerId: initialCustomerId, customerName: initialCustomerName, onClose, onSuccess }: CreateOrderModalProps) {
   const { branch, addAuditLog } = useAppContext();
-  const allCustomers = getCustomersByBranch(branch);
+
+  // Customers fetched from Supabase
+  const [allCustomers, setAllCustomers] = useState<{ id: string; name: string; email: string | null; phone: string | null; address: string | null; contact_person: string | null }[]>([]);
+
+  useEffect(() => {
+    const fetchCustomers = async () => {
+      const { data: branchData } = await supabase
+        .from('branches')
+        .select('id')
+        .eq('name', branch)
+        .single();
+      if (!branchData) return;
+      const { data } = await supabase
+        .from('customers')
+        .select('id, name, email, phone, address, contact_person')
+        .eq('branch_id', branchData.id)
+        .order('name');
+      setAllCustomers(data ?? []);
+    };
+    fetchCustomers();
+  }, [branch]);
   
   // Customer selection state
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>(initialCustomerId || '');
@@ -290,14 +84,23 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
   // Order state
   const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedProduct, setSelectedProduct] = useState<typeof MOCK_PIPE_PRODUCTS[0] | null>(null);
-  const [selectedVariant, setSelectedVariant] = useState<typeof MOCK_PIPE_PRODUCTS[0]['variants'][0] | null>(null);
+  const [selectedProduct, setSelectedProduct] = useState<DBProduct | null>(null);
+  const [selectedVariant, setSelectedVariant] = useState<DBVariant | null>(null);
   const [variantQuantity, setVariantQuantity] = useState(1);
   const [variantPrice, setVariantPrice] = useState(0);
   const [variantDiscounts, setVariantDiscounts] = useState<Array<{ name: string; percentage: number }>>([]);
-  const [editingItemIndex, setEditingItemIndex] = useState<number | null>(null); // Track if editing existing item
+  const [editingItemIndex, setEditingItemIndex] = useState<number | null>(null);
   const [deliveryDate, setDeliveryDate] = useState('');
   const [deliveryAddress, setDeliveryAddress] = useState('');
+
+  // Product browsing state
+  const [categories, setCategories] = useState<DBCategory[]>([]);
+  const [categoriesLoading, setCategoriesLoading] = useState(true);
+  const [categoryProducts, setCategoryProducts] = useState<DBProduct[]>([]);
+  const [productsLoading, setProductsLoading] = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState<DBCategory | null>(null);
+  // Cache: productId -> DBProduct so editOrderItem can look up across categories
+  const [productCache, setProductCache] = useState<Record<string, DBProduct>>({});
   const [contactPerson, setContactPerson] = useState('');
   const [contactPhone, setContactPhone] = useState('');
   const [notes, setNotes] = useState('');
@@ -306,10 +109,11 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
   
   // Filter customers based on search
   const filteredCustomers = customerSearchQuery.trim() === ''
-    ? allCustomers.slice(0, 10) // Show first 10 if no search
+    ? allCustomers.slice(0, 10)
     : allCustomers.filter(customer =>
         customer.name.toLowerCase().includes(customerSearchQuery.toLowerCase()) ||
-        customer.email?.toLowerCase().includes(customerSearchQuery.toLowerCase())
+        customer.email?.toLowerCase().includes(customerSearchQuery.toLowerCase()) ||
+        customer.contact_person?.toLowerCase().includes(customerSearchQuery.toLowerCase())
       ).slice(0, 10);
   
   // Select customer handler
@@ -317,21 +121,94 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
     setSelectedCustomerId(customer.id);
     setSelectedCustomerName(customer.name);
     setDeliveryAddress(customer.address || '');
-    setContactPerson(customer.name);
+    setContactPerson(customer.contact_person || customer.name);
     setContactPhone(customer.phone || '');
     setShowCustomerDropdown(false);
     setCustomerSearchQuery('');
   };
 
-  // Filter products based on search
-  const filteredProducts = searchQuery.trim() === '' 
-    ? MOCK_PIPE_PRODUCTS 
-    : MOCK_PIPE_PRODUCTS.filter(product =>
-        product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        product.category.toLowerCase().includes(searchQuery.toLowerCase())
+  // Fetch categories for this branch on mount
+  useEffect(() => {
+    const fetchCategories = async () => {
+      setCategoriesLoading(true);
+      const { data } = await supabase
+        .from('product_categories')
+        .select('id, name, image_url')
+        .or(`branch.eq.${branch},branch.is.null`)
+        .eq('is_active', true)
+        .order('sort_order');
+      setCategories(data ?? []);
+      setCategoriesLoading(false);
+    };
+    fetchCategories();
+  }, [branch]);
+
+  // Fetch products + variants when a category is selected
+  const handleSelectCategory = async (cat: DBCategory) => {
+    setSelectedCategory(cat);
+    setProductsLoading(true);
+    setCategoryProducts([]);
+
+    // Get branch id for stock lookup
+    const { data: branchRow } = await supabase
+      .from('branches').select('id').eq('name', branch).single();
+
+    const { data: productsData } = await supabase
+      .from('products')
+      .select('id, name, image_url, product_variants(id, size, description, unit_price, total_stock, product_bulk_discounts(min_qty, max_qty, discount_percent, is_active))')
+      .eq('category_id', cat.id)
+      .eq('status', 'Active')
+      .order('name');
+
+    if (!productsData) { setProductsLoading(false); return; }
+
+    // Fetch branch-specific stock for all variants at once
+    const allVariantIds = productsData.flatMap((p: any) => p.product_variants?.map((v: any) => v.id) ?? []);
+    const stockMap: Record<string, number> = {};
+    if (allVariantIds.length > 0 && branchRow) {
+      const { data: stockData } = await supabase
+        .from('product_variant_stock')
+        .select('variant_id, quantity')
+        .eq('branch_id', branchRow.id)
+        .in('variant_id', allVariantIds);
+      (stockData ?? []).forEach((s: any) => { stockMap[s.variant_id] = s.quantity; });
+    }
+
+    const mapped: DBProduct[] = productsData.map((p: any) => ({
+      id: p.id,
+      name: p.name,
+      category_id: cat.id,
+      image_url: p.image_url ?? null,
+      variants: (p.product_variants ?? []).map((v: any) => ({
+        id: v.id,
+        size: v.size,
+        description: v.description ?? null,
+        unit_price: Number(v.unit_price ?? 0),
+        stock: stockMap[v.id] ?? v.total_stock ?? 0,
+        bulk_discounts: (v.product_bulk_discounts ?? [])
+          .filter((d: any) => d.is_active)
+          .map((d: any) => ({ min_qty: d.min_qty, max_qty: d.max_qty, discount_percent: Number(d.discount_percent) })),
+      })),
+    }));
+
+    setCategoryProducts(mapped);
+    // Add to cache
+    setProductCache(prev => {
+      const next = { ...prev };
+      mapped.forEach(p => { next[p.id] = p; });
+      return next;
+    });
+    setProductsLoading(false);
+  };
+
+  // Search across all categories (use categoryProducts if a category is open, otherwise empty)
+  const filteredProducts = searchQuery.trim() === ''
+    ? categoryProducts
+    : categoryProducts.filter(p =>
+        p.name.toLowerCase().includes(searchQuery.toLowerCase())
       );
 
-  const addItemFromVariant = (product: typeof MOCK_PIPE_PRODUCTS[0], variant: typeof MOCK_PIPE_PRODUCTS[0]['variants'][0], quantity: number = 1) => {
+  const addItemFromVariant = (product: DBProduct, variant: DBVariant, quantity: number = 1) => {
     // Apply discounts multiplicatively to get final price
     const finalPrice = variantDiscounts.reduce((currentPrice, discount) => {
       return currentPrice * (1 - discount.percentage / 100);
@@ -344,8 +221,8 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
       variantSize: variant.size,
       variantDescription: variant.description,
       quantity: quantity,
-      price: variant.price, // Base price of variant
-      originalPrice: variant.price, // Base price
+      price: variant.unit_price,
+      originalPrice: variant.unit_price,
       negotiatedPrice: variantPrice, // Agent-set price
       discounts: [...variantDiscounts], // Copy of applied discounts
       subtotal: finalPrice * quantity,
@@ -441,24 +318,15 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
 
   const editOrderItem = (index: number) => {
     const item = orderItems[index];
-    
-    // Find the product and variant
-    const product = filteredProducts.find(p => p.id === item.productId);
+    const product = productCache[item.productId];
     if (!product) return;
-    
-    const variant = product.variants?.find(v => v.id === item.variantId);
+    const variant = product.variants.find(v => v.id === item.variantId);
     if (!variant) return;
-    
-    // Set the product and variant to open the modal
     setSelectedProduct(product);
     setSelectedVariant(variant);
-    
-    // Preset all values from the existing order item
     setVariantQuantity(item.quantity);
     setVariantPrice(item.negotiatedPrice);
     setVariantDiscounts([...item.discounts]);
-    
-    // Track that we're editing this item (don't remove it yet)
     setEditingItemIndex(index);
   };
 
@@ -653,33 +521,123 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                     type="text"
                     placeholder="Search products by name or category..."
                     value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onChange={(e) => {
+                      setSearchQuery(e.target.value);
+                      if (e.target.value.trim()) setSelectedCategory(null); // reset category when searching
+                    }}
                     className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
                   />
                 </div>
 
-                {/* Product Grid */}
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 max-h-48 overflow-y-auto p-1">
-                  {filteredProducts.map((product) => (
-                    <button
-                      key={product.id}
-                      type="button"
-                      onClick={() => {
-                        setSelectedProduct(product);
-                        setSelectedVariant(product.variants[0]);
-                        setVariantQuantity(1);
-                        setVariantPrice(product.variants[0].price);
-                      }}
-                      className="flex flex-col items-center p-3 border border-gray-200 rounded-lg hover:border-red-500 hover:bg-red-50 transition-all group relative"
-                    >
-                      <div className="w-12 h-12 bg-gray-100 rounded-lg flex items-center justify-center mb-2 group-hover:bg-red-100 transition-colors">
-                        <Package className="w-6 h-6 text-gray-600 group-hover:text-red-600" />
+                {/* Category / Product Browser */}
+                {searchQuery.trim() === '' && !selectedCategory ? (
+                  /* Category View */
+                  <div>
+                    <p className="text-xs text-gray-500 mb-2">Select a category</p>
+                    {categoriesLoading ? (
+                      <div className="flex items-center justify-center h-32 text-gray-400 text-sm">Loading categories…</div>
+                    ) : categories.length === 0 ? (
+                      <div className="flex items-center justify-center h-32 text-gray-400 text-sm">No categories found for this branch</div>
+                    ) : (
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 max-h-72 overflow-y-auto p-1">
+                        {categories.map((cat) => (
+                          <button
+                            key={cat.id}
+                            type="button"
+                            onClick={() => handleSelectCategory(cat)}
+                            className="flex flex-col items-center p-4 border border-gray-200 rounded-lg hover:border-red-500 hover:bg-red-50 transition-all group"
+                          >
+                            {cat.image_url ? (
+                              <img src={cat.image_url} alt={cat.name} className="w-12 h-12 object-cover rounded-lg mb-2" />
+                            ) : (
+                              <div className="w-12 h-12 bg-gray-100 rounded-lg flex items-center justify-center mb-2 group-hover:bg-red-100 transition-colors">
+                                <Package className="w-6 h-6 text-gray-600 group-hover:text-red-600" />
+                              </div>
+                            )}
+                            <div className="text-xs font-semibold text-gray-900 text-center">{cat.name}</div>
+                          </button>
+                        ))}
                       </div>
-                      <div className="text-xs font-medium text-gray-900 text-center line-clamp-2">{product.name}</div>
-                      <div className="text-xs text-gray-500 mt-1">{product.category}</div>
-                    </button>
-                  ))}
-                </div>
+                    )}
+                  </div>
+                ) : selectedCategory && searchQuery.trim() === '' ? (
+                  /* Products in selected category */
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <button
+                        type="button"
+                        onClick={() => { setSelectedCategory(null); setCategoryProducts([]); }}
+                        className="flex items-center gap-1 text-xs text-red-600 hover:text-red-700 font-medium"
+                      >
+                        <ChevronDown className="w-3 h-3 rotate-90" />
+                        All Categories
+                      </button>
+                      <span className="text-xs text-gray-400">/</span>
+                      <span className="text-xs font-semibold text-gray-700">{selectedCategory.name}</span>
+                    </div>
+                    {productsLoading ? (
+                      <div className="flex items-center justify-center h-32 text-gray-400 text-sm">Loading products…</div>
+                    ) : categoryProducts.length === 0 ? (
+                      <div className="flex items-center justify-center h-32 text-gray-400 text-sm">No products in this category</div>
+                    ) : (
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-72 overflow-y-auto p-1">
+                        {categoryProducts.map((product) => (
+                          <button
+                            key={product.id}
+                            type="button"
+                            onClick={() => {
+                              if (product.variants.length === 0) return;
+                              setSelectedProduct(product);
+                              setSelectedVariant(product.variants[0]);
+                              setVariantQuantity(1);
+                              setVariantPrice(product.variants[0].unit_price);
+                            }}
+                            className="flex flex-col items-center p-3 border border-gray-200 rounded-lg hover:border-red-500 hover:bg-red-50 transition-all group relative"
+                          >
+                            {product.image_url ? (
+                              <img src={product.image_url} alt={product.name} className="w-12 h-12 object-cover rounded-lg mb-2" />
+                            ) : (
+                              <div className="w-12 h-12 bg-gray-100 rounded-lg flex items-center justify-center mb-2 group-hover:bg-red-100 transition-colors">
+                                <Package className="w-6 h-6 text-gray-600 group-hover:text-red-600" />
+                              </div>
+                            )}
+                            <div className="text-xs font-medium text-gray-900 text-center line-clamp-2">{product.name}</div>
+                            <div className="text-xs text-gray-400 mt-1">{product.variants.length} variant{product.variants.length !== 1 ? 's' : ''}</div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  /* Search results */
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 max-h-72 overflow-y-auto p-1">
+                    {filteredProducts.length === 0 ? (
+                      <div className="col-span-full flex items-center justify-center h-24 text-gray-400 text-sm">No matching products</div>
+                    ) : filteredProducts.map((product) => (
+                      <button
+                        key={product.id}
+                        type="button"
+                        onClick={() => {
+                          if (product.variants.length === 0) return;
+                          setSelectedProduct(product);
+                          setSelectedVariant(product.variants[0]);
+                          setVariantQuantity(1);
+                          setVariantPrice(product.variants[0].unit_price);
+                        }}
+                        className="flex flex-col items-center p-3 border border-gray-200 rounded-lg hover:border-red-500 hover:bg-red-50 transition-all group relative"
+                      >
+                        {product.image_url ? (
+                          <img src={product.image_url} alt={product.name} className="w-12 h-12 object-cover rounded-lg mb-2" />
+                        ) : (
+                          <div className="w-12 h-12 bg-gray-100 rounded-lg flex items-center justify-center mb-2 group-hover:bg-red-100 transition-colors">
+                            <Package className="w-6 h-6 text-gray-600 group-hover:text-red-600" />
+                          </div>
+                        )}
+                        <div className="text-xs font-medium text-gray-900 text-center line-clamp-2">{product.name}</div>
+                      </button>
+                    ))}
+                  </div>
+                )}
 
                 {/* Order Items List */}
                 {orderItems.length === 0 ? (
@@ -936,7 +894,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                         className="flex-1 min-w-0 text-4xl font-bold text-gray-900 bg-white px-3 py-2 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500"
                       />
                     </div>
-                    <p className="text-xs text-gray-500 mt-2">Base price: ₱{selectedVariant.price.toLocaleString()}</p>
+                    <p className="text-xs text-gray-500 mt-2">Base price: ₱{selectedVariant.unit_price.toLocaleString()}</p>
                   </div>
                 </div>
 
@@ -970,7 +928,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                           onClick={() => {
                             setSelectedVariant(variant);
                             setVariantQuantity(1);
-                            setVariantPrice(variant.price);
+                            setVariantPrice(variant.unit_price);
                           }}
                           className={`px-4 py-3 border-2 rounded-lg font-medium transition-all text-left relative ${
                             selectedVariant.id === variant.id
@@ -980,7 +938,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                         >
                           <div className="font-semibold">{variant.size}</div>
                           <div className="flex items-baseline gap-1 mt-1">
-                            <span className="text-sm font-bold">₱{variant.price.toLocaleString()}</span>
+                            <span className="text-sm font-bold">₱{variant.unit_price.toLocaleString()}</span>
                           </div>
                           <div className="text-xs text-gray-500 mt-1">Stock: {variant.stock}</div>
                         </button>

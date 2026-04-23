@@ -21,9 +21,6 @@ import pressureImg    from '../assets/product-images/Pressure Line Pipe.webp';
 
 const fallbackImages = [hdpePipeImg, elbowPipeImg, sanitaryPipeImg, pipesImg, inHouseImg, pressureImg];
 
-// Strip seeding prefix like "M_", "C_", "B_" from display names
-const cleanName = (n: string) => n.replace(/^[A-Z]_/, '');
-
 interface ProductRow {
   id: string;
   name: string;
@@ -53,7 +50,7 @@ export default function ProductCategoryPage() {
   const [categoryId, setCategoryId]     = useState<string | null>(null);
   const [categoryTitle, setCategoryTitle] = useState(
     categoryName
-      ? cleanName(categoryName.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '))
+      ? categoryName.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
       : 'Category'
   );
   const [products, setProducts]         = useState<ProductRow[]>([]);
@@ -78,7 +75,7 @@ export default function ProductCategoryPage() {
 
     if (catData) {
       setCategoryId(catData.id);
-      setCategoryTitle(cleanName(catData.name));
+      setCategoryTitle(catData.name);
 
       let q = supabase
         .from('products')

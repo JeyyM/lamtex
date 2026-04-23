@@ -15,8 +15,17 @@ import {
   CreditCard,
   FileText,
   AlertCircle,
+  Loader2,
 } from 'lucide-react';
-import { getCustomerById } from '@/src/mock/customers';
+import { supabase } from '@/src/lib/supabase';
+import { useAppContext } from '@/src/store/AppContext';
+
+interface Agent {
+  id: string;
+  employee_name: string;
+  employee_id: string;
+  system_role: string | null;
+}
 
 interface CustomerFormData {
   name: string;
@@ -32,8 +41,9 @@ interface CustomerFormData {
   postalCode: string;
   businessRegistration: string;
   taxId: string;
-  creditLimit: number;
+  creditLimit: string;
   paymentTerms: 'COD' | '15 Days' | '30 Days' | '45 Days' | '60 Days';
+  assignedAgentId: string;
   assignedAgent: string;
   status: 'Active' | 'Inactive' | 'Suspended';
   notes: string;
@@ -43,6 +53,7 @@ export function CustomerFormPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
   const isEditMode = !!id;
+  const { branch: contextBranch, session } = useAppContext();
 
   const [formData, setFormData] = useState<CustomerFormData>({
     name: '',
@@ -58,68 +69,142 @@ export function CustomerFormPage() {
     postalCode: '',
     businessRegistration: '',
     taxId: '',
-    creditLimit: 0,
+    creditLimit: '',
     paymentTerms: '30 Days',
+    assignedAgentId: '',
     assignedAgent: '',
     status: 'Active',
     notes: '',
   });
 
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [agentsLoading, setAgentsLoading] = useState(false);
   const [errors, setErrors] = useState<Partial<Record<keyof CustomerFormData, string>>>({});
   const [loading, setLoading] = useState(false);
 
   // Load customer data if editing
   useEffect(() => {
-    if (isEditMode && id) {
-      console.log('Loading customer data for ID:', id);
+    if (!isEditMode || !id) return;
+
+    const fetchCustomer = async () => {
       setLoading(true);
       try {
-        const customer = getCustomerById(id);
-        console.log('Customer data loaded:', customer);
-        if (customer) {
-          setFormData({
-            name: customer.name,
-            type: customer.type,
-            contactPerson: customer.contactPerson,
-            phone: customer.phone,
-            email: customer.email,
-            alternatePhone: customer.alternatePhone || '',
-            alternateEmail: customer.alternateEmail || '',
-            address: customer.address,
-            city: customer.city,
-            province: customer.province,
-            postalCode: customer.postalCode,
-            businessRegistration: customer.businessRegistration || '',
-            taxId: customer.taxId || '',
-            creditLimit: customer.creditLimit,
-            paymentTerms: customer.paymentTerms as 'COD' | '15 Days' | '30 Days' | '45 Days' | '60 Days',
-            assignedAgent: customer.assignedAgent,
-            status: customer.status as 'Active' | 'Inactive' | 'Suspended',
-            notes: customer.notes && customer.notes.length > 0 ? customer.notes[0].content : '',
-          });
-          console.log('Form data set successfully');
-        } else {
-          console.error('Customer not found for ID:', id);
+        const { data, error } = await supabase
+          .from('customers')
+          .select('*, employees!assigned_agent_id(id, employee_name)')
+          .eq('id', id)
+          .single();
+
+        if (error) throw error;
+        if (!data) {
           alert('Customer not found');
           navigate('/customers');
+          return;
         }
-      } catch (error) {
-        console.error('Error loading customer:', error);
+
+        // Load the most recent note for this customer
+        const { data: noteData } = await supabase
+          .from('customer_notes')
+          .select('content')
+          .eq('customer_id', id)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        setFormData({
+          name: data.name ?? '',
+          type: data.type ?? 'Hardware Store',
+          contactPerson: data.contact_person ?? '',
+          phone: data.phone ?? '',
+          email: data.email ?? '',
+          alternatePhone: data.alternate_phone ?? '',
+          alternateEmail: data.alternate_email ?? '',
+          address: data.address ?? '',
+          city: data.city ?? '',
+          province: data.province ?? '',
+          postalCode: data.postal_code ?? '',
+          businessRegistration: data.business_registration ?? '',
+          taxId: data.tax_id ?? '',
+          creditLimit: String(data.credit_limit ?? ''),
+          paymentTerms: (data.payment_terms as CustomerFormData['paymentTerms']) ?? '30 Days',
+          assignedAgentId: data.assigned_agent_id ?? '',
+          assignedAgent: data.employees?.employee_name ?? '',
+          status: (data.status as CustomerFormData['status']) ?? 'Active',
+          notes: noteData?.content ?? '',
+        });
+      } catch (err) {
+        console.error('Error loading customer:', err);
         alert('Error loading customer data');
         navigate('/customers');
       } finally {
         setLoading(false);
       }
-    }
+    };
+
+    fetchCustomer();
   }, [isEditMode, id, navigate]);
+
+  // Fetch agents whenever the navbar branch changes
+  useEffect(() => {
+    if (!contextBranch) {
+      setAgents([]);
+      return;
+    }
+
+    const fetchAgents = async () => {
+      setAgentsLoading(true);
+      try {
+        const { data, error } = await supabase
+          .from('employees')
+          .select('id, employee_name, employee_id, system_role, branches!branch_id(name)')
+          .eq('role', 'Sales Agent')
+          .eq('status', 'active');
+
+        if (error) throw error;
+
+        // Filter client-side by branch name (contextBranch = "Manila" / "Cebu" / "Batangas")
+        const filtered = (data ?? []).filter(
+          (e: any) => e.branches?.name === contextBranch
+        );
+
+        setAgents(
+          filtered.map((e: any) => ({
+            id: e.id,
+            employee_name: e.employee_name,
+            employee_id: e.employee_id,
+            system_role: e.system_role,
+          }))
+        );
+      } catch (err) {
+        console.error('Failed to fetch agents:', err);
+        setAgents([]);
+      } finally {
+        setAgentsLoading(false);
+      }
+    };
+
+    fetchAgents();
+  }, [contextBranch]);
 
   const handleInputChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>
   ) => {
     const { name, value } = e.target;
+
+    if (name === 'assignedAgentId') {
+      const selected = agents.find((a) => a.id === value);
+      setFormData((prev) => ({
+        ...prev,
+        assignedAgentId: value,
+        assignedAgent: selected ? selected.employee_name : '',
+      }));
+      if (errors.assignedAgentId) setErrors((prev) => ({ ...prev, assignedAgentId: undefined }));
+      return;
+    }
+
     setFormData((prev) => ({
       ...prev,
-      [name]: name === 'creditLimit' ? parseFloat(value) || 0 : value,
+      [name]: value,
     }));
     // Clear error when user starts typing
     if (errors[name as keyof CustomerFormData]) {
@@ -141,25 +226,98 @@ export function CustomerFormPage() {
     if (!formData.address.trim()) newErrors.address = 'Address is required';
     if (!formData.city.trim()) newErrors.city = 'City is required';
     if (!formData.province.trim()) newErrors.province = 'Province is required';
-    if (formData.creditLimit < 0) newErrors.creditLimit = 'Credit limit cannot be negative';
+    if (formData.creditLimit.trim() !== '' && (isNaN(Number(formData.creditLimit)) || Number(formData.creditLimit) < 0))
+      newErrors.creditLimit = 'Credit limit must be a valid non-negative number';
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!validateForm()) {
-      return;
-    }
+    if (!validateForm()) return;
 
-    // TODO: Replace with actual API call
-    console.log('Submitting customer data:', formData);
-    
-    // Show success message and navigate back
-    alert(`Customer ${isEditMode ? 'updated' : 'created'} successfully!`);
-    navigate('/customers');
+    setLoading(true);
+    try {
+      // Resolve branch_id from contextBranch name
+      const { data: branchData, error: branchError } = await supabase
+        .from('branches')
+        .select('id')
+        .eq('name', contextBranch)
+        .single();
+
+      if (branchError || !branchData) throw new Error('Could not resolve branch');
+
+      const payload = {
+        name: formData.name.trim(),
+        type: formData.type,
+        contact_person: formData.contactPerson.trim(),
+        phone: formData.phone.trim(),
+        email: formData.email.trim(),
+        alternate_phone: formData.alternatePhone.trim() || null,
+        alternate_email: formData.alternateEmail.trim() || null,
+        address: formData.address.trim(),
+        city: formData.city.trim(),
+        province: formData.province.trim(),
+        postal_code: formData.postalCode.trim() || null,
+        business_registration: formData.businessRegistration.trim() || null,
+        tax_id: formData.taxId.trim() || null,
+        credit_limit: formData.creditLimit.trim() === '' ? 0 : parseFloat(formData.creditLimit),
+        payment_terms: formData.paymentTerms,
+        assigned_agent_id: formData.assignedAgentId || null,
+        branch_id: branchData.id,
+        status: formData.status,
+      };
+
+      if (isEditMode && id) {
+        const { error } = await supabase
+          .from('customers')
+          .update({ ...payload, updated_at: new Date().toISOString() })
+          .eq('id', id);
+        if (error) throw error;
+
+        // Insert new note if provided
+        if (formData.notes.trim()) {
+          const { error: noteError } = await supabase
+            .from('customer_notes')
+            .insert({
+              customer_id: id,
+              type: 'Other',
+              content: formData.notes.trim(),
+              created_by: session?.user?.email ?? null,
+            });
+          if (noteError) throw noteError;
+        }
+      } else {
+        const { data: inserted, error } = await supabase
+          .from('customers')
+          .insert(payload)
+          .select('id')
+          .single();
+        if (error) throw error;
+
+        // Insert note for new customer if provided
+        if (formData.notes.trim() && inserted) {
+          const { error: noteError } = await supabase
+            .from('customer_notes')
+            .insert({
+              customer_id: inserted.id,
+              type: 'Other',
+              content: formData.notes.trim(),
+              created_by: session?.user?.email ?? null,
+            });
+          if (noteError) throw noteError;
+        }
+      }
+
+      navigate('/customers');
+    } catch (err: any) {
+      console.error('Failed to save customer:', err);
+      alert(`Failed to save customer: ${err.message ?? 'Unknown error'}`);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleCancel = () => {
@@ -533,7 +691,8 @@ export function CustomerFormPage() {
                   Credit Limit (₱)
                 </label>
                 <input
-                  type="number"
+                  type="text"
+                  inputMode="numeric"
                   name="creditLimit"
                   value={formData.creditLimit}
                   onChange={handleInputChange}
@@ -541,8 +700,6 @@ export function CustomerFormPage() {
                     errors.creditLimit ? 'border-red-500' : 'border-gray-300'
                   }`}
                   placeholder="0"
-                  min="0"
-                  step="1000"
                 />
                 {errors.creditLimit && (
                   <p className="text-red-500 text-xs mt-1 flex items-center gap-1">
@@ -582,18 +739,41 @@ export function CustomerFormPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            {/* Assigned Agent */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Assigned Agent
               </label>
-              <input
-                type="text"
-                name="assignedAgent"
-                value={formData.assignedAgent}
-                onChange={handleInputChange}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
-                placeholder="Agent name"
-              />
+              {!contextBranch ? (
+                <div className="w-full px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-gray-400 text-sm">
+                  No branch selected in the navbar
+                </div>
+              ) : agentsLoading ? (
+                <div className="w-full px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 flex items-center gap-2 text-gray-500 text-sm">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Loading agents…
+                </div>
+              ) : agents.length === 0 ? (
+                <div className="w-full px-3 py-2 border border-amber-200 rounded-lg bg-amber-50 text-amber-700 text-sm">
+                  No agents found for this branch
+                </div>
+              ) : (
+                <select
+                  name="assignedAgentId"
+                  value={formData.assignedAgentId}
+                  onChange={handleInputChange}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
+                >
+                  <option value="">— Unassigned —</option>
+                  {agents.map((agent) => (
+                    <option key={agent.id} value={agent.id}>
+                      {agent.employee_name}
+                      {agent.system_role ? ` · ${agent.system_role}` : ''}
+                      {' '}({agent.employee_id})
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
 
             <div>

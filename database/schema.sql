@@ -2587,10 +2587,10 @@ END $$;
 -- ============================================================================
 
 -- Branches
-INSERT INTO branches (code, name, address) VALUES
-  ('A', 'Branch A', 'Main Warehouse, Industrial Zone'),
-  ('B', 'Branch B', 'Regional Hub, Commercial District'),
-  ('C', 'Branch C', 'Production Facility, Factory Area')
+INSERT INTO branches (code, name, is_active) VALUES
+  ('MNL', 'Manila',    TRUE),
+  ('CEB', 'Cebu',      TRUE),
+  ('BTG', 'Batangas',  TRUE)
 ON CONFLICT (code) DO NOTHING;
 
 -- Product categories (branch-specific; slug is the unique key)
