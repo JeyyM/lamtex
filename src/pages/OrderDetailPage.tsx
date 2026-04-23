@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
-import { getOrderById, getOrderLogs } from '@/src/mock/orders';
+import { supabase } from '@/src/lib/supabase';
 import { useAppContext } from '@/src/store/AppContext';
 import { OrderDetail, OrderStatus, OrderLineItem, OrderLog, ProofDocument } from '@/src/types/orders';
 import { PaymentLink } from '@/src/types/payments';
@@ -42,6 +42,7 @@ import {
   XCircle,
   Link as LinkIcon,
   Copy,
+  Loader2,
 } from 'lucide-react';
 
 // Batch pricing tiers for bulk orders
@@ -174,10 +175,138 @@ export function OrderDetailPage() {
   // Payment link state
   const [showPaymentLinkModal, setShowPaymentLinkModal] = useState(false);
   const [paymentLinks, setPaymentLinks] = useState<PaymentLink[]>([]);
-  
-  // Load the specific order and its audit logs
-  const order = getOrderById(id || '');
-  const orderLogs = order ? getOrderLogs(order.id) : [];
+
+  // Supabase data state
+  const [order, setOrder] = useState<OrderDetail | null>(null);
+  const [orderLogs, setOrderLogs] = useState<OrderLog[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!id) return;
+    const fetchOrder = async () => {
+      setLoading(true);
+
+      // Fetch order row + branch name via join
+      const { data: row } = await supabase
+        .from('orders')
+        .select(`
+          id, order_number, customer_id, customer_name, agent_id, agent_name,
+          order_date, required_date, delivery_type, payment_terms, payment_method,
+          status, payment_status, subtotal, discount_percent, discount_amount,
+          tax_amount, total_amount, requires_approval, approval_reasons,
+          approved_by, approved_date, rejected_by, rejection_reason,
+          estimated_delivery, actual_delivery, order_notes, internal_notes,
+          invoice_id, invoice_date, due_date, amount_paid, balance_due,
+          created_at, updated_at, cancelled_at, cancellation_reason,
+          branches(name)
+        `)
+        .eq('id', id)
+        .single();
+
+      if (!row) { setLoading(false); return; }
+
+      // Fetch line items
+      const { data: items } = await supabase
+        .from('order_line_items')
+        .select('id, sku, product_name, variant_description, quantity, unit_price, original_price, negotiated_price, discount_percent, discount_amount, batch_discount, line_total, stock_hint, available_stock')
+        .eq('order_id', id)
+        .order('created_at');
+
+      // Fetch order logs
+      const { data: logs } = await supabase
+        .from('order_logs')
+        .select('id, order_id, action, performed_by, performed_by_role, description, old_value, new_value, metadata, timestamp')
+        .eq('order_id', id)
+        .order('timestamp', { ascending: false });
+
+      const branchName = (row as any).branches?.name ?? '';
+
+      const lineItems: OrderLineItem[] = (items ?? []).map((item: any) => ({
+        id: item.id,
+        sku: item.sku ?? '',
+        productName: item.product_name ?? '',
+        variantDescription: item.variant_description ?? '',
+        quantity: item.quantity,
+        unitPrice: item.unit_price,
+        originalPrice: item.original_price,
+        negotiatedPrice: item.negotiated_price,
+        discountPercent: item.discount_percent ?? 0,
+        discountAmount: item.discount_amount ?? 0,
+        batchDiscount: item.batch_discount,
+        lineTotal: item.line_total,
+        stockHint: item.stock_hint ?? 'Available',
+        availableStock: item.available_stock,
+      }));
+
+      const mappedOrder: OrderDetail = {
+        id: (row as any).order_number,
+        customer: (row as any).customer_name ?? '',
+        customerId: (row as any).customer_id ?? '',
+        agent: (row as any).agent_name ?? '',
+        agentId: (row as any).agent_id ?? '',
+        branch: branchName,
+        orderDate: (row as any).order_date ?? '',
+        requiredDate: (row as any).required_date ?? '',
+        deliveryType: (row as any).delivery_type ?? 'Truck',
+        paymentTerms: (row as any).payment_terms ?? 'COD',
+        paymentMethod: (row as any).payment_method ?? 'Offline',
+        status: (row as any).status,
+        paymentStatus: (row as any).payment_status,
+        items: lineItems,
+        subtotal: (row as any).subtotal ?? 0,
+        discountPercent: (row as any).discount_percent ?? 0,
+        discountAmount: (row as any).discount_amount ?? 0,
+        totalAmount: (row as any).total_amount ?? 0,
+        requiresApproval: (row as any).requires_approval ?? false,
+        approvalReason: (row as any).approval_reasons,
+        approvedBy: (row as any).approved_by,
+        approvedDate: (row as any).approved_date,
+        rejectedBy: (row as any).rejected_by,
+        rejectionReason: (row as any).rejection_reason,
+        estimatedDelivery: (row as any).estimated_delivery,
+        actualDelivery: (row as any).actual_delivery,
+        invoiceId: (row as any).invoice_id,
+        invoiceDate: (row as any).invoice_date,
+        dueDate: (row as any).due_date,
+        amountPaid: (row as any).amount_paid ?? 0,
+        balanceDue: (row as any).balance_due ?? 0,
+        orderNotes: (row as any).order_notes,
+        internalNotes: (row as any).internal_notes,
+        createdAt: (row as any).created_at,
+        updatedAt: (row as any).updated_at,
+        cancelledAt: (row as any).cancelled_at,
+        cancellationReason: (row as any).cancellation_reason,
+      };
+
+      const mappedLogs: OrderLog[] = (logs ?? []).map((log: any) => ({
+        id: log.id,
+        orderId: log.order_id,
+        timestamp: log.timestamp,
+        action: log.action,
+        performedBy: log.performed_by ?? '',
+        performedByRole: log.performed_by_role ?? 'System',
+        description: log.description ?? '',
+        oldValue: log.old_value,
+        newValue: log.new_value,
+        metadata: log.metadata,
+      }));
+
+      setOrder(mappedOrder);
+      setOrderLogs(mappedLogs);
+      setLoading(false);
+    };
+
+    fetchOrder();
+  }, [id]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-32 gap-3 text-gray-500">
+        <Loader2 className="w-6 h-6 animate-spin" />
+        <span>Loading order...</span>
+      </div>
+    );
+  }
 
   if (!order) {
     return (

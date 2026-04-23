@@ -119,16 +119,32 @@ export default function ProductCategoryPage() {
         }).eq('id', editingProductId);
         if (error) throw error;
       } else {
-        const { error } = await supabase.from('products').insert({
+        const { data: newProduct, error } = await supabase.from('products').insert({
           name: formData.name.trim(),
           description: formData.description.trim() || null,
           image_url: formData.imageUrl || null,
           category_id: categoryId,
           branch: branch || null,
           status: 'Active',
-          total_variants: 0,
-        });
+          total_variants: 1,
+        }).select('id').single();
         if (error) throw error;
+        // Auto-create a default variant so the product page is usable immediately
+        if (newProduct?.id) {
+          const baseName = formData.name.trim().replace(/\s+/g, '-').toUpperCase().slice(0, 10);
+          await supabase.from('product_variants').insert({
+            product_id: newProduct.id,
+            sku: `${baseName}-DEFAULT`,
+            size: 'Default',
+            unit_price: 0,
+            cost_price: 0,
+            total_stock: 0,
+            reorder_point: 0,
+            status: 'Active',
+            units_sold_ytd: 0,
+            revenue_ytd: 0,
+          });
+        }
       }
       await fetchData();
       handleCloseModal();

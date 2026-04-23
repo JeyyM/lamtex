@@ -236,11 +236,13 @@ export default function ProductFamilyPage() {
       }
       setLoading(false);
     })();
-  }, [familyId, selectedBranch]);
+  }, [familyId]);
 
   // â”€â”€ Image carousel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const productImages = product?.images?.length
     ? product.images
+    : product?.image_url
+    ? [product.image_url]
     : [hdpePipeImg, pipesImg, pressureLineImg];
 
   const handlePreviousImage = () =>
@@ -248,9 +250,28 @@ export default function ProductFamilyPage() {
   const handleNextImage = () =>
     setCurrentImageIndex(p => (p === productImages.length - 1 ? 0 : p + 1));
 
-  const handleSelectImages = (imageUrls: string[]) => {
-    console.log('Selected images:', imageUrls);
-    setShowImageGalleryModal(false);
+  const handleSelectImages = async (imageUrls: string[]) => {
+    if (!familyId || imageUrls.length === 0) {
+      setShowImageGalleryModal(false);
+      return;
+    }
+    setSaving(true);
+    try {
+      const { error } = await supabase.from('products').update({
+        image_url: imageUrls[0],
+        images: imageUrls,
+        updated_at: new Date().toISOString(),
+      }).eq('id', familyId);
+      if (error) throw error;
+      // Update local state so carousel reflects immediately
+      setProduct(prev => prev ? { ...prev, image_url: imageUrls[0], images: imageUrls } : prev);
+      setCurrentImageIndex(0);
+    } catch (err: any) {
+      alert(`Failed to save images: ${err.message ?? 'Unknown error'}`);
+    } finally {
+      setSaving(false);
+      setShowImageGalleryModal(false);
+    }
   };
 
   // â”€â”€ Edit handlers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -328,6 +349,8 @@ export default function ProductFamilyPage() {
       setVariants(display);
       const updated = display.find(d => d.sku === editedVariant.sku) ?? display[0];
       setSelectedVariant(updated);
+      // Keep products.total_variants in sync
+      await supabase.from('products').update({ total_variants: display.length }).eq('id', familyId);
     }
   };
 
@@ -340,6 +363,8 @@ export default function ProductFamilyPage() {
     setSelectedVariant(remaining[0] ?? null);
     setIsEditingVariant(false);
     setEditedVariant(null);
+    // Keep products.total_variants in sync
+    await supabase.from('products').update({ total_variants: remaining.length }).eq('id', familyId);
   };
 
   const handleInputChange = (field: string, value: unknown) => {
@@ -420,11 +445,79 @@ export default function ProductFamilyPage() {
 
   // â”€â”€ Derived â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const displayVariant = isEditingVariant ? editedVariant : selectedVariant;
-  if (loading || !displayVariant) {
+
+  if (loading) {
     return (
       <div className="flex items-center justify-center h-64 gap-3 text-gray-500">
         <Loader2 className="w-6 h-6 animate-spin" />
         <span>Loading product data...</span>
+      </div>
+    );
+  }
+
+  if (!displayVariant && !isEditingVariant) {
+    const categoryTitle = categoryName
+      ? categoryName.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+      : 'Products';
+    return (
+      <div className="space-y-6">
+        {/* Header */}
+        <div className="flex items-center gap-3 md:gap-4">
+          <Button variant="ghost" onClick={() => navigate(`/products/category/${categoryName}`)} className="flex-shrink-0">
+            <ArrowLeft className="w-4 h-4 md:w-5 md:h-5" />
+          </Button>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 md:gap-3 flex-wrap">
+              <h1 className="text-xl md:text-2xl font-bold text-gray-900 truncate">{product?.name ?? 'Product Family'}</h1>
+              <Badge variant="default" size="sm">{categoryTitle}</Badge>
+            </div>
+            <p className="text-xs md:text-sm text-gray-500 mt-1">0 size variants available</p>
+          </div>
+          <Button
+            variant="primary"
+            className="flex-shrink-0"
+            onClick={() => {
+              const newVariant: DisplayVariant = {
+                id: `NEW-${Date.now()}`,
+                variantName: 'New Variant',
+                sku: '',
+                size: '',
+                length: '',
+                weight: '',
+                thickness: '',
+                pressure: '',
+                stock: 0,
+                reorderPoint: 0,
+                price: 0,
+                cost: 0,
+                monthlyUsage: 0,
+                unitsSold: 0,
+                status: 'In Stock',
+                monthlyProductionQuota: 0,
+                currentMonthProduced: 0,
+                leadTimeDays: 7,
+                minOrderQty: 100,
+                specs: [],
+                rawMaterials: [],
+                bulkDiscounts: [{ minQty: 1, discount: 0, pricePerUnit: 0 }],
+              };
+              setSelectedVariant(newVariant);
+              setIsEditingVariant(true);
+              setEditedVariant({ ...newVariant });
+            }}
+          >
+            <Plus className="w-4 h-4 mr-2" />
+            Add First Variant
+          </Button>
+        </div>
+        {/* Empty state */}
+        <div className="flex flex-col items-center justify-center h-64 gap-4 text-gray-400 border-2 border-dashed border-gray-200 rounded-xl">
+          <Package className="w-14 h-14 text-gray-300" />
+          <div className="text-center">
+            <p className="text-lg font-medium text-gray-500">No variants yet</p>
+            <p className="text-sm text-gray-400 mt-1">Add the first size variant to get started.</p>
+          </div>
+        </div>
       </div>
     );
   }

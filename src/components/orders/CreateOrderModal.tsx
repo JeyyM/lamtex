@@ -56,23 +56,37 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
 
   // Customers fetched from Supabase
   const [allCustomers, setAllCustomers] = useState<{ id: string; name: string; email: string | null; phone: string | null; address: string | null; contact_person: string | null }[]>([]);
+  // Agents fetched from Supabase
+  const [allAgents, setAllAgents] = useState<{ id: string; employee_name: string; employee_id: string }[]>([]);
+  const [selectedAgentId, setSelectedAgentId] = useState<string>('');
+  const [selectedAgentName, setSelectedAgentName] = useState<string>('');
 
   useEffect(() => {
-    const fetchCustomers = async () => {
+    const fetchData = async () => {
       const { data: branchData } = await supabase
         .from('branches')
         .select('id')
         .eq('name', branch)
         .single();
       if (!branchData) return;
-      const { data } = await supabase
-        .from('customers')
-        .select('id, name, email, phone, address, contact_person')
-        .eq('branch_id', branchData.id)
-        .order('name');
-      setAllCustomers(data ?? []);
+      const [{ data: customers }, { data: agents }] = await Promise.all([
+        supabase
+          .from('customers')
+          .select('id, name, email, phone, address, contact_person')
+          .eq('branch_id', branchData.id)
+          .order('name'),
+        supabase
+          .from('employees')
+          .select('id, employee_name, employee_id')
+          .eq('branch_id', branchData.id)
+          .eq('role', 'Sales Agent')
+          .eq('status', 'active')
+          .order('employee_name'),
+      ]);
+      setAllCustomers(customers ?? []);
+      setAllAgents(agents ?? []);
     };
-    fetchCustomers();
+    fetchData();
   }, [branch]);
   
   // Customer selection state
@@ -236,17 +250,20 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
       setOrderItems(newItems);
       setEditingItemIndex(null);
     } else {
-      // Check if item already exists
+      // Check if item already exists — if so, reopen it for editing
       const existingIndex = orderItems.findIndex(
         item => item.productId === product.id && item.variantId === variant.id
       );
 
       if (existingIndex >= 0) {
-        // Increment quantity
-        const newItems = [...orderItems];
-        newItems[existingIndex].quantity += quantity;
-        newItems[existingIndex].subtotal = newItems[existingIndex].quantity * newItems[existingIndex].negotiatedPrice;
-        setOrderItems(newItems);
+        // Reopen the existing item in the edit modal instead of stacking
+        const existing = orderItems[existingIndex];
+        setVariantQuantity(existing.quantity);
+        setVariantPrice(existing.negotiatedPrice);
+        setVariantDiscounts([...existing.discounts]);
+        setEditingItemIndex(existingIndex);
+        // Keep selectedProduct & selectedVariant open (already set by the caller)
+        return;
       } else {
         // Add new item
         setOrderItems([...orderItems, itemData]);
@@ -334,42 +351,95 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
     return orderItems.reduce((sum, item) => sum + item.subtotal, 0);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!selectedCustomerId || !selectedCustomerName) {
       alert('Please select a customer for this order');
       return;
     }
-    
     if (orderItems.length === 0) {
       alert('Please add at least one item to the order');
       return;
     }
-
     if (!deliveryDate) {
       alert('Please select a delivery date');
       return;
     }
 
     setIsSubmitting(true);
+    try {
+      // Resolve branch_id
+      const { data: branchData } = await supabase
+        .from('branches')
+        .select('id')
+        .eq('name', branch)
+        .single();
 
-    // Simulate order creation
-    setTimeout(() => {
-      const orderId = `ORD-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
-      
+      // Generate order number
+      const orderNumber = `ORD-${Date.now().toString(36).toUpperCase()}`;
+      const subtotal = calculateTotal();
+
+      // Insert order
+      const { data: newOrder, error: orderError } = await supabase
+        .from('orders')
+        .insert({
+          order_number:     orderNumber,
+          customer_id:      selectedCustomerId,
+          customer_name:    selectedCustomerName,
+          agent_id:         selectedAgentId || null,
+          agent_name:       selectedAgentName || null,
+          branch_id:        branchData?.id ?? null,
+          order_date:       new Date().toISOString().split('T')[0],
+          required_date:    deliveryDate,
+          estimated_delivery: deliveryDate,
+          delivery_address: deliveryAddress || null,
+          status:           'Pending',
+          payment_status:   'Unbilled',
+          subtotal,
+          total_amount:     subtotal,
+        })
+        .select('id')
+        .single();
+
+      if (orderError) throw orderError;
+
+      // Insert line items
+      const lineItems = orderItems.map(item => ({
+        order_id:           newOrder.id,
+        variant_id:         item.variantId || null,
+        product_name:       item.productName,
+        variant_description: item.variantSize,
+        quantity:           item.quantity,
+        unit_price:         item.price,
+        original_price:     item.originalPrice,
+        negotiated_price:   item.negotiatedPrice,
+        line_total:         item.subtotal,
+        available_stock:    item.stockAvailable,
+        stock_hint:         item.stockAvailable >= item.quantity ? 'Available' : item.stockAvailable > 0 ? 'Partial' : 'Not Available',
+      }));
+
+      const { error: itemsError } = await supabase
+        .from('order_line_items')
+        .insert(lineItems);
+
+      if (itemsError) throw itemsError;
+
       addAuditLog(
         'Order Created',
         'Order',
-        `Created order ${orderId} for ${selectedCustomerName} with ${orderItems.length} items, total ₱${calculateTotal().toLocaleString()}`
+        `Created order ${orderNumber} for ${selectedCustomerName} with ${orderItems.length} items, total ₱${subtotal.toLocaleString()}`
       );
 
-      alert(`Order ${orderId} created successfully!\n\nStatus: Pending\nCustomer: ${selectedCustomerName}\nItems: ${orderItems.length}\nTotal: ₱${calculateTotal().toLocaleString()}\nScheduled Delivery: ${deliveryDate}\n\nThe order is now pending executive approval.`);
-      
-      setIsSubmitting(false);
+      alert(`Order ${orderNumber} created successfully!\n\nStatus: Pending\nCustomer: ${selectedCustomerName}\nItems: ${orderItems.length}\nTotal: ₱${subtotal.toLocaleString()}\nScheduled Delivery: ${deliveryDate}`);
+
       onSuccess();
       onClose();
-    }, 1000);
+    } catch (err: any) {
+      alert(`Failed to create order: ${err.message ?? 'Unknown error'}`);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Get minimum date (today)
@@ -405,6 +475,32 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-4 md:p-6">
           <form onSubmit={handleSubmit} className="space-y-6">
+            {/* Agent Selection */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <User className="w-5 h-5" />
+                  Assign Agent
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <select
+                  value={selectedAgentId}
+                  onChange={(e) => {
+                    const agent = allAgents.find(a => a.id === e.target.value);
+                    setSelectedAgentId(e.target.value);
+                    setSelectedAgentName(agent?.employee_name ?? '');
+                  }}
+                  className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 text-sm bg-white"
+                >
+                  <option value="">— No agent assigned —</option>
+                  {allAgents.map(a => (
+                    <option key={a.id} value={a.id}>{a.employee_name} ({a.employee_id})</option>
+                  ))}
+                </select>
+              </CardContent>
+            </Card>
+
             {/* Customer Selection - Only show if no customer pre-selected */}
             {!initialCustomerId && (
               <Card>
@@ -873,8 +969,12 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                 
                 {/* Left: Product Image */}
                 <div className="space-y-4">
-                  <div className="aspect-square bg-gradient-to-br from-gray-50 to-gray-100 rounded-xl flex items-center justify-center border-2 border-gray-200">
-                    <Package className="w-32 h-32 text-gray-300" />
+                  <div className="aspect-square bg-gradient-to-br from-gray-50 to-gray-100 rounded-xl flex items-center justify-center border-2 border-gray-200 overflow-hidden">
+                    {selectedProduct.image_url ? (
+                      <img src={selectedProduct.image_url} alt={selectedProduct.name} className="w-full h-full object-cover" />
+                    ) : (
+                      <Package className="w-32 h-32 text-gray-300" />
+                    )}
                   </div>
                   
                   {/* Price */}
@@ -902,7 +1002,6 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                 <div className="space-y-6">
                   {/* Product Title */}
                   <div>
-                    <Badge variant="default" className="mb-2">{selectedProduct.category}</Badge>
                     <h2 className="text-3xl font-bold text-gray-900 mb-2">{selectedProduct.name}</h2>
                     <p className="text-gray-600">{selectedVariant.description}</p>
                   </div>
