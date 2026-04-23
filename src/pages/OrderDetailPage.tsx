@@ -45,118 +45,32 @@ import {
   Loader2,
 } from 'lucide-react';
 
-// Batch pricing tiers for bulk orders
-interface PriceTier {
-  minQty: number;
-  pricePerUnit: number;
-  discount: number;
-}
-
-// Mock product data (same as CreateOrderModal)
-const MOCK_PIPE_PRODUCTS = [
-  {
-    id: 'prod-001',
-    name: 'UPVC Sanitary Pipe',
-    category: 'Sanitary',
-    discount: 10,
-    batchEnabled: true,
-    variants: [
-      { 
-        id: 'var-001', 
-        size: '2" x 10ft', 
-        description: 'Standard white, for waste drainage systems', 
-        price: 450, 
-        originalPrice: 500,
-        stock: 120,
-        priceTiers: [
-          { minQty: 1, pricePerUnit: 450, discount: 0 },
-          { minQty: 5, pricePerUnit: 428, discount: 5 },
-          { minQty: 10, pricePerUnit: 405, discount: 10 },
-          { minQty: 25, pricePerUnit: 383, discount: 15 },
-        ]
-      },
-      { 
-        id: 'var-002', 
-        size: '3" x 10ft', 
-        description: 'Standard white, for main drain lines', 
-        price: 680, 
-        originalPrice: 755,
-        stock: 95,
-        priceTiers: [
-          { minQty: 1, pricePerUnit: 680, discount: 0 },
-          { minQty: 5, pricePerUnit: 646, discount: 5 },
-          { minQty: 10, pricePerUnit: 612, discount: 10 },
-          { minQty: 25, pricePerUnit: 578, discount: 15 },
-        ]
-      },
-    ],
-  },
-  {
-    id: 'prod-002',
-    name: 'UPVC Pressure Pipe',
-    category: 'Water Supply',
-    batchEnabled: true,
-    variants: [
-      { 
-        id: 'var-005', 
-        size: '1/2" x 10ft', 
-        description: 'Class C (160 PSI), potable water certified', 
-        price: 320, 
-        stock: 200,
-        priceTiers: [
-          { minQty: 1, pricePerUnit: 320, discount: 0 },
-          { minQty: 5, pricePerUnit: 304, discount: 5 },
-          { minQty: 10, pricePerUnit: 288, discount: 10 },
-          { minQty: 25, pricePerUnit: 272, discount: 15 },
-        ]
-      },
-      { 
-        id: 'var-006', 
-        size: '3/4" x 10ft', 
-        description: 'Class C (160 PSI), for residential water lines', 
-        price: 425, 
-        stock: 175,
-        priceTiers: [
-          { minQty: 1, pricePerUnit: 425, discount: 0 },
-          { minQty: 5, pricePerUnit: 404, discount: 5 },
-          { minQty: 10, pricePerUnit: 383, discount: 10 },
-          { minQty: 25, pricePerUnit: 361, discount: 15 },
-        ]
-      },
-    ],
-  },
-  {
-    id: 'prod-003',
-    name: 'UPVC Fittings - Tee Joint',
-    category: 'Fittings',
-    variants: [
-      { id: 'var-031', size: '3/4"', description: 'White solvent weld, 3-way connection', price: 58, stock: 445 },
-      { id: 'var-032', size: '1"', description: 'White solvent weld, 3-way connection', price: 85, stock: 380 },
-    ],
-  },
-  {
-    id: 'prod-004',
-    name: 'UPVC Fittings - Coupling',
-    category: 'Fittings',
-    discount: 15,
-    variants: [
-      { id: 'var-040', size: '1/2"', description: 'White solvent weld connector', price: 25, originalPrice: 29, stock: 600 },
-      { id: 'var-041', size: '1"', description: 'White solvent weld connector', price: 45, originalPrice: 53, stock: 420 },
-    ],
-  },
-];
+// ── DB Types (same as CreateOrderModal) ──────────────────────────────────────
+interface DBVariantDet { id: string; size: string; description: string | null; unit_price: number; stock: number; }
+interface DBProductDet { id: string; name: string; image_url: string | null; variants: DBVariantDet[]; }
+interface DBCategoryDet { id: string; name: string; image_url: string | null; }
 
 export function OrderDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { branch, addAuditLog } = useAppContext();
+  const { branch, addAuditLog, role, session, employeeName } = useAppContext();
   const [isEditing, setIsEditing] = useState(false);
   const [editedOrder, setEditedOrder] = useState<OrderDetail | null>(null);
+
+  // Product modal — Supabase-based, same e-commerce style as CreateOrderModal
   const [showProductModal, setShowProductModal] = useState(false);
   const [productSearch, setProductSearch] = useState('');
-  const [selectedProduct, setSelectedProduct] = useState<typeof MOCK_PIPE_PRODUCTS[0] | null>(null);
-  const [selectedVariant, setSelectedVariant] = useState<typeof MOCK_PIPE_PRODUCTS[0]['variants'][0] | null>(null);
-  const [quantity, setQuantity] = useState(1);
+  const [categories, setCategories] = useState<DBCategoryDet[]>([]);
+  const [categoriesLoading, setCategoriesLoading] = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState<DBCategoryDet | null>(null);
+  const [categoryProducts, setCategoryProducts] = useState<DBProductDet[]>([]);
+  const [productsLoading, setProductsLoading] = useState(false);
+  const [selectedProduct, setSelectedProduct] = useState<DBProductDet | null>(null);
+  const [selectedVariant, setSelectedVariant] = useState<DBVariantDet | null>(null);
+  const [variantQuantity, setVariantQuantity] = useState(1);
+  const [variantPrice, setVariantPrice] = useState(0);
+  const [variantDiscounts, setVariantDiscounts] = useState<Array<{ name: string; percentage: number }>>([]);
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
   
   // Cancel order state
   const [showCancelModal, setShowCancelModal] = useState(false);
@@ -175,6 +89,12 @@ export function OrderDetailPage() {
   // Payment link state
   const [showPaymentLinkModal, setShowPaymentLinkModal] = useState(false);
   const [paymentLinks, setPaymentLinks] = useState<PaymentLink[]>([]);
+
+  // Approve / Reject modal state
+  const [showApproveModal, setShowApproveModal] = useState(false);
+  const [showRejectModal, setShowRejectModal] = useState(false);
+  const [rejectionReason, setRejectionReason] = useState('');
+  const [approvalLoading, setApprovalLoading] = useState(false);
 
   // Supabase data state
   const [order, setOrder] = useState<OrderDetail | null>(null);
@@ -299,6 +219,56 @@ export function OrderDetailPage() {
     fetchOrder();
   }, [id]);
 
+  // ── Order log helper ──────────────────────────────────────────────────────
+  // Maps UserRole → order_log_role enum
+  const logRoleMap: Record<string, string> = {
+    Executive:  'Admin',
+    Agent:      'Agent',
+    Warehouse:  'Warehouse Staff',
+    Logistics:  'Logistics',
+    Driver:     'Logistics',
+  };
+
+  const insertOrderLog = async (
+    action: string,
+    description: string,
+    oldValue?: object | null,
+    newValue?: object | null,
+    metadata?: object | null,
+  ) => {
+    const actorName = employeeName || session?.user?.email || role;
+    const { data, error } = await supabase
+      .from('order_logs')
+      .insert({
+        order_id: id,
+        action,
+        performed_by:      actorName,
+        performed_by_role: logRoleMap[role] ?? 'System',
+        description,
+        old_value:  oldValue  ?? null,
+        new_value:  newValue  ?? null,
+        metadata:   metadata  ?? null,
+      })
+      .select('id, order_id, action, performed_by, performed_by_role, description, old_value, new_value, metadata, timestamp')
+      .single();
+
+    if (!error && data) {
+      const newLog: OrderLog = {
+        id:              data.id,
+        orderId:         data.order_id,
+        timestamp:       data.timestamp,
+        action:          data.action,
+        performedBy:     data.performed_by ?? '',
+        performedByRole: data.performed_by_role ?? 'System',
+        description:     data.description ?? '',
+        oldValue:        data.old_value,
+        newValue:        data.new_value,
+        metadata:        data.metadata,
+      };
+      setOrderLogs(prev => [newLog, ...prev]);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-32 gap-3 text-gray-500">
@@ -422,17 +392,197 @@ export function OrderDetailPage() {
     setShowFulfillModal(false);
   };
 
-  const handleSave = () => {
-    if (!editedOrder) return;
-    
-    // Recalculate totals
+  const handleApprove = async () => {
+    if (!order || !id) return;
+    setApprovalLoading(true);
+    const now = new Date().toISOString();
+    const { error } = await supabase
+      .from('orders')
+      .update({ status: 'Approved', approved_by: role, approved_date: now, rejected_by: null, rejection_reason: null })
+      .eq('id', id);
+    if (error) { alert('Failed to approve: ' + error.message); setApprovalLoading(false); return; }
+    setOrder({ ...order, status: 'Approved', approvedBy: role, approvedDate: now, rejectedBy: undefined, rejectionReason: undefined });
+    await insertOrderLog(
+      'approved',
+      `Order approved by ${employeeName || session?.user?.email || role}`,
+      { status: order.status },
+      { status: 'Approved', approved_by: employeeName || session?.user?.email || role },
+    );
+    addAuditLog('Approved Order', 'Order', `Approved order ${order.id}`);
+    setApprovalLoading(false);
+    setShowApproveModal(false);
+  };
+
+  const handleReject = async () => {
+    if (!order || !id) return;
+    setApprovalLoading(true);
+    const now = new Date().toISOString();
+    const { error } = await supabase
+      .from('orders')
+      .update({ status: 'Rejected', rejected_by: role, rejection_reason: rejectionReason || null, approved_by: null, approved_date: null })
+      .eq('id', id);
+    if (error) { alert('Failed to reject: ' + error.message); setApprovalLoading(false); return; }
+    setOrder({ ...order, status: 'Rejected' as any, rejectedBy: role, rejectionReason: rejectionReason || undefined, approvedBy: undefined, approvedDate: undefined });
+    await insertOrderLog(
+      'rejected',
+      `Order rejected by ${employeeName || session?.user?.email || role}${rejectionReason ? ` — Reason: ${rejectionReason}` : ''}`,
+      { status: order.status },
+      { status: 'Rejected', rejected_by: employeeName || session?.user?.email || role, rejection_reason: rejectionReason || null },
+    );
+    addAuditLog('Rejected Order', 'Order', `Rejected order ${order.id}${rejectionReason ? ': ' + rejectionReason : ''}`);
+    setApprovalLoading(false);
+    setShowRejectModal(false);
+    setRejectionReason('');
+  };
+
+  const handleSave = async () => {
+    if (!editedOrder || !id) return;
+
+    // Snapshot old state before save for diffing
+    const oldOrder = order!;
+
+    // Recalculate totals from items
     const subtotal = editedOrder.items.reduce((sum, item) => sum + item.lineTotal, 0);
-    const totalAmount = subtotal - editedOrder.discountAmount;
-    
-    alert('Order saved successfully');
+    const discountAmount = editedOrder.discountAmount ?? 0;
+    const totalAmount = subtotal - discountAmount;
+
+    // Update the order header
+    const { error: orderErr } = await supabase
+      .from('orders')
+      .update({
+        status: editedOrder.status,
+        payment_status: editedOrder.paymentStatus,
+        subtotal,
+        discount_amount: discountAmount,
+        total_amount: totalAmount,
+        required_date: editedOrder.requiredDate || null,
+        delivery_type: editedOrder.deliveryType,
+        payment_terms: editedOrder.paymentTerms,
+        payment_method: editedOrder.paymentMethod,
+      })
+      .eq('id', id);
+
+    if (orderErr) { alert('Failed to save order: ' + orderErr.message); return; }
+
+    // Delete existing line items and re-insert
+    await supabase.from('order_line_items').delete().eq('order_id', id);
+
+    if (editedOrder.items.length > 0) {
+      const rows = editedOrder.items.map(item => ({
+        order_id: id,
+        sku: item.sku,
+        product_name: item.productName,
+        variant_description: item.variantDescription,
+        quantity: item.quantity,
+        unit_price: item.unitPrice,
+        original_price: item.originalPrice ?? item.unitPrice,
+        negotiated_price: item.negotiatedPrice ?? item.unitPrice,
+        discount_percent: item.discountPercent ?? 0,
+        discount_amount: item.discountAmount ?? 0,
+        line_total: item.lineTotal,
+        stock_hint: item.stockHint ?? 'Available',
+        available_stock: item.availableStock ?? null,
+      }));
+      const { error: itemsErr } = await supabase.from('order_line_items').insert(rows);
+      if (itemsErr) { alert('Order header saved but items failed: ' + itemsErr.message); return; }
+    }
+
+    // ── Generate activity logs ──────────────────────────────────────────────
+
+    // 1. Status change
+    if (oldOrder.status !== editedOrder.status) {
+      await insertOrderLog(
+        'status_changed',
+        `Status changed from "${oldOrder.status}" to "${editedOrder.status}"`,
+        { status: oldOrder.status },
+        { status: editedOrder.status },
+      );
+    }
+
+    // 2. Payment status change
+    if (oldOrder.paymentStatus !== editedOrder.paymentStatus) {
+      await insertOrderLog(
+        'payment_status_changed',
+        `Payment status changed from "${oldOrder.paymentStatus}" to "${editedOrder.paymentStatus}"`,
+        { paymentStatus: oldOrder.paymentStatus },
+        { paymentStatus: editedOrder.paymentStatus },
+      );
+    }
+
+    // 3. Item-level diffs
+    const oldItemMap = new Map<string, OrderLineItem>(oldOrder.items.map(i => [i.id, i]));
+    const newItemMap = new Map<string, OrderLineItem>(editedOrder.items.map(i => [i.id, i]));
+
+    // Removed items
+    for (const oldItem of oldOrder.items) {
+      if (!newItemMap.has(oldItem.id)) {
+        await insertOrderLog(
+          'item_removed',
+          `Removed item: ${oldItem.productName}${oldItem.variantDescription ? ` (${oldItem.variantDescription})` : ''} × ${oldItem.quantity}`,
+          { quantity: oldItem.quantity, unitPrice: oldItem.unitPrice },
+          null,
+          { productName: oldItem.productName, variantDescription: oldItem.variantDescription || undefined },
+        );
+      }
+    }
+
+    // Added items (temp ids start with "item-") or truly new ids
+    for (const newItem of editedOrder.items) {
+      if (!oldItemMap.has(newItem.id) || newItem.id.startsWith('item-')) {
+        await insertOrderLog(
+          'item_added',
+          `Added item: ${newItem.productName}${newItem.variantDescription ? ` (${newItem.variantDescription})` : ''} × ${newItem.quantity} @ ₱${newItem.unitPrice.toLocaleString()}`,
+          null,
+          { quantity: newItem.quantity, unitPrice: newItem.unitPrice, lineTotal: newItem.lineTotal },
+          { productName: newItem.productName, variantDescription: newItem.variantDescription || undefined },
+        );
+      }
+    }
+
+    // Modified items (same real id, quantity or price changed)
+    for (const newItem of editedOrder.items) {
+      const oldItem = oldItemMap.get(newItem.id);
+      if (!oldItem || newItem.id.startsWith('item-')) continue;
+
+      if (oldItem.quantity !== newItem.quantity) {
+        await insertOrderLog(
+          'item_quantity_changed',
+          `Quantity of ${newItem.productName} changed: ${oldItem.quantity} → ${newItem.quantity}`,
+          { quantity: oldItem.quantity },
+          { quantity: newItem.quantity },
+          { productName: newItem.productName, variantDescription: newItem.variantDescription },
+        );
+      }
+
+      if (Math.round(oldItem.unitPrice * 100) !== Math.round(newItem.unitPrice * 100)) {
+        await insertOrderLog(
+          'item_price_changed',
+          `Price of ${newItem.productName} changed: ₱${oldItem.unitPrice.toLocaleString()} → ₱${newItem.unitPrice.toLocaleString()}`,
+          { unitPrice: oldItem.unitPrice },
+          { unitPrice: newItem.unitPrice },
+          { productName: newItem.productName, variantDescription: newItem.variantDescription },
+        );
+      }
+
+      if (
+        Math.round((oldItem.discountPercent ?? 0) * 100) !== Math.round((newItem.discountPercent ?? 0) * 100) &&
+        (newItem.discountPercent ?? 0) > 0
+      ) {
+        await insertOrderLog(
+          'discount_applied',
+          `Discount on ${newItem.productName} changed: ${(oldItem.discountPercent ?? 0).toFixed(2)}% → ${(newItem.discountPercent ?? 0).toFixed(2)}%`,
+          { discountPercent: oldItem.discountPercent ?? 0 },
+          { discountPercent: newItem.discountPercent ?? 0 },
+          { productName: newItem.productName },
+        );
+      }
+    }
+
+    addAuditLog('Updated Order', 'Order', `Updated order ${editedOrder.id}`);
+    // Refresh from DB
+    setOrder({ ...editedOrder, subtotal, totalAmount });
     setIsEditing(false);
     setEditedOrder(null);
-    addAuditLog('Updated Order', 'Order', `Updated order ${order.id}`);
   };
 
   const handleQuantityChange = (itemId: string, newQuantity: number) => {
@@ -457,88 +607,175 @@ export function OrderDetailPage() {
   };
 
   const handleAddProduct = () => {
+    // Load categories when opening the modal
+    if (categories.length === 0) {
+      setCategoriesLoading(true);
+      supabase
+        .from('product_categories')
+        .select('id, name, image_url')
+        .or(`branch.eq.${branch},branch.is.null`)
+        .eq('is_active', true)
+        .order('sort_order')
+        .then(({ data }) => {
+          setCategories(data ?? []);
+          setCategoriesLoading(false);
+        });
+    }
     setShowProductModal(true);
+  };
+
+  const handleSelectCategory = async (cat: DBCategoryDet) => {
+    setSelectedCategory(cat);
+    setProductsLoading(true);
+    setCategoryProducts([]);
+    const { data: branchRow } = await supabase.from('branches').select('id').eq('name', branch).single();
+    const { data: productsData } = await supabase
+      .from('products')
+      .select('id, name, image_url, product_variants(id, size, description, unit_price, total_stock)')
+      .eq('category_id', cat.id)
+      .eq('status', 'Active')
+      .order('name');
+    if (!productsData) { setProductsLoading(false); return; }
+    const allVariantIds = productsData.flatMap((p: any) => p.product_variants?.map((v: any) => v.id) ?? []);
+    const stockMap: Record<string, number> = {};
+    if (allVariantIds.length > 0 && branchRow) {
+      const { data: stockData } = await supabase
+        .from('product_variant_stock')
+        .select('variant_id, quantity')
+        .eq('branch_id', branchRow.id)
+        .in('variant_id', allVariantIds);
+      (stockData ?? []).forEach((s: any) => { stockMap[s.variant_id] = s.quantity; });
+    }
+    setCategoryProducts(productsData.map((p: any) => ({
+      id: p.id,
+      name: p.name,
+      image_url: p.image_url ?? null,
+      variants: (p.product_variants ?? []).map((v: any) => ({
+        id: v.id,
+        size: v.size,
+        description: v.description ?? null,
+        unit_price: Number(v.unit_price ?? 0),
+        stock: stockMap[v.id] ?? v.total_stock ?? 0,
+      })),
+    })));
+    setProductsLoading(false);
   };
 
   const handleCloseProductModal = () => {
     setShowProductModal(false);
     setSelectedProduct(null);
     setSelectedVariant(null);
-    setQuantity(1);
+    setVariantQuantity(1);
+    setVariantPrice(0);
+    setVariantDiscounts([]);
     setProductSearch('');
+    setSelectedCategory(null);
+    setCategoryProducts([]);
+    setEditingItemId(null);
   };
 
-  const handleSelectProduct = (product: typeof MOCK_PIPE_PRODUCTS[0]) => {
-    setSelectedProduct(product);
-    setSelectedVariant(null);
+  // Open the product detail modal pre-filled from an existing line item (for editing)
+  const handleEditItem = (item: OrderLineItem) => {
+    if (!isEditing) return;
+
+    // Reconstruct a synthetic DBProductDet / DBVariantDet from the saved item data
+    const syntheticVariant: DBVariantDet = {
+      id: item.sku.toLowerCase(),
+      size: item.variantDescription,
+      description: null,
+      unit_price: item.originalPrice ?? item.unitPrice,
+      stock: item.availableStock ?? 999,
+    };
+    const syntheticProduct: DBProductDet = {
+      id: item.id,
+      name: item.productName,
+      image_url: null,
+      variants: [syntheticVariant],
+    };
+
+    // Reconstruct discounts: we store a single combined discount entry if one exists
+    const reconstructedDiscounts: Array<{ name: string; percentage: number }> = [];
+    const effectivePct = item.discountPercent > 0
+      ? item.discountPercent
+      : (() => {
+          const gross = item.unitPrice * item.quantity;
+          return gross > 0 && item.lineTotal < gross ? ((gross - item.lineTotal) / gross) * 100 : 0;
+        })();
+    if (effectivePct > 0) {
+      reconstructedDiscounts.push({ name: 'Discount', percentage: parseFloat(effectivePct.toFixed(4)) });
+    }
+
+    setEditingItemId(item.id);
+    setSelectedProduct(syntheticProduct);
+    setSelectedVariant(syntheticVariant);
+    setVariantQuantity(item.quantity);
+    setVariantPrice(item.unitPrice);
+    setVariantDiscounts(reconstructedDiscounts);
+    setShowProductModal(true);
   };
 
-  const handleSelectVariant = (variant: typeof MOCK_PIPE_PRODUCTS[0]['variants'][0]) => {
-    setSelectedVariant(variant);
-    setQuantity(1);
+  const addDiscount = () => setVariantDiscounts([...variantDiscounts, { name: '', percentage: 0 }]);  const updateDiscount = (index: number, field: 'name' | 'percentage', value: string | number) => {
+    const next = [...variantDiscounts];
+    if (field === 'name') next[index].name = value as string;
+    else next[index].percentage = Math.max(0, Math.min(100, Number(value) || 0));
+    setVariantDiscounts(next);
   };
+  const removeDiscount = (index: number) => setVariantDiscounts(variantDiscounts.filter((_, i) => i !== index));
 
-  const getBestPriceTier = (variant: typeof MOCK_PIPE_PRODUCTS[0]['variants'][0], qty: number): PriceTier | null => {
-    if (!('priceTiers' in variant) || !variant.priceTiers) return null;
-    
-    const applicableTiers = variant.priceTiers.filter(tier => qty >= tier.minQty);
-    return applicableTiers.length > 0 ? applicableTiers[applicableTiers.length - 1] : null;
-  };
+  const calculateFinalPrice = () =>
+    variantDiscounts.reduce((p, d) => p * (1 - d.percentage / 100), variantPrice * variantQuantity);
 
-  const getNextPriceTier = (variant: typeof MOCK_PIPE_PRODUCTS[0]['variants'][0], currentQty: number): PriceTier | null => {
-    if (!('priceTiers' in variant) || !variant.priceTiers) return null;
-    
-    return variant.priceTiers.find(tier => tier.minQty > currentQty) || null;
-  };
-
-  const getEffectivePrice = () => {
-    if (!selectedVariant) return 0;
-    const tier = getBestPriceTier(selectedVariant, quantity);
-    return tier ? tier.pricePerUnit : selectedVariant.price;
+  const calculateTotalDiscountPct = () => {
+    const subtotal = variantPrice * variantQuantity;
+    if (subtotal === 0) return 0;
+    return ((subtotal - calculateFinalPrice()) / subtotal) * 100;
   };
 
   const handleAddToOrder = () => {
     if (!editedOrder || !selectedProduct || !selectedVariant) return;
+    const finalTotal = calculateFinalPrice();
+    const totalDiscount = calculateTotalDiscountPct();
 
-    const tier = getBestPriceTier(selectedVariant, quantity);
-    const effectivePrice = tier ? tier.pricePerUnit : selectedVariant.price;
-    const discount = tier ? tier.discount : 0;
-
-    const newItem: OrderLineItem = {
-      id: `item-${Date.now()}`,
+    const updatedItem: OrderLineItem = {
+      id: editingItemId ?? `item-${Date.now()}`,
       sku: selectedVariant.id.toUpperCase(),
       productName: selectedProduct.name,
-      variantDescription: `${selectedVariant.size} - ${selectedVariant.description}`,
-      quantity: quantity,
-      unitPrice: selectedVariant.price,
-      discountPercent: discount,
-      discountAmount: (selectedVariant.price - effectivePrice) * quantity,
-      lineTotal: quantity * effectivePrice,
-      stockHint: selectedVariant.stock > 50 ? 'Available' : 'Partial',
+      variantDescription: `${selectedVariant.size}${selectedVariant.description ? ' - ' + selectedVariant.description : ''}`,
+      quantity: variantQuantity,
+      unitPrice: variantPrice,
+      originalPrice: selectedVariant.unit_price,
+      negotiatedPrice: variantPrice,
+      discountPercent: totalDiscount,
+      discountAmount: variantPrice * variantQuantity - finalTotal,
+      lineTotal: finalTotal,
+      stockHint: selectedVariant.stock >= variantQuantity ? 'Available' : selectedVariant.stock > 0 ? 'Partial' : 'Not Available',
       availableStock: selectedVariant.stock,
     };
 
-    setEditedOrder({
-      ...editedOrder,
-      items: [...editedOrder.items, newItem],
-    });
-
+    if (editingItemId) {
+      // Replace the existing item
+      setEditedOrder({
+        ...editedOrder,
+        items: editedOrder.items.map(i => i.id === editingItemId ? updatedItem : i),
+      });
+    } else {
+      setEditedOrder({ ...editedOrder, items: [...editedOrder.items, updatedItem] });
+    }
     handleCloseProductModal();
   };
+
+  const filteredProducts = productSearch.trim()
+    ? categoryProducts.filter(p => p.name.toLowerCase().includes(productSearch.toLowerCase()))
+    : categoryProducts;
 
   // Invoice Generation
   const handleGenerateInvoice = () => {
     if (!order) return;
-    
-    // Simulate invoice generation
     const invoiceNumber = `INV-2026-${Math.floor(1000 + Math.random() * 9000)}`;
     const today = new Date();
     const dueDate = new Date(today);
     dueDate.setDate(dueDate.getDate() + (order.paymentTerms === 'COD' ? 0 : parseInt(order.paymentTerms) || 30));
-    
     alert(`Invoice ${invoiceNumber} generated successfully!\n\nInvoice Date: ${today.toLocaleDateString()}\nDue Date: ${dueDate.toLocaleDateString()}\nTotal Amount: ₱${order.totalAmount.toLocaleString()}\n\n(PDF generation would happen here)`);
-    
-    // In a real app, this would call an API to generate the PDF
     setShowInvoiceModal(false);
   };
 
@@ -551,56 +788,34 @@ export function OrderDetailPage() {
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
-      // Validate file size (max 10MB)
-      if (file.size > 10 * 1024 * 1024) {
-        alert('File size must be less than 10MB');
-        return;
-      }
-      
-      // Validate file type (images and PDFs only)
+      if (file.size > 10 * 1024 * 1024) { alert('File size must be less than 10MB'); return; }
       const validTypes = ['image/jpeg', 'image/png', 'image/jpg', 'application/pdf'];
-      if (!validTypes.includes(file.type)) {
-        alert('Only JPG, PNG, and PDF files are allowed');
-        return;
-      }
-      
+      if (!validTypes.includes(file.type)) { alert('Only JPG, PNG, and PDF files are allowed'); return; }
       setSelectedFile(file);
     }
   };
 
   const handleUploadProof = () => {
     if (!order || !selectedFile) return;
-    
     const newProof: ProofDocument = {
       id: `proof-${Date.now()}`,
       orderId: order.id,
       type: proofType,
       fileName: selectedFile.name,
-      fileUrl: URL.createObjectURL(selectedFile), // In real app, this would be uploaded to server
+      fileUrl: URL.createObjectURL(selectedFile),
       fileSize: selectedFile.size,
       uploadedBy: order.agent,
       uploadedByRole: 'Agent',
       uploadedAt: new Date().toISOString(),
       status: 'pending',
-      notes: proofNotes
+      notes: proofNotes,
     };
-    
     setProofs([...proofs, newProof]);
-    
-    alert(`${proofType === 'delivery' ? 'Proof of Delivery' : proofType === 'payment' ? 'Proof of Payment' : 'Receipt'} uploaded successfully!\n\nFile: ${selectedFile.name}\nStatus: Pending Verification\n\n(In a real system, this would be uploaded to a server and notify the verification team)`);
-    
-    // Reset form
+    alert(`${proofType === 'delivery' ? 'Proof of Delivery' : proofType === 'payment' ? 'Proof of Payment' : 'Receipt'} uploaded successfully!\n\nFile: ${selectedFile.name}\nStatus: Pending Verification`);
     setSelectedFile(null);
     setProofNotes('');
     setShowProofModal(false);
   };
-
-  const filteredProducts = productSearch
-    ? MOCK_PIPE_PRODUCTS.filter(product =>
-        product.name.toLowerCase().includes(productSearch.toLowerCase()) ||
-        product.category.toLowerCase().includes(productSearch.toLowerCase())
-      )
-    : MOCK_PIPE_PRODUCTS;
 
   const handleStatusChange = (newStatus: OrderStatus) => {
     if (!editedOrder) return;
@@ -613,6 +828,14 @@ export function OrderDetailPage() {
   };
 
   const displayOrder = isEditing && editedOrder ? editedOrder : order;
+
+  // Compute effective discount % for a line item (fall back to amount-based calculation)
+  const effectiveDiscountPct = (item: OrderLineItem) => {
+    if (item.discountPercent > 0) return item.discountPercent;
+    const gross = item.unitPrice * item.quantity;
+    if (gross > 0 && item.lineTotal < gross) return ((gross - item.lineTotal) / gross) * 100;
+    return 0;
+  };
 
   // All available statuses
   const allStatuses: OrderStatus[] = [
@@ -856,29 +1079,28 @@ export function OrderDetailPage() {
           {/* Mobile Card View */}
           <div className="md:hidden divide-y divide-gray-200">
             {displayOrder.items.map((item, index) => (
-              <div key={index} className="p-4 space-y-3">
+              <div key={index} className={`p-4 space-y-3 ${isEditing ? 'cursor-pointer hover:bg-blue-50 transition-colors' : ''}`}
+                onClick={isEditing ? () => handleEditItem(item) : undefined}>
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0 flex-1">
                     <div className="font-medium text-gray-900 break-words">{item.productName}</div>
                     <div className="text-xs text-gray-500 mt-1">{item.variantDescription}</div>
                     <div className="text-xs text-gray-600 mt-1">SKU: {item.sku}</div>
                     <div className="flex gap-2 mt-2 flex-wrap">
-                      {item.batchDiscount && (
-                        <Badge variant="warning" className="text-xs">Bulk {item.batchDiscount}%</Badge>
-                      )}
                       {item.negotiatedPrice && item.originalPrice && item.negotiatedPrice < item.originalPrice && (
                         <Badge variant="danger" className="text-xs">Negotiated</Badge>
                       )}
                       <Badge variant={item.stockHint === 'Available' ? 'success' : 'warning'} className="text-xs">
                         {item.stockHint}
                       </Badge>
+                      {isEditing && <Badge variant="outline" className="text-xs text-blue-600 border-blue-400">Click to edit</Badge>}
                     </div>
                   </div>
                   {isEditing && (
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => handleRemoveItem(item.id)}
+                      onClick={(e) => { e.stopPropagation(); handleRemoveItem(item.id); }}
                       className="text-red-600 hover:text-red-700 hover:bg-red-50 flex-shrink-0"
                     >
                       <X className="w-4 h-4" />
@@ -906,7 +1128,7 @@ export function OrderDetailPage() {
                   </div>
                   <div>
                     <div className="text-xs text-gray-500">Discount</div>
-                    <div className="font-medium text-gray-900">{item.batchDiscount ? `${item.batchDiscount}%` : '-'}</div>
+                    <div className="font-medium text-gray-900">{effectiveDiscountPct(item) > 0 ? `${effectiveDiscountPct(item).toFixed(1)}%` : '-'}</div>
                   </div>
                   <div>
                     <div className="text-xs text-gray-500">Line Total</div>
@@ -942,17 +1164,17 @@ export function OrderDetailPage() {
                   </thead>
                   <tbody className="divide-y divide-gray-200">
                     {displayOrder.items.map((item, index) => (
-                      <tr key={index} className="hover:bg-gray-50">
+                      <tr key={index}
+                        className={`hover:bg-gray-50 ${isEditing ? 'cursor-pointer hover:bg-blue-50' : ''}`}
+                        onClick={isEditing ? () => handleEditItem(item) : undefined}>
                         <td className="px-6 py-4 text-gray-600">{item.sku}</td>
                         <td className="px-6 py-4">
                           <div className="font-medium text-gray-900">{item.productName}</div>
                           <div className="text-xs text-gray-500">{item.variantDescription}</div>
-                          {item.batchDiscount && (
-                            <Badge variant="warning" className="mt-1">Bulk {item.batchDiscount}%</Badge>
-                          )}
                           {item.negotiatedPrice && item.originalPrice && item.negotiatedPrice < item.originalPrice && (
                             <Badge variant="danger" className="mt-1">Negotiated</Badge>
                           )}
+                          {isEditing && <div className="text-xs text-blue-500 mt-1">Click to edit</div>}
                         </td>
                         <td className="px-6 py-4 text-center font-medium">
                           {isEditing ? (
@@ -979,7 +1201,7 @@ export function OrderDetailPage() {
                         </td>
                         <td className="px-6 py-4 text-right font-medium text-gray-900">₱{item.unitPrice}</td>
                         <td className="px-6 py-4 text-center">
-                          {item.batchDiscount ? `${item.batchDiscount}%` : '-'}
+                          {effectiveDiscountPct(item) > 0 ? `${effectiveDiscountPct(item).toFixed(1)}%` : '-'}
                         </td>
                         <td className="px-6 py-4 text-right font-medium text-gray-900">
                           ₱{item.lineTotal.toLocaleString()}
@@ -994,7 +1216,7 @@ export function OrderDetailPage() {
                             <Button
                               variant="ghost"
                               size="sm"
-                              onClick={() => handleRemoveItem(item.id)}
+                              onClick={(e) => { e.stopPropagation(); handleRemoveItem(item.id); }}
                               className="text-red-600 hover:text-red-700 hover:bg-red-50"
                             >
                               <X className="w-4 h-4" />
@@ -1020,6 +1242,66 @@ export function OrderDetailPage() {
           </div>
         </CardContent>
           </Card>
+
+          {/* Approve / Reject Action Bar */}
+          {order.status !== 'Approved' && order.status !== 'Rejected' && (
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl">
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-amber-900">Order Decision</p>
+                <p className="text-xs text-amber-700 mt-0.5">
+                  Current status: <span className="font-medium">{order.status}</span>
+                  {order.requiresApproval && ' · Requires approval'}
+                </p>
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setShowRejectModal(true)}
+                  className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg border-2 border-red-600 text-red-600 font-semibold hover:bg-red-50 transition-colors"
+                >
+                  <XCircle className="w-4 h-4" />
+                  Reject
+                </button>
+                <button
+                  onClick={() => setShowApproveModal(true)}
+                  className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg bg-green-600 text-white font-semibold hover:bg-green-700 transition-colors"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  Approve
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Already decided banner */}
+          {(order.status === 'Approved' || order.status === 'Rejected') && (
+            <div className={`flex items-center gap-3 p-4 rounded-xl border ${order.status === 'Approved' ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
+              {order.status === 'Approved'
+                ? <CheckCircle2 className="w-5 h-5 text-green-600 flex-shrink-0" />
+                : <XCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
+              }
+              <div className="flex-1 min-w-0">
+                <p className={`text-sm font-semibold ${order.status === 'Approved' ? 'text-green-900' : 'text-red-900'}`}>
+                  Order {order.status}
+                  {order.status === 'Approved' && order.approvedBy && ` by ${order.approvedBy}`}
+                  {order.status === 'Rejected' && order.rejectedBy && ` by ${order.rejectedBy}`}
+                </p>
+                {order.status === 'Rejected' && order.rejectionReason && (
+                  <p className="text-xs text-red-700 mt-0.5">Reason: {order.rejectionReason}</p>
+                )}
+              </div>
+              {/* Allow un-deciding (reset to Pending) */}
+              <button
+                onClick={async () => {
+                  if (!id) return;
+                  await supabase.from('orders').update({ status: 'Pending', approved_by: null, approved_date: null, rejected_by: null, rejection_reason: null }).eq('id', id);
+                  setOrder({ ...order, status: 'Pending', approvedBy: undefined, approvedDate: undefined, rejectedBy: undefined, rejectionReason: undefined });
+                }}
+                className="text-xs underline text-gray-500 hover:text-gray-700 flex-shrink-0"
+              >
+                Undo
+              </button>
+            </div>
+          )}
 
           {/* Approval Information */}
           {order.requiresApproval && (
@@ -1411,85 +1693,103 @@ export function OrderDetailPage() {
                       </div>
 
                       {/* Show old vs new values if available */}
-                      {(log.oldValue || log.newValue) && (
-                        <div className="mt-2 space-y-1">
-                          {log.oldValue && log.newValue && (
-                            <div className="text-xs flex items-center gap-2">
-                              <span className="text-red-700 font-medium">
-                                {typeof log.oldValue === 'object' && log.oldValue.unitPrice 
-                                  ? `₱${log.oldValue.unitPrice.toLocaleString()}`
-                                  : typeof log.oldValue === 'string' || typeof log.oldValue === 'number'
-                                  ? log.oldValue
-                                  : JSON.stringify(log.oldValue)
-                                }
+                      {(log.oldValue || log.newValue) && (() => {
+                        // Render a single key's value in a human-friendly way
+                        const fmt = (obj: any, key: string): string => {
+                          const v = obj?.[key];
+                          if (v === undefined || v === null) return '—';
+                          if (key === 'unitPrice' || key === 'lineTotal' || key === 'discountAmount') return `₱${Number(v).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+                          if (key === 'discountPercent') return `${Number(v).toFixed(2)}%`;
+                          return String(v);
+                        };
+
+                        // Detect which field changed and produce a clean pill-style diff
+                        const keys = Array.from(new Set([
+                          ...Object.keys(log.oldValue ?? {}),
+                          ...Object.keys(log.newValue ?? {}),
+                        ])).filter(k => {
+                          // Skip decorative/redundant keys
+                          if (['approved_by', 'rejected_by', 'rejection_reason'].includes(k)) return false;
+                          // Skip keys whose value is a nested object (not renderable as a pill)
+                          const oldV = (log.oldValue as any)?.[k];
+                          const newV = (log.newValue as any)?.[k];
+                          if (oldV !== undefined && typeof oldV === 'object') return false;
+                          if (newV !== undefined && typeof newV === 'object') return false;
+                          return true;
+                        });
+
+                        if (keys.length === 0) return null;
+
+                        return (
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {keys.map(key => {
+                              const oldDisplay = fmt(log.oldValue, key);
+                              const newDisplay = fmt(log.newValue, key);
+                              const hasOld = log.oldValue && log.oldValue[key] !== undefined;
+                              const hasNew = log.newValue && log.newValue[key] !== undefined;
+                              return (
+                                <div key={key} className="flex items-center gap-1.5 text-xs">
+                                  {hasOld && (
+                                    <span className="px-2 py-0.5 rounded-full bg-red-50 text-red-700 font-medium border border-red-200 line-through decoration-red-400">
+                                      {oldDisplay}
+                                    </span>
+                                  )}
+                                  {hasOld && hasNew && (
+                                    <span className="text-gray-400 font-bold">→</span>
+                                  )}
+                                  {hasNew && (
+                                    <span className="px-2 py-0.5 rounded-full bg-green-50 text-green-700 font-medium border border-green-200">
+                                      {newDisplay}
+                                    </span>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })()}
+
+                      {/* Show metadata if available — only fields that add context beyond the description */}
+                      {log.metadata && (() => {
+                        // Keys to suppress: productName/variantDescription are already in the description text
+                        const SKIP_KEYS = new Set(['productName', 'variantDescription']);
+                        const entries = Object.entries(log.metadata as Record<string, any>).filter(([k]) => !SKIP_KEYS.has(k));
+                        if (entries.length === 0) return null;
+
+                        const fmtMetaValue = (key: string, val: any): string => {
+                          if (typeof val === 'boolean') return val ? 'Yes' : 'No';
+                          if (typeof val === 'number') {
+                            if (['addedAmount', 'savedAmount', 'reducedAmount', 'unitPrice', 'lineTotal'].includes(key))
+                              return `₱${val.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+                            if (key === 'discountPercent') return `${val.toFixed(2)}%`;
+                            return val.toLocaleString();
+                          }
+                          if (key === 'dueDate') return new Date(val).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+                          return String(val);
+                        };
+
+                        const fmtMetaKey = (k: string): string => {
+                          const labels: Record<string, string> = {
+                            addedAmount: 'Added to order',
+                            savedAmount: 'Saved',
+                            reducedAmount: 'Reduced by',
+                            dueDate: 'Due date',
+                            reason: 'Reason',
+                          };
+                          return labels[k] ?? k.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase()).trim();
+                        };
+
+                        return (
+                          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+                            {entries.map(([key, value]) => (
+                              <span key={key} className="text-xs text-gray-500">
+                                <span className="font-medium text-gray-700">{fmtMetaKey(key)}:</span>{' '}
+                                {fmtMetaValue(key, value)}
                               </span>
-                              <span className="text-gray-400">→</span>
-                              <span className="text-green-700 font-medium">
-                                {typeof log.newValue === 'object' && log.newValue.unitPrice 
-                                  ? `₱${log.newValue.unitPrice.toLocaleString()}`
-                                  : typeof log.newValue === 'string' || typeof log.newValue === 'number'
-                                  ? log.newValue
-                                  : JSON.stringify(log.newValue)
-                                }
-                              </span>
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Show metadata if available */}
-                      {log.metadata && Object.keys(log.metadata).length > 0 && (
-                        <div className="mt-2 text-xs bg-white rounded border border-gray-200 p-2 space-y-1">
-                          {Object.entries(log.metadata).map(([key, value]) => {
-                            const formatValue = (val: any): string => {
-                              if (typeof val === 'boolean') return val ? 'Yes' : 'No';
-                              if (typeof val === 'number') {
-                                // Format monetary values
-                                if (key === 'addedAmount' || key === 'savedAmount' || key === 'reducedAmount') {
-                                  return `₱${val.toLocaleString()}`;
-                                }
-                                return val.toLocaleString();
-                              }
-                              if (key === 'dueDate') {
-                                return new Date(val).toLocaleDateString('en-US', {
-                                  month: 'short',
-                                  day: 'numeric',
-                                  year: 'numeric'
-                                });
-                              }
-                              if (key === 'estimatedArrival') {
-                                return new Date(val).toLocaleString('en-US', {
-                                  month: 'short',
-                                  day: 'numeric',
-                                  hour: '2-digit',
-                                  minute: '2-digit'
-                                });
-                              }
-                              return String(val);
-                            };
-
-                            const formatKey = (k: string): string => {
-                              const keyLabels: Record<string, string> = {
-                                'addedAmount': 'Added to order',
-                                'savedAmount': 'Saved',
-                                'reducedAmount': 'Reduced by',
-                                'dueDate': 'Due date',
-                                'reason': 'Reason'
-                              };
-                              return keyLabels[k] || k.replace(/([A-Z])/g, ' $1')
-                                .replace(/^./, str => str.toUpperCase())
-                                .trim();
-                            };
-
-                            return (
-                              <div key={key} className="flex gap-2">
-                                <span className="text-gray-600">{formatKey(key)}:</span>
-                                <span className="text-gray-900 font-medium">{formatValue(value)}</span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
+                            ))}
+                          </div>
+                        );
+                      })()}
                     </div>
                   </div>
                 );
@@ -1499,241 +1799,361 @@ export function OrderDetailPage() {
         </CardContent>
       </Card>
 
-      {/* Product Selector Modal */}
+      {/* Product Selector Modal — same e-commerce style as CreateOrderModal */}
       {showProductModal && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-0 md:p-4">
-          <div className="bg-white md:rounded-lg shadow-xl w-full h-full md:w-auto md:h-auto md:max-w-6xl md:max-h-[90vh] overflow-hidden flex flex-col">
-            {/* Modal Header */}
-            <div className="sticky top-0 bg-white border-b border-gray-200 px-4 md:px-6 py-4 flex items-center justify-between">
-              <div className="flex items-center gap-3 min-w-0 flex-1">
-                <ShoppingCart className="w-5 h-5 md:w-6 md:h-6 text-red-600 flex-shrink-0" />
-                <div className="min-w-0">
-                  <h2 className="text-lg md:text-xl font-bold text-gray-900 truncate">Add Products to Order</h2>
-                  <p className="text-xs md:text-sm text-gray-500 mt-1 hidden sm:block">Browse and select products to add</p>
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-0 lg:p-4">
+          <div className="bg-white w-full h-full max-h-screen overflow-hidden flex flex-col lg:rounded-lg lg:h-auto lg:max-w-5xl lg:max-h-[90vh]">
+            {/* Header */}
+            <div className="px-4 md:px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <ShoppingCart className="w-6 h-6 text-red-600" />
+                <div>
+                  <h2 className="text-lg sm:text-xl font-bold text-gray-900">Add Products to Order</h2>
+                  <p className="text-sm text-gray-500 mt-0.5">Browse categories and select a product</p>
                 </div>
               </div>
-              <button onClick={handleCloseProductModal} className="text-gray-400 hover:text-gray-600 flex-shrink-0">
-                <X className="w-5 h-5 md:w-6 md:h-6" />
+              <button onClick={handleCloseProductModal} className="text-gray-400 hover:text-gray-600">
+                <X className="w-6 h-6" />
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-4 md:p-6">
-              {!selectedProduct ? (
-                <>
-                  {/* Search Bar */}
-                  <div className="mb-6">
-                    <div className="relative">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                      <input
-                        type="text"
-                        placeholder="Search products..."
-                        value={productSearch}
-                        onChange={(e) => setProductSearch(e.target.value)}
-                        className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
-                      />
-                    </div>
-                  </div>
+            <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4">
+              {/* Search */}
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Search products by name..."
+                  value={productSearch}
+                  onChange={(e) => { setProductSearch(e.target.value); if (e.target.value.trim()) setSelectedCategory(null); }}
+                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                />
+              </div>
 
-                  {/* Product Grid */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {filteredProducts.map((product) => (
-                      <Card
-                        key={product.id}
-                        className="cursor-pointer hover:shadow-lg transition-shadow border-2 hover:border-red-500"
-                        onClick={() => handleSelectProduct(product)}
-                      >
-                        <CardContent className="p-4">
-                          <div className="flex items-start justify-between mb-2">
-                            <div className="flex-1">
-                              <h3 className="font-semibold text-gray-900 mb-1">{product.name}</h3>
-                              <Badge variant="outline" className="text-xs">{product.category}</Badge>
-                            </div>
-                            <Package className="w-5 h-5 text-gray-400" />
-                          </div>
-                          <p className="text-xs text-gray-500 mt-2">{product.variants.length} variants available</p>
-                          <div className="mt-3 flex items-center justify-between">
-                            <span className="text-sm text-gray-600">
-                              From ₱{Math.min(...product.variants.map(v => v.price))}
-                            </span>
-                            <Button variant="outline" size="sm" className="gap-1">
-                              Select <Plus className="w-3 h-3" />
-                            </Button>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    ))}
-                  </div>
-
-                  {filteredProducts.length === 0 && (
-                    <div className="text-center py-12">
-                      <Package className="w-12 h-12 mx-auto mb-3 text-gray-400" />
-                      <p className="font-medium text-gray-900">No products found</p>
-                      <p className="text-sm text-gray-500 mt-1">Try adjusting your search</p>
+              {/* Category / Product Browser */}
+              {productSearch.trim() === '' && !selectedCategory ? (
+                <div>
+                  <p className="text-xs text-gray-500 mb-2">Select a category</p>
+                  {categoriesLoading ? (
+                    <div className="flex items-center justify-center h-32 text-gray-400 text-sm gap-2"><Loader2 className="w-4 h-4 animate-spin" />Loading…</div>
+                  ) : (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 max-h-80 overflow-y-auto p-1">
+                      {categories.map(cat => (
+                        <button key={cat.id} type="button" onClick={() => handleSelectCategory(cat)}
+                          className="flex flex-col items-center p-4 border border-gray-200 rounded-lg hover:border-red-500 hover:bg-red-50 transition-all group">
+                          {cat.image_url
+                            ? <img src={cat.image_url} alt={cat.name} className="w-12 h-12 object-cover rounded-lg mb-2" />
+                            : <div className="w-12 h-12 bg-gray-100 rounded-lg flex items-center justify-center mb-2 group-hover:bg-red-100"><Package className="w-6 h-6 text-gray-600 group-hover:text-red-600" /></div>
+                          }
+                          <div className="text-xs font-semibold text-gray-900 text-center">{cat.name}</div>
+                        </button>
+                      ))}
                     </div>
                   )}
-                </>
-              ) : (
-                <>
-                  {/* Product Detail View */}
-                  <div className="mb-6">
-                    <Button variant="ghost" size="sm" onClick={() => setSelectedProduct(null)} className="gap-2 mb-4">
-                      <ArrowLeft className="w-4 h-4" />
-                      Back to Products
-                    </Button>
-                    
-                    <div className="bg-gray-50 p-4 rounded-lg">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <h3 className="text-lg font-bold text-gray-900">{selectedProduct.name}</h3>
-                          <Badge variant="outline" className="mt-2">{selectedProduct.category}</Badge>
-                        </div>
-                        <Package className="w-8 h-8 text-gray-400" />
-                      </div>
+                </div>
+              ) : selectedCategory && productSearch.trim() === '' ? (
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <button type="button" onClick={() => { setSelectedCategory(null); setCategoryProducts([]); }}
+                      className="flex items-center gap-1 text-xs text-red-600 hover:text-red-700 font-medium">
+                      ← All Categories
+                    </button>
+                    <span className="text-xs text-gray-400">/</span>
+                    <span className="text-xs font-semibold text-gray-700">{selectedCategory.name}</span>
+                  </div>
+                  {productsLoading ? (
+                    <div className="flex items-center justify-center h-32 text-gray-400 text-sm gap-2"><Loader2 className="w-4 h-4 animate-spin" />Loading…</div>
+                  ) : (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-80 overflow-y-auto p-1">
+                      {categoryProducts.map(product => (
+                        <button key={product.id} type="button"
+                          onClick={() => { if (!product.variants.length) return; setSelectedProduct(product); setSelectedVariant(product.variants[0]); setVariantQuantity(1); setVariantPrice(product.variants[0].unit_price); setVariantDiscounts([]); }}
+                          className="flex flex-col items-center p-3 border border-gray-200 rounded-lg hover:border-red-500 hover:bg-red-50 transition-all group">
+                          {product.image_url
+                            ? <img src={product.image_url} alt={product.name} className="w-12 h-12 object-cover rounded-lg mb-2" />
+                            : <div className="w-12 h-12 bg-gray-100 rounded-lg flex items-center justify-center mb-2 group-hover:bg-red-100"><Package className="w-6 h-6 text-gray-600 group-hover:text-red-600" /></div>
+                          }
+                          <div className="text-xs font-medium text-gray-900 text-center line-clamp-2">{product.name}</div>
+                          <div className="text-xs text-gray-400 mt-1">{product.variants.length} variant{product.variants.length !== 1 ? 's' : ''}</div>
+                        </button>
+                      ))}
                     </div>
+                  )}
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 max-h-80 overflow-y-auto p-1">
+                  {filteredProducts.length === 0
+                    ? <div className="col-span-full flex items-center justify-center h-24 text-gray-400 text-sm">No matching products</div>
+                    : filteredProducts.map(product => (
+                      <button key={product.id} type="button"
+                        onClick={() => { setSelectedProduct(product); setSelectedVariant(product.variants[0]); setVariantQuantity(1); setVariantPrice(product.variants[0].unit_price); setVariantDiscounts([]); }}
+                        className="flex flex-col items-center p-3 border border-gray-200 rounded-lg hover:border-red-500 hover:bg-red-50 transition-all group">
+                        {product.image_url
+                          ? <img src={product.image_url} alt={product.name} className="w-12 h-12 object-cover rounded-lg mb-2" />
+                          : <div className="w-12 h-12 bg-gray-100 rounded-lg flex items-center justify-center mb-2"><Package className="w-6 h-6 text-gray-600" /></div>
+                        }
+                        <div className="text-xs font-medium text-gray-900 text-center line-clamp-2">{product.name}</div>
+                      </button>
+                    ))}
+                </div>
+              )}
+            </div>
+
+            <div className="px-4 md:px-6 py-4 border-t border-gray-200 flex justify-end">
+              <Button variant="outline" onClick={handleCloseProductModal}>Cancel</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Product Detail Modal — e-commerce style, overlays the product browser */}
+      {showProductModal && selectedProduct && selectedVariant && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[60] p-0 lg:p-4">
+          <div className="bg-white rounded-none lg:rounded-lg shadow-2xl w-full h-full lg:h-auto lg:max-w-4xl lg:max-h-[85vh] overflow-hidden flex flex-col">
+            <button onClick={() => { setSelectedProduct(null); setSelectedVariant(null); setVariantQuantity(1); setVariantPrice(0); setVariantDiscounts([]); }}
+              className="absolute top-4 right-4 z-20 p-2 bg-white rounded-full shadow-lg hover:bg-gray-100">
+              <X className="w-5 h-5 text-gray-600" />
+            </button>
+
+            <div className="flex-1 overflow-y-auto">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 lg:gap-8 p-4 md:p-8">
+                {/* Left: Image + Price input */}
+                <div className="space-y-4">
+                  <div className="aspect-square bg-gradient-to-br from-gray-50 to-gray-100 rounded-xl flex items-center justify-center border-2 border-gray-200 overflow-hidden">
+                    {selectedProduct.image_url
+                      ? <img src={selectedProduct.image_url} alt={selectedProduct.name} className="w-full h-full object-cover" />
+                      : <Package className="w-32 h-32 text-gray-300" />
+                    }
+                  </div>
+                  <div className="bg-gray-50 rounded-lg p-4">
+                    <div className="text-sm text-gray-600 mb-2">Price per unit</div>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-lg font-bold text-gray-900 flex-shrink-0">₱</span>
+                      <input type="number" min="0" step="0.01" value={variantPrice}
+                        onChange={(e) => setVariantPrice(Math.max(0, parseFloat(e.target.value) || 0))}
+                        onWheel={(e) => e.currentTarget.blur()}
+                        className="min-w-0 w-full text-xl font-bold text-gray-900 bg-white px-3 py-2 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500" />
+                    </div>
+                    <p className="text-xs text-gray-500 mt-2">Base price: ₱{selectedVariant.unit_price.toLocaleString()}</p>
+                  </div>
+                </div>
+
+                {/* Right: Details */}
+                <div className="space-y-6">
+                  <div>
+                    <h2 className="text-3xl font-bold text-gray-900 mb-2">{selectedProduct.name}</h2>
+                    <p className="text-gray-600">{selectedVariant.description}</p>
+                  </div>
+                  <div className="text-sm text-gray-600">
+                    <span className="font-medium">Available Stock: </span>
+                    <span className={`font-bold ${selectedVariant.stock > 50 ? 'text-green-600' : selectedVariant.stock > 0 ? 'text-yellow-600' : 'text-red-600'}`}>
+                      {selectedVariant.stock} Units
+                    </span>
                   </div>
 
-                  {/* Variant Selection */}
+                  {/* Variant selector */}
                   <div>
-                    <h4 className="font-semibold text-gray-900 mb-3">Select Variant</h4>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      {selectedProduct.variants.map((variant) => (
-                        <Card
-                          key={variant.id}
-                          className={`cursor-pointer transition-all ${
-                            selectedVariant?.id === variant.id
-                              ? 'border-2 border-red-500 bg-red-50'
-                              : 'border hover:border-red-300'
-                          }`}
-                          onClick={() => handleSelectVariant(variant)}
-                        >
-                          <CardContent className="p-4">
-                            <div className="flex items-start justify-between mb-2">
-                              <div className="flex-1">
-                                <h5 className="font-semibold text-gray-900">{variant.size}</h5>
-                                <p className="text-xs text-gray-500 mt-1">{variant.description}</p>
-                              </div>
-                              {selectedVariant?.id === variant.id && (
-                                <CheckCircle className="w-5 h-5 text-red-600" />
-                              )}
-                            </div>
-                            <div className="mt-3 flex items-center justify-between">
-                              <span className="text-lg font-bold text-gray-900">₱{variant.price}</span>
-                              <span className="text-xs text-gray-500">Stock: {variant.stock}</span>
-                            </div>
-                          </CardContent>
-                        </Card>
+                    <label className="block text-sm font-semibold text-gray-900 mb-3">Select Size</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {selectedProduct.variants.map(v => (
+                        <button key={v.id} type="button"
+                          onClick={() => { setSelectedVariant(v); setVariantQuantity(1); setVariantPrice(v.unit_price); }}
+                          className={`px-4 py-3 border-2 rounded-lg font-medium transition-all text-left ${v.id === selectedVariant.id ? 'border-red-600 bg-red-50 text-red-700' : 'border-gray-200 hover:border-gray-300 text-gray-700'}`}>
+                          <div className="font-semibold">{v.size}</div>
+                          <div className="text-sm font-bold mt-1">₱{v.unit_price.toLocaleString()}</div>
+                          <div className="text-xs text-gray-500 mt-1">Stock: {v.stock}</div>
+                        </button>
                       ))}
                     </div>
                   </div>
 
-                  {/* Quantity Selection */}
-                  {selectedVariant && (
-                    <div className="mt-6 bg-gray-50 p-4 rounded-lg">
-                      <h4 className="font-semibold text-gray-900 mb-3">Quantity</h4>
-                      <div className="flex items-center gap-4">
-                        <input
-                          type="number"
-                          min="1"
-                          max={selectedVariant.stock}
-                          value={quantity}
-                          onChange={(e) => setQuantity(parseInt(e.target.value) || 1)}
-                          className="w-32 px-4 py-2 border border-gray-300 rounded-lg text-center font-medium focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
-                        />
-                        <div className="flex-1">
-                          <p className="text-sm text-gray-600">
-                            Line Total: <span className="font-bold text-gray-900">₱{(quantity * getEffectivePrice()).toLocaleString()}</span>
-                          </p>
-                          <p className="text-xs text-gray-500 mt-1">Max available: {selectedVariant.stock} units</p>
-                        </div>
-                      </div>
-
-                      {/* Batch Pricing Tiers */}
-                      {('priceTiers' in selectedVariant) && selectedVariant.priceTiers && selectedVariant.priceTiers.length > 0 && (
-                        <div className="mt-4">
-                          <div className="bg-gradient-to-br from-amber-50 to-orange-50 p-4 rounded-lg border border-amber-200">
-                            <h5 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-                              <Package className="w-4 h-4 text-amber-600" />
-                              Bulk Buy Discounts
-                            </h5>
-                            <div className="space-y-2">
-                              {selectedVariant.priceTiers.map((tier, idx) => {
-                                const isActive = quantity >= tier.minQty;
-                                const isNext = !isActive && (idx === 0 || quantity < tier.minQty) && (!selectedVariant.priceTiers![idx - 1] || quantity >= selectedVariant.priceTiers![idx - 1].minQty);
-                                const isFuture = !isActive && !isNext;
-
-                                return (
-                                  <div
-                                    key={idx}
-                                    className={`flex items-center justify-between p-3 rounded-lg transition-all ${
-                                      isActive
-                                        ? 'bg-green-50 border border-green-200'
-                                        : isNext
-                                        ? 'bg-blue-50 border border-blue-200'
-                                        : 'bg-amber-50/30 border border-amber-100'
-                                    }`}
-                                  >
-                                    <div className="flex items-center gap-3">
-                                      {isActive && <Check className="w-5 h-5 text-green-600" />}
-                                      {isNext && <ArrowUp className="w-5 h-5 text-blue-600" />}
-                                      {isFuture && <Minus className="w-5 h-5 text-gray-400" />}
-                                      <div>
-                                        <p className={`text-sm font-semibold ${isActive ? 'text-green-900' : isNext ? 'text-blue-900' : 'text-gray-700'}`}>
-                                          Buy {tier.minQty}+ units
-                                        </p>
-                                        <p className={`text-xs ${isActive ? 'text-green-700' : isNext ? 'text-blue-700' : 'text-gray-500'}`}>
-                                          ₱{tier.pricePerUnit}/unit
-                                          {tier.discount > 0 && ` • ${tier.discount}% off`}
-                                        </p>
-                                      </div>
-                                    </div>
-                                    {tier.discount > 0 && (
-                                      <Badge className={isActive ? 'bg-blue-600 text-white' : isNext ? 'bg-blue-500 text-white' : 'bg-gray-400 text-white'}>
-                                        Save {tier.discount}%
-                                      </Badge>
-                                    )}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                            {(() => {
-                              const currentTier = getBestPriceTier(selectedVariant, quantity);
-                              const nextTier = getNextPriceTier(selectedVariant, quantity);
-                              if (currentTier && nextTier) {
-                                const additionalUnits = nextTier.minQty - quantity;
-                                const currentTotal = quantity * currentTier.pricePerUnit;
-                                const nextTotal = nextTier.minQty * nextTier.pricePerUnit;
-                                const potentialSavings = (quantity * currentTier.pricePerUnit) - (quantity * nextTier.pricePerUnit);
-                                
-                                return (
-                                  <div className="mt-3 p-3 bg-blue-100 border border-blue-300 rounded-lg">
-                                    <p className="text-xs text-blue-900 font-medium">
-                                      💡 Add {additionalUnits} more unit{additionalUnits > 1 ? 's' : ''} to unlock the next tier and save ₱{potentialSavings.toFixed(2)} per unit!
-                                    </p>
-                                  </div>
-                                );
-                              }
-                              return null;
-                            })()}
-                          </div>
-                        </div>
-                      )}
+                  {/* Quantity */}
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-900 mb-3">Quantity Request</label>
+                    <div className="flex items-center gap-4">
+                      <button type="button" onClick={() => setVariantQuantity(Math.max(1, variantQuantity - 1))}
+                        className="w-12 h-12 flex items-center justify-center border-2 border-gray-300 rounded-lg hover:bg-gray-50">
+                        <Minus className="w-5 h-5" />
+                      </button>
+                      <input type="number" min="1" value={variantQuantity}
+                        onChange={(e) => setVariantQuantity(Math.max(1, parseInt(e.target.value) || 1))}
+                        className="w-24 text-center text-2xl font-bold px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500" />
+                      <button type="button" onClick={() => setVariantQuantity(variantQuantity + 1)}
+                        className="w-12 h-12 flex items-center justify-center border-2 border-gray-300 rounded-lg hover:bg-gray-50">
+                        <Plus className="w-5 h-5" />
+                      </button>
                     </div>
-                  )}
-                </>
+                    {variantQuantity > selectedVariant.stock && (
+                      <p className="text-sm text-red-600 mt-2">⚠️ Quantity exceeds available stock</p>
+                    )}
+                  </div>
+
+                  {/* Discounts */}
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <label className="block text-sm font-semibold text-gray-900">Discounts</label>
+                      <button type="button" onClick={addDiscount}
+                        className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium text-red-600 border border-red-600 rounded-lg hover:bg-red-50">
+                        <Plus className="w-4 h-4" />Add Discount
+                      </button>
+                    </div>
+                    {variantDiscounts.length > 0 ? (
+                      <div className="space-y-2">
+                        {variantDiscounts.map((d, i) => (
+                          <div key={i} className="flex items-center gap-2">
+                            <input type="text" placeholder="Discount name" value={d.name}
+                              onChange={(e) => updateDiscount(i, 'name', e.target.value)}
+                              className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500" />
+                            <input type="number" min="0" max="100" step="0.1" placeholder="0" value={d.percentage || ''}
+                              onChange={(e) => updateDiscount(i, 'percentage', e.target.value)}
+                              onWheel={(e) => e.currentTarget.blur()}
+                              className="w-20 px-3 py-2 text-sm text-center border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500" />
+                            <span className="text-sm text-gray-600">%</span>
+                            <button type="button" onClick={() => removeDiscount(i)}
+                              className="p-2 text-red-600 hover:bg-red-50 rounded-lg">
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-gray-500 italic">No discounts applied</p>
+                    )}
+                  </div>
+
+                  {/* Subtotal */}
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-blue-900">Subtotal</span>
+                      <span className="text-lg font-bold text-blue-900">₱{(variantPrice * variantQuantity).toLocaleString()}</span>
+                    </div>
+                    {variantDiscounts.length > 0 && (() => {
+                      let cur = variantPrice * variantQuantity;
+                      return (
+                        <>
+                          {variantDiscounts.map((d, i) => {
+                            const amt = cur * (d.percentage / 100);
+                            cur -= amt;
+                            return (
+                              <div key={i} className="flex items-center justify-between text-sm">
+                                <span className="text-green-700">{d.name || `Discount ${i + 1}`} ({d.percentage}%)</span>
+                                <span className="text-green-700 font-semibold">-₱{amt.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                              </div>
+                            );
+                          })}
+                          <div className="pt-2 border-t border-blue-300 flex items-center justify-between">
+                            <span className="text-sm font-bold text-blue-900">Final Cost</span>
+                            <span className="text-2xl font-bold text-blue-900">₱{calculateFinalPrice().toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+
+                  <button type="button" onClick={handleAddToOrder}
+                    className="w-full py-4 bg-red-600 text-white text-lg font-semibold rounded-lg hover:bg-red-700 transition-colors flex items-center justify-center gap-2">
+                    <ShoppingCart className="w-5 h-5" />
+                    {editingItemId ? 'Update Item' : 'Add to Order'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Approve Confirmation Modal ─────────────────────────────── */}
+      {showApproveModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => !approvalLoading && setShowApproveModal(false)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="px-6 py-5 border-b border-gray-100 flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0">
+                <CheckCircle2 className="w-5 h-5 text-green-600" />
+              </div>
+              <div>
+                <h2 className="text-lg font-bold text-gray-900">Approve Order</h2>
+                <p className="text-sm text-gray-500">Order {order.id}</p>
+              </div>
+            </div>
+            <div className="px-6 py-5">
+              <p className="text-sm text-gray-700">
+                Are you sure you want to <span className="font-semibold text-green-700">approve</span> this order?
+                The status will be updated to <span className="font-semibold">Approved</span> and the agent will be notified.
+              </p>
+              {order.requiresApproval && order.approvalReason && (
+                <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">
+                  <span className="font-medium">Approval reason: </span>{order.approvalReason}
+                </div>
               )}
             </div>
-
-            {/* Modal Footer */}
-            <div className="sticky bottom-0 bg-white border-t border-gray-200 px-6 py-4 flex items-center justify-between">
-              <Button variant="outline" onClick={handleCloseProductModal}>
+            <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
+              <button
+                onClick={() => setShowApproveModal(false)}
+                disabled={approvalLoading}
+                className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 transition-colors disabled:opacity-50"
+              >
                 Cancel
-              </Button>
-              {selectedProduct && selectedVariant && (
-                <Button variant="primary" onClick={handleAddToOrder} className="gap-2">
-                  <Plus className="w-4 h-4" />
-                  Add to Order
-                </Button>
-              )}
+              </button>
+              <button
+                onClick={handleApprove}
+                disabled={approvalLoading}
+                className="px-5 py-2 rounded-lg bg-green-600 text-white font-semibold hover:bg-green-700 transition-colors disabled:opacity-50 flex items-center gap-2"
+              >
+                {approvalLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                Confirm Approval
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Reject Confirmation Modal ──────────────────────────────── */}
+      {showRejectModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => { if (!approvalLoading) { setShowRejectModal(false); setRejectionReason(''); } }}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="px-6 py-5 border-b border-gray-100 flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+                <XCircle className="w-5 h-5 text-red-600" />
+              </div>
+              <div>
+                <h2 className="text-lg font-bold text-gray-900">Reject Order</h2>
+                <p className="text-sm text-gray-500">Order {order.id}</p>
+              </div>
+            </div>
+            <div className="px-6 py-5 space-y-4">
+              <p className="text-sm text-gray-700">
+                Are you sure you want to <span className="font-semibold text-red-700">reject</span> this order?
+                The agent will be notified and the order will be marked as <span className="font-semibold">Rejected</span>.
+              </p>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Reason for rejection <span className="text-gray-400 font-normal">(optional)</span>
+                </label>
+                <textarea
+                  rows={3}
+                  value={rejectionReason}
+                  onChange={(e) => setRejectionReason(e.target.value)}
+                  placeholder="e.g. Pricing outside approved range, customer credit issue…"
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-red-500"
+                />
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
+              <button
+                onClick={() => { setShowRejectModal(false); setRejectionReason(''); }}
+                disabled={approvalLoading}
+                className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleReject}
+                disabled={approvalLoading}
+                className="px-5 py-2 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-700 transition-colors disabled:opacity-50 flex items-center gap-2"
+              >
+                {approvalLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <XCircle className="w-4 h-4" />}
+                Confirm Rejection
+              </button>
             </div>
           </div>
         </div>

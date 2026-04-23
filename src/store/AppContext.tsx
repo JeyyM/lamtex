@@ -20,6 +20,8 @@ interface AppContextType {
   session: Session | null;
   sessionLoading: boolean;
   signOut: () => Promise<void>;
+  // Employee profile
+  employeeName: string;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -32,6 +34,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [hideBranchSelector, setHideBranchSelector] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
+  const [employeeName, setEmployeeName] = useState<string>('');
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([
     {
       id: '1',
@@ -44,17 +47,29 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   ]);
 
+  const fetchEmployeeName = async (email: string) => {
+    const { data } = await supabase
+      .from('employees')
+      .select('employee_name')
+      .eq('email', email)
+      .single();
+    setEmployeeName(data?.employee_name ?? email);
+  };
+
   // Listen for Supabase auth state changes
   useEffect(() => {
     // Get initial session
     supabase.auth.getSession().then(({ data: { session: s } }) => {
       setSession(s);
       setSessionLoading(false);
+      if (s?.user?.email) fetchEmployeeName(s.user.email);
     });
 
     // Subscribe to changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
       setSession(s);
+      if (s?.user?.email) fetchEmployeeName(s.user.email);
+      else setEmployeeName('');
     });
 
     return () => subscription.unsubscribe();
@@ -79,7 +94,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   return (
-    <AppContext.Provider value={{ role, setRole, branch, setBranch, auditLogs, addAuditLog, isSidebarCollapsed, setIsSidebarCollapsed, isMobileMenuOpen, setIsMobileMenuOpen, hideBranchSelector, setHideBranchSelector, session, sessionLoading, signOut }}>
+    <AppContext.Provider value={{ role, setRole, branch, setBranch, auditLogs, addAuditLog, isSidebarCollapsed, setIsSidebarCollapsed, isMobileMenuOpen, setIsMobileMenuOpen, hideBranchSelector, setHideBranchSelector, session, sessionLoading, signOut, employeeName }}>
       {children}
     </AppContext.Provider>
   );  
