@@ -15,7 +15,7 @@ interface AccountEntry {
 
 const ACCOUNTS: AccountEntry[] = [
   // Executive
-  { branch: 'Executive', id: 'EXEC-001', name: 'Executive', email: 'executive@lamtex.com', role: 'Executive', password: 'lamtex2026' },
+  { branch: 'Executive', id: 'EXEC-001', name: 'Executive', email: 'executive@lamtex.com', role: 'Executive', password: 'Lamtex@2026' },
   // Manila
   { branch: 'Manila', id: 'AGT-MNL-001', name: 'Ana Reyes', email: 'ana.reyes.manila@lamtex.com', role: 'Agent', password: 'Lamtex@2026' },
   { branch: 'Manila', id: 'AGT-MNL-002', name: 'Carlos Buenaventura', email: 'carlos.buenaventura.manila@lamtex.com', role: 'Agent', password: 'Lamtex@2026' },
@@ -62,7 +62,7 @@ const BRANCH_OPTIONS = ['Manila', 'Cebu', 'Batangas'];
 export default function LoginPage() {
   const navigate = useNavigate();
   const [email, setEmail] = useState('executive@lamtex.com');
-  const [password, setPassword] = useState('lamtex2026');
+  const [password, setPassword] = useState('Lamtex@2026');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);

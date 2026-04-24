@@ -97,6 +97,7 @@ export interface OrderLineItem {
   stockHint: StockHint;
   availableStock?: number;
   batchDiscount?: number; // Batch/bulk pricing discount percentage
+  discountsBreakdown?: Array<{ name: string; percentage: number }>; // Individual discount entries
 }
 
 export type OrderLogAction = 

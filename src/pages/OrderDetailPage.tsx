@@ -67,7 +67,7 @@ export function OrderDetailPage() {
   const [productsLoading, setProductsLoading] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<DBProductDet | null>(null);
   const [selectedVariant, setSelectedVariant] = useState<DBVariantDet | null>(null);
-  const [variantQuantity, setVariantQuantity] = useState(1);
+  const [variantQuantity, setVariantQuantity] = useState<string>('1');
   const [variantPrice, setVariantPrice] = useState(0);
   const [variantDiscounts, setVariantDiscounts] = useState<Array<{ name: string; percentage: number }>>([]);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
@@ -128,7 +128,7 @@ export function OrderDetailPage() {
       // Fetch line items
       const { data: items } = await supabase
         .from('order_line_items')
-        .select('id, sku, product_name, variant_description, quantity, unit_price, original_price, negotiated_price, discount_percent, discount_amount, batch_discount, line_total, stock_hint, available_stock')
+        .select('id, sku, product_name, variant_description, quantity, unit_price, original_price, negotiated_price, discount_percent, discount_amount, batch_discount, discounts_breakdown, line_total, stock_hint, available_stock')
         .eq('order_id', id)
         .order('created_at');
 
@@ -153,6 +153,7 @@ export function OrderDetailPage() {
         discountPercent: item.discount_percent ?? 0,
         discountAmount: item.discount_amount ?? 0,
         batchDiscount: item.batch_discount,
+        discountsBreakdown: Array.isArray((item as any).discounts_breakdown) ? (item as any).discounts_breakdown : undefined,
         lineTotal: item.line_total,
         stockHint: item.stock_hint ?? 'Available',
         availableStock: item.available_stock,
@@ -425,9 +426,10 @@ export function OrderDetailPage() {
     setOrder({ ...order, status: 'Rejected' as any, rejectedBy: role, rejectionReason: rejectionReason || undefined, approvedBy: undefined, approvedDate: undefined });
     await insertOrderLog(
       'rejected',
-      `Order rejected by ${employeeName || session?.user?.email || role}${rejectionReason ? ` — Reason: ${rejectionReason}` : ''}`,
+      `Order rejected by ${employeeName || session?.user?.email || role}`,
       { status: order.status },
-      { status: 'Rejected', rejected_by: employeeName || session?.user?.email || role, rejection_reason: rejectionReason || null },
+      { status: 'Rejected', rejected_by: employeeName || session?.user?.email || role },
+      rejectionReason ? { reason: rejectionReason } : null,
     );
     addAuditLog('Rejected Order', 'Order', `Rejected order ${order.id}${rejectionReason ? ': ' + rejectionReason : ''}`);
     setApprovalLoading(false);
@@ -482,6 +484,7 @@ export function OrderDetailPage() {
         line_total: item.lineTotal,
         stock_hint: item.stockHint ?? 'Available',
         available_stock: item.availableStock ?? null,
+        discounts_breakdown: item.discountsBreakdown ?? null,
       }));
       const { error: itemsErr } = await supabase.from('order_line_items').insert(rows);
       if (itemsErr) { alert('Order header saved but items failed: ' + itemsErr.message); return; }
@@ -665,7 +668,7 @@ export function OrderDetailPage() {
     setShowProductModal(false);
     setSelectedProduct(null);
     setSelectedVariant(null);
-    setVariantQuantity(1);
+    setVariantQuantity('1');
     setVariantPrice(0);
     setVariantDiscounts([]);
     setProductSearch('');
@@ -693,22 +696,26 @@ export function OrderDetailPage() {
       variants: [syntheticVariant],
     };
 
-    // Reconstruct discounts: we store a single combined discount entry if one exists
-    const reconstructedDiscounts: Array<{ name: string; percentage: number }> = [];
-    const effectivePct = item.discountPercent > 0
-      ? item.discountPercent
-      : (() => {
-          const gross = item.unitPrice * item.quantity;
-          return gross > 0 && item.lineTotal < gross ? ((gross - item.lineTotal) / gross) * 100 : 0;
-        })();
-    if (effectivePct > 0) {
-      reconstructedDiscounts.push({ name: 'Discount', percentage: parseFloat(effectivePct.toFixed(4)) });
+    // Reconstruct discounts: prefer stored breakdown, fall back to single collapsed entry
+    let reconstructedDiscounts: Array<{ name: string; percentage: number }> = [];
+    if (item.discountsBreakdown && item.discountsBreakdown.length > 0) {
+      reconstructedDiscounts = item.discountsBreakdown.map(d => ({ ...d }));
+    } else {
+      const effectivePct = item.discountPercent > 0
+        ? item.discountPercent
+        : (() => {
+            const gross = item.unitPrice * item.quantity;
+            return gross > 0 && item.lineTotal < gross ? ((gross - item.lineTotal) / gross) * 100 : 0;
+          })();
+      if (effectivePct > 0) {
+        reconstructedDiscounts.push({ name: 'Discount', percentage: parseFloat(effectivePct.toFixed(4)) });
+      }
     }
 
     setEditingItemId(item.id);
     setSelectedProduct(syntheticProduct);
     setSelectedVariant(syntheticVariant);
-    setVariantQuantity(item.quantity);
+    setVariantQuantity(item.quantity.toString());
     setVariantPrice(item.unitPrice);
     setVariantDiscounts(reconstructedDiscounts);
     setShowProductModal(true);
@@ -723,16 +730,21 @@ export function OrderDetailPage() {
   const removeDiscount = (index: number) => setVariantDiscounts(variantDiscounts.filter((_, i) => i !== index));
 
   const calculateFinalPrice = () =>
-    variantDiscounts.reduce((p, d) => p * (1 - d.percentage / 100), variantPrice * variantQuantity);
+    variantDiscounts.reduce((p, d) => p * (1 - d.percentage / 100), variantPrice * (parseInt(variantQuantity, 10) || 0));
 
   const calculateTotalDiscountPct = () => {
-    const subtotal = variantPrice * variantQuantity;
+    const subtotal = variantPrice * (parseInt(variantQuantity, 10) || 0);
     if (subtotal === 0) return 0;
     return ((subtotal - calculateFinalPrice()) / subtotal) * 100;
   };
 
   const handleAddToOrder = () => {
     if (!editedOrder || !selectedProduct || !selectedVariant) return;
+    const parsedQty = parseInt(variantQuantity, 10);
+    if (!parsedQty || parsedQty < 1) {
+      alert('Please enter a valid quantity (minimum 1).');
+      return;
+    }
     const finalTotal = calculateFinalPrice();
     const totalDiscount = calculateTotalDiscountPct();
 
@@ -741,15 +753,16 @@ export function OrderDetailPage() {
       sku: selectedVariant.id.toUpperCase(),
       productName: selectedProduct.name,
       variantDescription: `${selectedVariant.size}${selectedVariant.description ? ' - ' + selectedVariant.description : ''}`,
-      quantity: variantQuantity,
+      quantity: parsedQty,
       unitPrice: variantPrice,
       originalPrice: selectedVariant.unit_price,
       negotiatedPrice: variantPrice,
       discountPercent: totalDiscount,
-      discountAmount: variantPrice * variantQuantity - finalTotal,
+      discountAmount: variantPrice * parsedQty - finalTotal,
       lineTotal: finalTotal,
-      stockHint: selectedVariant.stock >= variantQuantity ? 'Available' : selectedVariant.stock > 0 ? 'Partial' : 'Not Available',
+      stockHint: selectedVariant.stock >= parsedQty ? 'Available' : selectedVariant.stock > 0 ? 'Partial' : 'Not Available',
       availableStock: selectedVariant.stock,
+      discountsBreakdown: variantDiscounts.length > 0 ? [...variantDiscounts] : undefined,
     };
 
     if (editingItemId) {
@@ -1672,7 +1685,29 @@ export function OrderDetailPage() {
                     <div className="bg-gray-50 rounded-lg p-3 hover:bg-gray-100 transition-colors">
                       <div className="flex items-start justify-between gap-3 mb-1">
                         <div className="flex-1">
-                          <p className="text-sm font-medium text-gray-900">{log.description}</p>
+                          {(() => {
+                            // Strip legacy "— Reason: ..." suffix from description if present
+                            const reasonSepIdx = log.description.indexOf(' — Reason: ');
+                            const cleanDesc = reasonSepIdx !== -1
+                              ? log.description.slice(0, reasonSepIdx)
+                              : log.description;
+                            const legacyReason = reasonSepIdx !== -1
+                              ? log.description.slice(reasonSepIdx + ' — Reason: '.length)
+                              : null;
+                            // Use metadata.reason if present, otherwise fall back to legacy
+                            const displayReason = (log.metadata as any)?.reason ?? legacyReason;
+                            return (
+                              <>
+                                <p className="text-sm font-medium text-gray-900">{cleanDesc}</p>
+                                {displayReason && (
+                                  <div className="mt-1.5 text-xs text-gray-500">
+                                    <span className="font-semibold text-gray-700">Reason:</span>
+                                    <p className="mt-0.5 text-gray-800 whitespace-pre-wrap">{displayReason}</p>
+                                  </div>
+                                )}
+                              </>
+                            );
+                          })()}
                           <div className="flex items-center gap-2 mt-1 flex-wrap">
                             <span className="text-xs text-gray-500">
                               {new Date(log.timestamp).toLocaleString('en-US', {
@@ -1751,10 +1786,10 @@ export function OrderDetailPage() {
 
                       {/* Show metadata if available — only fields that add context beyond the description */}
                       {log.metadata && (() => {
+                        const meta = log.metadata as Record<string, any>;
                         // Keys to suppress: productName/variantDescription are already in the description text
-                        const SKIP_KEYS = new Set(['productName', 'variantDescription']);
-                        const entries = Object.entries(log.metadata as Record<string, any>).filter(([k]) => !SKIP_KEYS.has(k));
-                        if (entries.length === 0) return null;
+                        const SKIP_KEYS = new Set(['productName', 'variantDescription', 'reason']);
+                        const entries = Object.entries(meta).filter(([k]) => !SKIP_KEYS.has(k));
 
                         const fmtMetaValue = (key: string, val: any): string => {
                           if (typeof val === 'boolean') return val ? 'Yes' : 'No';
@@ -1774,20 +1809,31 @@ export function OrderDetailPage() {
                             savedAmount: 'Saved',
                             reducedAmount: 'Reduced by',
                             dueDate: 'Due date',
-                            reason: 'Reason',
                           };
                           return labels[k] ?? k.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase()).trim();
                         };
 
                         return (
-                          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
-                            {entries.map(([key, value]) => (
-                              <span key={key} className="text-xs text-gray-500">
-                                <span className="font-medium text-gray-700">{fmtMetaKey(key)}:</span>{' '}
-                                {fmtMetaValue(key, value)}
-                              </span>
-                            ))}
-                          </div>
+                          <>
+                            {/* Reason — rendered as its own distinct block */}
+                            {meta.reason && (
+                              <div className="mt-2 text-xs text-gray-500">
+                                <span className="font-semibold text-gray-700">Reason:</span>
+                                <p className="mt-0.5 text-gray-800 whitespace-pre-wrap">{meta.reason}</p>
+                              </div>
+                            )}
+                            {/* Remaining metadata fields */}
+                            {entries.length > 0 && (
+                              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+                                {entries.map(([key, value]) => (
+                                  <span key={key} className="text-xs text-gray-500">
+                                    <span className="font-medium text-gray-700">{fmtMetaKey(key)}:</span>{' '}
+                                    {fmtMetaValue(key, value)}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </>
                         );
                       })()}
                     </div>
@@ -1867,7 +1913,7 @@ export function OrderDetailPage() {
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-80 overflow-y-auto p-1">
                       {categoryProducts.map(product => (
                         <button key={product.id} type="button"
-                          onClick={() => { if (!product.variants.length) return; setSelectedProduct(product); setSelectedVariant(product.variants[0]); setVariantQuantity(1); setVariantPrice(product.variants[0].unit_price); setVariantDiscounts([]); }}
+                          onClick={() => { if (!product.variants.length) return; setSelectedProduct(product); setSelectedVariant(product.variants[0]); setVariantQuantity('1'); setVariantPrice(product.variants[0].unit_price); setVariantDiscounts([]); }}
                           className="flex flex-col items-center p-3 border border-gray-200 rounded-lg hover:border-red-500 hover:bg-red-50 transition-all group">
                           {product.image_url
                             ? <img src={product.image_url} alt={product.name} className="w-12 h-12 object-cover rounded-lg mb-2" />
@@ -1886,7 +1932,7 @@ export function OrderDetailPage() {
                     ? <div className="col-span-full flex items-center justify-center h-24 text-gray-400 text-sm">No matching products</div>
                     : filteredProducts.map(product => (
                       <button key={product.id} type="button"
-                        onClick={() => { setSelectedProduct(product); setSelectedVariant(product.variants[0]); setVariantQuantity(1); setVariantPrice(product.variants[0].unit_price); setVariantDiscounts([]); }}
+                        onClick={() => { setSelectedProduct(product); setSelectedVariant(product.variants[0]); setVariantQuantity('1'); setVariantPrice(product.variants[0].unit_price); setVariantDiscounts([]); }}
                         className="flex flex-col items-center p-3 border border-gray-200 rounded-lg hover:border-red-500 hover:bg-red-50 transition-all group">
                         {product.image_url
                           ? <img src={product.image_url} alt={product.name} className="w-12 h-12 object-cover rounded-lg mb-2" />
@@ -1910,7 +1956,7 @@ export function OrderDetailPage() {
       {showProductModal && selectedProduct && selectedVariant && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[60] p-0 lg:p-4">
           <div className="bg-white rounded-none lg:rounded-lg shadow-2xl w-full h-full lg:h-auto lg:max-w-4xl lg:max-h-[85vh] overflow-hidden flex flex-col">
-            <button onClick={() => { setSelectedProduct(null); setSelectedVariant(null); setVariantQuantity(1); setVariantPrice(0); setVariantDiscounts([]); }}
+            <button onClick={() => { setSelectedProduct(null); setSelectedVariant(null); setVariantQuantity('1'); setVariantPrice(0); setVariantDiscounts([]); }}
               className="absolute top-4 right-4 z-20 p-2 bg-white rounded-full shadow-lg hover:bg-gray-100">
               <X className="w-5 h-5 text-gray-600" />
             </button>
@@ -1957,7 +2003,7 @@ export function OrderDetailPage() {
                     <div className="grid grid-cols-2 gap-2">
                       {selectedProduct.variants.map(v => (
                         <button key={v.id} type="button"
-                          onClick={() => { setSelectedVariant(v); setVariantQuantity(1); setVariantPrice(v.unit_price); }}
+                          onClick={() => { setSelectedVariant(v); setVariantQuantity('1'); setVariantPrice(v.unit_price); }}
                           className={`px-4 py-3 border-2 rounded-lg font-medium transition-all text-left ${v.id === selectedVariant.id ? 'border-red-600 bg-red-50 text-red-700' : 'border-gray-200 hover:border-gray-300 text-gray-700'}`}>
                           <div className="font-semibold">{v.size}</div>
                           <div className="text-sm font-bold mt-1">₱{v.unit_price.toLocaleString()}</div>
@@ -1971,19 +2017,28 @@ export function OrderDetailPage() {
                   <div>
                     <label className="block text-sm font-semibold text-gray-900 mb-3">Quantity Request</label>
                     <div className="flex items-center gap-4">
-                      <button type="button" onClick={() => setVariantQuantity(Math.max(1, variantQuantity - 1))}
+                      <button type="button" onClick={() => setVariantQuantity(String(Math.max(1, (parseInt(variantQuantity, 10) || 1) - 1)))}
                         className="w-12 h-12 flex items-center justify-center border-2 border-gray-300 rounded-lg hover:bg-gray-50">
                         <Minus className="w-5 h-5" />
                       </button>
-                      <input type="number" min="1" value={variantQuantity}
-                        onChange={(e) => setVariantQuantity(Math.max(1, parseInt(e.target.value) || 1))}
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        value={variantQuantity}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          if (raw === '' || /^\d+$/.test(raw)) {
+                            setVariantQuantity(raw);
+                          }
+                        }}
                         className="w-24 text-center text-2xl font-bold px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500" />
-                      <button type="button" onClick={() => setVariantQuantity(variantQuantity + 1)}
+                      <button type="button" onClick={() => setVariantQuantity(String((parseInt(variantQuantity, 10) || 0) + 1))}
                         className="w-12 h-12 flex items-center justify-center border-2 border-gray-300 rounded-lg hover:bg-gray-50">
                         <Plus className="w-5 h-5" />
                       </button>
                     </div>
-                    {variantQuantity > selectedVariant.stock && (
+                    {variantQuantity !== '' && parseInt(variantQuantity, 10) > selectedVariant.stock && (
                       <p className="text-sm text-red-600 mt-2">⚠️ Quantity exceeds available stock</p>
                     )}
                   </div>
@@ -2025,10 +2080,10 @@ export function OrderDetailPage() {
                   <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-2">
                     <div className="flex items-center justify-between">
                       <span className="text-sm font-medium text-blue-900">Subtotal</span>
-                      <span className="text-lg font-bold text-blue-900">₱{(variantPrice * variantQuantity).toLocaleString()}</span>
+                      <span className="text-lg font-bold text-blue-900">₱{(variantPrice * (parseInt(variantQuantity, 10) || 0)).toLocaleString()}</span>
                     </div>
                     {variantDiscounts.length > 0 && (() => {
-                      let cur = variantPrice * variantQuantity;
+                      let cur = variantPrice * (parseInt(variantQuantity, 10) || 0);
                       return (
                         <>
                           {variantDiscounts.map((d, i) => {
