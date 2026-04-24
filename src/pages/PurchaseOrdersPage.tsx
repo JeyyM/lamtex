@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
+import { supabase } from '@/src/lib/supabase';
 import {
   ShoppingCart,
   Search,
@@ -10,422 +12,333 @@ import {
   Plus,
   FileText,
   Download,
-  Eye,
   Send,
   CheckCircle,
   Clock,
-  X,
   AlertTriangle,
+  Loader2,
+  RefreshCw,
+  Package,
+  Truck,
+  Ban,
 } from 'lucide-react';
-import { useAppContext } from '@/src/store/AppContext';
-import CreateRequestModal from '@/src/components/logistics/CreateRequestModal';
-import { getFinishedGoodsByBranch, getRawMaterialsByBranch } from '@/src/mock/warehouseDashboard';
 
-interface PurchaseOrder {
+// ── Types ──────────────────────────────────────────────────
+type POStatus = 'Draft' | 'Sent' | 'Confirmed' | 'Partially Received' | 'Completed' | 'Cancelled';
+
+interface PORow {
   id: string;
-  poNumber: string;
-  date: string;
-  supplier: string;
-  status: 'Draft' | 'Sent' | 'Confirmed' | 'Partially Received' | 'Completed' | 'Cancelled';
-  totalAmount: number;
-  itemCount: number;
-  expectedDelivery: string;
-  createdBy: string;
+  po_number: string;
+  branch_id: string | null;
+  supplier_id: string | null;
+  status: POStatus;
+  order_date: string;
+  expected_delivery_date: string | null;
+  actual_delivery_date: string | null;
+  total_amount: number;
+  currency: string;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+  suppliers: { name: string } | null;
+  branches:  { name: string } | null;
+  purchase_order_items: { id: string }[];
 }
 
+const STATUS_OPTIONS: POStatus[] = ['Draft', 'Sent', 'Confirmed', 'Partially Received', 'Completed', 'Cancelled'];
+
+const fmt = (date: string | null) =>
+  date ? new Date(date).toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' }) : '—';
+
+const getStatusVariant = (status: POStatus): 'success' | 'warning' | 'danger' | 'neutral' | 'default' => {
+  if (status === 'Completed')          return 'success';
+  if (status === 'Partially Received') return 'warning';
+  if (status === 'Cancelled')          return 'danger';
+  if (status === 'Confirmed')          return 'default';
+  if (status === 'Sent')               return 'default';
+  return 'neutral';
+};
+
+const getStatusIcon = (status: POStatus) => {
+  if (status === 'Completed')          return <CheckCircle className="w-3.5 h-3.5" />;
+  if (status === 'Sent')               return <Send className="w-3.5 h-3.5" />;
+  if (status === 'Confirmed')          return <Truck className="w-3.5 h-3.5" />;
+  if (status === 'Partially Received') return <Package className="w-3.5 h-3.5" />;
+  if (status === 'Cancelled')          return <Ban className="w-3.5 h-3.5" />;
+  return <FileText className="w-3.5 h-3.5" />;
+};
+
 export function PurchaseOrdersPage() {
+  const { branch } = useAppContext();
   const navigate = useNavigate();
-  const { branch, selectedBranch } = useAppContext();
-  const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>('All');
-  const [isModalOpen, setIsModalOpen] = useState(false);
 
-  // Get finished goods and raw materials for the modal
-  const currentBranch = selectedBranch || branch || 'All';
-  const finishedGoods = getFinishedGoodsByBranch(currentBranch).map(fg => ({
-    id: fg.id,
-    sku: fg.sku,
-    name: fg.productName,
-    category: 'Finished Goods',
-    currentStock: fg.currentStock,
-    unit: 'units',
-    reorderPoint: fg.minLevel,
-    maxCapacity: fg.currentStock + 1000,
-    location: fg.branch || '',
-    lastRestocked: '2026-02-20',
-    status: fg.riskLevel === 'High' ? 'critical' : fg.riskLevel === 'Medium' ? 'warning' : 'healthy' as 'healthy' | 'warning' | 'critical'
-  }));
+  const [orders, setOrders]                     = useState<PORow[]>([]);
+  const [loading, setLoading]                   = useState(true);
+  const [error, setError]                       = useState<string | null>(null);
+  const [resolvedBranchId, setResolvedBranchId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery]           = useState('');
+  const [statusFilter, setStatusFilter]         = useState<string>('All');
 
-  const rawMaterials = getRawMaterialsByBranch(currentBranch).map(rm => ({
-    id: rm.id,
-    code: rm.sku,
-    name: rm.materialName,
-    category: 'Raw Materials',
-    currentStock: rm.currentQty,
-    unit: rm.unit,
-    reorderPoint: rm.safetyLevel,
-    dailyConsumption: rm.avgDailyUse,
-    daysRemaining: rm.daysRemaining,
-    supplier: 'Primary Supplier',
-    lastPurchased: '2026-02-15',
-    status: rm.riskLevel === 'High' ? 'critical' : rm.riskLevel === 'Medium' ? 'warning' : 'healthy' as 'healthy' | 'warning' | 'critical'
-  }));
+  // ── Fetch ──────────────────────────────────────────────
+  const fetchOrders = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [branchResult, ordersResult] = await Promise.all([
+        branch
+          ? supabase.from('branches').select('id').eq('name', branch).single()
+          : Promise.resolve({ data: null }),
+        supabase
+          .from('purchase_orders')
+          .select('*, suppliers(name), branches(name), purchase_order_items(id)')
+          .order('created_at', { ascending: false }),
+      ]);
+      if (ordersResult.error) throw ordersResult.error;
+      const resolvedId = (branchResult as any).data?.id ?? null;
+      setResolvedBranchId(resolvedId);
+      setOrders((ordersResult.data ?? []) as unknown as PORow[]);
+    } catch (e: any) {
+      setError(e.message ?? 'Failed to load purchase orders');
+    } finally {
+      setLoading(false);
+    }
+  }, [branch]);
 
-  // Mock data - hardcoded purchase orders
-  const [purchaseOrders] = useState<PurchaseOrder[]>([
-    {
-      id: 'PO-001',
-      poNumber: 'PO-2026-0215',
-      date: '2026-02-15',
-      supplier: 'ChemCorp Philippines',
-      status: 'Confirmed',
-      totalAmount: 325000,
-      itemCount: 2,
-      expectedDelivery: '2026-03-15',
-      createdBy: 'John Santos',
-    },
-    {
-      id: 'PO-002',
-      poNumber: 'PO-2026-0220',
-      date: '2026-02-20',
-      supplier: 'Polytech Solutions Inc.',
-      status: 'Sent',
-      totalAmount: 760000,
-      itemCount: 1,
-      expectedDelivery: '2026-04-05',
-      createdBy: 'Maria Cruz',
-    },
-    {
-      id: 'PO-003',
-      poNumber: 'PO-2026-0222',
-      date: '2026-02-22',
-      supplier: 'Stabilizer Corp',
-      status: 'Partially Received',
-      totalAmount: 187500,
-      itemCount: 3,
-      expectedDelivery: '2026-03-08',
-      createdBy: 'John Santos',
-    },
-    {
-      id: 'PO-004',
-      poNumber: 'PO-2026-0225',
-      date: '2026-02-25',
-      supplier: 'ColorMaster Industries',
-      status: 'Draft',
-      totalAmount: 95000,
-      itemCount: 2,
-      expectedDelivery: '2026-03-20',
-      createdBy: 'Maria Cruz',
-    },
-    {
-      id: 'PO-005',
-      poNumber: 'PO-2026-0112',
-      date: '2026-01-12',
-      supplier: 'ChemCorp Philippines',
-      status: 'Completed',
-      totalAmount: 450000,
-      itemCount: 3,
-      expectedDelivery: '2026-02-10',
-      createdBy: 'John Santos',
-    },
-  ]);
+  useEffect(() => { fetchOrders(); }, [fetchOrders]);
 
-  const filteredPOs = purchaseOrders.filter(po => {
+  // ── Filter ─────────────────────────────────────────────
+  const branchFiltered = orders.filter(po =>
+    !resolvedBranchId || po.branch_id === resolvedBranchId
+  );
+
+  const filtered = branchFiltered.filter(po => {
+    const q = searchQuery.toLowerCase();
     const matchesSearch =
-      po.poNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      po.supplier.toLowerCase().includes(searchQuery.toLowerCase());
+      po.po_number.toLowerCase().includes(q) ||
+      (po.suppliers?.name ?? '').toLowerCase().includes(q);
     const matchesStatus = statusFilter === 'All' || po.status === statusFilter;
     return matchesSearch && matchesStatus;
   });
 
-  const getStatusColor = (status: PurchaseOrder['status']): 'success' | 'warning' | 'danger' | 'default' => {
-    if (status === 'Completed') return 'success';
-    if (status === 'Confirmed' || status === 'Sent') return 'default';
-    if (status === 'Partially Received') return 'warning';
-    if (status === 'Cancelled') return 'danger';
-    return 'default';
-  };
+  // ── KPIs ───────────────────────────────────────────────
+  const totalPOs     = branchFiltered.length;
+  const pendingPOs   = branchFiltered.filter(po => ['Sent', 'Confirmed', 'Partially Received'].includes(po.status)).length;
+  const completedPOs = branchFiltered.filter(po => po.status === 'Completed').length;
+  const totalValue   = branchFiltered.reduce((s, po) => s + (po.total_amount ?? 0), 0);
 
-  const getStatusIcon = (status: PurchaseOrder['status']) => {
-    if (status === 'Completed') return <CheckCircle className="w-4 h-4" />;
-    if (status === 'Sent' || status === 'Confirmed') return <Send className="w-4 h-4" />;
-    if (status === 'Partially Received') return <Clock className="w-4 h-4" />;
-    if (status === 'Cancelled') return <X className="w-4 h-4" />;
-    return <FileText className="w-4 h-4" />;
-  };
+  const isOverdue = (po: PORow) =>
+    po.expected_delivery_date &&
+    !po.actual_delivery_date &&
+    new Date(po.expected_delivery_date) < new Date() &&
+    !['Completed', 'Cancelled'].includes(po.status);
 
-  const statusOptions = ['All', 'Draft', 'Sent', 'Confirmed', 'Partially Received', 'Completed', 'Cancelled'];
+  // ── Loading / Error ────────────────────────────────────
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <div className="text-center">
+          <Loader2 className="w-10 h-10 animate-spin text-red-500 mx-auto" />
+          <p className="mt-4 text-gray-500">Loading purchase orders…</p>
+        </div>
+      </div>
+    );
+  }
 
-  // Calculate KPIs
-  const totalPOs = purchaseOrders.length;
-  const pendingPOs = purchaseOrders.filter(po => ['Sent', 'Confirmed', 'Partially Received'].includes(po.status)).length;
-  const completedPOs = purchaseOrders.filter(po => po.status === 'Completed').length;
-  const totalValue = purchaseOrders.reduce((sum, po) => sum + po.totalAmount, 0);
+  if (error) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <div className="text-center">
+          <AlertTriangle className="w-12 h-12 text-orange-500 mx-auto mb-3" />
+          <p className="text-gray-800 font-semibold mb-1">Failed to load purchase orders</p>
+          <p className="text-sm text-gray-500 mb-4">{error}</p>
+          <Button variant="outline" onClick={fetchOrders} className="gap-2">
+            <RefreshCw className="w-4 h-4" /> Retry
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4 sm:space-y-6 p-3 sm:p-4 md:p-6">
-      {/* Header */}
+
+      {/* ── Header ── */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Purchase Orders</h1>
-          <p className="text-sm text-gray-500 mt-1">Manage purchase orders for raw materials</p>
+          <p className="text-sm text-gray-500 mt-1">
+            Raw material procurement for{' '}
+            <span className="font-medium text-gray-700">{branch || 'all branches'}</span>
+          </p>
         </div>
         <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
-          <Button variant="outline" className="w-full sm:w-auto">
-            <Download className="w-4 h-4 mr-2" />
-            Export
+          <Button variant="outline" className="w-full sm:w-auto gap-2">
+            <Download className="w-4 h-4" /> Export
           </Button>
-          <Button variant="primary" onClick={() => setIsModalOpen(true)} className="w-full sm:w-auto">
-            <Plus className="w-4 h-4 mr-2" />
-            New Purchase Order
+          <Button variant="primary" className="w-full sm:w-auto gap-2">
+            <Plus className="w-4 h-4" /> New Purchase Order
           </Button>
         </div>
       </div>
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-blue-100 rounded-lg">
-                <ShoppingCart className="w-6 h-6 text-blue-600" />
-              </div>
-              <div>
-                <p className="text-sm text-gray-500">Total POs</p>
-                <p className="text-2xl font-bold text-gray-900">{totalPOs}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+      {/* ── KPI Cards ── */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <Card><CardContent className="p-4">
+          <div className="flex items-center gap-3">
+            <div className="p-3 bg-blue-100 rounded-lg"><ShoppingCart className="w-6 h-6 text-blue-600" /></div>
+            <div><p className="text-sm text-gray-500">Total POs</p><p className="text-2xl font-bold text-gray-900">{totalPOs}</p></div>
+          </div>
+        </CardContent></Card>
 
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-orange-100 rounded-lg">
-                <Clock className="w-6 h-6 text-orange-600" />
-              </div>
-              <div>
-                <p className="text-sm text-gray-500">Pending</p>
-                <p className="text-2xl font-bold text-gray-900">{pendingPOs}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <Card><CardContent className="p-4">
+          <div className="flex items-center gap-3">
+            <div className="p-3 bg-orange-100 rounded-lg"><Clock className="w-6 h-6 text-orange-600" /></div>
+            <div><p className="text-sm text-gray-500">In Progress</p><p className="text-2xl font-bold text-gray-900">{pendingPOs}</p></div>
+          </div>
+        </CardContent></Card>
 
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-green-100 rounded-lg">
-                <CheckCircle className="w-6 h-6 text-green-600" />
-              </div>
-              <div>
-                <p className="text-sm text-gray-500">Completed</p>
-                <p className="text-2xl font-bold text-gray-900">{completedPOs}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <Card><CardContent className="p-4">
+          <div className="flex items-center gap-3">
+            <div className="p-3 bg-green-100 rounded-lg"><CheckCircle className="w-6 h-6 text-green-600" /></div>
+            <div><p className="text-sm text-gray-500">Completed</p><p className="text-2xl font-bold text-gray-900">{completedPOs}</p></div>
+          </div>
+        </CardContent></Card>
 
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-purple-100 rounded-lg">
-                <FileText className="w-6 h-6 text-purple-600" />
-              </div>
-              <div>
-                <p className="text-sm text-gray-500">Total Value</p>
-                <p className="text-2xl font-bold text-gray-900">₱{(totalValue / 1000000).toFixed(1)}M</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <Card><CardContent className="p-4">
+          <div className="flex items-center gap-3">
+            <div className="p-3 bg-purple-100 rounded-lg"><FileText className="w-6 h-6 text-purple-600" /></div>
+            <div><p className="text-sm text-gray-500">Total Value</p><p className="text-2xl font-bold text-gray-900">₱{(totalValue / 1_000_000).toFixed(1)}M</p></div>
+          </div>
+        </CardContent></Card>
       </div>
 
-      {/* Filters */}
+      {/* ── Filters ── */}
       <Card>
         <CardContent className="p-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
               <input
                 type="text"
-                placeholder="Search by PO number or supplier..."
+                placeholder="Search by PO number or supplier…"
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={e => setSearchQuery(e.target.value)}
                 className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
               />
             </div>
-
             <div className="relative">
-              <Filter className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4 pointer-events-none" />
+              <Filter className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4 pointer-events-none" />
               <select
                 value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
+                onChange={e => setStatusFilter(e.target.value)}
                 className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent appearance-none bg-white"
               >
-                {statusOptions.map(status => (
-                  <option key={status} value={status}>{status}</option>
-                ))}
+                <option value="All">All Statuses</option>
+                {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
           </div>
         </CardContent>
       </Card>
 
-      {/* Purchase Orders Table */}
+      {/* ── Table ── */}
       <Card>
         <CardHeader>
-          <CardTitle>Purchase Orders List</CardTitle>
+          <CardTitle>Purchase Orders — {filtered.length} result{filtered.length !== 1 ? 's' : ''}</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
-          {filteredPOs.length > 0 ? (
+          {filtered.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16">
+              <ShoppingCart className="w-12 h-12 text-gray-300 mb-4" />
+              <p className="text-gray-500 text-sm">No purchase orders found</p>
+            </div>
+          ) : (
             <>
+              {/* Mobile cards */}
               <div className="md:hidden divide-y divide-gray-200">
-                {filteredPOs.map((po) => (
-                  <div key={po.id} className="p-4 space-y-3">
+                {filtered.map(po => (
+                  <div
+                    key={po.id}
+                    className="p-4 space-y-3 hover:bg-gray-50 cursor-pointer"
+                    onClick={() => navigate(`/purchase-orders/${po.id}`)}
+                  >
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <div className="font-medium text-blue-600">{po.poNumber}</div>
-                        <div className="text-sm text-gray-900 mt-1">{po.supplier}</div>
+                        <div className="font-medium text-blue-600">{po.po_number}</div>
+                        <div className="text-sm text-gray-900 mt-0.5">{po.suppliers?.name ?? '—'}</div>
                       </div>
-                      <Badge variant={getStatusColor(po.status)} className="flex items-center gap-1 w-fit">
-                        {getStatusIcon(po.status)}
-                        {po.status}
+                      <Badge variant={getStatusVariant(po.status)} className="inline-flex items-center gap-1 whitespace-nowrap shrink-0">
+                        {getStatusIcon(po.status)} {po.status}
                       </Badge>
                     </div>
-
-                    <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      <div><p className="text-gray-500">Order Date</p><p className="font-medium">{fmt(po.order_date)}</p></div>
                       <div>
-                        <p className="text-gray-500">Date</p>
-                        <p className="font-medium text-gray-900">{new Date(po.date).toLocaleDateString()}</p>
+                        <p className="text-gray-500">Exp. Delivery</p>
+                        <p className={`font-medium ${isOverdue(po) ? 'text-red-600' : ''}`}>
+                          {fmt(po.expected_delivery_date)}{isOverdue(po) ? ' ⚠' : ''}
+                        </p>
                       </div>
-                      <div>
-                        <p className="text-gray-500">Expected Delivery</p>
-                        <p className="font-medium text-gray-900">{new Date(po.expectedDelivery).toLocaleDateString()}</p>
-                      </div>
-                      <div>
-                        <p className="text-gray-500">Items</p>
-                        <p className="font-medium text-gray-900">{po.itemCount} {po.itemCount === 1 ? 'item' : 'items'}</p>
-                      </div>
-                      <div>
-                        <p className="text-gray-500">Amount</p>
-                        <p className="font-medium text-gray-900">₱{po.totalAmount.toLocaleString()}</p>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-between pt-2 border-t border-gray-100">
-                      <span className="text-xs text-gray-500">Created by {po.createdBy}</span>
-                      <div className="flex gap-2">
-                        <Button variant="ghost" size="sm" onClick={() => alert(`View PO ${po.poNumber}`)}>
-                          <Eye className="w-4 h-4" />
-                        </Button>
-                        {po.status === 'Confirmed' && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => alert(`Receive against ${po.poNumber}`)}
-                            title="Receive Materials"
-                          >
-                            <CheckCircle className="w-4 h-4 text-green-600" />
-                          </Button>
-                        )}
-                      </div>
+                      <div><p className="text-gray-500">Items</p><p className="font-medium">{po.purchase_order_items.length}</p></div>
+                      <div><p className="text-gray-500">Amount</p><p className="font-medium">₱{po.total_amount.toLocaleString()}</p></div>
                     </div>
                   </div>
                 ))}
               </div>
 
+              {/* Desktop table */}
               <div className="hidden md:block overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b">
-                  <tr>
-                    <th className="px-6 py-3 text-left font-medium">PO Number</th>
-                    <th className="px-6 py-3 text-left font-medium">Date</th>
-                    <th className="px-6 py-3 text-left font-medium">Supplier</th>
-                    <th className="px-6 py-3 text-left font-medium">Items</th>
-                    <th className="px-6 py-3 text-left font-medium">Amount</th>
-                    <th className="px-6 py-3 text-left font-medium">Expected Delivery</th>
-                    <th className="px-6 py-3 text-left font-medium">Status</th>
-                    <th className="px-6 py-3 text-left font-medium">Created By</th>
-                    <th className="px-6 py-3 text-left font-medium">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200">
-                  {filteredPOs.map((po) => (
-                    <tr key={po.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4">
-                        <div className="font-medium text-blue-600 hover:underline cursor-pointer">
-                          {po.poNumber}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 text-gray-600">
-                        {new Date(po.date).toLocaleDateString()}
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="font-medium text-gray-900">{po.supplier}</div>
-                      </td>
-                      <td className="px-6 py-4 text-gray-600">
-                        {po.itemCount} {po.itemCount === 1 ? 'item' : 'items'}
-                      </td>
-                      <td className="px-6 py-4 font-medium text-gray-900">
-                        ₱{po.totalAmount.toLocaleString()}
-                      </td>
-                      <td className="px-6 py-4 text-gray-600">
-                        {new Date(po.expectedDelivery).toLocaleDateString()}
-                      </td>
-                      <td className="px-6 py-4">
-                        <Badge variant={getStatusColor(po.status)} className="flex items-center gap-1 w-fit">
-                          {getStatusIcon(po.status)}
-                          {po.status}
-                        </Badge>
-                      </td>
-                      <td className="px-6 py-4 text-gray-600">
-                        {po.createdBy}
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex gap-2">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => alert(`View PO ${po.poNumber}`)}
-                          >
-                            <Eye className="w-4 h-4" />
-                          </Button>
-                          {po.status === 'Confirmed' && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => alert(`Receive against ${po.poNumber}`)}
-                              title="Receive Materials"
-                            >
-                              <CheckCircle className="w-4 h-4 text-green-600" />
-                            </Button>
-                          )}
-                        </div>
-                      </td>
+                <table className="w-full text-sm">
+                  <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b">
+                    <tr>
+                      <th className="px-6 py-3 text-left font-medium">PO Number</th>
+                      <th className="px-6 py-3 text-left font-medium">Order Date</th>
+                      <th className="px-6 py-3 text-left font-medium">Supplier</th>
+                      <th className="px-6 py-3 text-left font-medium">Items</th>
+                      <th className="px-6 py-3 text-left font-medium">Amount</th>
+                      <th className="px-6 py-3 text-left font-medium">Exp. Delivery</th>
+                      <th className="px-6 py-3 text-center font-medium w-44">Status</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {filtered.map(po => (
+                      <tr
+                        key={po.id}
+                        className="hover:bg-gray-50 cursor-pointer"
+                        onClick={() => navigate(`/purchase-orders/${po.id}`)}
+                      >
+                        <td className="px-6 py-4">
+                          <div className="font-medium text-blue-600 hover:underline">{po.po_number}</div>
+                        </td>
+                        <td className="px-6 py-4 text-gray-600">{fmt(po.order_date)}</td>
+                        <td className="px-6 py-4 font-medium text-gray-900">{po.suppliers?.name ?? '—'}</td>
+                        <td className="px-6 py-4 text-gray-600">
+                          {po.purchase_order_items.length} {po.purchase_order_items.length === 1 ? 'item' : 'items'}
+                        </td>
+                        <td className="px-6 py-4 font-medium text-gray-900">
+                          {po.currency === 'USD' ? '$' : '₱'}{po.total_amount.toLocaleString()}
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className={isOverdue(po) ? 'text-red-600 font-medium flex items-center gap-1' : 'text-gray-600'}>
+                            {isOverdue(po) && <AlertTriangle className="w-3.5 h-3.5" />}
+                            {fmt(po.expected_delivery_date)}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <Badge variant={getStatusVariant(po.status)} className="inline-flex items-center gap-1 whitespace-nowrap">
+                            {getStatusIcon(po.status)} {po.status}
+                          </Badge>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </>
-          ) : (
-            <div className="flex flex-col items-center justify-center py-12">
-              <ShoppingCart className="w-12 h-12 text-gray-300 mb-4" />
-              <p className="text-gray-500 text-sm">No purchase orders found</p>
-            </div>
           )}
         </CardContent>
       </Card>
 
-      {/* Create Request Modal */}
-      <CreateRequestModal
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        initialType="purchase"
-        finishedGoods={finishedGoods}
-        rawMaterials={rawMaterials}
-      />
     </div>
   );
 }

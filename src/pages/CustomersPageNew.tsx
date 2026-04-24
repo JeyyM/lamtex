@@ -184,6 +184,18 @@ export function CustomersPage() {
     }
   };
 
+  const getTypeStyle = (type: string): string => {
+    switch (type) {
+      case 'Hardware Store':       return 'bg-blue-100 text-blue-700 border border-blue-200';
+      case 'Construction Company': return 'bg-purple-100 text-purple-700 border border-purple-200';
+      case 'Contractor':           return 'bg-orange-100 text-orange-700 border border-orange-200';
+      case 'Distributor':          return 'bg-green-100 text-green-700 border border-green-200';
+      case 'Retailer':             return 'bg-teal-100 text-teal-700 border border-teal-200';
+      case 'Wholesaler':           return 'bg-indigo-100 text-indigo-700 border border-indigo-200';
+      default:                     return 'bg-gray-100 text-gray-700 border border-gray-200';
+    }
+  };
+
   const sortIcon = (col: string) => {
     if (sortKey !== col) return <ArrowUpDown className="w-3 h-3 ml-1 opacity-40" />;
     return sortDir === 'asc'
@@ -473,7 +485,9 @@ export function CustomersPage() {
                         )}
                         {/* Show type below name on screens ≤1555px */}
                         <div className="mt-1 min-[1556px]:hidden">
-                          <Badge variant="default">{customer.type}</Badge>
+                          <span className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold text-center leading-tight ${getTypeStyle(customer.type)}`}>
+                            {customer.type}
+                          </span>
                         </div>
                         {/* Show contact below customer on screens ≤474px */}
                         <div className="max-[474px]:block hidden">
@@ -494,7 +508,9 @@ export function CustomersPage() {
                       className="px-6 py-4 cursor-pointer hidden min-[1556px]:table-cell"
                       onClick={() => handleViewCustomer(customer)}
                     >
-                      <Badge variant="default">{customer.type}</Badge>
+                      <span className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold text-center leading-tight max-w-[120px] break-words ${getTypeStyle(customer.type)}`}>
+                        {customer.type}
+                      </span>
                     </td>
                     <td
                       className="px-6 py-4 cursor-pointer hidden min-[475px]:table-cell"

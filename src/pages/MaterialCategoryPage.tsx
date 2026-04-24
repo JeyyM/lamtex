@@ -11,7 +11,6 @@ import {
   TrendingUp,
   Search,
   Filter,
-  ShoppingCart,
   Edit,
   Plus,
   Edit3,
@@ -324,11 +323,6 @@ export default function MaterialCategoryPage() {
           </div>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <Button variant="outline" className="flex-1 sm:flex-none">
-            <ShoppingCart className="w-4 h-4 mr-2" />
-            <span className="hidden sm:inline">Create Purchase Order</span>
-            <span className="sm:hidden">Purchase Order</span>
-          </Button>
           <Button
             variant="primary"
             className="flex-1 sm:flex-none"

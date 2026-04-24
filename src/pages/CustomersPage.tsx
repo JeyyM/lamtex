@@ -279,6 +279,16 @@ export function CustomersPage() {
     return 'danger';
   };
 
+  const getTypeStyle = (type: string): string => {
+    switch (type) {
+      case 'Hardware Store':       return 'bg-blue-100 text-blue-700 border-blue-200';
+      case 'Construction Company': return 'bg-purple-100 text-purple-700 border-purple-200';
+      case 'Contractor':           return 'bg-orange-100 text-orange-700 border-orange-200';
+      case 'Distributor':          return 'bg-green-100 text-green-700 border-green-200';
+      default:                     return 'bg-gray-100 text-gray-700 border-gray-200';
+    }
+  };
+
   const calculateCreditUtilization = (customer: Customer) => {
     return Math.round((customer.outstandingBalance / customer.creditLimit) * 100);
   };
@@ -516,10 +526,12 @@ export function CustomersPage() {
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
-                            <Target className="w-4 h-4 text-gray-400" />
+                            <Target className="w-4 h-4 text-gray-400 flex-shrink-0" />
                             <div>
-                              <div className="text-gray-500 text-xs">Type</div>
-                              <div className="text-gray-900">{customer.type}</div>
+                              <div className="text-gray-500 text-xs mb-1">Type</div>
+                              <span className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold border text-center ${getTypeStyle(customer.type)}`}>
+                                {customer.type}
+                              </span>
                             </div>
                           </div>
                         </div>
@@ -870,7 +882,9 @@ export function CustomersPage() {
                             <Building2 className="w-4 h-4 text-gray-400" />
                             <div>
                               <div className="font-medium text-gray-900">{customer.name}</div>
-                              <div className="text-xs text-gray-500">{customer.type}</div>
+                              <span className={`inline-block mt-0.5 px-2 py-0.5 rounded-full text-xs font-semibold border text-center ${getTypeStyle(customer.type)}`}>
+                                {customer.type}
+                              </span>
                             </div>
                           </div>
                         </td>

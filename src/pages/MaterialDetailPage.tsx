@@ -20,7 +20,6 @@ import {
   AlertTriangle,
   BarChart3,
   Activity,
-  FileText,
   Truck,
   ClipboardList,
   Calendar,
@@ -29,6 +28,7 @@ import {
   Factory,
   Edit3,
   Loader2,
+  ShoppingCart,
 } from 'lucide-react';
 import {
   BarChart,
@@ -43,6 +43,25 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import type { MaterialStatus } from '@/src/types/materials';
+
+interface POHistoryRow {
+  id: string;
+  order_id: string;
+  quantity_ordered: number;
+  quantity_received: number;
+  unit_price: number;
+  unit_of_measure: string | null;
+  purchase_orders: {
+    id: string;
+    po_number: string;
+    status: string;
+    order_date: string;
+    expected_delivery_date: string | null;
+    actual_delivery_date: string | null;
+    total_amount: number;
+    suppliers: { name: string } | null;
+  } | null;
+}
 
 interface MaterialStockRow {
   quantity: number;
@@ -74,7 +93,13 @@ export function MaterialDetailPage() {
   const { id, categoryName } = useParams<{ id: string; categoryName: string }>();
   const navigate = useNavigate();
   const { selectedBranch } = useAppContext();
-  const [activeTab, setActiveTab] = useState<'overview' | 'batches' | 'analytics'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'history' | 'analytics'>('overview');
+
+  // PO creation
+  const [creatingPO, setCreatingPO]   = useState(false);
+  // PO history
+  const [poHistory, setPOHistory]     = useState<POHistoryRow[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   // Stock adjustment modal states
   const [showStockAdjustmentModal, setShowStockAdjustmentModal] = useState(false);
@@ -122,7 +147,66 @@ export function MaterialDetailPage() {
 
   useEffect(() => { fetchMaterial(); }, [fetchMaterial]);
 
-  const batches: any[] = []; // Batches not yet in Supabase schema
+  const fetchPOHistory = useCallback(async () => {
+    if (!id) return;
+    setHistoryLoading(true);
+    try {
+      const { data, error: err } = await supabase
+        .from('purchase_order_items')
+        .select(`
+          id, order_id, quantity_ordered, quantity_received, unit_price, unit_of_measure,
+          purchase_orders ( id, po_number, status, order_date, expected_delivery_date, actual_delivery_date, total_amount, suppliers ( name ) )
+        `)
+        .eq('material_id', id)
+        .order('id', { ascending: false });
+      if (!err && data) setPOHistory(data as unknown as POHistoryRow[]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [id]);
+
+  useEffect(() => {
+    if (activeTab === 'history') fetchPOHistory();
+  }, [activeTab, fetchPOHistory]);
+
+  const handleCreatePO = async () => {
+    if (!material) return;
+    setCreatingPO(true);
+    try {
+      let branchId: string | null = null;
+      if (selectedBranch) {
+        const { data: bd } = await supabase.from('branches').select('id').eq('name', selectedBranch).single();
+        branchId = bd?.id ?? null;
+      }
+      const poNumber = `PO-${Date.now()}`;
+      const { data: poData, error: poErr } = await supabase
+        .from('purchase_orders')
+        .insert({
+          po_number:    poNumber,
+          branch_id:    branchId,
+          status:       'Draft',
+          order_date:   new Date().toISOString().split('T')[0],
+          total_amount: material.cost_per_unit,
+        })
+        .select('id')
+        .single();
+      if (poErr) throw poErr;
+      const { error: itemErr } = await supabase.from('purchase_order_items').insert({
+        order_id:          poData.id,
+        material_id:       material.id,
+        quantity_ordered:  1,
+        quantity_received: 0,
+        unit_price:        material.cost_per_unit,
+        unit_of_measure:   material.unit_of_measure,
+      });
+      if (itemErr) throw itemErr;
+      navigate(`/purchase-orders/${poData.id}`);
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setCreatingPO(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -307,10 +391,11 @@ export function MaterialDetailPage() {
           </div>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <Button variant="outline" onClick={() => navigate(`/purchase-requests/new/${material.id}`)} className="flex-1 sm:flex-none">
-            <FileText className="w-4 h-4 mr-2" />
-            <span className="hidden sm:inline">Create PR</span>
-            <span className="sm:hidden">PR</span>
+          <Button variant="outline" onClick={handleCreatePO} disabled={creatingPO} className="flex-1 sm:flex-none gap-0">
+            {creatingPO
+              ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /><span className="hidden sm:inline">Creating…</span><span className="sm:hidden">…</span></>
+              : <><ShoppingCart className="w-4 h-4 mr-2" /><span className="hidden sm:inline">Create PO</span><span className="sm:hidden">PO</span></>
+            }
           </Button>
           <Button variant="outline" onClick={() => setShowEditModal(true)} className="flex-1 sm:flex-none">
             <Edit className="w-4 h-4 mr-2" />
@@ -478,14 +563,14 @@ export function MaterialDetailPage() {
             Overview
           </button>
           <button
-            onClick={() => setActiveTab('batches')}
+            onClick={() => setActiveTab('history')}
             className={`py-2 px-1 border-b-2 font-medium text-sm ${
-              activeTab === 'batches'
+              activeTab === 'history'
                 ? 'border-red-500 text-red-600'
                 : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
             }`}
           >
-            Batches ({batches.length})
+            History ({poHistory.length})
           </button>
           <button
             onClick={() => setActiveTab('analytics')}
@@ -580,242 +665,159 @@ export function MaterialDetailPage() {
         </div>
       )}
 
-      {/* Tab Content - Batches */}
-      {activeTab === 'batches' && (
-        <div className="space-y-6">
-          {/* Current Batches */}
+      {/* Tab Content - History */}
+      {activeTab === 'history' && (
+        <div className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <ClipboardList className="w-5 h-5" />
-                Current Batches
-              </CardTitle>
+              <div className="flex items-center justify-between">
+                <CardTitle className="flex items-center gap-2">
+                  <ClipboardList className="w-5 h-5" />
+                  Purchase Order History
+                </CardTitle>
+                <Button variant="primary" onClick={handleCreatePO} disabled={creatingPO} className="gap-2">
+                  {creatingPO
+                    ? <><Loader2 className="w-4 h-4 animate-spin" /> Creating…</>
+                    : <><ShoppingCart className="w-4 h-4" /> Create PO</>
+                  }
+                </Button>
+              </div>
             </CardHeader>
             <CardContent className="p-0">
-              {batches.length > 0 ? (
+              {historyLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="w-6 h-6 animate-spin text-red-400" />
+                </div>
+              ) : poHistory.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-16 text-center px-4">
+                  <ShoppingCart className="w-12 h-12 text-gray-300 mb-4" />
+                  <p className="text-gray-500 text-sm font-medium">No purchase orders yet for this material</p>
+                  <p className="text-gray-400 text-xs mt-1">Create a PO to track procurement history</p>
+                  <Button variant="outline" onClick={handleCreatePO} disabled={creatingPO} className="mt-4 gap-2">
+                    {creatingPO ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShoppingCart className="w-4 h-4" />}
+                    Create First PO
+                  </Button>
+                </div>
+              ) : (
                 <>
-                  {/* Desktop Table */}
+                  {/* Desktop table */}
                   <div className="hidden md:block overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b">
                         <tr>
-                          <th className="px-6 py-3 text-left font-medium">Batch Number</th>
-                          <th className="px-6 py-3 text-left font-medium">Lot Number</th>
-                          <th className="px-6 py-3 text-left font-medium">Received</th>
-                          <th className="px-6 py-3 text-left font-medium">Available</th>
-                          <th className="px-6 py-3 text-left font-medium">Issued</th>
-                          <th className="px-6 py-3 text-left font-medium">Branch</th>
-                          <th className="px-6 py-3 text-left font-medium">Quality Status</th>
-                          <th className="px-6 py-3 text-left font-medium">Received Date</th>
-                          <th className="px-6 py-3 text-left font-medium">Expiry Date</th>
+                          <th className="px-5 py-3 text-left font-medium">PO Number</th>
+                          <th className="px-5 py-3 text-left font-medium">Supplier</th>
+                          <th className="px-5 py-3 text-left font-medium">Status</th>
+                          <th className="px-5 py-3 text-left font-medium">Order Date</th>
+                          <th className="px-5 py-3 text-left font-medium">Expected</th>
+                          <th className="px-5 py-3 text-right font-medium">Qty Ordered</th>
+                          <th className="px-5 py-3 text-right font-medium">Qty Received</th>
+                          <th className="px-5 py-3 text-right font-medium">Unit Price</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-200">
-                        {batches.map((batch) => (
-                          <tr key={batch.id} className="hover:bg-gray-50">
-                            <td className="px-6 py-4 font-mono text-xs text-gray-900">{batch.batchNumber}</td>
-                            <td className="px-6 py-4 font-mono text-xs text-gray-600">{batch.lotNumber}</td>
-                            <td className="px-6 py-4 text-gray-900">{batch.quantityReceived.toLocaleString()}</td>
-                            <td className="px-6 py-4 font-medium text-gray-900">{batch.quantityAvailable.toLocaleString()}</td>
-                            <td className="px-6 py-4 text-gray-600">{batch.quantityIssued.toLocaleString()}</td>
-                            <td className="px-6 py-4">
-                              <Badge variant="outline">Branch {batch.branch}</Badge>
-                            </td>
-                            <td className="px-6 py-4">
-                              <Badge variant={getQualityStatusColor(batch.qualityStatus)}>
-                                {batch.qualityStatus}
-                              </Badge>
-                            </td>
-                            <td className="px-6 py-4 text-gray-600">{batch.receivedDate}</td>
-                            <td className="px-6 py-4 text-gray-600">{batch.expiryDate || '-'}</td>
-                          </tr>
-                        ))}
+                        {poHistory.map(row => {
+                          const po = row.purchase_orders;
+                          if (!po) return null;
+                          const pct = row.quantity_ordered > 0
+                            ? Math.round((row.quantity_received / row.quantity_ordered) * 100)
+                            : 0;
+                          return (
+                            <tr
+                              key={row.id}
+                              className="hover:bg-gray-50 cursor-pointer"
+                              onClick={() => navigate(`/purchase-orders/${po.id}`)}
+                            >
+                              <td className="px-5 py-3 font-mono text-xs text-indigo-600 font-semibold">{po.po_number}</td>
+                              <td className="px-5 py-3 text-gray-900">{po.suppliers?.name ?? '—'}</td>
+                              <td className="px-5 py-3">
+                                <Badge variant={
+                                  po.status === 'Completed' ? 'success' :
+                                  po.status === 'Partially Received' ? 'warning' :
+                                  po.status === 'Cancelled' ? 'danger' : 'neutral'
+                                }>
+                                  {po.status}
+                                </Badge>
+                              </td>
+                              <td className="px-5 py-3 text-gray-600 text-xs">
+                                {new Date(po.order_date).toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' })}
+                              </td>
+                              <td className="px-5 py-3 text-gray-600 text-xs">
+                                {po.expected_delivery_date
+                                  ? new Date(po.expected_delivery_date).toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' })
+                                  : '—'}
+                              </td>
+                              <td className="px-5 py-3 text-right font-medium text-gray-900">
+                                {row.quantity_ordered.toLocaleString()} {row.unit_of_measure ?? material.unit_of_measure}
+                              </td>
+                              <td className="px-5 py-3 text-right">
+                                <span className={pct >= 100 ? 'text-green-600 font-semibold' : pct > 0 ? 'text-amber-600 font-semibold' : 'text-gray-400'}>
+                                  {row.quantity_received.toLocaleString()}
+                                </span>
+                                <span className="text-gray-400 text-xs ml-1">({pct}%)</span>
+                              </td>
+                              <td className="px-5 py-3 text-right text-gray-700 font-medium">
+                                ₱{row.unit_price.toLocaleString()}
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
 
-                  {/* Mobile Card View */}
+                  {/* Mobile cards */}
                   <div className="md:hidden divide-y divide-gray-200">
-                    {batches.map((batch) => (
-                      <div key={batch.id} className="p-4 space-y-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0 flex-1">
-                            <p className="font-mono text-sm font-medium text-gray-900 break-all">{batch.batchNumber}</p>
-                            <p className="font-mono text-xs text-gray-600 mt-1 break-all">Lot: {batch.lotNumber}</p>
+                    {poHistory.map(row => {
+                      const po = row.purchase_orders;
+                      if (!po) return null;
+                      const pct = row.quantity_ordered > 0
+                        ? Math.round((row.quantity_received / row.quantity_ordered) * 100)
+                        : 0;
+                      return (
+                        <div
+                          key={row.id}
+                          className="p-4 space-y-3 cursor-pointer hover:bg-gray-50"
+                          onClick={() => navigate(`/purchase-orders/${po.id}`)}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <p className="font-mono text-xs text-indigo-600 font-semibold break-all">{po.po_number}</p>
+                              <p className="text-sm font-medium text-gray-900 mt-0.5">{po.suppliers?.name ?? '—'}</p>
+                            </div>
+                            <Badge variant={
+                              po.status === 'Completed' ? 'success' :
+                              po.status === 'Partially Received' ? 'warning' :
+                              po.status === 'Cancelled' ? 'danger' : 'neutral'
+                            }>
+                              {po.status}
+                            </Badge>
                           </div>
-                          <Badge variant={getQualityStatusColor(batch.qualityStatus)}>
-                            {batch.qualityStatus}
-                          </Badge>
+                          <div className="grid grid-cols-3 gap-2 text-xs">
+                            <div>
+                              <p className="text-gray-500">Ordered</p>
+                              <p className="font-medium text-gray-900">{row.quantity_ordered.toLocaleString()}</p>
+                            </div>
+                            <div>
+                              <p className="text-gray-500">Received</p>
+                              <p className={`font-medium ${pct >= 100 ? 'text-green-600' : pct > 0 ? 'text-amber-600' : 'text-gray-400'}`}>
+                                {row.quantity_received.toLocaleString()} <span className="text-gray-400">({pct}%)</span>
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-gray-500">Unit Price</p>
+                              <p className="font-medium text-gray-700">₱{row.unit_price.toLocaleString()}</p>
+                            </div>
+                          </div>
+                          <p className="text-xs text-gray-400 pt-1 border-t">
+                            Ordered: {new Date(po.order_date).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}
+                          </p>
                         </div>
-                        <div className="grid grid-cols-2 gap-3 text-sm">
-                          <div>
-                            <p className="text-xs text-gray-500">Received</p>
-                            <p className="font-medium text-gray-900">{batch.quantityReceived.toLocaleString()}</p>
-                          </div>
-                          <div>
-                            <p className="text-xs text-gray-500">Available</p>
-                            <p className="font-medium text-gray-900">{batch.quantityAvailable.toLocaleString()}</p>
-                          </div>
-                          <div>
-                            <p className="text-xs text-gray-500">Issued</p>
-                            <p className="text-gray-600">{batch.quantityIssued.toLocaleString()}</p>
-                          </div>
-                          <div>
-                            <p className="text-xs text-gray-500">Branch</p>
-                            <Badge variant="outline" size="sm">Branch {batch.branch}</Badge>
-                          </div>
-                        </div>
-                        <div className="flex items-center justify-between text-xs text-gray-500 pt-2 border-t">
-                          <span>Received: {batch.receivedDate}</span>
-                          <span>Expiry: {batch.expiryDate || '-'}</span>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </>
-              ) : (
-                <div className="flex flex-col items-center justify-center py-12">
-                  <ClipboardList className="w-12 h-12 text-gray-300 mb-4" />
-                  <p className="text-gray-500 text-sm">No batches recorded for this material</p>
-                </div>
               )}
-            </CardContent>
-          </Card>
-
-          {/* Scheduled Batches */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Calendar className="w-5 h-5" />
-                Scheduled Incoming Batches
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-0">
-              {/* Desktop Table */}
-              <div className="hidden md:block overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b">
-                    <tr>
-                      <th className="px-6 py-3 text-left font-medium">PO Number</th>
-                      <th className="px-6 py-3 text-left font-medium">Supplier</th>
-                      <th className="px-6 py-3 text-left font-medium">Expected Quantity</th>
-                      <th className="px-6 py-3 text-left font-medium">Expected Delivery</th>
-                      <th className="px-6 py-3 text-left font-medium">Destination Branch</th>
-                      <th className="px-6 py-3 text-left font-medium">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-200">
-                    <tr className="hover:bg-gray-50">
-                      <td className="px-6 py-4 font-mono text-xs text-blue-600 font-medium">PO-2024-0847</td>
-                      <td className="px-6 py-4 text-gray-900">ChemCorp Philippines</td>
-                      <td className="px-6 py-4 font-medium text-gray-900">5,000 kg</td>
-                      <td className="px-6 py-4 text-gray-600">March 15, 2026</td>
-                      <td className="px-6 py-4">
-                        <Badge variant="outline">Branch A</Badge>
-                      </td>
-                      <td className="px-6 py-4">
-                        <Badge variant="default">In Transit</Badge>
-                      </td>
-                    </tr>
-                    <tr className="hover:bg-gray-50">
-                      <td className="px-6 py-4 font-mono text-xs text-blue-600 font-medium">PO-2024-0892</td>
-                      <td className="px-6 py-4 text-gray-900">Global Materials Inc.</td>
-                      <td className="px-6 py-4 font-medium text-gray-900">3,500 kg</td>
-                      <td className="px-6 py-4 text-gray-600">March 22, 2026</td>
-                      <td className="px-6 py-4">
-                        <Badge variant="outline">Branch B</Badge>
-                      </td>
-                      <td className="px-6 py-4">
-                        <Badge variant="warning">Pending Shipment</Badge>
-                      </td>
-                    </tr>
-                    <tr className="hover:bg-gray-50">
-                      <td className="px-6 py-4 font-mono text-xs text-blue-600 font-medium">PO-2024-0915</td>
-                      <td className="px-6 py-4 text-gray-900">ChemCorp Philippines</td>
-                      <td className="px-6 py-4 font-medium text-gray-900">4,000 kg</td>
-                      <td className="px-6 py-4 text-gray-600">April 5, 2026</td>
-                      <td className="px-6 py-4">
-                        <Badge variant="outline">Branch A</Badge>
-                      </td>
-                      <td className="px-6 py-4">
-                        <Badge variant="default">Confirmed</Badge>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-
-              {/* Mobile Card View */}
-              <div className="md:hidden divide-y divide-gray-200">
-                <div className="p-4 space-y-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <p className="font-mono text-xs text-blue-600 font-medium break-all">PO-2024-0847</p>
-                      <p className="text-sm font-medium text-gray-900 mt-1">ChemCorp Philippines</p>
-                    </div>
-                    <Badge variant="default">In Transit</Badge>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3 text-sm">
-                    <div>
-                      <p className="text-xs text-gray-500">Expected Quantity</p>
-                      <p className="font-medium text-gray-900">5,000 kg</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500">Destination</p>
-                      <Badge variant="outline" size="sm">Branch A</Badge>
-                    </div>
-                  </div>
-                  <div className="text-xs text-gray-500 pt-2 border-t">
-                    Expected Delivery: March 15, 2026
-                  </div>
-                </div>
-
-                <div className="p-4 space-y-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <p className="font-mono text-xs text-blue-600 font-medium break-all">PO-2024-0892</p>
-                      <p className="text-sm font-medium text-gray-900 mt-1">Global Materials Inc.</p>
-                    </div>
-                    <Badge variant="warning">Pending Shipment</Badge>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3 text-sm">
-                    <div>
-                      <p className="text-xs text-gray-500">Expected Quantity</p>
-                      <p className="font-medium text-gray-900">3,500 kg</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500">Destination</p>
-                      <Badge variant="outline" size="sm">Branch B</Badge>
-                    </div>
-                  </div>
-                  <div className="text-xs text-gray-500 pt-2 border-t">
-                    Expected Delivery: March 22, 2026
-                  </div>
-                </div>
-
-                <div className="p-4 space-y-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <p className="font-mono text-xs text-blue-600 font-medium break-all">PO-2024-0915</p>
-                      <p className="text-sm font-medium text-gray-900 mt-1">ChemCorp Philippines</p>
-                    </div>
-                    <Badge variant="default">Confirmed</Badge>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3 text-sm">
-                    <div>
-                      <p className="text-xs text-gray-500">Expected Quantity</p>
-                      <p className="font-medium text-gray-900">4,000 kg</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500">Destination</p>
-                      <Badge variant="outline" size="sm">Branch A</Badge>
-                    </div>
-                  </div>
-                  <div className="text-xs text-gray-500 pt-2 border-t">
-                    Expected Delivery: April 5, 2026
-                  </div>
-                </div>
-              </div>
             </CardContent>
           </Card>
         </div>

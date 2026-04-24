@@ -455,42 +455,64 @@ CREATE TABLE IF NOT EXISTS customer_assignments (
 -- SECTION 4: SUPPLIERS
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS suppliers (
-  id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  code                VARCHAR(50)  NOT NULL UNIQUE,
-  name                VARCHAR(300) NOT NULL,
-  
-  -- Contact
-  contact_person      VARCHAR(200),
-  email               VARCHAR(255),
-  phone               VARCHAR(50),
-  address             TEXT,
-  
-  -- Classification
-  type                supplier_type,
-  category            supplier_category,
-  
-  -- Terms
-  payment_terms       VARCHAR(100),
-  credit_limit        NUMERIC(14,2) DEFAULT 0,
-  delivery_lead_time  INT DEFAULT 0,  -- days
-  
-  -- Materials supplied (array of material IDs)
-  materials_supplied  UUID[],
-  
+  id                       UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  name                     TEXT        NOT NULL,
+  type                     TEXT        NOT NULL
+                             CHECK (type IN ('Raw Materials','Packaging','Chemicals','Equipment','Services')),
+  category                 TEXT,
+  contact_person           TEXT,
+  phone                    TEXT,
+  email                    TEXT,
+  payment_terms            TEXT        NOT NULL DEFAULT '30 Days', -- repurposed: avg delivery time (e.g. "45 Days")
+  currency                 TEXT        NOT NULL DEFAULT 'PHP',
+  status                   TEXT        NOT NULL DEFAULT 'Active'
+                             CHECK (status IN ('Active','Inactive','Suspended','Under Review')),
+
   -- Performance metrics
-  rating              NUMERIC(3,2) DEFAULT 0,      -- 1.00 - 5.00
-  on_time_delivery_rate NUMERIC(5,2) DEFAULT 0,     -- percentage
-  quality_score       NUMERIC(5,2) DEFAULT 0,       -- percentage
-  
-  -- Status
-  status              supplier_status NOT NULL DEFAULT 'Active',
-  
-  -- Dates
-  registered_date     DATE DEFAULT CURRENT_DATE,
-  last_order_date     DATE,
-  
-  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  performance_score        NUMERIC     NOT NULL DEFAULT 0,
+  quality_rating           NUMERIC     NOT NULL DEFAULT 0,
+  delivery_rating          NUMERIC     NOT NULL DEFAULT 0,
+  avg_lead_time            INTEGER     NOT NULL DEFAULT 0,
+  on_time_delivery_rate    NUMERIC     NOT NULL DEFAULT 0,
+  defect_rate              NUMERIC     NOT NULL DEFAULT 0,
+
+  -- Financials
+  total_purchases_ytd      NUMERIC     NOT NULL DEFAULT 0,
+  total_purchases_lifetime NUMERIC     NOT NULL DEFAULT 0,
+  order_count              INTEGER     NOT NULL DEFAULT 0,
+  avg_order_value          NUMERIC     NOT NULL DEFAULT 0,
+  last_purchase_date       DATE,
+  account_since            DATE,
+
+  preferred_supplier       BOOLEAN     NOT NULL DEFAULT false,
+  risk_level               TEXT        NOT NULL DEFAULT 'Low'
+                             CHECK (risk_level IN ('Low','Medium','High')),
+  notes                    TEXT,
+  created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Supplier ↔ Branch assignments (many-to-many)
+CREATE TABLE IF NOT EXISTS supplier_branches (
+  id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  supplier_id UUID        NOT NULL REFERENCES suppliers(id)  ON DELETE CASCADE,
+  branch_id   UUID        NOT NULL REFERENCES branches(id)   ON DELETE CASCADE,
+  is_primary  BOOLEAN     NOT NULL DEFAULT true,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(supplier_id, branch_id)
+);
+
+-- Supplier ↔ Raw Material pricing catalogue
+CREATE TABLE IF NOT EXISTS supplier_materials (
+  id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  supplier_id    UUID        NOT NULL REFERENCES suppliers(id)     ON DELETE CASCADE,
+  material_id    UUID        NOT NULL REFERENCES raw_materials(id) ON DELETE CASCADE,
+  unit_price     NUMERIC     NOT NULL DEFAULT 0,
+  lead_time_days INTEGER     NOT NULL DEFAULT 0,
+  min_order_qty  NUMERIC     NOT NULL DEFAULT 0,
+  is_preferred   BOOLEAN     NOT NULL DEFAULT false,
+  notes          TEXT,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(supplier_id, material_id)
 );
 
 
@@ -672,11 +694,14 @@ CREATE TABLE IF NOT EXISTS raw_materials (
   safety_stock        NUMERIC(14,4) DEFAULT 0,
   
   -- Pricing
-  cost_per_unit       NUMERIC(12,4) DEFAULT 0,
-  currency            VARCHAR(10) DEFAULT 'PHP',
-  last_purchase_price NUMERIC(12,4) DEFAULT 0,
-  average_cost        NUMERIC(12,4) DEFAULT 0,
-  total_value         NUMERIC(14,2) DEFAULT 0,
+  cost_per_unit          NUMERIC(12,4) DEFAULT 0,
+  currency               VARCHAR(10) DEFAULT 'PHP',
+  last_purchase_price    NUMERIC(12,4) DEFAULT 0,
+  average_cost           NUMERIC(12,4) DEFAULT 0,
+  total_value            NUMERIC(14,2) DEFAULT 0,
+  -- PO price sync (FK to purchase_orders added below via ALTER TABLE)
+  price_synced_at        TIMESTAMPTZ,
+  price_synced_from_po   UUID,
   
   -- Supplier
   primary_supplier    VARCHAR(300),
@@ -1464,43 +1489,28 @@ CREATE TABLE IF NOT EXISTS purchase_requisitions (
 
 -- 12b: Purchase orders
 CREATE TABLE IF NOT EXISTS purchase_orders (
-  id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  po_number             VARCHAR(50) NOT NULL UNIQUE,
-  
-  supplier_id           UUID REFERENCES suppliers(id) ON DELETE SET NULL,
-  supplier_name         VARCHAR(300),
-  supplier_contact      VARCHAR(200),
-  supplier_address      TEXT,
-  
-  -- Totals
-  subtotal              NUMERIC(14,2) DEFAULT 0,
-  tax                   NUMERIC(14,2) DEFAULT 0,
-  shipping_cost         NUMERIC(14,2) DEFAULT 0,
-  total_amount          NUMERIC(14,2) DEFAULT 0,
-  
-  -- Delivery
-  delivery_branch       VARCHAR(10),
-  delivery_address      TEXT,
-  requested_delivery_date DATE,
-  
-  -- Status
-  status                purchase_order_status DEFAULT 'Draft',
-  
-  -- Workflow
-  created_by            VARCHAR(200),
-  created_date          DATE DEFAULT CURRENT_DATE,
-  approved_by           VARCHAR(200),
-  approval_date         DATE,
-  sent_date             DATE,
-  
-  -- References (PR IDs)
-  pr_references         UUID[],
-  
-  payment_terms         VARCHAR(100),
-  notes                 TEXT,
-  
-  created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  po_number              TEXT NOT NULL UNIQUE,
+  branch_id              UUID REFERENCES branches(id)   ON DELETE SET NULL,
+  supplier_id            UUID REFERENCES suppliers(id)  ON DELETE SET NULL,
+  status                 TEXT NOT NULL DEFAULT 'Draft'
+                           CHECK (status IN ('Draft','Sent','Confirmed','Partially Received','Completed','Cancelled')),
+  order_date             DATE NOT NULL DEFAULT CURRENT_DATE,
+  expected_delivery_date DATE,
+  actual_delivery_date   DATE,
+  total_amount           NUMERIC(14,2) NOT NULL DEFAULT 0,
+  currency               TEXT NOT NULL DEFAULT 'PHP',
+  notes                  TEXT,
+  created_by             TEXT,
+  -- Payment tracking
+  payment_status         TEXT NOT NULL DEFAULT 'Unpaid'
+                           CHECK (payment_status IN ('Unpaid','Partially Paid','Paid','Overdue')),
+  amount_paid            NUMERIC(14,2) NOT NULL DEFAULT 0,
+  payment_due_date       DATE,
+  payment_method         TEXT,
+  payment_notes          TEXT,
+  created_at             TIMESTAMPTZ DEFAULT NOW(),
+  updated_at             TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Add FK from purchase_requisitions to purchase_orders
@@ -1511,20 +1521,54 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
--- 12c: Purchase order line items
+-- Add FK from raw_materials.price_synced_from_po → purchase_orders (deferred because purchase_orders is defined later)
+DO $$ BEGIN
+  ALTER TABLE raw_materials
+    ADD CONSTRAINT fk_raw_material_price_po
+    FOREIGN KEY (price_synced_from_po) REFERENCES purchase_orders(id) ON DELETE SET NULL;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+-- Purchase order line items
 CREATE TABLE IF NOT EXISTS purchase_order_items (
-  id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  purchase_order_id     UUID NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+  id                    UUID    PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id              UUID    NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+  material_id           UUID    REFERENCES raw_materials(id) ON DELETE SET NULL,
+  quantity_ordered      NUMERIC(14,2) NOT NULL DEFAULT 0,
+  quantity_received     NUMERIC(14,2) NOT NULL DEFAULT 0,
+  unit_price            NUMERIC(14,2) NOT NULL DEFAULT 0,
+  unit_of_measure       TEXT,
+  sync_price_on_receive BOOLEAN NOT NULL DEFAULT FALSE, -- if true, updates raw_material cost on receive
+  created_at            TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Proof-of-receiving images attached to a PO receipt event
+CREATE TABLE IF NOT EXISTS purchase_order_receipts (
+  id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id    UUID        NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+  file_url    TEXT        NOT NULL,
+  file_name   TEXT        NOT NULL,
+  file_size   INTEGER,
+  note        TEXT,
+  uploaded_by TEXT,
+  created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Worker-raised purchase requests (suggest materials/suppliers; executive converts to PO)
+CREATE TABLE IF NOT EXISTS purchase_requests (
+  id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  branch_id             UUID REFERENCES branches(id)   ON DELETE SET NULL,
   material_id           UUID REFERENCES raw_materials(id) ON DELETE SET NULL,
-  material_name         VARCHAR(300),
-  material_sku          VARCHAR(100),
-  description           TEXT,
-  quantity              NUMERIC(14,4) NOT NULL,
-  unit_of_measure       unit_of_measure DEFAULT 'kg',
-  unit_price            NUMERIC(12,4) DEFAULT 0,
-  total_price           NUMERIC(14,2) DEFAULT 0,
-  expected_delivery_date DATE,
-  created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  suggested_supplier_id UUID REFERENCES suppliers(id)  ON DELETE SET NULL,
+  requested_qty         NUMERIC(14,2) NOT NULL DEFAULT 0,
+  unit_of_measure       TEXT,
+  reason                TEXT,
+  raised_by             TEXT,
+  status                TEXT NOT NULL DEFAULT 'Pending'
+                          CHECK (status IN ('Pending','Approved','Rejected')),
+  executive_notes       TEXT,
+  linked_po_id          UUID REFERENCES purchase_orders(id) ON DELETE SET NULL,
+  created_at            TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 12d: Goods Receipt Notes (GRN)
@@ -2414,7 +2458,20 @@ CREATE INDEX IF NOT EXISTS idx_purchase_requisitions_material ON purchase_requis
 CREATE INDEX IF NOT EXISTS idx_purchase_requisitions_status ON purchase_requisitions(status);
 CREATE INDEX IF NOT EXISTS idx_purchase_orders_supplier ON purchase_orders(supplier_id);
 CREATE INDEX IF NOT EXISTS idx_purchase_orders_status ON purchase_orders(status);
+CREATE INDEX IF NOT EXISTS idx_purchase_orders_branch ON purchase_orders(branch_id);
+CREATE INDEX IF NOT EXISTS idx_purchase_order_items_order ON purchase_order_items(order_id);
+CREATE INDEX IF NOT EXISTS idx_purchase_order_items_material ON purchase_order_items(material_id);
+CREATE INDEX IF NOT EXISTS idx_po_receipts_order ON purchase_order_receipts(order_id);
+CREATE INDEX IF NOT EXISTS idx_purchase_requests_branch ON purchase_requests(branch_id);
+CREATE INDEX IF NOT EXISTS idx_purchase_requests_status ON purchase_requests(status);
 CREATE INDEX IF NOT EXISTS idx_grn_po ON goods_receipt_notes(purchase_order_id);
+
+-- Suppliers
+CREATE INDEX IF NOT EXISTS idx_suppliers_status ON suppliers(status);
+CREATE INDEX IF NOT EXISTS idx_supplier_branches_supplier ON supplier_branches(supplier_id);
+CREATE INDEX IF NOT EXISTS idx_supplier_branches_branch ON supplier_branches(branch_id);
+CREATE INDEX IF NOT EXISTS idx_supplier_materials_supplier ON supplier_materials(supplier_id);
+CREATE INDEX IF NOT EXISTS idx_supplier_materials_material ON supplier_materials(material_id);
 
 -- Logistics
 CREATE INDEX IF NOT EXISTS idx_vehicles_status ON vehicles(status);

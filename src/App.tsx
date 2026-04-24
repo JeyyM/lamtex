@@ -33,6 +33,7 @@ import AgentProfilePage from './pages/AgentProfilePage';
 import EmployeesPage from './pages/EmployeesPage';
 import { PurchaseRequestsPage } from './pages/PurchaseRequestsPage';
 import { PurchaseOrdersPage } from './pages/PurchaseOrdersPage';
+import { PurchaseOrderDetailPage } from './pages/PurchaseOrderDetailPage';
 import { TruckDetailPage } from './pages/TruckDetailPage';
 import WarehousePage from './pages/WarehousePage';
 import ChatsPage from './pages/ChatsPage';
@@ -128,6 +129,7 @@ function AppRoutes() {
             <Route path="/purchase-requests" element={<PurchaseRequestsPage />} />
             <Route path="/purchase-requests/new/:materialId" element={<PurchaseRequestsPage />} />
             <Route path="/purchase-orders" element={<PurchaseOrdersPage />} />
+            <Route path="/purchase-orders/:id" element={<PurchaseOrderDetailPage />} />
           </Route>
         </Routes>
   );
