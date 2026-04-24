@@ -21,6 +21,7 @@ import {
 import AddMaterialModal, { MaterialFormData } from '../components/materials/AddMaterialModal';
 import StockAdjustmentModal from '../components/warehouse/StockAdjustmentModal';
 import { supabase } from '../lib/supabase';
+import { computeStockStatus } from '../lib/stockStatus';
 
 // ── Supabase row shape ───────────────────────────────────────────────────────
 interface MaterialStockRow {
@@ -235,12 +236,27 @@ export default function MaterialCategoryPage() {
       currentStock: m.total_stock,
       unit: m.unit_of_measure,
       reorderPoint: m.reorder_point,
+      status: m.status,
     });
     setShowStockAdjustmentModal(true);
   };
 
-  const handleStockAdjustment = (adjustment: any) => {
-    console.log('Stock Adjustment:', { item: selectedItemForAdjustment, adjustment });
+  const handleStockAdjustment = async (adjustment: { type: 'add' | 'subtract'; quantity: number; notes: string }) => {
+    if (!selectedItemForAdjustment) return;
+    const delta = adjustment.type === 'add' ? adjustment.quantity : -adjustment.quantity;
+    const newTotal = Math.max(0, selectedItemForAdjustment.currentStock + delta);
+    const newStatus = computeStockStatus(newTotal, selectedItemForAdjustment.reorderPoint ?? 0);
+
+    try {
+      const { error } = await supabase
+        .from('raw_materials')
+        .update({ total_stock: newTotal, status: newStatus })
+        .eq('id', selectedItemForAdjustment.id);
+      if (error) throw error;
+      await fetchMaterials();
+    } catch (err: any) {
+      alert(`Failed to adjust stock: ${err.message ?? 'Unknown error'}`);
+    }
   };
 
   // ── Derived data ─────────────────────────────────────────────────────────
@@ -258,7 +274,10 @@ export default function MaterialCategoryPage() {
     });
 
   const totalValue = filteredMaterials.reduce((sum, m) => sum + (m.total_stock * m.cost_per_unit), 0);
-  const lowStockCount = filteredMaterials.filter(m => m.status === 'Low Stock' || m.status === 'Critical').length;
+  const lowStockCount = filteredMaterials.filter(m => {
+    const computed = computeStockStatus(m.total_stock, m.reorder_point);
+    return ['Low Stock', 'Critical', 'Out of Stock'].includes(computed);
+  }).length;
 
   const getStockBarColor = (m: RawMaterialRow) => {
     if (m.reorder_point > 0 && m.total_stock <= m.reorder_point * 0.5) return 'bg-red-500';

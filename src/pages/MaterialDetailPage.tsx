@@ -7,6 +7,7 @@ import { useAppContext } from '@/src/store/AppContext';
 import StockAdjustmentModal from '@/src/components/warehouse/StockAdjustmentModal';
 import AddMaterialModal, { MaterialFormData } from '@/src/components/materials/AddMaterialModal';
 import { supabase } from '@/src/lib/supabase';
+import { computeStockStatus } from '@/src/lib/stockStatus';
 import {
   Package,
   ArrowLeft,
@@ -148,8 +149,14 @@ export function MaterialDetailPage() {
   const getStatusColor = (status: MaterialStatus): 'success' | 'warning' | 'danger' | 'default' => {
     if (status === 'Active') return 'success';
     if (status === 'Low Stock') return 'warning';
-    if (status === 'Out of Stock' || status === 'Discontinued' || status === 'Expired') return 'danger';
+    if (status === 'Critical' || status === 'Out of Stock' || status === 'Discontinued' || status === 'Expired') return 'danger';
     return 'default';
+  };
+
+  const getStatusLabel = (status: string): string => {
+    if (status === 'Active') return 'In Stock';
+    if (status === 'Critical') return 'Critical Stock';
+    return status;
   };
 
   const getQualityStatusColor = (status: string): 'success' | 'warning' | 'danger' | 'default' => {
@@ -197,6 +204,7 @@ export function MaterialDetailPage() {
       currentStock: material.total_stock,
       unit: material.unit_of_measure,
       reorderPoint: material.reorder_point,
+      status: material.status,
     });
     setShowStockAdjustmentModal(true);
   };
@@ -208,10 +216,11 @@ export function MaterialDetailPage() {
       : Math.max(0, Number(material.total_stock) - adjustment.quantity);
 
     try {
-      // 1. Update aggregate total_stock
+      // 1. Update aggregate total_stock + auto-computed status
+      const newStatus = computeStockStatus(newTotal, material.reorder_point);
       const { error: matErr } = await supabase
         .from('raw_materials')
-        .update({ total_stock: newTotal, updated_at: new Date().toISOString() })
+        .update({ total_stock: newTotal, status: newStatus, updated_at: new Date().toISOString() })
         .eq('id', material.id);
       if (matErr) throw matErr;
 
@@ -255,6 +264,7 @@ export function MaterialDetailPage() {
   const handleSaveEdit = async (formData: MaterialFormData) => {
     setSavingEdit(true);
     try {
+      const updatedStatus = computeStockStatus(material.total_stock, formData.reorderPoint);
       const { error } = await supabase
         .from('raw_materials')
         .update({
@@ -266,6 +276,7 @@ export function MaterialDetailPage() {
           unit_of_measure: formData.unitOfMeasure,
           cost_per_unit: formData.costPerUnit,
           reorder_point: formData.reorderPoint,
+          status: updatedStatus,
           specifications: formData.specifications.filter(s => s.label.trim()),
           updated_at: new Date().toISOString(),
         })
@@ -432,7 +443,7 @@ export function MaterialDetailPage() {
                 <div className="space-y-2">
                   <div>
                     <Badge variant={getStatusColor(material.status as MaterialStatus)} className="text-sm">
-                      {material.status}
+                      {getStatusLabel(material.status)}
                     </Badge>
                   </div>
                   <p className="text-sm text-gray-900">

@@ -7,7 +7,6 @@ import {
   AlertTriangle,
   FileText,
   User,
-  Calendar,
   MessageSquare,
 } from 'lucide-react';
 import { useAppContext } from '@/src/store/AppContext';
@@ -54,12 +53,12 @@ export function CancelOrderModal({
   onClose,
   onConfirm,
 }: CancelOrderModalProps) {
-  const { role, userName } = useAppContext();
-  
+  const { role, employeeName, session } = useAppContext();
+
+  const actorName = employeeName || session?.user?.email || role || 'Unknown';
+
   const [category, setCategory] = useState('');
-  const [reason, setReason] = useState('');
   const [customReason, setCustomReason] = useState('');
-  const [initiatedBy, setInitiatedBy] = useState(userName || 'Current User');
   const [refundRequired, setRefundRequired] = useState(false);
   const [refundAmount, setRefundAmount] = useState(orderAmount);
   const [restockItems, setRestockItems] = useState(true);
@@ -69,8 +68,7 @@ export function CancelOrderModal({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    
-    // Validation
+
     if (!category) {
       alert('Please select a cancellation reason');
       return;
@@ -96,7 +94,7 @@ export function CancelOrderModal({
     const cancellationData: CancellationData = {
       reason: category === 'Other' ? customReason : category,
       category,
-      initiatedBy,
+      initiatedBy: actorName,
       refundRequired,
       refundAmount: refundRequired ? refundAmount : 0,
       restockItems,
@@ -105,11 +103,8 @@ export function CancelOrderModal({
       cancellationDate: new Date().toISOString(),
     };
 
-    // Simulate API call
-    setTimeout(() => {
-      onConfirm(cancellationData);
-      setIsSubmitting(false);
-    }, 500);
+    onConfirm(cancellationData);
+    setIsSubmitting(false);
   };
 
   return (
@@ -171,7 +166,7 @@ export function CancelOrderModal({
               </div>
               <div>
                 <p className="text-sm text-gray-500">Cancelled By</p>
-                <p className="font-semibold text-gray-900">{initiatedBy}</p>
+                <p className="font-semibold text-gray-900">{actorName}</p>
               </div>
             </div>
 
@@ -213,19 +208,16 @@ export function CancelOrderModal({
               </div>
             )}
 
-            {/* Initiated By */}
+            {/* Initiated By — read-only, locked to logged-in user */}
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-2">
                 <User className="w-4 h-4 inline mr-1" />
                 Initiated By
               </label>
-              <input
-                type="text"
-                value={initiatedBy}
-                onChange={(e) => setInitiatedBy(e.target.value)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
-                placeholder="Name of person initiating cancellation"
-              />
+              <div className="flex items-center gap-2 px-4 py-2 bg-gray-100 border border-gray-200 rounded-lg text-gray-700">
+                <User className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                <span className="font-medium">{actorName}</span>
+              </div>
             </div>
 
             {/* Refund Section */}

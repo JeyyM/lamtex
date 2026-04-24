@@ -12,7 +12,7 @@ export type MaterialCategory =
   | 'Packaging Materials'
   | 'Other';
 
-export type MaterialStatus = 'Active' | 'Discontinued' | 'Low Stock' | 'Out of Stock' | 'Expired';
+export type MaterialStatus = 'Active' | 'Discontinued' | 'Low Stock' | 'Critical' | 'Out of Stock' | 'Expired';
 
 export type StockOutRisk = 'OK' | 'Risky' | 'Critical';
 

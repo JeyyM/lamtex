@@ -9,7 +9,8 @@ export type OrderStatus =
   | 'Ready' 
   | 'Scheduled' 
   | 'In Transit' 
-  | 'Delivered' 
+  | 'Delivered'
+  | 'Partially Fulfilled'
   | 'Completed' 
   | 'Cancelled' 
   | 'Rejected';
@@ -85,6 +86,7 @@ export interface OrderDetail {
 export interface OrderLineItem {
   id: string;
   sku: string;
+  variantId?: string;
   productName: string;
   variantDescription: string;
   quantity: number;

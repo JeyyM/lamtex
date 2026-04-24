@@ -22,6 +22,7 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
 import { supabase } from '../lib/supabase';
+import { computeStockStatus } from '../lib/stockStatus';
 
 // â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const stringToColor = (str: string) => {
@@ -298,7 +299,7 @@ export default function ProductFamilyPage() {
       cost_price:       editedVariant.cost,
       total_stock:      editedVariant.stock,
       reorder_point:    editedVariant.reorderPoint,
-      status:           editedVariant.status === 'In Stock' ? 'Active' : editedVariant.status,
+      status:           computeStockStatus(editedVariant.stock, editedVariant.reorderPoint),
       units_sold_ytd:   editedVariant.unitsSold,
       weight_kg:        parseFloat(editedVariant.weight) || null,
       length_m:         parseFloat(editedVariant.length)  || null,
@@ -1263,6 +1264,7 @@ export default function ProductFamilyPage() {
             currentStock: displayVariant.stock,
             reorderPoint: displayVariant.reorderPoint,
           }}
+          productId={familyId ?? ''}
           branch={selectedBranch}
         />
       )}

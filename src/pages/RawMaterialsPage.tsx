@@ -105,6 +105,19 @@ export function RawMaterialsPage() {
   });
   const [summaryLoading, setSummaryLoading] = useState(true);
 
+  // Live alert materials from Supabase
+  interface AlertMaterial {
+    id: string;
+    name: string;
+    total_stock: number;
+    reorder_point: number;
+    monthly_consumption: number;
+    status: string;
+    daysOfCover: number;
+  }
+  const [dbAlertMaterials, setDbAlertMaterials] = useState<AlertMaterial[]>([]);
+  const [alertsLoading, setAlertsLoading] = useState(true);
+
   const allMaterials = getAllRawMaterials();
 
   // Fetch material categories from Supabase
@@ -164,11 +177,55 @@ export function RawMaterialsPage() {
 
     const totalMaterials = data.length;
     const totalValue = data.reduce((sum, m) => sum + (Number(m.total_value) || 0), 0);
-    const lowStockCount = data.filter(m => m.status === 'Low Stock' || m.status === 'Out of Stock').length;
+    const lowStockCount = data.filter(m => ['Low Stock', 'Critical', 'Out of Stock'].includes(m.status)).length;
     const reorderCount = data.filter(m => Number(m.total_stock) <= Number(m.reorder_point)).length;
 
     setSummaryStats({ totalMaterials, totalValue, lowStockCount, reorderCount });
     setSummaryLoading(false);
+  };
+
+  // Fetch alert materials from Supabase (branch-aware)
+  const fetchAlertMaterials = async (currentBranch: string, allCategories: MaterialCategoryRow[]) => {
+    setAlertsLoading(true);
+
+    const branchCategoryIds = allCategories
+      .filter(c => c.branches?.name === currentBranch)
+      .map(c => c.id);
+
+    if (branchCategoryIds.length === 0) {
+      setDbAlertMaterials([]);
+      setAlertsLoading(false);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from('raw_materials')
+      .select('id, name, total_stock, reorder_point, monthly_consumption, status')
+      .in('category_id', branchCategoryIds);
+
+    if (error || !data) {
+      setAlertsLoading(false);
+      return;
+    }
+
+    const withDays: AlertMaterial[] = data.map(m => {
+      const stock = Number(m.total_stock) || 0;
+      const consumption = Number(m.monthly_consumption) || 0;
+      const avgDailyUsage = consumption > 0 ? consumption / 30 : 0;
+      const daysOfCover = avgDailyUsage > 0 ? stock / avgDailyUsage : Infinity;
+      return {
+        id: m.id,
+        name: m.name,
+        total_stock: stock,
+        reorder_point: Number(m.reorder_point) || 0,
+        monthly_consumption: consumption,
+        status: m.status ?? '',
+        daysOfCover,
+      };
+    });
+
+    setDbAlertMaterials(withDays);
+    setAlertsLoading(false);
   };
 
   useEffect(() => {
@@ -176,7 +233,10 @@ export function RawMaterialsPage() {
   }, []);
 
   useEffect(() => {
-    if (branch) fetchSummaryStats(branch, categories);
+    if (branch) {
+      fetchSummaryStats(branch, categories);
+      fetchAlertMaterials(branch, categories);
+    }
   }, [branch, categories]);
 
   const visibleCategories = branch
@@ -376,18 +436,16 @@ export function RawMaterialsPage() {
     return matchesRisk;
   });
 
-  // KPI: Estimated Stock-Out Count (immutable filter)
-  const estimatedStockOutCount = enhancedMaterials.filter(
-    (m) => m.daysOfCover <= 30
-  ).length;
+  // KPI: Estimated Stock-Out Count — from live DB data
+  const estimatedStockOutCount = dbAlertMaterials.filter(m => m.daysOfCover <= 30).length;
 
-  // Derive Alerts (immutable operations)
-  const criticalAlerts = [...enhancedMaterials]
-    .filter((m) => m.daysOfCover <= 30)
+  // Derive Alerts from live DB data
+  const criticalAlerts = [...dbAlertMaterials]
+    .filter(m => m.daysOfCover <= 30)
     .sort((a, b) => a.daysOfCover - b.daysOfCover);
 
-  const warningAlerts = [...enhancedMaterials]
-    .filter((m) => m.daysOfCover > 30 && m.daysOfCover <= 90)
+  const warningAlerts = [...dbAlertMaterials]
+    .filter(m => m.daysOfCover > 30 && m.daysOfCover <= 90)
     .sort((a, b) => a.daysOfCover - b.daysOfCover);
 
   return (
@@ -503,7 +561,14 @@ export function RawMaterialsPage() {
           </div>
 
           {/* Stock Alerts */}
-          {(criticalAlerts.length > 0 || warningAlerts.length > 0) && (
+          {alertsLoading ? (
+            <Card className="border-l-4 border-l-orange-500 shadow-sm">
+              <CardContent className="p-6 flex items-center gap-3 text-gray-500">
+                <Loader2 className="w-5 h-5 animate-spin text-orange-500" />
+                <span className="text-sm">Loading stock alerts…</span>
+              </CardContent>
+            </Card>
+          ) : (criticalAlerts.length > 0 || warningAlerts.length > 0) && (
             <Card className="border-l-4 border-l-orange-500 shadow-sm">
               <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-lg">
@@ -537,13 +602,13 @@ export function RawMaterialsPage() {
                                   {m.name}
                                 </p>
                                 <p className="text-xs text-red-600 font-medium mt-1">
-                                  ⚠ {m.daysOfCover.toFixed(1)} days remaining
+                                  ⚠ {isFinite(m.daysOfCover) ? `${m.daysOfCover.toFixed(1)} days remaining` : `${m.total_stock} units · no consumption data`}
                                 </p>
                               </div>
                               <Button
                                 size="sm"
                                 variant="outline"
-                                onClick={() => navigate(`/materials/category/${m.category.toLowerCase().replace(/\s+/g, '-')}`)}
+                                onClick={() => navigate(`/materials/${m.id}`)}
                                 className="flex-shrink-0 text-xs"
                               >
                                 View
@@ -576,13 +641,13 @@ export function RawMaterialsPage() {
                                   {m.name}
                                 </p>
                                 <p className="text-xs text-yellow-600 font-medium mt-1">
-                                  {m.daysOfCover.toFixed(1)} days remaining
+                                  {isFinite(m.daysOfCover) ? `${m.daysOfCover.toFixed(1)} days remaining` : `${m.total_stock} units · no consumption data`}
                                 </p>
                               </div>
                               <Button
                                 size="sm"
                                 variant="outline"
-                                onClick={() => navigate(`/materials/category/${m.category.toLowerCase().replace(/\s+/g, '-')}`)}
+                                onClick={() => navigate(`/materials/${m.id}`)}
                                 className="flex-shrink-0 text-xs"
                               >
                                 Review
@@ -598,7 +663,7 @@ export function RawMaterialsPage() {
             </Card>
           )}
 
-      {/* Categories Section */}
+          {/* Categories Section */}
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">

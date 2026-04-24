@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, Plus, Minus, Package, AlertCircle, CheckCircle, User } from 'lucide-react';
 import { supabase } from '@/src/lib/supabase';
+import { computeStockStatus } from '@/src/lib/stockStatus';
 
 type AdjustmentType = 'add' | 'subtract';
 
@@ -15,14 +16,23 @@ interface ProductStockAdjustmentModalProps {
     currentStock: number;
     reorderPoint: number;
   };
+  productId: string;
   branch: string;
 }
+
+const STATUS_PRIORITY: Record<string, number> = {
+  'Out of Stock': 4,
+  'Critical':     3,
+  'Low Stock':    2,
+  'Active':       1,
+};
 
 export default function ProductStockAdjustmentModal({
   isOpen,
   onClose,
   onSuccess,
   variant,
+  productId,
   branch,
 }: ProductStockAdjustmentModalProps) {
   const [adjustmentType, setAdjustmentType] = useState<AdjustmentType>('add');
@@ -56,12 +66,29 @@ export default function ProductStockAdjustmentModal({
     setSaving(true);
     setErrorMsg('');
     try {
-      // 1. Update total_stock on the variant row
+      // 1. Update total_stock + auto-computed status on the variant row
+      const newStatus = computeStockStatus(newStock, variant.reorderPoint);
       const { error: varErr } = await supabase
         .from('product_variants')
-        .update({ total_stock: newStock })
+        .update({ total_stock: newStock, status: newStatus })
         .eq('id', variant.id);
       if (varErr) throw varErr;
+
+      // 2. Re-derive and save the parent product's status from all its variants
+      const { data: allVariants } = await supabase
+        .from('product_variants')
+        .select('status')
+        .eq('product_id', productId);
+      if (allVariants && allVariants.length > 0) {
+        const worstStatus = allVariants.reduce<string>((worst, v) => {
+          const vStatus = v.status ?? 'Active';
+          return (STATUS_PRIORITY[vStatus] ?? 0) > (STATUS_PRIORITY[worst] ?? 0) ? vStatus : worst;
+        }, 'Active');
+        await supabase
+          .from('products')
+          .update({ status: worstStatus })
+          .eq('id', productId);
+      }
 
       // 2. Update the branch-specific stock row if it exists
       const { data: branchRow } = await supabase

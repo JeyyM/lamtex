@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { X, Plus, Minus, Package, AlertCircle, CheckCircle, User } from 'lucide-react';
+import { computeStockStatus } from '@/src/lib/stockStatus';
 
 type AdjustmentType = 'add' | 'subtract';
 
@@ -15,6 +16,7 @@ interface StockAdjustmentModalProps {
     unit: string;
     location?: string;
     reorderPoint?: number;
+    status?: string;
   };
   onAdjust: (adjustment: {
     type: AdjustmentType;
@@ -80,6 +82,27 @@ export default function StockAdjustmentModal({
   const handleQuickAmount = (amount: number) => {
     setQuantity(amount.toString());
   };
+
+  const getStatusLabel = (s: string) => {
+    if (s === 'Active') return 'In Stock';
+    if (s === 'Critical') return 'Critical Stock';
+    return s;
+  };
+
+  const getStatusStyle = (s: string) => {
+    if (s === 'Active') return 'bg-green-100 text-green-700 border-green-200';
+    if (s === 'Low Stock') return 'bg-orange-100 text-orange-700 border-orange-200';
+    if (s === 'Critical' || s === 'Out of Stock') return 'bg-red-100 text-red-700 border-red-200';
+    return 'bg-gray-100 text-gray-700 border-gray-200';
+  };
+
+  const currentStatus = item.status ?? (item.reorderPoint !== undefined
+    ? computeStockStatus(item.currentStock, item.reorderPoint)
+    : 'Active');
+  const newStatus = item.reorderPoint !== undefined
+    ? computeStockStatus(newStock, item.reorderPoint)
+    : null;
+  const statusWillChange = newStatus && newStatus !== currentStatus;
 
   const handleClose = () => {
     setShowPreConfirmation(false);
@@ -182,6 +205,11 @@ export default function StockAdjustmentModal({
                   <p className="text-2xl font-bold text-red-900">
                     {newStock} <span className="text-base font-normal text-red-700">{item.unit}</span>
                   </p>
+                  {newStatus && (
+                    <span className={`inline-block mt-1.5 px-2.5 py-0.5 text-xs font-semibold rounded-full border ${getStatusStyle(newStatus)}`}>
+                      {getStatusLabel(newStatus)}
+                    </span>
+                  )}
                 </div>
                 {newStock < (item.reorderPoint || 0) && (
                   <AlertCircle className="w-6 h-6 text-red-600" />
@@ -238,6 +266,9 @@ export default function StockAdjustmentModal({
                   <p className="text-sm text-gray-600 mt-1">
                     {item.sku || item.code} {item.location && `• ${item.location}`}
                   </p>
+                  <span className={`inline-block mt-2 px-2.5 py-0.5 text-xs font-semibold rounded-full border ${getStatusStyle(currentStatus)}`}>
+                    {getStatusLabel(currentStatus)}
+                  </span>
                 </div>
                 <div className="text-right flex-shrink-0">
                   <p className="text-xs text-gray-500">Current Stock</p>
@@ -245,6 +276,9 @@ export default function StockAdjustmentModal({
                     {item.currentStock}
                     <span className="text-sm font-normal text-gray-600 ml-1">{item.unit}</span>
                   </p>
+                  {item.reorderPoint !== undefined && (
+                    <p className="text-xs text-gray-400 mt-0.5">Reorder at {item.reorderPoint} {item.unit}</p>
+                  )}
                 </div>
               </div>
             </div>
@@ -324,7 +358,7 @@ export default function StockAdjustmentModal({
 
               {/* Stock Preview */}
               {numericQuantity > 0 && (
-                <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg space-y-2">
                   <div className="flex items-center justify-between text-sm">
                     <div>
                       <span className="text-gray-700">Current: </span>
@@ -338,6 +372,26 @@ export default function StockAdjustmentModal({
                       <span className="font-semibold text-gray-900">{newStock} {item.unit}</span>
                     </div>
                   </div>
+                  {newStatus && statusWillChange && (
+                    <div className="flex items-center gap-2 pt-1 border-t border-blue-200">
+                      <span className="text-xs text-gray-500">Status will change:</span>
+                      <span className={`px-2 py-0.5 text-xs font-semibold rounded-full border ${getStatusStyle(currentStatus)}`}>
+                        {getStatusLabel(currentStatus)}
+                      </span>
+                      <span className="text-xs text-gray-400">→</span>
+                      <span className={`px-2 py-0.5 text-xs font-semibold rounded-full border ${getStatusStyle(newStatus)}`}>
+                        {getStatusLabel(newStatus)}
+                      </span>
+                    </div>
+                  )}
+                  {newStatus && !statusWillChange && (
+                    <div className="flex items-center gap-2 pt-1 border-t border-blue-200">
+                      <span className="text-xs text-gray-500">Status remains:</span>
+                      <span className={`px-2 py-0.5 text-xs font-semibold rounded-full border ${getStatusStyle(currentStatus)}`}>
+                        {getStatusLabel(currentStatus)}
+                      </span>
+                    </div>
+                  )}
                 </div>
               )}
 

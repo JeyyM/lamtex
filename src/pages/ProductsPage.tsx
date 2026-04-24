@@ -31,8 +31,6 @@ import gardenHoseImg   from '@/src/assets/product-images/Garden Hose.webp';
 import couplingImg     from '@/src/assets/product-images/Coupling.webp';
 import pvcCementImg    from '@/src/assets/product-images/PVC Cement.webp';
 
-// Strip seeding prefix like "M_", "C_", "B_" from display names
-const cleanName = (n: string) => n.replace(/^[A-Z]_/, '');
 
 const categoryImageMap: Record<string, string> = {
   // old slugs
@@ -138,7 +136,7 @@ export function ProductsPage() {
       setSummaryStats({
         totalProducts: data.length,
         totalVariants: data.reduce((s, p) => s + (p.total_variants ?? 0), 0),
-        lowStockCount: data.filter(p => p.status === 'Low Stock' || p.status === 'Out of Stock').length,
+        lowStockCount: data.filter(p => ['Low Stock', 'Critical', 'Out of Stock'].includes(p.status)).length,
         totalRevenue:  data.reduce((s, p) => s + (Number(p.total_revenue) || 0), 0),
       });
     }
@@ -155,18 +153,18 @@ export function ProductsPage() {
     const rows = productStats.filter(p => p.category_id === catId);
     return {
       count:    rows.length,
-      lowStock: rows.filter(p => p.status === 'Low Stock' || p.status === 'Out of Stock').length,
+      lowStock: rows.filter(p => ['Low Stock', 'Critical', 'Out of Stock'].includes(p.status)).length,
     };
   };
 
   const filteredCategories = categories.filter(cat =>
-    cleanName(cat.name).toLowerCase().includes(searchQuery.toLowerCase())
+    cat.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   // â”€â”€ Category CRUD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const handleEditCategory = (cat: CategoryRow, e: React.MouseEvent) => {
     e.stopPropagation();
-    setEditingCategory({ name: cleanName(cat.name), description: cat.description ?? '', imageUrl: cat.image_url ?? '', icon: 'category' });
+    setEditingCategory({ name: cat.name, description: cat.description ?? '', imageUrl: cat.image_url ?? '', icon: 'category' });
     setEditingCategoryId(cat.id);
     setIsEditMode(true);
     setShowAddCategoryModal(true);
@@ -256,6 +254,12 @@ export function ProductsPage() {
               <div>
                 <p className="text-sm text-gray-500">Product Families</p>
                 <p className="text-2xl font-bold text-gray-900">{summaryLoading ? '...' : summaryStats.totalProducts}</p>
+                {!summaryLoading && summaryStats.lowStockCount > 0 && (
+                  <p className="text-xs text-orange-600 font-medium mt-0.5 flex items-center gap-1">
+                    <AlertTriangle className="w-3 h-3" />
+                    {summaryStats.lowStockCount} low / critical stock
+                  </p>
+                )}
               </div>
             </div>
           </CardContent>
@@ -364,15 +368,16 @@ export function ProductsPage() {
                       </div>
                       <div className="p-3 sm:p-4">
                         <h3 className="font-semibold text-gray-900 group-hover:text-red-600 transition-colors">
-                          {cleanName(cat.name)}
+                          {cat.name}
                         </h3>
                         <p className="text-sm text-gray-500 mt-1">
                           {stats.count} {stats.count === 1 ? 'product family' : 'product families'}
                         </p>
                         {stats.lowStock > 0 && (
-                          <Badge variant="warning" size="sm" className="mt-2">
-                            {stats.lowStock} low stock
-                          </Badge>
+                          <p className="text-xs text-orange-600 font-medium mt-1.5 flex items-center gap-1">
+                            <AlertTriangle className="w-3 h-3" />
+                            {stats.lowStock} low / critical stock
+                          </p>
                         )}
                       </div>
                     </button>

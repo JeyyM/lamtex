@@ -24,29 +24,46 @@ export function FulfillOrderModal({
   onFulfill,
 }: FulfillOrderModalProps) {
   const [fulfillmentData, setFulfillmentData] = useState<FulfillmentData[]>([]);
+  const [inputValues, setInputValues] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (isOpen) {
-      // Initialize fulfillment data with full quantities
-      setFulfillmentData(
-        items.map(item => ({
-          itemId: item.id,
-          orderedQuantity: item.quantity,
-          deliveredQuantity: item.quantity, // Default to full delivery
-        }))
-      );
+      const data = items.map(item => ({
+        itemId: item.id,
+        orderedQuantity: item.quantity,
+        deliveredQuantity: item.quantity,
+      }));
+      setFulfillmentData(data);
+      setInputValues(Object.fromEntries(data.map(d => [d.itemId, String(d.deliveredQuantity)])));
     }
   }, [isOpen, items]);
 
   if (!isOpen) return null;
 
   const handleQuantityChange = (itemId: string, value: string) => {
-    const numValue = parseInt(value) || 0;
+    setInputValues(prev => ({ ...prev, [itemId]: value }));
+    const numValue = parseInt(value);
+    if (!isNaN(numValue)) {
+      const ordered = fulfillmentData.find(f => f.itemId === itemId)?.orderedQuantity ?? 0;
+      setFulfillmentData(prev =>
+        prev.map(item =>
+          item.itemId === itemId
+            ? { ...item, deliveredQuantity: Math.min(Math.max(0, numValue), ordered) }
+            : item
+        )
+      );
+    }
+  };
+
+  const handleQuantityBlur = (itemId: string) => {
+    const ordered = fulfillmentData.find(f => f.itemId === itemId)?.orderedQuantity ?? 0;
+    const raw = inputValues[itemId] ?? '';
+    const numValue = parseInt(raw);
+    const clamped = isNaN(numValue) ? 0 : Math.min(Math.max(0, numValue), ordered);
+    setInputValues(prev => ({ ...prev, [itemId]: String(clamped) }));
     setFulfillmentData(prev =>
       prev.map(item =>
-        item.itemId === itemId
-          ? { ...item, deliveredQuantity: Math.min(Math.max(0, numValue), item.orderedQuantity) }
-          : item
+        item.itemId === itemId ? { ...item, deliveredQuantity: clamped } : item
       )
     );
   };
@@ -150,8 +167,10 @@ export function FulfillOrderModal({
                             type="number"
                             min="0"
                             max={orderedQty}
-                            value={deliveredQty}
+                            value={inputValues[item.id] ?? String(deliveredQty)}
                             onChange={(e) => handleQuantityChange(item.id, e.target.value)}
+                            onBlur={() => handleQuantityBlur(item.id)}
+                            onWheel={(e) => e.currentTarget.blur()}
                             className="w-20 px-3 py-2 border-2 border-gray-300 rounded-lg text-center font-bold text-lg focus:border-blue-500 focus:outline-none"
                           />
                           <span className="text-gray-400 font-bold">/</span>

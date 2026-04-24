@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { X, Upload, Search, Loader2, AlertTriangle, RefreshCw } from 'lucide-react';
+import { X, Upload, Search, Loader2, AlertTriangle, RefreshCw, Zap } from 'lucide-react';
 import { supabase } from '@/src/lib/supabase';
+import { optimizeImage, formatBytes } from '@/src/lib/imageOptimizer';
 
 interface ImageGalleryModalProps {
   isOpen: boolean;
@@ -40,6 +41,7 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
   const [selectedImage, setSelectedImage] = useState<string | null>(currentImageUrl || null);
   const [selectedImagesOrder, setSelectedImagesOrder] = useState<string[]>(currentImages);
   const [uploading, setUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
 
   const isMultiSelect = maxImages > 1;
@@ -95,51 +97,52 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
       setSelectedImagesOrder(currentImages);
       setSelectedImage(currentImageUrl || null);
       setSearchQuery('');
+      setUploadStatus(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
-  // Upload handler
+  // Upload handler with client-side optimization
   const handleFileSelect = async () => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = 'image/jpeg,image/jpg,image/png,image/webp,image/avif';
+    input.accept = 'image/jpeg,image/jpg,image/png,image/webp,image/avif,image/gif,image/bmp';
     input.onchange = async (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (!file) return;
 
-      if (file.size > 5 * 1024 * 1024) {
-        alert('Image too large! Please select an image under 5MB.');
-        return;
-      }
-
       if (!file.type.startsWith('image/')) {
-        alert('Please select an image file (JPEG, PNG, WebP, AVIF)');
+        alert('Please select an image file (JPEG, PNG, WebP, AVIF, etc.)');
         return;
       }
 
       try {
         setUploading(true);
 
-        // Sanitise filename: replace spaces with hyphens, keep extension
-        const safeName = file.name.replace(/\s+/g, '-').toLowerCase();
-        const filePath = folder ? `${folder}/${safeName}` : safeName;
+        // Step 1 — Optimize / compress
+        setUploadStatus('Optimizing image…');
+        const result = await optimizeImage(file);
+        const saved = Math.round((1 - result.optimizedSize / result.originalSize) * 100);
+        setUploadStatus(
+          `Optimized: ${formatBytes(result.originalSize)} → ${formatBytes(result.optimizedSize)} (${saved}% smaller)`
+        );
 
+        // Step 2 — Upload the compressed file
+        const filePath = folder ? `${folder}/${result.file.name}` : result.file.name;
         const { error: uploadError } = await supabase.storage
           .from(BUCKET)
-          .upload(filePath, file, {
-            cacheControl: '3600',
-            upsert: true, // Overwrite if same name
-          });
+          .upload(filePath, result.file, { cacheControl: '3600', upsert: true });
 
-        if (uploadError) {
-          throw uploadError;
-        }
+        if (uploadError) throw uploadError;
 
-        // Refresh the gallery after upload
+        // Step 3 — Refresh gallery
         await fetchImages();
+        setUploadStatus(
+          `Uploaded & optimized: ${formatBytes(result.originalSize)} → ${formatBytes(result.optimizedSize)} (${saved}% smaller)`
+        );
       } catch (err: any) {
         console.error('Upload failed:', err);
+        setUploadStatus(null);
         alert(`Upload failed: ${err.message ?? 'Unknown error'}`);
       } finally {
         setUploading(false);
@@ -229,10 +232,24 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
               disabled={uploading}
               className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <Upload className="w-4 h-4" />
-              {uploading ? 'Uploading...' : 'Upload New'}
+              {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+              {uploading ? 'Processing...' : 'Upload New'}
             </button>
           </div>
+
+          {/* Optimization status banner */}
+          {uploadStatus && (
+            <div className={`mt-3 flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium ${
+              uploadStatus.startsWith('Optimizing')
+                ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                : 'bg-green-50 text-green-700 border border-green-200'
+            }`}>
+              {uploadStatus.startsWith('Optimizing')
+                ? <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />
+                : <Zap className="w-4 h-4 flex-shrink-0" />}
+              {uploadStatus}
+            </div>
+          )}
         </div>
 
         {/* Gallery Grid */}

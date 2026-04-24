@@ -185,7 +185,7 @@ export default function ProductCategoryPage() {
     });
 
   const totalRevenue  = filteredProducts.reduce((s, p) => s + (Number(p.total_revenue) || 0), 0);
-  const lowStockCount = filteredProducts.filter(p => p.status === 'Low Stock' || p.status === 'Out of Stock').length;
+  const lowStockCount = filteredProducts.filter(p => ['Low Stock', 'Critical', 'Out of Stock'].includes(p.status)).length;
 
   // â”€â”€ Render â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   return (
@@ -331,15 +331,16 @@ export default function ProductCategoryPage() {
                   </div>
                   <div className="p-6 space-y-4">
                     <div>
-                      <div className="flex items-start justify-between gap-2 mb-2">
+                      <div className="flex items-center justify-between gap-2 mb-2">
                         <h3 className="font-semibold text-gray-900 text-lg group-hover:text-red-600 transition-colors">
                           {p.name}
                         </h3>
                         <Badge
-                          variant={p.status === 'Low Stock' ? 'warning' : p.status === 'Out of Stock' ? 'destructive' : 'success'}
+                          variant={p.status === 'Critical' ? 'destructive' : p.status === 'Low Stock' ? 'warning' : p.status === 'Out of Stock' ? 'destructive' : 'success'}
                           size="sm"
+                          className="whitespace-nowrap text-center flex-shrink-0"
                         >
-                          {p.status}
+                          {p.status === 'Active' ? 'In Stock' : p.status === 'Critical' ? 'Critical Stock' : p.status}
                         </Badge>
                       </div>
                       <p className="text-sm text-gray-500 line-clamp-2">{p.description ?? 'No description'}</p>
@@ -375,11 +376,11 @@ export default function ProductCategoryPage() {
                         </span>
                       </div>
                     </div>
-                    {(p.status === 'Low Stock' || p.status === 'Out of Stock') && (
-                      <div className="flex items-start gap-2 p-3 bg-orange-50 border border-orange-200 rounded-lg">
-                        <AlertTriangle className="w-4 h-4 text-orange-600 flex-shrink-0 mt-0.5" />
-                        <div className="text-xs text-orange-700">
-                          <span className="font-semibold">{p.status}!</span> Consider reviewing production schedule.
+                    {['Low Stock', 'Critical', 'Out of Stock'].includes(p.status) && (
+                      <div className={`flex items-start gap-2 p-3 rounded-lg border ${p.status === 'Critical' || p.status === 'Out of Stock' ? 'bg-red-50 border-red-200' : 'bg-orange-50 border-orange-200'}`}>
+                        <AlertTriangle className={`w-4 h-4 flex-shrink-0 mt-0.5 ${p.status === 'Critical' || p.status === 'Out of Stock' ? 'text-red-600' : 'text-orange-600'}`} />
+                        <div className={`text-xs ${p.status === 'Critical' || p.status === 'Out of Stock' ? 'text-red-700' : 'text-orange-700'}`}>
+                          <span className="font-semibold">{p.status === 'Critical' ? 'Critical Stock' : p.status}!</span> Consider reviewing production schedule.
                         </div>
                       </div>
                     )}

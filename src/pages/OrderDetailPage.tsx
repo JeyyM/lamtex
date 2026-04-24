@@ -46,7 +46,8 @@ import {
 } from 'lucide-react';
 
 // ── DB Types (same as CreateOrderModal) ──────────────────────────────────────
-interface DBVariantDet { id: string; size: string; description: string | null; unit_price: number; stock: number; }
+interface DBBulkDiscount { min_qty: number; max_qty: number | null; discount_percent: number; }
+interface DBVariantDet { id: string; size: string; description: string | null; unit_price: number; stock: number; bulk_discounts: DBBulkDiscount[]; }
 interface DBProductDet { id: string; name: string; image_url: string | null; variants: DBVariantDet[]; }
 interface DBCategoryDet { id: string; name: string; image_url: string | null; }
 
@@ -67,10 +68,12 @@ export function OrderDetailPage() {
   const [productsLoading, setProductsLoading] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<DBProductDet | null>(null);
   const [selectedVariant, setSelectedVariant] = useState<DBVariantDet | null>(null);
-  const [variantQuantity, setVariantQuantity] = useState<string>('1');
+  const [variantQuantity, setVariantQuantity] = useState(1);
   const [variantPrice, setVariantPrice] = useState(0);
   const [variantDiscounts, setVariantDiscounts] = useState<Array<{ name: string; percentage: number }>>([]);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
+  // Cache fetched products by id for instant lookup when re-editing items
+  const [productCache, setProductCache] = useState<Record<string, DBProductDet>>({});
   
   // Cancel order state
   const [showCancelModal, setShowCancelModal] = useState(false);
@@ -128,7 +131,7 @@ export function OrderDetailPage() {
       // Fetch line items
       const { data: items } = await supabase
         .from('order_line_items')
-        .select('id, sku, product_name, variant_description, quantity, unit_price, original_price, negotiated_price, discount_percent, discount_amount, batch_discount, discounts_breakdown, line_total, stock_hint, available_stock')
+        .select('id, sku, variant_id, product_name, variant_description, quantity, unit_price, original_price, negotiated_price, discount_percent, discount_amount, batch_discount, discounts_breakdown, line_total, stock_hint, available_stock')
         .eq('order_id', id)
         .order('created_at');
 
@@ -144,6 +147,7 @@ export function OrderDetailPage() {
       const lineItems: OrderLineItem[] = (items ?? []).map((item: any) => ({
         id: item.id,
         sku: item.sku ?? '',
+        variantId: item.variant_id ?? undefined,
         productName: item.product_name ?? '',
         variantDescription: item.variant_description ?? '',
         quantity: item.quantity,
@@ -219,6 +223,133 @@ export function OrderDetailPage() {
 
     fetchOrder();
   }, [id]);
+
+  // ── Pre-fetch all products for existing order items when edit mode starts ──
+  // Must be declared here (before any early returns) to satisfy Rules of Hooks.
+  // This mirrors CreateOrderModal: products (with image_url, variants, stock) are
+  // loaded into productCache BEFORE the user clicks an item, so handleEditItem
+  // can be synchronous — no async lookup needed on click.
+  useEffect(() => {
+    if (!isEditing || !order) return;
+
+    const prefetchProducts = async () => {
+      const items = order.items;
+      if (items.length === 0) return;
+
+      // Collect variant UUIDs from the items.
+      // - Orders created via CreateOrderModal: item.variantId is the UUID
+      // - Orders created via old edit flow: item.variantId is null, item.sku is the UUID
+      const variantUuids = [
+        ...items.map(i => i.variantId).filter(Boolean) as string[],
+        ...items.filter(i => !i.variantId && i.sku).map(i => i.sku),
+      ].filter(Boolean);
+
+      if (variantUuids.length === 0) return;
+
+      // 1. Batch-fetch product_id for every variant UUID
+      const { data: variantRows } = await supabase
+        .from('product_variants')
+        .select('id, product_id')
+        .in('id', variantUuids);
+
+      const productIds = [
+        ...new Set((variantRows ?? []).map((v: any) => v.product_id).filter(Boolean)),
+      ] as string[];
+      if (productIds.length === 0) return;
+
+      // 2. Batch-fetch all products + variants + bulk discounts
+      const { data: productsData } = await supabase
+        .from('products')
+        .select('id, name, image_url, product_variants(id, size, description, unit_price, total_stock, product_bulk_discounts(min_qty, max_qty, discount_percent, is_active))')
+        .in('id', productIds);
+
+      if (!productsData || productsData.length === 0) return;
+
+      // 3. Batch-fetch branch-specific stock
+      const allVariantIds = productsData.flatMap((p: any) => p.product_variants?.map((v: any) => v.id) ?? []);
+      const stockMap: Record<string, number> = {};
+      const { data: branchRow } = await supabase.from('branches').select('id').eq('name', branch).maybeSingle();
+      if (branchRow?.id && allVariantIds.length > 0) {
+        const { data: stockData } = await supabase
+          .from('product_variant_stock').select('variant_id, quantity')
+          .eq('branch_id', branchRow.id).in('variant_id', allVariantIds);
+        (stockData ?? []).forEach((s: any) => { stockMap[s.variant_id] = s.quantity; });
+      }
+
+      // 4. Build DBProductDet objects and populate the cache
+      const mapped: DBProductDet[] = productsData.map((p: any) => ({
+        id: p.id,
+        name: p.name,
+        image_url: p.image_url ?? null,
+        variants: (p.product_variants ?? []).map((v: any) => ({
+          id: v.id,
+          size: v.size,
+          description: v.description ?? null,
+          unit_price: Number(v.unit_price ?? 0),
+          stock: stockMap[v.id] ?? v.total_stock ?? 0,
+          bulk_discounts: (v.product_bulk_discounts ?? [])
+            .filter((d: any) => d.is_active)
+            .map((d: any) => ({ min_qty: d.min_qty, max_qty: d.max_qty, discount_percent: Number(d.discount_percent) })),
+        })),
+      }));
+
+      setProductCache(prev => {
+        const next = { ...prev };
+        mapped.forEach(p => { next[p.id] = p; });
+        return next;
+      });
+
+      // ── Fallback for legacy items with no variant_id AND no sku ──────────────
+      // These items were saved by the old edit flow which lost the variant reference.
+      // We can still find the product by its name, which is always stored.
+      const itemsWithNoVariant = items.filter(i => !i.variantId && !i.sku);
+      if (itemsWithNoVariant.length > 0) {
+        const productNames = [...new Set(itemsWithNoVariant.map(i => i.productName).filter(Boolean))];
+        if (productNames.length > 0) {
+          const { data: productsByName } = await supabase
+            .from('products')
+            .select('id, name, image_url, product_variants(id, size, description, unit_price, total_stock, product_bulk_discounts(min_qty, max_qty, discount_percent, is_active))')
+            .in('name', productNames);
+
+          if (productsByName && productsByName.length > 0) {
+            const allFallbackVariantIds = productsByName.flatMap((p: any) => p.product_variants?.map((v: any) => v.id) ?? []);
+            const fallbackStockMap: Record<string, number> = {};
+            if (branchRow?.id && allFallbackVariantIds.length > 0) {
+              const { data: fallbackStock } = await supabase
+                .from('product_variant_stock').select('variant_id, quantity')
+                .eq('branch_id', branchRow.id).in('variant_id', allFallbackVariantIds);
+              (fallbackStock ?? []).forEach((s: any) => { fallbackStockMap[s.variant_id] = s.quantity; });
+            }
+
+            const fallbackMapped: DBProductDet[] = productsByName.map((p: any) => ({
+              id: p.id,
+              name: p.name,
+              image_url: p.image_url ?? null,
+              variants: (p.product_variants ?? []).map((v: any) => ({
+                id: v.id,
+                size: v.size,
+                description: v.description ?? null,
+                unit_price: Number(v.unit_price ?? 0),
+                stock: fallbackStockMap[v.id] ?? v.total_stock ?? 0,
+                bulk_discounts: (v.product_bulk_discounts ?? [])
+                  .filter((d: any) => d.is_active)
+                  .map((d: any) => ({ min_qty: d.min_qty, max_qty: d.max_qty, discount_percent: Number(d.discount_percent) })),
+              })),
+            }));
+
+            setProductCache(prev => {
+              const next = { ...prev };
+              fallbackMapped.forEach(p => { next[p.id] = p; });
+              return next;
+            });
+          }
+        }
+      }
+
+    };
+
+    prefetchProducts();
+  }, [isEditing]);
 
   // ── Order log helper ──────────────────────────────────────────────────────
   // Maps UserRole → order_log_role enum
@@ -301,7 +432,7 @@ export function OrderDetailPage() {
     if (['Delivered', 'Completed', 'Approved'].includes(status)) return 'success';
     if (['Pending', 'Picking', 'Packed', 'Ready', 'Scheduled'].includes(status)) return 'warning';
     if (['Rejected', 'Cancelled'].includes(status)) return 'danger';
-    if (status === 'In Transit') return 'info';
+    if (['In Transit', 'Partially Fulfilled'].includes(status)) return 'info';
     return 'neutral';
   };
 
@@ -327,25 +458,49 @@ export function OrderDetailPage() {
     setShowCancelModal(true);
   };
 
-  const handleConfirmCancellation = (cancellationData: CancellationData) => {
-    // Log the cancellation with all details
-    const logMessage = `Cancelled order ${order.id}. Reason: ${cancellationData.reason}. ` +
-      `Refund: ${cancellationData.refundRequired ? `₱${cancellationData.refundAmount.toLocaleString()}` : 'No'}, ` +
-      `Restock: ${cancellationData.restockItems ? 'Yes' : 'No'}, ` +
-      `Notify Customer: ${cancellationData.notifyCustomer ? 'Yes' : 'No'}`;
-    
-    addAuditLog('Cancelled Order', 'Order', logMessage);
-    
-    // Show success message with details
-    alert(
-      `Order ${order.id} has been cancelled successfully.\n\n` +
-      `Reason: ${cancellationData.reason}\n` +
-      `Initiated by: ${cancellationData.initiatedBy}\n` +
-      `Refund Amount: ${cancellationData.refundRequired ? `₱${cancellationData.refundAmount.toLocaleString()}` : 'None'}\n` +
-      `Items returned to stock: ${cancellationData.restockItems ? 'Yes' : 'No'}\n` +
-      `Customer notified: ${cancellationData.notifyCustomer ? 'Yes' : 'No'}`
+  const handleConfirmCancellation = async (cancellationData: CancellationData) => {
+    if (!order || !id) return;
+
+    const now = new Date().toISOString();
+
+    const { error } = await supabase
+      .from('orders')
+      .update({
+        status: 'Cancelled',
+        cancelled_at: now,
+        cancellation_reason: cancellationData.reason,
+      })
+      .eq('id', id);
+
+    if (error) {
+      alert('Failed to cancel order: ' + error.message);
+      return;
+    }
+
+    const logMessage =
+      `Order cancelled by ${cancellationData.initiatedBy}. ` +
+      `Reason: ${cancellationData.reason}. ` +
+      `Refund: ${cancellationData.refundRequired ? `₱${cancellationData.refundAmount.toLocaleString()}` : 'No'}. ` +
+      `Restock: ${cancellationData.restockItems ? 'Yes' : 'No'}. ` +
+      `Notify customer: ${cancellationData.notifyCustomer ? 'Yes' : 'No'}.` +
+      (cancellationData.additionalNotes ? ` Notes: ${cancellationData.additionalNotes}` : '');
+
+    await insertOrderLog(
+      'cancelled',
+      logMessage,
+      { status: order.status },
+      { status: 'Cancelled', cancelled_at: now, cancellation_reason: cancellationData.reason },
+      {
+        initiatedBy: cancellationData.initiatedBy,
+        refundRequired: cancellationData.refundRequired,
+        refundAmount: cancellationData.refundAmount,
+        restockItems: cancellationData.restockItems,
+        notifyCustomer: cancellationData.notifyCustomer,
+      },
     );
-    
+
+    addAuditLog('Cancelled Order', 'Order', logMessage);
+
     setShowCancelModal(false);
     navigate('/orders');
   };
@@ -357,39 +512,48 @@ export function OrderDetailPage() {
     }
   };
 
-  const handleFulfillOrder = (fulfillmentData: FulfillmentData[]) => {
-    // Check if any item is partially fulfilled
-    const hasPartialFulfillment = fulfillmentData.some(
-      item => item.deliveredQuantity < item.orderedQuantity && item.deliveredQuantity > 0
-    );
-    
+  const handleFulfillOrder = async (fulfillmentData: FulfillmentData[]) => {
+    if (!order || !id) return;
+
     const isFullyFulfilled = fulfillmentData.every(
       item => item.deliveredQuantity === item.orderedQuantity
     );
+    const newStatus: OrderStatus = isFullyFulfilled ? 'Delivered' : 'Partially Fulfilled';
+    const now = new Date().toISOString();
 
-    const newStatus = isFullyFulfilled ? 'Delivered' : 'Partially Fulfilled';
-    
-    // Create detailed log message
-    const fulfillmentDetails = fulfillmentData.map(item => {
+    const updatePayload: Record<string, unknown> = { status: newStatus };
+    if (isFullyFulfilled) updatePayload.actual_delivery = now;
+
+    const { error } = await supabase
+      .from('orders')
+      .update(updatePayload)
+      .eq('id', id);
+
+    if (error) {
+      alert('Failed to fulfill order: ' + error.message);
+      return;
+    }
+
+    const itemSummary = fulfillmentData.map(item => {
       const orderItem = order.items.find(i => i.id === item.itemId);
       return `${orderItem?.productName}: ${item.deliveredQuantity}/${item.orderedQuantity}`;
     }).join(', ');
 
-    addAuditLog(
-      'Fulfilled Order',
-      'Order',
-      `Order ${order.id} marked as ${newStatus}. Items: ${fulfillmentDetails}`
+    await insertOrderLog(
+      'delivered',
+      `Order marked as ${newStatus} by ${employeeName || session?.user?.email || role}. Items: ${itemSummary}`,
+      { status: order.status },
+      { status: newStatus },
+      { fulfillmentData },
     );
 
-    alert(
-      `Order ${order.id} has been ${hasPartialFulfillment ? 'partially fulfilled' : 'fulfilled'}.\n\n` +
-      `Status: ${newStatus}\n\n` +
-      `Fulfillment Details:\n${fulfillmentData.map(item => {
-        const orderItem = order.items.find(i => i.id === item.itemId);
-        return `• ${orderItem?.productName}: ${item.deliveredQuantity} of ${item.orderedQuantity} delivered`;
-      }).join('\n')}`
-    );
+    addAuditLog('Fulfilled Order', 'Order', `Order ${order.id} marked as ${newStatus}. Items: ${itemSummary}`);
 
+    setOrder({
+      ...order,
+      status: newStatus,
+      ...(isFullyFulfilled ? { actualDelivery: now } : {}),
+    });
     setShowFulfillModal(false);
   };
 
@@ -473,6 +637,7 @@ export function OrderDetailPage() {
       const rows = editedOrder.items.map(item => ({
         order_id: id,
         sku: item.sku,
+        variant_id: item.variantId ?? null,
         product_name: item.productName,
         variant_description: item.variantDescription,
         quantity: item.quantity,
@@ -634,7 +799,7 @@ export function OrderDetailPage() {
     const { data: branchRow } = await supabase.from('branches').select('id').eq('name', branch).single();
     const { data: productsData } = await supabase
       .from('products')
-      .select('id, name, image_url, product_variants(id, size, description, unit_price, total_stock)')
+      .select('id, name, image_url, product_variants(id, size, description, unit_price, total_stock, product_bulk_discounts(min_qty, max_qty, discount_percent, is_active))')
       .eq('category_id', cat.id)
       .eq('status', 'Active')
       .order('name');
@@ -649,7 +814,7 @@ export function OrderDetailPage() {
         .in('variant_id', allVariantIds);
       (stockData ?? []).forEach((s: any) => { stockMap[s.variant_id] = s.quantity; });
     }
-    setCategoryProducts(productsData.map((p: any) => ({
+    const mapped: DBProductDet[] = productsData.map((p: any) => ({
       id: p.id,
       name: p.name,
       image_url: p.image_url ?? null,
@@ -659,8 +824,17 @@ export function OrderDetailPage() {
         description: v.description ?? null,
         unit_price: Number(v.unit_price ?? 0),
         stock: stockMap[v.id] ?? v.total_stock ?? 0,
+        bulk_discounts: (v.product_bulk_discounts ?? [])
+          .filter((d: any) => d.is_active)
+          .map((d: any) => ({ min_qty: d.min_qty, max_qty: d.max_qty, discount_percent: Number(d.discount_percent) })),
       })),
-    })));
+    }));
+    setCategoryProducts(mapped);
+    setProductCache(prev => {
+      const next = { ...prev };
+      mapped.forEach(p => { next[p.id] = p; });
+      return next;
+    });
     setProductsLoading(false);
   };
 
@@ -668,7 +842,7 @@ export function OrderDetailPage() {
     setShowProductModal(false);
     setSelectedProduct(null);
     setSelectedVariant(null);
-    setVariantQuantity('1');
+    setVariantQuantity(1);
     setVariantPrice(0);
     setVariantDiscounts([]);
     setProductSearch('');
@@ -677,29 +851,65 @@ export function OrderDetailPage() {
     setEditingItemId(null);
   };
 
-  // Open the product detail modal pre-filled from an existing line item (for editing)
+  // Open the product detail modal pre-filled from an existing line item (for editing).
+  // Identical logic to CreateOrderModal's editOrderItem:
+  //   1. Look up product in the cache (pre-populated by the useEffect above)
+  //   2. Set state and open the modal — synchronous, no async needed
+  // The cache uses product.id as key; we find the right product by matching variant UUID.
   const handleEditItem = (item: OrderLineItem) => {
     if (!isEditing) return;
 
-    // Reconstruct a synthetic DBProductDet / DBVariantDet from the saved item data
-    const syntheticVariant: DBVariantDet = {
-      id: item.sku.toLowerCase(),
-      size: item.variantDescription,
-      description: null,
-      unit_price: item.originalPrice ?? item.unitPrice,
-      stock: item.availableStock ?? 999,
-    };
-    const syntheticProduct: DBProductDet = {
+    // The variant UUID is stored as item.variantId for new orders, or as item.sku for old ones.
+    const variantUuid = item.variantId || item.sku;
+
+    // Find the product in the cache.
+    // Primary: match by variant UUID (new orders / orders with variant_id)
+    // Fallback: match by product name (legacy orders where variant_id and sku were lost)
+    let cachedProduct: DBProductDet | null = null;
+    let cachedVariant: DBVariantDet | null = null;
+
+    if (variantUuid) {
+      cachedProduct = Object.values(productCache).find(p =>
+        p.variants.some(v => v.id.toLowerCase() === variantUuid.toLowerCase())
+      ) ?? null;
+      cachedVariant = cachedProduct?.variants.find(
+        v => v.id.toLowerCase() === variantUuid.toLowerCase()
+      ) ?? null;
+    }
+
+    // Name-based fallback for legacy items with no variant identifier
+    if (!cachedProduct && item.productName) {
+      cachedProduct = Object.values(productCache).find(
+        p => p.name === item.productName
+      ) ?? null;
+      // Match the right variant by its size label
+      if (cachedProduct) {
+        cachedVariant = cachedProduct.variants.find(
+          v => v.size === item.variantDescription
+        ) ?? cachedProduct.variants[0] ?? null;
+      }
+    }
+
+    // If still no cache hit, open the modal with a synthetic object (editing still works, image is missing)
+    const product: DBProductDet = cachedProduct ?? {
       id: item.id,
       name: item.productName,
       image_url: null,
-      variants: [syntheticVariant],
+      variants: [{
+        id: variantUuid || item.id,
+        size: item.variantDescription,
+        description: null,
+        unit_price: item.originalPrice ?? item.unitPrice,
+        stock: item.availableStock ?? 999,
+        bulk_discounts: [],
+      }],
     };
+    const variant: DBVariantDet = cachedVariant ?? product.variants[0];
 
-    // Reconstruct discounts: prefer stored breakdown, fall back to single collapsed entry
-    let reconstructedDiscounts: Array<{ name: string; percentage: number }> = [];
+    // Reconstruct discounts
+    const discounts: Array<{ name: string; percentage: number }> = [];
     if (item.discountsBreakdown && item.discountsBreakdown.length > 0) {
-      reconstructedDiscounts = item.discountsBreakdown.map(d => ({ ...d }));
+      discounts.push(...item.discountsBreakdown.map(d => ({ ...d })));
     } else {
       const effectivePct = item.discountPercent > 0
         ? item.discountPercent
@@ -707,17 +917,16 @@ export function OrderDetailPage() {
             const gross = item.unitPrice * item.quantity;
             return gross > 0 && item.lineTotal < gross ? ((gross - item.lineTotal) / gross) * 100 : 0;
           })();
-      if (effectivePct > 0) {
-        reconstructedDiscounts.push({ name: 'Discount', percentage: parseFloat(effectivePct.toFixed(4)) });
-      }
+      if (effectivePct > 0) discounts.push({ name: 'Discount', percentage: parseFloat(effectivePct.toFixed(4)) });
     }
 
+
     setEditingItemId(item.id);
-    setSelectedProduct(syntheticProduct);
-    setSelectedVariant(syntheticVariant);
-    setVariantQuantity(item.quantity.toString());
+    setSelectedProduct(product);
+    setSelectedVariant(variant);
+    setVariantQuantity(item.quantity);
     setVariantPrice(item.unitPrice);
-    setVariantDiscounts(reconstructedDiscounts);
+    setVariantDiscounts(discounts);
     setShowProductModal(true);
   };
 
@@ -730,17 +939,17 @@ export function OrderDetailPage() {
   const removeDiscount = (index: number) => setVariantDiscounts(variantDiscounts.filter((_, i) => i !== index));
 
   const calculateFinalPrice = () =>
-    variantDiscounts.reduce((p, d) => p * (1 - d.percentage / 100), variantPrice * (parseInt(variantQuantity, 10) || 0));
+    variantDiscounts.reduce((p, d) => p * (1 - d.percentage / 100), variantPrice * variantQuantity);
 
   const calculateTotalDiscountPct = () => {
-    const subtotal = variantPrice * (parseInt(variantQuantity, 10) || 0);
+    const subtotal = variantPrice * variantQuantity;
     if (subtotal === 0) return 0;
     return ((subtotal - calculateFinalPrice()) / subtotal) * 100;
   };
 
   const handleAddToOrder = () => {
     if (!editedOrder || !selectedProduct || !selectedVariant) return;
-    const parsedQty = parseInt(variantQuantity, 10);
+    const parsedQty = variantQuantity;
     if (!parsedQty || parsedQty < 1) {
       alert('Please enter a valid quantity (minimum 1).');
       return;
@@ -751,6 +960,7 @@ export function OrderDetailPage() {
     const updatedItem: OrderLineItem = {
       id: editingItemId ?? `item-${Date.now()}`,
       sku: selectedVariant.id.toUpperCase(),
+      variantId: selectedVariant.id,
       productName: selectedProduct.name,
       variantDescription: `${selectedVariant.size}${selectedVariant.description ? ' - ' + selectedVariant.description : ''}`,
       quantity: parsedQty,
@@ -860,6 +1070,7 @@ export function OrderDetailPage() {
     'Ready',
     'Scheduled',
     'In Transit',
+    'Partially Fulfilled',
     'Delivered',
     'Completed',
     'Cancelled',
@@ -905,7 +1116,7 @@ export function OrderDetailPage() {
                 <Edit className="w-4 h-4" />
                 Edit Order
               </Button>
-              {['Approved', 'In Transit', 'Processing'].includes(order.status) && (
+              {['Approved', 'In Transit', 'Processing', 'Partially Fulfilled'].includes(order.status) && (
                 <Button variant="primary" onClick={() => setShowFulfillModal(true)} className="gap-2">
                   <Package className="w-4 h-4" />
                   Fulfill Order
@@ -1088,79 +1299,175 @@ export function OrderDetailPage() {
             </Button>
           )}
         </CardHeader>
-        <CardContent className="p-0">
-          {/* Mobile Card View */}
-          <div className="md:hidden divide-y divide-gray-200">
-            {displayOrder.items.map((item, index) => (
-              <div key={index} className={`p-4 space-y-3 ${isEditing ? 'cursor-pointer hover:bg-blue-50 transition-colors' : ''}`}
-                onClick={isEditing ? () => handleEditItem(item) : undefined}>
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0 flex-1">
-                    <div className="font-medium text-gray-900 break-words">{item.productName}</div>
-                    <div className="text-xs text-gray-500 mt-1">{item.variantDescription}</div>
-                    <div className="text-xs text-gray-600 mt-1">SKU: {item.sku}</div>
-                    <div className="flex gap-2 mt-2 flex-wrap">
-                      {item.negotiatedPrice && item.originalPrice && item.negotiatedPrice < item.originalPrice && (
-                        <Badge variant="danger" className="text-xs">Negotiated</Badge>
-                      )}
-                      <Badge variant={item.stockHint === 'Available' ? 'success' : 'warning'} className="text-xs">
-                        {item.stockHint}
-                      </Badge>
-                      {isEditing && <Badge variant="outline" className="text-xs text-blue-600 border-blue-400">Click to edit</Badge>}
+        <CardContent className={isEditing ? 'p-4 space-y-3' : 'p-0'}>
+
+          {/* ── Edit mode: same card style as CreateOrderModal ── */}
+          {isEditing && (
+            <>
+              {displayOrder.items.length === 0 ? (
+                <div className="text-center py-12 text-gray-500">
+                  <Package className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+                  <p className="font-medium">No items added yet</p>
+                  <p className="text-sm mt-1">Click "Add Product" to start adding items</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {displayOrder.items.map((item) => (
+                    <div
+                      key={item.id}
+                      className="flex items-center gap-4 p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors cursor-pointer group"
+                      onClick={() => handleEditItem(item)}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-semibold text-gray-900 group-hover:text-red-600 transition-colors">
+                            {item.productName}
+                          </span>
+                          <Badge variant="default" className="text-xs">{item.variantDescription}</Badge>
+                          {item.negotiatedPrice && item.originalPrice && item.negotiatedPrice < item.originalPrice && (
+                            <Badge variant="danger" className="text-xs">Negotiated</Badge>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 mt-2 flex-wrap">
+                          <div className="text-xs text-gray-500">
+                            Base: ₱{(item.originalPrice ?? item.unitPrice).toLocaleString()}/unit
+                          </div>
+                          {item.negotiatedPrice && item.negotiatedPrice !== (item.originalPrice ?? item.unitPrice) && (
+                            <>
+                              <div className="text-xs text-gray-400">•</div>
+                              <div className="text-xs text-red-600 font-medium">
+                                Custom: ₱{item.negotiatedPrice.toLocaleString()}/unit
+                              </div>
+                            </>
+                          )}
+                        </div>
+                        {item.discountsBreakdown && item.discountsBreakdown.length > 0 && (
+                          <div className="flex items-center gap-1 mt-1 flex-wrap">
+                            <span className="text-xs text-gray-500">Discounts:</span>
+                            {item.discountsBreakdown.map((d, i) => (
+                              <Badge key={i} variant="secondary" className="text-xs">
+                                {d.name} ({d.percentage}%)
+                              </Badge>
+                            ))}
+                          </div>
+                        )}
+                        <div className="text-xs text-gray-500 mt-1">
+                          Qty: {item.quantity} × ₱{item.quantity > 0
+                            ? (item.lineTotal / item.quantity).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                            : '0.00'}/unit
+                        </div>
+                      </div>
+
+                      <div className="w-32 text-right flex-shrink-0">
+                        <div className="text-sm text-gray-600 font-medium mb-1">Total</div>
+                        {effectiveDiscountPct(item) > 0 && (
+                          <div className="text-xs text-gray-400 line-through mb-0.5">
+                            ₱{(item.unitPrice * item.quantity).toLocaleString()}
+                          </div>
+                        )}
+                        <div className="font-semibold text-gray-900 text-lg">
+                          ₱{item.lineTotal.toLocaleString()}
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); handleRemoveItem(item.id); }}
+                        className="text-red-600 hover:text-red-700 transition-colors flex-shrink-0"
+                      >
+                        <Trash2 className="w-5 h-5" />
+                      </button>
+                    </div>
+                  ))}
+
+                  {/* Savings + Total summary */}
+                  {(() => {
+                    const totalOriginal = displayOrder.items.reduce((s, i) => s + (i.unitPrice * i.quantity), 0);
+                    const totalFinal = displayOrder.items.reduce((s, i) => s + i.lineTotal, 0);
+                    const savings = totalOriginal - totalFinal;
+                    return (
+                      <div className="space-y-2 pt-2">
+                        {savings > 0 && (
+                          <>
+                            <div className="flex items-center justify-between p-3 bg-green-50 border border-green-200 rounded-lg">
+                              <div className="text-sm text-gray-700">Original Total:</div>
+                              <div className="text-sm text-gray-500 line-through">₱{totalOriginal.toLocaleString()}</div>
+                            </div>
+                            <div className="flex items-center justify-between p-3 bg-red-50 border border-red-200 rounded-lg">
+                              <div className="flex items-center gap-2">
+                                <span className="font-semibold text-gray-900">Total Savings:</span>
+                                <Badge variant="destructive" className="text-xs">
+                                  {Math.round((savings / totalOriginal) * 100)}% OFF
+                                </Badge>
+                              </div>
+                              <div className="text-lg font-bold text-green-600">-₱{savings.toLocaleString()}</div>
+                            </div>
+                          </>
+                        )}
+                        <div className="flex items-center justify-between p-4 bg-red-600 text-white rounded-lg">
+                          <div className="font-semibold text-lg">Final Amount:</div>
+                          <div className="text-3xl font-bold">₱{totalFinal.toLocaleString()}</div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+            </>
+          )}
+
+          {/* ── View mode: read-only table ── */}
+          {!isEditing && (
+            <>
+              {/* Mobile Card View */}
+              <div className="md:hidden divide-y divide-gray-200">
+                {displayOrder.items.map((item, index) => (
+                  <div key={index} className="p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium text-gray-900 break-words">{item.productName}</div>
+                        <div className="text-xs text-gray-500 mt-1">{item.variantDescription}</div>
+                        <div className="text-xs text-gray-600 mt-1">SKU: {item.sku}</div>
+                        <div className="flex gap-2 mt-2 flex-wrap">
+                          {item.negotiatedPrice && item.originalPrice && item.negotiatedPrice < item.originalPrice && (
+                            <Badge variant="danger" className="text-xs">Negotiated</Badge>
+                          )}
+                          <Badge variant={item.stockHint === 'Available' ? 'success' : 'warning'} className="text-xs">
+                            {item.stockHint}
+                          </Badge>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div>
+                        <div className="text-xs text-gray-500">Quantity</div>
+                        <div className="font-medium text-gray-900">{item.quantity}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-gray-500">Unit Price</div>
+                        <div className="font-medium text-gray-900">₱{item.unitPrice}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-gray-500">Discount</div>
+                        <div className="font-medium text-gray-900">{effectiveDiscountPct(item) > 0 ? `${effectiveDiscountPct(item).toFixed(1)}%` : '-'}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-gray-500">Line Total</div>
+                        <div className="font-semibold text-gray-900">₱{item.lineTotal.toLocaleString()}</div>
+                      </div>
                     </div>
                   </div>
-                  {isEditing && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={(e) => { e.stopPropagation(); handleRemoveItem(item.id); }}
-                      className="text-red-600 hover:text-red-700 hover:bg-red-50 flex-shrink-0"
-                    >
-                      <X className="w-4 h-4" />
-                    </Button>
-                  )}
-                </div>
-                <div className="grid grid-cols-2 gap-3 text-sm">
-                  <div>
-                    <div className="text-xs text-gray-500">Quantity</div>
-                    {isEditing ? (
-                      <input
-                        type="number"
-                        min="1"
-                        value={item.quantity}
-                        onChange={(e) => handleQuantityChange(item.id, parseInt(e.target.value) || 1)}
-                        className="w-full px-2 py-1 border border-gray-300 rounded text-center focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
-                      />
-                    ) : (
-                      <div className="font-medium text-gray-900">{item.quantity}</div>
-                    )}
-                  </div>
-                  <div>
-                    <div className="text-xs text-gray-500">Unit Price</div>
-                    <div className="font-medium text-gray-900">₱{item.unitPrice}</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-gray-500">Discount</div>
-                    <div className="font-medium text-gray-900">{effectiveDiscountPct(item) > 0 ? `${effectiveDiscountPct(item).toFixed(1)}%` : '-'}</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-gray-500">Line Total</div>
-                    <div className="font-semibold text-gray-900">₱{item.lineTotal.toLocaleString()}</div>
+                ))}
+                <div className="p-4 bg-gray-50 border-t-2 border-gray-200">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-gray-700">Subtotal:</span>
+                    <span className="font-bold text-gray-900 text-lg">₱{displayOrder.totalAmount.toLocaleString()}</span>
                   </div>
                 </div>
               </div>
-            ))}
-            <div className="p-4 bg-gray-50 border-t-2 border-gray-200">
-              <div className="flex items-center justify-between">
-                <span className="font-semibold text-gray-700">Subtotal:</span>
-                <span className="font-bold text-gray-900 text-lg">₱{displayOrder.totalAmount.toLocaleString()}</span>
-              </div>
-            </div>
-          </div>
 
-          {/* Desktop Table View */}
-          <div className="hidden md:block">
-              <div className="overflow-x-auto">
+              {/* Desktop Table View */}
+              <div className="hidden md:block overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b border-gray-200">
                     <tr>
@@ -1172,14 +1479,11 @@ export function OrderDetailPage() {
                       <th className="px-6 py-3 text-center font-medium">Discount</th>
                       <th className="px-6 py-3 text-right font-medium">Total</th>
                       <th className="px-6 py-3 text-center font-medium">Stock</th>
-                      {isEditing && <th className="px-6 py-3 text-center font-medium">Actions</th>}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
                     {displayOrder.items.map((item, index) => (
-                      <tr key={index}
-                        className={`hover:bg-gray-50 ${isEditing ? 'cursor-pointer hover:bg-blue-50' : ''}`}
-                        onClick={isEditing ? () => handleEditItem(item) : undefined}>
+                      <tr key={index} className="hover:bg-gray-50">
                         <td className="px-6 py-4 text-gray-600">{item.sku}</td>
                         <td className="px-6 py-4">
                           <div className="font-medium text-gray-900">{item.productName}</div>
@@ -1187,21 +1491,8 @@ export function OrderDetailPage() {
                           {item.negotiatedPrice && item.originalPrice && item.negotiatedPrice < item.originalPrice && (
                             <Badge variant="danger" className="mt-1">Negotiated</Badge>
                           )}
-                          {isEditing && <div className="text-xs text-blue-500 mt-1">Click to edit</div>}
                         </td>
-                        <td className="px-6 py-4 text-center font-medium">
-                          {isEditing ? (
-                            <input
-                              type="number"
-                              min="1"
-                              value={item.quantity}
-                              onChange={(e) => handleQuantityChange(item.id, parseInt(e.target.value) || 1)}
-                              className="w-20 px-2 py-1 border border-gray-300 rounded text-center focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
-                            />
-                          ) : (
-                            item.quantity
-                          )}
-                        </td>
+                        <td className="px-6 py-4 text-center font-medium">{item.quantity}</td>
                         <td className="px-6 py-4 text-right">
                           {item.originalPrice && item.negotiatedPrice && item.originalPrice !== item.negotiatedPrice ? (
                             <div>
@@ -1224,37 +1515,30 @@ export function OrderDetailPage() {
                             {item.stockHint}
                           </Badge>
                         </td>
-                        {isEditing && (
-                          <td className="px-6 py-4 text-center">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={(e) => { e.stopPropagation(); handleRemoveItem(item.id); }}
-                              className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                            >
-                              <X className="w-4 h-4" />
-                            </Button>
-                          </td>
-                        )}
                       </tr>
                     ))}
+                    {displayOrder.items.length === 0 && (
+                      <tr>
+                        <td colSpan={8} className="px-6 py-12 text-center text-gray-500">
+                          <Package className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+                          <p className="font-medium">No items in this order</p>
+                        </td>
+                      </tr>
+                    )}
                   </tbody>
                   <tfoot className="bg-gray-50 border-t border-gray-200">
                     <tr>
-                      <td colSpan={isEditing ? 7 : 6} className="px-6 py-4 text-right font-semibold text-gray-700">
-                        Subtotal:
-                      </td>
-                      <td className="px-6 py-4 text-right font-bold text-gray-900">
-                        ₱{displayOrder.totalAmount.toLocaleString()}
-                      </td>
-                      <td colSpan={isEditing ? 2 : 1}></td>
+                      <td colSpan={6} className="px-6 py-4 text-right font-semibold text-gray-700">Subtotal:</td>
+                      <td className="px-6 py-4 text-right font-bold text-gray-900">₱{displayOrder.totalAmount.toLocaleString()}</td>
+                      <td></td>
                     </tr>
                   </tfoot>
                 </table>
               </div>
-          </div>
+            </>
+          )}
         </CardContent>
-          </Card>
+      </Card>
 
           {/* Approve / Reject Action Bar */}
           {order.status !== 'Approved' && order.status !== 'Rejected' && (
@@ -1664,6 +1948,7 @@ export function OrderDetailPage() {
                     case 'Warehouse Staff': return 'bg-orange-100 text-orange-700';
                     case 'Logistics': return 'bg-green-100 text-green-700';
                     case 'Admin': return 'bg-red-100 text-red-700';
+                    case 'Executive': return 'bg-red-100 text-red-700';
                     case 'System': return 'bg-gray-100 text-gray-700';
                     default: return 'bg-gray-100 text-gray-700';
                   }
@@ -1721,7 +2006,7 @@ export function OrderDetailPage() {
                             <span className="text-xs text-gray-400">•</span>
                             <span className="text-xs text-gray-700 font-medium">{log.performedBy}</span>
                             <Badge className={`text-xs px-2 py-0.5 ${getRoleBadgeColor()}`}>
-                              {log.performedByRole}
+                              {log.performedByRole === 'Admin' ? 'Executive' : log.performedByRole}
                             </Badge>
                           </div>
                         </div>
@@ -1913,7 +2198,7 @@ export function OrderDetailPage() {
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-80 overflow-y-auto p-1">
                       {categoryProducts.map(product => (
                         <button key={product.id} type="button"
-                          onClick={() => { if (!product.variants.length) return; setSelectedProduct(product); setSelectedVariant(product.variants[0]); setVariantQuantity('1'); setVariantPrice(product.variants[0].unit_price); setVariantDiscounts([]); }}
+                          onClick={() => { if (!product.variants.length) return; setSelectedProduct(product); setSelectedVariant(product.variants[0]); setVariantQuantity(1); setVariantPrice(product.variants[0].unit_price); setVariantDiscounts([]); }}
                           className="flex flex-col items-center p-3 border border-gray-200 rounded-lg hover:border-red-500 hover:bg-red-50 transition-all group">
                           {product.image_url
                             ? <img src={product.image_url} alt={product.name} className="w-12 h-12 object-cover rounded-lg mb-2" />
@@ -1932,7 +2217,7 @@ export function OrderDetailPage() {
                     ? <div className="col-span-full flex items-center justify-center h-24 text-gray-400 text-sm">No matching products</div>
                     : filteredProducts.map(product => (
                       <button key={product.id} type="button"
-                        onClick={() => { setSelectedProduct(product); setSelectedVariant(product.variants[0]); setVariantQuantity('1'); setVariantPrice(product.variants[0].unit_price); setVariantDiscounts([]); }}
+                        onClick={() => { setSelectedProduct(product); setSelectedVariant(product.variants[0]); setVariantQuantity(1); setVariantPrice(product.variants[0].unit_price); setVariantDiscounts([]); }}
                         className="flex flex-col items-center p-3 border border-gray-200 rounded-lg hover:border-red-500 hover:bg-red-50 transition-all group">
                         {product.image_url
                           ? <img src={product.image_url} alt={product.name} className="w-12 h-12 object-cover rounded-lg mb-2" />
@@ -1956,7 +2241,7 @@ export function OrderDetailPage() {
       {showProductModal && selectedProduct && selectedVariant && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[60] p-0 lg:p-4">
           <div className="bg-white rounded-none lg:rounded-lg shadow-2xl w-full h-full lg:h-auto lg:max-w-4xl lg:max-h-[85vh] overflow-hidden flex flex-col">
-            <button onClick={() => { setSelectedProduct(null); setSelectedVariant(null); setVariantQuantity('1'); setVariantPrice(0); setVariantDiscounts([]); }}
+            <button onClick={() => { setSelectedProduct(null); setSelectedVariant(null); setVariantQuantity(1); setVariantPrice(0); setVariantDiscounts([]); }}
               className="absolute top-4 right-4 z-20 p-2 bg-white rounded-full shadow-lg hover:bg-gray-100">
               <X className="w-5 h-5 text-gray-600" />
             </button>
@@ -2003,7 +2288,7 @@ export function OrderDetailPage() {
                     <div className="grid grid-cols-2 gap-2">
                       {selectedProduct.variants.map(v => (
                         <button key={v.id} type="button"
-                          onClick={() => { setSelectedVariant(v); setVariantQuantity('1'); setVariantPrice(v.unit_price); }}
+                          onClick={() => { setSelectedVariant(v); setVariantQuantity(1); setVariantPrice(v.unit_price); }}
                           className={`px-4 py-3 border-2 rounded-lg font-medium transition-all text-left ${v.id === selectedVariant.id ? 'border-red-600 bg-red-50 text-red-700' : 'border-gray-200 hover:border-gray-300 text-gray-700'}`}>
                           <div className="font-semibold">{v.size}</div>
                           <div className="text-sm font-bold mt-1">₱{v.unit_price.toLocaleString()}</div>
@@ -2017,28 +2302,24 @@ export function OrderDetailPage() {
                   <div>
                     <label className="block text-sm font-semibold text-gray-900 mb-3">Quantity Request</label>
                     <div className="flex items-center gap-4">
-                      <button type="button" onClick={() => setVariantQuantity(String(Math.max(1, (parseInt(variantQuantity, 10) || 1) - 1)))}
+                      <button type="button" onClick={() => setVariantQuantity(Math.max(1, variantQuantity - 1))}
                         className="w-12 h-12 flex items-center justify-center border-2 border-gray-300 rounded-lg hover:bg-gray-50">
                         <Minus className="w-5 h-5" />
                       </button>
                       <input
-                        type="text"
-                        inputMode="numeric"
-                        pattern="[0-9]*"
+                        type="number"
+                        min="1"
+                        max={selectedVariant.stock}
                         value={variantQuantity}
-                        onChange={(e) => {
-                          const raw = e.target.value;
-                          if (raw === '' || /^\d+$/.test(raw)) {
-                            setVariantQuantity(raw);
-                          }
-                        }}
+                        onChange={(e) => setVariantQuantity(Math.max(1, parseInt(e.target.value) || 1))}
+                        onWheel={(e) => e.currentTarget.blur()}
                         className="w-24 text-center text-2xl font-bold px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500" />
-                      <button type="button" onClick={() => setVariantQuantity(String((parseInt(variantQuantity, 10) || 0) + 1))}
+                      <button type="button" onClick={() => setVariantQuantity(variantQuantity + 1)}
                         className="w-12 h-12 flex items-center justify-center border-2 border-gray-300 rounded-lg hover:bg-gray-50">
                         <Plus className="w-5 h-5" />
                       </button>
                     </div>
-                    {variantQuantity !== '' && parseInt(variantQuantity, 10) > selectedVariant.stock && (
+                    {variantQuantity > selectedVariant.stock && (
                       <p className="text-sm text-red-600 mt-2">⚠️ Quantity exceeds available stock</p>
                     )}
                   </div>
@@ -2080,10 +2361,10 @@ export function OrderDetailPage() {
                   <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-2">
                     <div className="flex items-center justify-between">
                       <span className="text-sm font-medium text-blue-900">Subtotal</span>
-                      <span className="text-lg font-bold text-blue-900">₱{(variantPrice * (parseInt(variantQuantity, 10) || 0)).toLocaleString()}</span>
+                      <span className="text-lg font-bold text-blue-900">₱{(variantPrice * variantQuantity).toLocaleString()}</span>
                     </div>
                     {variantDiscounts.length > 0 && (() => {
-                      let cur = variantPrice * (parseInt(variantQuantity, 10) || 0);
+                      let cur = variantPrice * variantQuantity;
                       return (
                         <>
                           {variantDiscounts.map((d, i) => {
