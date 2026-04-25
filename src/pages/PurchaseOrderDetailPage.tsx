@@ -137,6 +137,7 @@ const getStatusVariant = (status: POStatus): 'success' | 'warning' | 'danger' | 
   if (status === 'Partially Received') return 'warning';
   if (status === 'Cancelled' || status === 'Rejected') return 'danger';
   if (status === 'Requested')         return 'warning';
+  if (status === 'Draft')             return 'neutral';
   if (status === 'Accepted')           return 'default';
   if (status === 'Confirmed')          return 'default';
   if (status === 'Sent')               return 'default';
@@ -149,6 +150,7 @@ const getStatusIcon = (status: POStatus) => {
   if (status === 'Confirmed')          return <Truck className="w-4 h-4" />;
   if (status === 'Partially Received') return <Package className="w-4 h-4" />;
   if (status === 'Cancelled')          return <Ban className="w-4 h-4" />;
+  if (status === 'Draft')              return <FileText className="w-4 h-4" />;
   if (status === 'Requested')          return <ClipboardList className="w-4 h-4" />;
   if (status === 'Rejected')           return <XCircle className="w-4 h-4" />;
   if (status === 'Accepted')            return <ThumbsUp className="w-4 h-4" />;
@@ -220,6 +222,7 @@ export function PurchaseOrderDetailPage() {
   const [workflowSaving, setWorkflowSaving]            = useState(false);
   const [showAcceptModal, setShowAcceptModal]          = useState(false);
   const [showRejectModal, setShowRejectModal]          = useState(false);
+  const [showSubmitModal, setShowSubmitModal]          = useState(false);
   const [rejectionReason, setRejectionReason]         = useState('');
   const [approvalLoading, setApprovalLoading]          = useState(false);
 
@@ -762,6 +765,40 @@ export function PurchaseOrderDetailPage() {
   const showPaymentSummary =
     po && ['Confirmed', 'Partially Received', 'Completed'].includes(po.status);
 
+  const handleSubmitForApproval = async () => {
+    if (!po || po.status !== 'Draft') return;
+    if (items.length === 0) {
+      alert('Add at least one line item before submitting for approval.');
+      setShowSubmitModal(false);
+      return;
+    }
+    setApprovalLoading(true);
+    const actor = employeeName || session?.user?.email || role;
+    const now = new Date().toISOString();
+    try {
+      const { error } = await supabase
+        .from('purchase_orders')
+        .update({
+          status: 'Requested',
+          updated_at: now,
+        })
+        .eq('id', po.id);
+      if (error) throw error;
+      await insertPoLog(
+        'submitted',
+        `Submitted for approval by ${actor}. Pending manager or executive review.`,
+        { status: 'Draft' },
+        { status: 'Requested' },
+      );
+      await fetchPO();
+      setShowSubmitModal(false);
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : 'Failed to submit for approval');
+    } finally {
+      setApprovalLoading(false);
+    }
+  };
+
   const handleAcceptRequest = async () => {
     if (!po) return;
     setApprovalLoading(true);
@@ -916,7 +953,18 @@ export function PurchaseOrderDetailPage() {
             </>
           ) : (
             <>
-              {['Requested', 'Draft'].includes(po.status ?? '') && (
+              {po.status === 'Draft' && (
+                <Button
+                  variant="primary"
+                  onClick={() => setShowSubmitModal(true)}
+                  disabled={workflowSaving}
+                  className="gap-2"
+                >
+                  <Send className="w-4 h-4" />
+                  Submit for approval
+                </Button>
+              )}
+              {po.status === 'Requested' && (
                 <>
                   <Button
                     variant="primary"
@@ -1590,6 +1638,7 @@ export function PurchaseOrderDetailPage() {
                 const getActionIcon = () => {
                   switch (log.action) {
                     case 'requested':         return <ClipboardList className="w-4 h-4" />;
+                    case 'submitted':         return <Send className="w-4 h-4" />;
                     case 'updated':         return <FileText className="w-4 h-4" />;
                     case 'approved':         return <CheckCircle className="w-4 h-4" />;
                     case 'rejected':         return <XCircle className="w-4 h-4" />;
@@ -1612,6 +1661,7 @@ export function PurchaseOrderDetailPage() {
                     case 'proof_uploaded':    return 'text-blue-600 bg-blue-50';
                     case 'proof_removed':     return 'text-orange-600 bg-orange-50';
                     case 'requested':         return 'text-amber-600 bg-amber-50';
+                    case 'submitted':         return 'text-amber-600 bg-amber-50';
                     default:                 return 'text-gray-600 bg-gray-50';
                   }
                 };
@@ -2054,6 +2104,53 @@ export function PurchaseOrderDetailPage() {
                   ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</>
                   : <><Banknote className="w-4 h-4" /> Confirm Payment</>
                 }
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Submit for approval (Draft → Requested) ── */}
+      {showSubmitModal && po && (
+        <div
+          className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
+          onClick={() => !approvalLoading && setShowSubmitModal(false)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="px-6 py-5 border-b border-gray-100 flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0">
+                <Send className="w-5 h-5 text-amber-700" />
+              </div>
+              <div>
+                <h2 className="text-lg font-bold text-gray-900">Submit for approval</h2>
+                <p className="text-sm text-gray-500">{po.po_number}</p>
+              </div>
+            </div>
+            <div className="px-6 py-5">
+              <p className="text-sm text-gray-700">
+                This will send the purchase order to <span className="font-semibold">Requested</span> so a manager or executive can accept or reject it.
+              </p>
+            </div>
+            <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowSubmitModal(false)}
+                disabled={approvalLoading}
+                className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSubmitForApproval}
+                disabled={approvalLoading}
+                className="px-5 py-2 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-700 transition-colors disabled:opacity-50 flex items-center gap-2"
+              >
+                {approvalLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                Submit for approval
               </button>
             </div>
           </div>

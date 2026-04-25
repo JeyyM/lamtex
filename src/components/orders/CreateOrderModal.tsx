@@ -100,7 +100,8 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedProduct, setSelectedProduct] = useState<DBProduct | null>(null);
   const [selectedVariant, setSelectedVariant] = useState<DBVariant | null>(null);
-  const [variantQuantity, setVariantQuantity] = useState(1);
+  /** Digits only; empty allowed while typing. Validated in addItemFromVariant. */
+  const [variantQtyInput, setVariantQtyInput] = useState('1');
   const [variantPrice, setVariantPrice] = useState(0);
   const [variantDiscounts, setVariantDiscounts] = useState<Array<{ name: string; percentage: number }>>([]);
   const [editingItemIndex, setEditingItemIndex] = useState<number | null>(null);
@@ -222,7 +223,34 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
         p.name.toLowerCase().includes(searchQuery.toLowerCase())
       );
 
-  const addItemFromVariant = (product: DBProduct, variant: DBVariant, quantity: number = 1) => {
+  /** For subtotal / discount preview; empty input → 0. */
+  const qtyForPreview = () => {
+    const t = variantQtyInput.trim();
+    if (t === '') return 0;
+    const n = parseInt(t, 10);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  };
+
+  const parseStepQty = () => {
+    const t = variantQtyInput.trim();
+    if (t === '') return 1;
+    const n = parseInt(t, 10);
+    if (!Number.isFinite(n) || n < 1) return 1;
+    return n;
+  };
+
+  const addItemFromVariant = (product: DBProduct, variant: DBVariant) => {
+    const raw = variantQtyInput.trim();
+    if (raw === '') {
+      alert('Enter a quantity.');
+      return;
+    }
+    const quantity = parseInt(raw, 10);
+    if (!Number.isFinite(quantity) || quantity < 1) {
+      alert('Enter a valid whole number (at least 1).');
+      return;
+    }
+
     // Apply discounts multiplicatively to get final price
     const finalPrice = variantDiscounts.reduce((currentPrice, discount) => {
       return currentPrice * (1 - discount.percentage / 100);
@@ -234,7 +262,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
       productName: product.name,
       variantSize: variant.size,
       variantDescription: variant.description,
-      quantity: quantity,
+      quantity,
       price: variant.unit_price,
       originalPrice: variant.unit_price,
       negotiatedPrice: variantPrice, // Agent-set price
@@ -258,7 +286,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
       if (existingIndex >= 0) {
         // Reopen the existing item in the edit modal instead of stacking
         const existing = orderItems[existingIndex];
-        setVariantQuantity(existing.quantity);
+        setVariantQtyInput(String(existing.quantity));
         setVariantPrice(existing.negotiatedPrice);
         setVariantDiscounts([...existing.discounts]);
         setEditingItemIndex(existingIndex);
@@ -273,7 +301,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
     // Close product detail modal and reset
     setSelectedProduct(null);
     setSelectedVariant(null);
-    setVariantQuantity(1);
+    setVariantQtyInput('1');
     setVariantPrice(0);
     setVariantDiscounts([]);
   };
@@ -298,7 +326,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
 
   const calculateTotalDiscount = () => {
     // Calculate effective discount percentage from cascading discounts
-    const subtotal = variantPrice * variantQuantity;
+    const subtotal = variantPrice * qtyForPreview();
     if (subtotal === 0) return 0;
     
     const finalPrice = variantDiscounts.reduce((currentPrice, discount) => {
@@ -310,7 +338,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
   };
 
   const calculateFinalPrice = () => {
-    const subtotal = variantPrice * variantQuantity;
+    const subtotal = variantPrice * qtyForPreview();
     // Apply discounts multiplicatively (cascading)
     return variantDiscounts.reduce((currentPrice, discount) => {
       return currentPrice * (1 - discount.percentage / 100);
@@ -341,7 +369,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
     if (!variant) return;
     setSelectedProduct(product);
     setSelectedVariant(variant);
-    setVariantQuantity(item.quantity);
+    setVariantQtyInput(String(item.quantity));
     setVariantPrice(item.negotiatedPrice);
     setVariantDiscounts([...item.discounts]);
     setEditingItemIndex(index);
@@ -685,7 +713,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                               if (product.variants.length === 0) return;
                               setSelectedProduct(product);
                               setSelectedVariant(product.variants[0]);
-                              setVariantQuantity(1);
+                              setVariantQtyInput('1');
                               setVariantPrice(product.variants[0].unit_price);
                             }}
                             className="flex flex-col items-center p-3 border border-gray-200 rounded-lg hover:border-red-500 hover:bg-red-50 transition-all group relative"
@@ -717,7 +745,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                           if (product.variants.length === 0) return;
                           setSelectedProduct(product);
                           setSelectedVariant(product.variants[0]);
-                          setVariantQuantity(1);
+                          setVariantQtyInput('1');
                           setVariantPrice(product.variants[0].unit_price);
                         }}
                         className="flex flex-col items-center p-3 border border-gray-200 rounded-lg hover:border-red-500 hover:bg-red-50 transition-all group relative"
@@ -953,7 +981,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
               onClick={() => {
                 setSelectedProduct(null);
                 setSelectedVariant(null);
-                setVariantQuantity(1);
+                setVariantQtyInput('1');
                 setVariantPrice(0);
                 setVariantDiscounts([]);
                 setEditingItemIndex(null); // Cancel editing
@@ -990,8 +1018,8 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                         step="0.01"
                         value={variantPrice}
                         onChange={(e) => setVariantPrice(Math.max(0, parseFloat(e.target.value) || 0))}
-                        onWheel={(e) => e.currentTarget.blur()}
-                        className="flex-1 min-w-0 text-4xl font-bold text-gray-900 bg-white px-3 py-2 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                        onWheel={(e) => e.preventDefault()}
+                        className="flex-1 min-w-0 text-4xl font-bold text-gray-900 bg-white px-3 py-2 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                       />
                     </div>
                     <p className="text-xs text-gray-500 mt-2">Base price: ₱{selectedVariant.unit_price.toLocaleString()}</p>
@@ -1026,7 +1054,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                           type="button"
                           onClick={() => {
                             setSelectedVariant(variant);
-                            setVariantQuantity(1);
+                            setVariantQtyInput('1');
                             setVariantPrice(variant.unit_price);
                           }}
                           className={`px-4 py-3 border-2 rounded-lg font-medium transition-all text-left relative ${
@@ -1048,33 +1076,55 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                   {/* Quantity Selector */}
                   <div>
                     <label className="block text-sm font-semibold text-gray-900 mb-3">Quantity Request</label>
-                    <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-2 sm:gap-4">
                       <button
                         type="button"
-                        onClick={() => setVariantQuantity(Math.max(1, variantQuantity - 1))}
-                        className="w-12 h-12 flex items-center justify-center border-2 border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                        onClick={() => setVariantQtyInput(String(Math.max(1, parseStepQty() - 1)))}
+                        className="w-12 h-12 flex shrink-0 items-center justify-center border-2 border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
                       >
                         <Minus className="w-5 h-5" />
                       </button>
-                      <input
-                        type="number"
-                        min="1"
-                        max={selectedVariant.stock}
-                        value={variantQuantity}
-                        onChange={(e) => setVariantQuantity(Math.max(1, parseInt(e.target.value) || 1))}
-                        className="w-24 text-center text-2xl font-bold px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500"
-                      />
+                      <div className="relative min-w-0 flex-1 max-w-[9rem]">
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          autoComplete="off"
+                          value={variantQtyInput}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            if (v === '') {
+                              setVariantQtyInput('');
+                              return;
+                            }
+                            if (/^\d+$/.test(v)) setVariantQtyInput(v);
+                          }}
+                          onWheel={(e) => e.preventDefault()}
+                          placeholder="1"
+                          className="w-full text-center text-2xl font-bold pl-3 pr-10 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                        />
+                        {variantQtyInput !== '' && (
+                          <button
+                            type="button"
+                            onClick={() => setVariantQtyInput('')}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                            aria-label="Clear quantity"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
                       <button
                         type="button"
-                        onClick={() => setVariantQuantity(Math.min(selectedVariant.stock, variantQuantity + 1))}
-                        className="w-12 h-12 flex items-center justify-center border-2 border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                        onClick={() => setVariantQtyInput(String(Math.min(selectedVariant.stock, parseStepQty() + 1)))}
+                        className="w-12 h-12 flex shrink-0 items-center justify-center border-2 border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
                       >
                         <Plus className="w-5 h-5" />
                       </button>
                     </div>
-                    {variantQuantity > selectedVariant.stock && (
-                      <p className="text-sm text-red-600 mt-2">⚠️ Quantity exceeds available stock</p>
-                    )}
+                    {variantQtyInput.trim() !== '' &&
+                      (parseInt(variantQtyInput, 10) || 0) > selectedVariant.stock && (
+                        <p className="text-sm text-red-600 mt-2">⚠️ Quantity exceeds available stock</p>
+                      )}
                   </div>
 
                   {/* Discounts Section */}
@@ -1111,8 +1161,8 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                                 placeholder="0"
                                 value={discount.percentage || ''}
                                 onChange={(e) => updateDiscount(index, 'percentage', e.target.value)}
-                                onWheel={(e) => e.currentTarget.blur()}
-                                className="w-20 px-3 py-2 text-sm text-center border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                                onWheel={(e) => e.preventDefault()}
+                                className="w-20 px-3 py-2 text-sm text-center border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                               />
                               <span className="text-sm text-gray-600">%</span>
                             </div>
@@ -1143,13 +1193,13 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                     <div className="flex items-center justify-between">
                       <span className="text-sm font-medium text-blue-900">Subtotal</span>
                       <span className="text-lg font-bold text-blue-900">
-                        ₱{(variantPrice * variantQuantity).toLocaleString()}
+                        ₱{(variantPrice * qtyForPreview()).toLocaleString()}
                       </span>
                     </div>
                     {variantDiscounts.length > 0 && (
                       <>
                         {(() => {
-                          let currentPrice = variantPrice * variantQuantity;
+                          let currentPrice = variantPrice * qtyForPreview();
                           return variantDiscounts.map((discount, index) => {
                             const priceBeforeDiscount = currentPrice;
                             const discountAmount = currentPrice * (discount.percentage / 100);
@@ -1182,7 +1232,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                   {/* Add to Order Button */}
                   <button
                     type="button"
-                    onClick={() => addItemFromVariant(selectedProduct, selectedVariant, variantQuantity)}
+                    onClick={() => addItemFromVariant(selectedProduct, selectedVariant)}
                     className="w-full py-4 bg-red-600 text-white text-lg font-semibold rounded-lg hover:bg-red-700 transition-colors flex items-center justify-center gap-2"
                   >
                     <ShoppingCart className="w-5 h-5" />

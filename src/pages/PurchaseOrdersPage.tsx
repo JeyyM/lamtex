@@ -299,10 +299,6 @@ export function PurchaseOrdersPage() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Purchase Orders</h1>
-          <p className="text-sm text-gray-500 mt-1">
-            Raw material procurement for{' '}
-            <span className="font-medium text-gray-700">{branch || 'all branches'}</span>
-          </p>
         </div>
         <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
           <Button variant="outline" className="w-full sm:w-auto gap-2">

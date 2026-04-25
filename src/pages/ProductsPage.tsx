@@ -14,6 +14,7 @@ import {
   Download,
   Edit,
   Loader2,
+  Factory,
 } from 'lucide-react';
 import AddCategoryModal, { CategoryFormData } from '@/src/components/products/AddCategoryModal';
 import { supabase } from '@/src/lib/supabase';
@@ -237,7 +238,16 @@ export function ProductsPage() {
             Browse products by category{branch ? ` · ${branch}` : ' · All Branches'}
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2 justify-end w-full md:w-auto">
+          <Button
+            type="button"
+            variant="outline"
+            className="flex-1 sm:flex-none"
+            onClick={() => navigate('/production-requests')}
+          >
+            <Factory className="w-4 h-4 mr-2" />
+            Production requests
+          </Button>
           <Button variant="outline" className="flex-1 sm:flex-none">
             <Download className="w-4 h-4 mr-2" />
             Export

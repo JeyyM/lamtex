@@ -34,6 +34,8 @@ import EmployeesPage from './pages/EmployeesPage';
 import { PurchaseRequestsPage } from './pages/PurchaseRequestsPage';
 import { PurchaseOrdersPage } from './pages/PurchaseOrdersPage';
 import { PurchaseOrderDetailPage } from './pages/PurchaseOrderDetailPage';
+import { ProductionRequestsPage } from './pages/ProductionRequestsPage';
+import { ProductionRequestDetailPage } from './pages/ProductionRequestDetailPage';
 import { TruckDetailPage } from './pages/TruckDetailPage';
 import WarehousePage from './pages/WarehousePage';
 import ChatsPage from './pages/ChatsPage';
@@ -125,11 +127,13 @@ function AppRoutes() {
             <Route path="reports" element={<ReportsPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="audit" element={<AuditLogsPage />} />
+            <Route path="purchase-requests" element={<PurchaseRequestsPage />} />
+            <Route path="purchase-requests/new/:materialId" element={<PurchaseRequestsPage />} />
+            <Route path="purchase-orders" element={<PurchaseOrdersPage />} />
+            <Route path="purchase-orders/:id" element={<PurchaseOrderDetailPage />} />
+            <Route path="production-requests" element={<ProductionRequestsPage />} />
+            <Route path="production-requests/:id" element={<ProductionRequestDetailPage />} />
             <Route path="*" element={<PlaceholderPage />} />
-            <Route path="/purchase-requests" element={<PurchaseRequestsPage />} />
-            <Route path="/purchase-requests/new/:materialId" element={<PurchaseRequestsPage />} />
-            <Route path="/purchase-orders" element={<PurchaseOrdersPage />} />
-            <Route path="/purchase-orders/:id" element={<PurchaseOrderDetailPage />} />
           </Route>
         </Routes>
   );

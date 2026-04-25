@@ -1589,6 +1589,57 @@ CREATE TABLE IF NOT EXISTS purchase_requests (
   created_at            TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- 12c: Product production requests (finished goods; worker request → approval before production)
+CREATE TABLE IF NOT EXISTS production_requests (
+  id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  pr_number                TEXT NOT NULL UNIQUE,
+  branch_id                UUID REFERENCES branches(id) ON DELETE SET NULL,
+  status                   TEXT NOT NULL DEFAULT 'Draft'
+    CHECK (status IN ('Draft', 'Requested', 'Rejected', 'Accepted', 'In Progress', 'Completed', 'Cancelled')),
+  request_date             DATE NOT NULL DEFAULT CURRENT_DATE,
+  expected_completion_date DATE,
+  notes                    TEXT,
+  created_by               TEXT,
+  accepted_by              TEXT,
+  accepted_at              TIMESTAMPTZ,
+  rejected_by              TEXT,
+  rejection_reason         TEXT,
+  created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS production_request_items (
+  id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  request_id           UUID NOT NULL REFERENCES production_requests(id) ON DELETE CASCADE,
+  product_id           UUID NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
+  product_variant_id   UUID NOT NULL REFERENCES product_variants(id) ON DELETE RESTRICT,
+  quantity             NUMERIC(14, 2) NOT NULL CHECK (quantity > 0),
+  quantity_completed   NUMERIC(14, 2) NOT NULL DEFAULT 0,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS production_request_logs (
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  request_id          UUID NOT NULL REFERENCES production_requests(id) ON DELETE CASCADE,
+  action              TEXT NOT NULL,
+  performed_by        TEXT,
+  performed_by_role   TEXT,
+  description         TEXT,
+  old_value           JSONB,
+  new_value           JSONB,
+  metadata            JSONB,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Links customer orders to a production request (context for the floor: who / what due dates)
+CREATE TABLE IF NOT EXISTS production_request_orders (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  request_id  UUID NOT NULL REFERENCES production_requests(id) ON DELETE CASCADE,
+  order_id    UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (request_id, order_id)
+);
+
 -- 12d: Goods Receipt Notes (GRN)
 CREATE TABLE IF NOT EXISTS goods_receipt_notes (
   id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -2483,6 +2534,12 @@ CREATE INDEX IF NOT EXISTS idx_po_receipts_order ON purchase_order_receipts(orde
 CREATE INDEX IF NOT EXISTS idx_po_logs_order ON purchase_order_logs(order_id);
 CREATE INDEX IF NOT EXISTS idx_purchase_requests_branch ON purchase_requests(branch_id);
 CREATE INDEX IF NOT EXISTS idx_purchase_requests_status ON purchase_requests(status);
+CREATE INDEX IF NOT EXISTS idx_production_requests_branch ON production_requests(branch_id);
+CREATE INDEX IF NOT EXISTS idx_production_requests_status ON production_requests(status);
+CREATE INDEX IF NOT EXISTS idx_production_request_items_request ON production_request_items(request_id);
+CREATE INDEX IF NOT EXISTS idx_production_request_logs_req ON production_request_logs(request_id);
+CREATE INDEX IF NOT EXISTS idx_production_request_orders_request ON production_request_orders(request_id);
+CREATE INDEX IF NOT EXISTS idx_production_request_orders_order ON production_request_orders(order_id);
 CREATE INDEX IF NOT EXISTS idx_grn_po ON goods_receipt_notes(purchase_order_id);
 
 -- Suppliers
