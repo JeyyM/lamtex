@@ -38,7 +38,7 @@ export type MovementType = 'Receipt' | 'Issue' | 'Transfer' | 'Adjustment' | 'Re
 
 export type PurchaseRequisitionStatus = 'Draft' | 'Pending Approval' | 'Approved' | 'Rejected' | 'Ordered' | 'Completed' | 'Cancelled';
 
-export type PurchaseOrderStatus = 'Draft' | 'Sent' | 'Confirmed' | 'Partially Received' | 'Completed' | 'Cancelled';
+export type PurchaseOrderStatus = 'Draft' | 'Requested' | 'Rejected' | 'Accepted' | 'Sent' | 'Confirmed' | 'Partially Received' | 'Completed' | 'Cancelled';
 
 export type QualityStatus = 'Pending' | 'Passed' | 'Failed' | 'Conditionally Approved';
 

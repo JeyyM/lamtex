@@ -167,7 +167,7 @@ export function RawMaterialsPage() {
 
     const { data, error } = await supabase
       .from('raw_materials')
-      .select('total_stock, total_value, reorder_point, status, category_id')
+      .select('total_stock, cost_per_unit, reorder_point, status, category_id')
       .in('category_id', branchCategoryIds);
 
     if (error || !data) {
@@ -176,7 +176,7 @@ export function RawMaterialsPage() {
     }
 
     const totalMaterials = data.length;
-    const totalValue = data.reduce((sum, m) => sum + (Number(m.total_value) || 0), 0);
+    const totalValue = data.reduce((sum, m) => sum + (Number(m.total_stock) || 0) * (Number(m.cost_per_unit) || 0), 0);
     const lowStockCount = data.filter(m => ['Low Stock', 'Critical', 'Out of Stock'].includes(m.status)).length;
     const reorderCount = data.filter(m => Number(m.total_stock) <= Number(m.reorder_point)).length;
 

@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
+import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagination';
 import { CreateOrderModal } from '@/src/components/orders/CreateOrderModal';
 import { ProofOfDeliveryModal } from '@/src/components/orders/ProofOfDeliveryModal';
 import { useAppContext } from '@/src/store/AppContext';
@@ -23,6 +24,9 @@ import {
   MapPin,
   Calendar,
   Loader2,
+  ArrowUp,
+  ArrowDown,
+  ArrowUpDown,
 } from 'lucide-react';
 
 type OrderTab = 'all' | 'draft' | 'pending' | 'approved' | 'intransit' | 'delivered' | 'rejected';
@@ -53,6 +57,12 @@ export function OrdersPage() {
   const [selectedOrderForProof, setSelectedOrderForProof] = useState<{ id: string; customer: string } | null>(null);
   const [allOrders, setAllOrders] = useState<OrderRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [sortKey, setSortKey] = useState<string>('order_date');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const [tablePage, setTablePage] = useState(1);
+  /** '' = all values (column filter on orders table) */
+  const [headerStatusFilter, setHeaderStatusFilter] = useState('');
+  const [headerPaymentFilter, setHeaderPaymentFilter] = useState('');
 
   const fetchOrders = async () => {
     setLoading(true);
@@ -76,6 +86,21 @@ export function OrdersPage() {
 
   useEffect(() => { fetchOrders(); }, [branch]);
 
+  useEffect(() => {
+    setHeaderStatusFilter('');
+    setHeaderPaymentFilter('');
+  }, [branch]);
+
+  const distinctOrderStatuses = useMemo(() => {
+    const s = new Set(allOrders.map((o) => o.status).filter(Boolean));
+    return Array.from(s).sort((a, b) => a.localeCompare(b));
+  }, [allOrders]);
+
+  const distinctPaymentStatuses = useMemo(() => {
+    const s = new Set(allOrders.map((o) => o.payment_status).filter(Boolean));
+    return Array.from(s).sort((a, b) => a.localeCompare(b));
+  }, [allOrders]);
+
   const filteredOrders = allOrders.filter(order => {
     const matchesSearch =
       order.order_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -90,8 +115,70 @@ export function OrdersPage() {
       (activeTab === 'delivered' && ['Delivered', 'Completed'].includes(order.status)) ||
       (activeTab === 'rejected'  && ['Rejected', 'Cancelled'].includes(order.status));
 
-    return matchesSearch && matchesTab;
+    const matchesHeaderStatus = headerStatusFilter === '' || order.status === headerStatusFilter;
+    const matchesHeaderPayment = headerPaymentFilter === '' || order.payment_status === headerPaymentFilter;
+
+    return matchesSearch && matchesTab && matchesHeaderStatus && matchesHeaderPayment;
   });
+
+  const handleSort = (key: string) => {
+    if (sortKey === key) {
+      setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key);
+      setSortDir('asc');
+    }
+  };
+
+  const sortIcon = (col: string) => {
+    if (sortKey !== col) return <ArrowUpDown className="w-3 h-3 ml-1 opacity-40" />;
+    return sortDir === 'asc'
+      ? <ArrowUp className="w-3 h-3 ml-1 text-red-600" />
+      : <ArrowDown className="w-3 h-3 ml-1 text-red-600" />;
+  };
+
+  const sortedOrders = useMemo(() => {
+    return [...filteredOrders].sort((a, b) => {
+      let av: string | number;
+      let bv: string | number;
+      switch (sortKey) {
+        case 'order_number': av = a.order_number; bv = b.order_number; break;
+        case 'customer': av = (a.customer_name ?? '').toLowerCase(); bv = (b.customer_name ?? '').toLowerCase(); break;
+        case 'agent': av = (a.agent_name ?? '').toLowerCase(); bv = (b.agent_name ?? '').toLowerCase(); break;
+        case 'order_date': av = a.order_date ?? ''; bv = b.order_date ?? ''; break;
+        case 'required_date': av = a.required_date ?? ''; bv = b.required_date ?? ''; break;
+        case 'amount': av = a.total_amount; bv = b.total_amount; break;
+        case 'status': av = a.status; bv = b.status; break;
+        case 'payment': av = a.payment_status; bv = b.payment_status; break;
+        default: av = a.order_date ?? ''; bv = b.order_date ?? '';
+      }
+      if (typeof av === 'number' && typeof bv === 'number') {
+        if (av < bv) return sortDir === 'asc' ? -1 : 1;
+        if (av > bv) return sortDir === 'asc' ? 1 : -1;
+        return 0;
+      }
+      const as = String(av);
+      const bs = String(bv);
+      if (as < bs) return sortDir === 'asc' ? -1 : 1;
+      if (as > bs) return sortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [filteredOrders, sortKey, sortDir]);
+
+  const totalListPages = Math.max(1, Math.ceil(sortedOrders.length / TABLE_PAGE_SIZE) || 1);
+  const pagedOrders = useMemo(() => {
+    const p = Math.min(tablePage, totalListPages);
+    const start = (p - 1) * TABLE_PAGE_SIZE;
+    return sortedOrders.slice(start, start + TABLE_PAGE_SIZE);
+  }, [sortedOrders, tablePage, totalListPages]);
+
+  useEffect(() => {
+    if (tablePage > totalListPages) setTablePage(totalListPages);
+  }, [tablePage, totalListPages]);
+
+  useEffect(() => {
+    setTablePage(1);
+  }, [searchTerm, activeTab, branch, headerStatusFilter, headerPaymentFilter]);
 
   const getStatusBadgeVariant = (status: string): 'success' | 'warning' | 'danger' | 'info' | 'default' | 'neutral' | 'outline' | 'destructive' => {
     if (['Delivered', 'Completed', 'Approved'].includes(status)) return 'success';
@@ -275,14 +362,40 @@ export function OrdersPage() {
 
       <Card>
         <CardHeader>
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-            <div className="relative flex-1 sm:max-w-md">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <input type="text" placeholder="Search by order # or customer name..." value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none" />
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+              <div className="relative flex-1 sm:max-w-md">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                <input type="text" placeholder="Search by order # or customer name..." value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none" />
+              </div>
+              <Button variant="outline" size="sm" className="gap-2"><Filter className="w-4 h-4" />More Filters</Button>
             </div>
-            <Button variant="outline" size="sm" className="gap-2"><Filter className="w-4 h-4" />More Filters</Button>
+            <div className="md:hidden grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <select
+                aria-label="Filter by status"
+                value={headerStatusFilter}
+                onChange={(e) => setHeaderStatusFilter(e.target.value)}
+                className="w-full text-sm text-gray-900 border border-gray-300 rounded-lg px-3 py-2 bg-white focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
+              >
+                <option value="">Status</option>
+                {distinctOrderStatuses.map((s) => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+              <select
+                aria-label="Filter by payment"
+                value={headerPaymentFilter}
+                onChange={(e) => setHeaderPaymentFilter(e.target.value)}
+                className="w-full text-sm text-gray-900 border border-gray-300 rounded-lg px-3 py-2 bg-white focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
+              >
+                <option value="">Payment</option>
+                {distinctPaymentStatuses.map((p) => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+            </div>
           </div>
         </CardHeader>
         <CardContent className="p-0">
@@ -294,7 +407,7 @@ export function OrdersPage() {
             <>
               {/* Mobile Card View */}
               <div className="md:hidden divide-y divide-gray-200">
-                {filteredOrders.map((order) => (
+                {pagedOrders.map((order) => (
                   <div key={order.id} className="p-4 hover:bg-gray-50 cursor-pointer transition-colors" onClick={() => handleViewOrder(order.id)}>
                     <div className="space-y-3">
                       <div className="flex items-start justify-between gap-2">
@@ -322,7 +435,7 @@ export function OrdersPage() {
                     </div>
                   </div>
                 ))}
-                {filteredOrders.length === 0 && (
+                {sortedOrders.length === 0 && (
                   <div className="px-4 py-12 text-center text-gray-500">
                     <FileText className="w-12 h-12 mx-auto mb-3 text-gray-400" />
                     <p className="font-medium">No orders found</p>
@@ -336,17 +449,57 @@ export function OrdersPage() {
                 <table className="w-full text-sm">
                   <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b border-gray-200">
                     <tr>
-                      <th className="px-6 py-3 text-left font-medium">Order #</th>
-                      <th className="px-6 py-3 text-left font-medium">Customer</th>
-                      <th className="px-6 py-3 text-left font-medium">Order Date</th>
-                      <th className="px-6 py-3 text-left font-medium">Required Date</th>
-                      <th className="px-6 py-3 text-left font-medium">Amount</th>
-                      <th className="px-6 py-3 text-left font-medium">Status</th>
-                      <th className="px-6 py-3 text-left font-medium">Payment</th>
+                      <th onClick={() => handleSort('order_number')} className="px-6 py-3 text-left font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                        <span className="flex items-center">Order #{sortIcon('order_number')}</span>
+                      </th>
+                      <th onClick={() => handleSort('customer')} className="px-6 py-3 text-left font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                        <span className="flex items-center">Customer{sortIcon('customer')}</span>
+                      </th>
+                      <th onClick={() => handleSort('order_date')} className="px-6 py-3 text-left font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                        <span className="flex items-center">Order Date{sortIcon('order_date')}</span>
+                      </th>
+                      <th onClick={() => handleSort('required_date')} className="px-6 py-3 text-left font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                        <span className="flex items-center">Required Date{sortIcon('required_date')}</span>
+                      </th>
+                      <th onClick={() => handleSort('amount')} className="px-6 py-3 text-left font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                        <span className="flex items-center">Amount{sortIcon('amount')}</span>
+                      </th>
+                      <th className="px-3 py-3 text-left font-medium align-top min-w-[10.5rem] max-w-[14rem]">
+                        <div className="normal-case">
+                          <select
+                            aria-label="Filter by status"
+                            value={headerStatusFilter}
+                            onChange={(e) => setHeaderStatusFilter(e.target.value)}
+                            onClick={(e) => e.stopPropagation()}
+                            className="w-full text-sm font-medium text-gray-800 border border-gray-200 rounded-md px-2 py-1.5 bg-white hover:border-gray-300 focus:outline-none focus:ring-1 focus:ring-red-500 focus:border-red-500"
+                          >
+                            <option value="">Status</option>
+                            {distinctOrderStatuses.map((s) => (
+                              <option key={s} value={s}>{s}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </th>
+                      <th className="px-3 py-3 text-left font-medium align-top min-w-[9.5rem] max-w-[13rem]">
+                        <div className="normal-case">
+                          <select
+                            aria-label="Filter by payment"
+                            value={headerPaymentFilter}
+                            onChange={(e) => setHeaderPaymentFilter(e.target.value)}
+                            onClick={(e) => e.stopPropagation()}
+                            className="w-full text-sm font-medium text-gray-800 border border-gray-200 rounded-md px-2 py-1.5 bg-white hover:border-gray-300 focus:outline-none focus:ring-1 focus:ring-red-500 focus:border-red-500"
+                          >
+                            <option value="">Payment</option>
+                            {distinctPaymentStatuses.map((p) => (
+                              <option key={p} value={p}>{p}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
-                    {filteredOrders.map((order) => (
+                    {pagedOrders.map((order) => (
                       <tr key={order.id} className="hover:bg-gray-50 cursor-pointer transition-colors" onClick={() => handleViewOrder(order.id)}>
                         <td className="px-6 py-4">
                           <div className="flex items-center gap-2">
@@ -372,7 +525,7 @@ export function OrdersPage() {
                         </td>
                       </tr>
                     ))}
-                    {filteredOrders.length === 0 && (
+                    {sortedOrders.length === 0 && (
                       <tr>
                         <td colSpan={7} className="px-6 py-12 text-center text-gray-500">
                           <FileText className="w-12 h-12 mx-auto mb-3 text-gray-400" />
@@ -384,6 +537,10 @@ export function OrdersPage() {
                   </tbody>
                 </table>
               </div>
+
+              {sortedOrders.length > 0 && (
+                <TablePagination page={tablePage} total={sortedOrders.length} onPageChange={setTablePage} />
+              )}
             </>
           )}
         </CardContent>

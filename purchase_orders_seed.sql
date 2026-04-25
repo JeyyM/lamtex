@@ -15,7 +15,7 @@ CREATE TABLE purchase_orders (
   branch_id              UUID REFERENCES branches(id) ON DELETE SET NULL,
   supplier_id            UUID REFERENCES suppliers(id) ON DELETE SET NULL,
   status                 TEXT NOT NULL DEFAULT 'Draft'
-                           CHECK (status IN ('Draft','Sent','Confirmed','Partially Received','Completed','Cancelled')),
+                           CHECK (status IN ('Draft','Requested','Rejected','Accepted','Sent','Confirmed','Partially Received','Completed','Cancelled')),
   order_date             DATE NOT NULL DEFAULT CURRENT_DATE,
   expected_delivery_date DATE,
   actual_delivery_date   DATE,

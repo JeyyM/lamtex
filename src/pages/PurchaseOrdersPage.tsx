@@ -1,14 +1,14 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
+import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagination';
 import { supabase } from '@/src/lib/supabase';
 import {
   ShoppingCart,
   Search,
-  Filter,
   Plus,
   FileText,
   Download,
@@ -21,10 +21,16 @@ import {
   Package,
   Truck,
   Ban,
+  ClipboardList,
+  XCircle,
+  ThumbsUp,
+  ArrowUp,
+  ArrowDown,
+  ArrowUpDown,
 } from 'lucide-react';
 
 // ── Types ──────────────────────────────────────────────────
-type POStatus = 'Draft' | 'Sent' | 'Confirmed' | 'Partially Received' | 'Completed' | 'Cancelled';
+type POStatus = 'Draft' | 'Requested' | 'Rejected' | 'Accepted' | 'Sent' | 'Confirmed' | 'Partially Received' | 'Completed' | 'Cancelled';
 
 interface PORow {
   id: string;
@@ -45,15 +51,15 @@ interface PORow {
   purchase_order_items: { id: string }[];
 }
 
-const STATUS_OPTIONS: POStatus[] = ['Draft', 'Sent', 'Confirmed', 'Partially Received', 'Completed', 'Cancelled'];
-
 const fmt = (date: string | null) =>
   date ? new Date(date).toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' }) : '—';
 
 const getStatusVariant = (status: POStatus): 'success' | 'warning' | 'danger' | 'neutral' | 'default' => {
   if (status === 'Completed')          return 'success';
   if (status === 'Partially Received') return 'warning';
-  if (status === 'Cancelled')          return 'danger';
+  if (status === 'Cancelled' || status === 'Rejected') return 'danger';
+  if (status === 'Requested')         return 'warning';
+  if (status === 'Accepted')           return 'default';
   if (status === 'Confirmed')          return 'default';
   if (status === 'Sent')               return 'default';
   return 'neutral';
@@ -65,19 +71,35 @@ const getStatusIcon = (status: POStatus) => {
   if (status === 'Confirmed')          return <Truck className="w-3.5 h-3.5" />;
   if (status === 'Partially Received') return <Package className="w-3.5 h-3.5" />;
   if (status === 'Cancelled')          return <Ban className="w-3.5 h-3.5" />;
+  if (status === 'Requested')          return <ClipboardList className="w-3.5 h-3.5" />;
+  if (status === 'Rejected')           return <XCircle className="w-3.5 h-3.5" />;
+  if (status === 'Accepted')            return <ThumbsUp className="w-3.5 h-3.5" />;
   return <FileText className="w-3.5 h-3.5" />;
 };
 
+const poLogRoleMap: Record<string, string> = {
+  Executive:  'Admin',
+  Agent:      'Agent',
+  Warehouse:  'Warehouse Staff',
+  Logistics:  'Logistics',
+  Driver:     'Logistics',
+};
+
 export function PurchaseOrdersPage() {
-  const { branch } = useAppContext();
+  const { branch, employeeName, role, session } = useAppContext();
   const navigate = useNavigate();
 
   const [orders, setOrders]                     = useState<PORow[]>([]);
   const [loading, setLoading]                   = useState(true);
+  const [creating, setCreating]                 = useState(false);
   const [error, setError]                       = useState<string | null>(null);
   const [resolvedBranchId, setResolvedBranchId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery]           = useState('');
-  const [statusFilter, setStatusFilter]         = useState<string>('All');
+  /** '' = all PO statuses (matches column filter pattern on Orders) */
+  const [statusFilter, setStatusFilter]         = useState('');
+  const [poSortKey, setPoSortKey]              = useState<string>('order_date');
+  const [poSortDir, setPoSortDir]              = useState<'asc' | 'desc'>('desc');
+  const [poTablePage, setPoTablePage]         = useState(1);
 
   // ── Fetch ──────────────────────────────────────────────
   const fetchOrders = useCallback(async () => {
@@ -106,23 +128,92 @@ export function PurchaseOrdersPage() {
 
   useEffect(() => { fetchOrders(); }, [fetchOrders]);
 
+  useEffect(() => {
+    setStatusFilter('');
+  }, [branch]);
+
   // ── Filter ─────────────────────────────────────────────
   const branchFiltered = orders.filter(po =>
     !resolvedBranchId || po.branch_id === resolvedBranchId
   );
+
+  const distinctPoStatuses = useMemo(() => {
+    const s = new Set(branchFiltered.map((po) => po.status).filter(Boolean));
+    return Array.from(s).sort((a, b) => a.localeCompare(b));
+  }, [branchFiltered]);
 
   const filtered = branchFiltered.filter(po => {
     const q = searchQuery.toLowerCase();
     const matchesSearch =
       po.po_number.toLowerCase().includes(q) ||
       (po.suppliers?.name ?? '').toLowerCase().includes(q);
-    const matchesStatus = statusFilter === 'All' || po.status === statusFilter;
+    const matchesStatus = statusFilter === '' || po.status === statusFilter;
     return matchesSearch && matchesStatus;
   });
 
+  const handlePOSort = (key: string) => {
+    if (poSortKey === key) {
+      setPoSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setPoSortKey(key);
+      setPoSortDir('asc');
+    }
+  };
+
+  const poSortIcon = (col: string) => {
+    if (poSortKey !== col) return <ArrowUpDown className="w-3 h-3 ml-1 inline opacity-40" />;
+    return poSortDir === 'asc'
+      ? <ArrowUp className="w-3 h-3 ml-1 text-red-600" />
+      : <ArrowDown className="w-3 h-3 ml-1 text-red-600" />;
+  };
+
+  const sortedPOs = useMemo(() => {
+    return [...filtered].sort((a, b) => {
+      let av: string | number;
+      let bv: string | number;
+      switch (poSortKey) {
+        case 'po_number': av = a.po_number; bv = b.po_number; break;
+        case 'order_date': av = a.order_date; bv = b.order_date; break;
+        case 'supplier': av = a.suppliers?.name ?? ''; bv = b.suppliers?.name ?? ''; break;
+        case 'items': av = a.purchase_order_items.length; bv = b.purchase_order_items.length; break;
+        case 'amount': av = a.total_amount; bv = b.total_amount; break;
+        case 'expected': av = a.expected_delivery_date ?? ''; bv = b.expected_delivery_date ?? ''; break;
+        case 'status': av = a.status; bv = b.status; break;
+        default: av = a.order_date; bv = b.order_date;
+      }
+      if (typeof av === 'number' && typeof bv === 'number') {
+        if (av < bv) return poSortDir === 'asc' ? -1 : 1;
+        if (av > bv) return poSortDir === 'asc' ? 1 : -1;
+        return 0;
+      }
+      const as = String(av);
+      const bs = String(bv);
+      if (as < bs) return poSortDir === 'asc' ? -1 : 1;
+      if (as > bs) return poSortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [filtered, poSortKey, poSortDir]);
+
+  const poTotalListPages = Math.max(1, Math.ceil(sortedPOs.length / TABLE_PAGE_SIZE) || 1);
+  const pagedPOs = useMemo(() => {
+    const p = Math.min(poTablePage, poTotalListPages);
+    const start = (p - 1) * TABLE_PAGE_SIZE;
+    return sortedPOs.slice(start, start + TABLE_PAGE_SIZE);
+  }, [sortedPOs, poTablePage, poTotalListPages]);
+
+  useEffect(() => {
+    if (poTablePage > poTotalListPages) setPoTablePage(poTotalListPages);
+  }, [poTablePage, poTotalListPages]);
+
+  useEffect(() => {
+    setPoTablePage(1);
+  }, [searchQuery, statusFilter, resolvedBranchId]);
+
   // ── KPIs ───────────────────────────────────────────────
   const totalPOs     = branchFiltered.length;
-  const pendingPOs   = branchFiltered.filter(po => ['Sent', 'Confirmed', 'Partially Received'].includes(po.status)).length;
+  const pendingPOs   = branchFiltered.filter(po =>
+    ['Requested', 'Accepted', 'Sent', 'Confirmed', 'Partially Received'].includes(po.status)
+  ).length;
   const completedPOs = branchFiltered.filter(po => po.status === 'Completed').length;
   const totalValue   = branchFiltered.reduce((s, po) => s + (po.total_amount ?? 0), 0);
 
@@ -130,7 +221,49 @@ export function PurchaseOrdersPage() {
     po.expected_delivery_date &&
     !po.actual_delivery_date &&
     new Date(po.expected_delivery_date) < new Date() &&
-    !['Completed', 'Cancelled'].includes(po.status);
+    !['Completed', 'Cancelled', 'Requested', 'Rejected', 'Accepted', 'Draft'].includes(po.status);
+
+  // ── New PO: worker request (status Requested) ───────────
+  const handleNewPO = async () => {
+    setCreating(true);
+    try {
+      let branchId: string | null = null;
+      if (branch) {
+        const { data: bd } = await supabase.from('branches').select('id').eq('name', branch).single();
+        branchId = bd?.id ?? null;
+      }
+      const poNumber  = `PO-${Date.now()}`;
+      const actor     = employeeName || session?.user?.email || 'User';
+      const { data, error: err } = await supabase
+        .from('purchase_orders')
+        .insert({
+          po_number:   poNumber,
+          branch_id:  branchId,
+          status:     'Requested',
+          order_date: new Date().toISOString().split('T')[0],
+          total_amount: 0,
+          created_by:  actor,
+        })
+        .select('id')
+        .single();
+      if (err) throw err;
+      const logRole = poLogRoleMap[role] ?? 'System';
+      const { error: logErr } = await supabase.from('purchase_order_logs').insert({
+        order_id:         data.id,
+        action:           'requested',
+        performed_by:     actor,
+        performed_by_role: logRole,
+        description:     'Purchase order requested',
+        metadata:         { po_number: poNumber },
+      });
+      if (logErr && import.meta.env.DEV) console.warn('[PO request log]', logErr.message);
+      navigate(`/purchase-orders/${data.id}`);
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setCreating(false);
+    }
+  };
 
   // ── Loading / Error ────────────────────────────────────
   if (loading) {
@@ -175,8 +308,11 @@ export function PurchaseOrdersPage() {
           <Button variant="outline" className="w-full sm:w-auto gap-2">
             <Download className="w-4 h-4" /> Export
           </Button>
-          <Button variant="primary" className="w-full sm:w-auto gap-2">
-            <Plus className="w-4 h-4" /> New Purchase Order
+          <Button variant="primary" onClick={handleNewPO} disabled={creating} className="w-full sm:w-auto gap-2">
+            {creating
+              ? <><Loader2 className="w-4 h-4 animate-spin" /> Creating…</>
+              : <><Plus className="w-4 h-4" /> New Purchase Order</>
+            }
           </Button>
         </div>
       </div>
@@ -215,7 +351,7 @@ export function PurchaseOrdersPage() {
       {/* ── Filters ── */}
       <Card>
         <CardContent className="p-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="flex flex-col gap-3">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
               <input
@@ -226,15 +362,17 @@ export function PurchaseOrdersPage() {
                 className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
               />
             </div>
-            <div className="relative">
-              <Filter className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4 pointer-events-none" />
+            <div className="md:hidden">
               <select
+                aria-label="Filter by status"
                 value={statusFilter}
                 onChange={e => setStatusFilter(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent appearance-none bg-white"
+                className="w-full text-sm text-gray-900 border border-gray-300 rounded-lg px-3 py-2 bg-white focus:ring-2 focus:ring-red-500 focus:border-transparent outline-none"
               >
-                <option value="All">All Statuses</option>
-                {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+                <option value="">Status</option>
+                {distinctPoStatuses.map((s) => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
               </select>
             </div>
           </div>
@@ -256,7 +394,7 @@ export function PurchaseOrdersPage() {
             <>
               {/* Mobile cards */}
               <div className="md:hidden divide-y divide-gray-200">
-                {filtered.map(po => (
+                {pagedPOs.map(po => (
                   <div
                     key={po.id}
                     className="p-4 space-y-3 hover:bg-gray-50 cursor-pointer"
@@ -291,17 +429,44 @@ export function PurchaseOrdersPage() {
                 <table className="w-full text-sm">
                   <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b">
                     <tr>
-                      <th className="px-6 py-3 text-left font-medium">PO Number</th>
-                      <th className="px-6 py-3 text-left font-medium">Order Date</th>
-                      <th className="px-6 py-3 text-left font-medium">Supplier</th>
-                      <th className="px-6 py-3 text-left font-medium">Items</th>
-                      <th className="px-6 py-3 text-left font-medium">Amount</th>
-                      <th className="px-6 py-3 text-left font-medium">Exp. Delivery</th>
-                      <th className="px-6 py-3 text-center font-medium w-44">Status</th>
+                      <th onClick={() => handlePOSort('po_number')} className="px-6 py-3 text-left font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                        <span className="inline-flex items-center">PO Number{poSortIcon('po_number')}</span>
+                      </th>
+                      <th onClick={() => handlePOSort('order_date')} className="px-6 py-3 text-left font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                        <span className="inline-flex items-center">Order Date{poSortIcon('order_date')}</span>
+                      </th>
+                      <th onClick={() => handlePOSort('supplier')} className="px-6 py-3 text-left font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                        <span className="inline-flex items-center">Supplier{poSortIcon('supplier')}</span>
+                      </th>
+                      <th onClick={() => handlePOSort('items')} className="px-6 py-3 text-left font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                        <span className="inline-flex items-center">Items{poSortIcon('items')}</span>
+                      </th>
+                      <th onClick={() => handlePOSort('amount')} className="px-6 py-3 text-left font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                        <span className="inline-flex items-center">Amount{poSortIcon('amount')}</span>
+                      </th>
+                      <th onClick={() => handlePOSort('expected')} className="px-6 py-3 text-left font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                        <span className="inline-flex items-center">Exp. Delivery{poSortIcon('expected')}</span>
+                      </th>
+                      <th className="px-3 py-3 text-center font-medium align-top w-44 min-w-[10rem] max-w-[14rem]">
+                        <div className="normal-case flex justify-center">
+                          <select
+                            aria-label="Filter by status"
+                            value={statusFilter}
+                            onChange={e => setStatusFilter(e.target.value)}
+                            onClick={e => e.stopPropagation()}
+                            className="w-full max-w-[11rem] text-sm font-medium text-gray-800 border border-gray-200 rounded-md px-2 py-1.5 bg-white hover:border-gray-300 focus:outline-none focus:ring-1 focus:ring-red-500 focus:border-red-500"
+                          >
+                            <option value="">Status</option>
+                            {distinctPoStatuses.map((s) => (
+                              <option key={s} value={s}>{s}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
-                    {filtered.map(po => (
+                    {pagedPOs.map(po => (
                       <tr
                         key={po.id}
                         className="hover:bg-gray-50 cursor-pointer"
@@ -312,8 +477,8 @@ export function PurchaseOrdersPage() {
                         </td>
                         <td className="px-6 py-4 text-gray-600">{fmt(po.order_date)}</td>
                         <td className="px-6 py-4 font-medium text-gray-900">{po.suppliers?.name ?? '—'}</td>
-                        <td className="px-6 py-4 text-gray-600">
-                          {po.purchase_order_items.length} {po.purchase_order_items.length === 1 ? 'item' : 'items'}
+                        <td className="px-6 py-4 text-gray-600 tabular-nums">
+                          {po.purchase_order_items.length}
                         </td>
                         <td className="px-6 py-4 font-medium text-gray-900">
                           {po.currency === 'USD' ? '$' : '₱'}{po.total_amount.toLocaleString()}
@@ -334,6 +499,10 @@ export function PurchaseOrdersPage() {
                   </tbody>
                 </table>
               </div>
+
+              {sortedPOs.length > 0 && (
+                <TablePagination page={poTablePage} total={sortedPOs.length} onPageChange={setPoTablePage} />
+              )}
             </>
           )}
         </CardContent>

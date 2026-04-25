@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
+import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagination';
 import { useAppContext } from '@/src/store/AppContext';
 import StockAdjustmentModal from '@/src/components/warehouse/StockAdjustmentModal';
 import AddMaterialModal, { MaterialFormData } from '@/src/components/materials/AddMaterialModal';
@@ -29,6 +30,12 @@ import {
   Edit3,
   Loader2,
   ShoppingCart,
+  Link2,
+  Building2,
+  ExternalLink,
+  ArrowUp,
+  ArrowDown,
+  ArrowUpDown,
 } from 'lucide-react';
 import {
   BarChart,
@@ -39,10 +46,20 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  Legend,
   ResponsiveContainer,
 } from 'recharts';
 import type { MaterialStatus } from '@/src/types/materials';
+
+/** Set to true to show the next-3-month usage forecast line again. */
+const USAGE_FORECAST_ENABLED = false;
+
+const poLogRoleMap: Record<string, string> = {
+  Executive:  'Admin',
+  Agent:      'Agent',
+  Warehouse:  'Warehouse Staff',
+  Logistics:  'Logistics',
+  Driver:     'Logistics',
+};
 
 interface POHistoryRow {
   id: string;
@@ -92,7 +109,7 @@ interface RawMaterialRow {
 export function MaterialDetailPage() {
   const { id, categoryName } = useParams<{ id: string; categoryName: string }>();
   const navigate = useNavigate();
-  const { selectedBranch } = useAppContext();
+  const { selectedBranch, employeeName, role, session } = useAppContext();
   const [activeTab, setActiveTab] = useState<'overview' | 'history' | 'analytics'>('overview');
 
   // PO creation
@@ -100,6 +117,38 @@ export function MaterialDetailPage() {
   // PO history
   const [poHistory, setPOHistory]     = useState<POHistoryRow[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [historySortKey, setHistorySortKey] = useState<string>('order_date');
+  const [historySortDir, setHistorySortDir] = useState<'asc' | 'desc'>('desc');
+  const [historyTablePage, setHistoryTablePage] = useState(1);
+  /** '' = all PO statuses in purchase order history */
+  const [headerPoHistoryStatusFilter, setHeaderPoHistoryStatusFilter] = useState('');
+
+  interface LinkedVariantRow {
+    pvrId: string;
+    quantityNeeded: number;
+    uom: string | null;
+    variantId: string;
+    sku: string;
+    size: string;
+    productId: string;
+    productName: string;
+    categorySlug: string | null;
+  }
+  interface MaterialSupplierRow {
+    smId: string;
+    unitPrice: number;
+    leadTimeDays: number;
+    minOrderQty: number;
+    isCatalogPreferred: boolean;
+    supplierId: string;
+    name: string;
+    paymentTerms: string | null;
+    supplierPreferred: boolean;
+    status: string;
+  }
+  const [linkedVariants, setLinkedVariants]   = useState<LinkedVariantRow[]>([]);
+  const [materialSuppliers, setMaterialSuppliers] = useState<MaterialSupplierRow[]>([]);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
 
   // Stock adjustment modal states
   const [showStockAdjustmentModal, setShowStockAdjustmentModal] = useState(false);
@@ -166,8 +215,348 @@ export function MaterialDetailPage() {
   }, [id]);
 
   useEffect(() => {
-    if (activeTab === 'history') fetchPOHistory();
+    if (activeTab === 'history' || activeTab === 'analytics') fetchPOHistory();
   }, [activeTab, fetchPOHistory]);
+
+  const fetchAnalyticsLinks = useCallback(async () => {
+    if (!id) return;
+    setAnalyticsLoading(true);
+    try {
+      const [pvrRes, smRes] = await Promise.all([
+        supabase
+          .from('product_variant_raw_materials')
+          .select(
+            'id, quantity_needed, unit_of_measure, product_variants!inner ( id, sku, size, products!inner ( id, name, product_categories ( slug, name ) ) )',
+          )
+          .eq('raw_material_id', id),
+        supabase
+          .from('supplier_materials')
+          .select(
+            'id, unit_price, lead_time_days, min_order_qty, is_preferred, suppliers!inner ( id, name, payment_terms, preferred_supplier, status )',
+          )
+          .eq('material_id', id)
+          .order('is_preferred', { ascending: false })
+          .order('unit_price', { ascending: true }),
+      ]);
+
+      if (!pvrRes.error && pvrRes.data) {
+        const rows: LinkedVariantRow[] = (pvrRes.data as unknown as Array<{
+          id: string;
+          quantity_needed: number;
+          unit_of_measure: string | null;
+          product_variants: {
+            id: string;
+            sku: string;
+            size: string;
+            products: {
+              id: string;
+              name: string;
+              product_categories: { slug: string; name: string } | null;
+            } | null;
+          } | null;
+        }>).map(row => {
+          const pv = row.product_variants;
+          const p  = pv?.products;
+          return {
+            pvrId:         row.id,
+            quantityNeeded: Number(row.quantity_needed),
+            uom:           row.unit_of_measure,
+            variantId:     pv?.id ?? '',
+            sku:           pv?.sku ?? '',
+            size:          pv?.size ?? '',
+            productId:     p?.id ?? '',
+            productName:   p?.name ?? '—',
+            categorySlug:  p?.product_categories?.slug ?? null,
+          };
+        });
+        setLinkedVariants(rows);
+      } else {
+        setLinkedVariants([]);
+        if (pvrRes.error && import.meta.env.DEV) console.warn('[linked variants]', pvrRes.error.message);
+      }
+
+      if (!smRes.error && smRes.data) {
+        setMaterialSuppliers(
+          (smRes.data as unknown as Array<{
+            id: string;
+            unit_price: number;
+            lead_time_days: number;
+            min_order_qty: number;
+            is_preferred: boolean;
+            suppliers: {
+              id: string;
+              name: string;
+              payment_terms: string;
+              preferred_supplier: boolean;
+              status: string;
+            } | null;
+          }>).map(r => {
+            const s = r.suppliers;
+            return {
+              smId: r.id,
+              unitPrice:       Number(r.unit_price),
+              leadTimeDays:    r.lead_time_days,
+              minOrderQty:     Number(r.min_order_qty),
+              isCatalogPreferred: r.is_preferred,
+              supplierId:   s?.id ?? '',
+              name:           s?.name ?? '—',
+              paymentTerms:   s?.payment_terms ?? null,
+              supplierPreferred: s?.preferred_supplier ?? false,
+              status:         s?.status ?? 'Active',
+            };
+          }),
+        );
+      } else {
+        setMaterialSuppliers([]);
+        if (smRes.error && import.meta.env.DEV) console.warn('[material suppliers]', smRes.error.message);
+      }
+    } finally {
+      setAnalyticsLoading(false);
+    }
+  }, [id]);
+
+  useEffect(() => {
+    if (activeTab === 'analytics' && id) fetchAnalyticsLinks();
+  }, [activeTab, id, fetchAnalyticsLinks]);
+
+  /** Usage = monthly qty received from PO lines; forecast from recent trend or monthly_consumption. Price = monthly avg unit price. */
+  const { usageForecastData, priceHistoryData, usageHasPoData, priceHasPoData } = useMemo(() => {
+    if (!material) {
+      return { usageForecastData: [] as { month: string; actual: number | null; forecast: number | null }[], priceHistoryData: [] as { month: string; price: number | null }[], usageHasPoData: false, priceHasPoData: false };
+    }
+
+    const uMap = new Map<string, number>();
+    const pAgg = new Map<string, { sum: number; n: number }>();
+    for (const row of poHistory) {
+      const od = row.purchase_orders?.order_date;
+      if (!od) continue;
+      const key = od.slice(0, 7);
+      const rec = Number(row.quantity_received) || 0;
+      if (rec > 0) uMap.set(key, (uMap.get(key) || 0) + rec);
+      const up = Number(row.unit_price) || 0;
+      if (up > 0) {
+        const cur = pAgg.get(key) || { sum: 0, n: 0 };
+        cur.sum += up;
+        cur.n += 1;
+        pAgg.set(key, cur);
+      }
+    }
+    const usageHasData = uMap.size > 0;
+
+    const y = new Date().getFullYear();
+    const m0 = new Date().getMonth();
+    const mKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    const mLab = (d: Date) => d.toLocaleDateString('en-PH', { month: 'short', year: '2-digit' });
+
+    const keys12: string[] = [];
+    for (let k = 11; k >= 0; k--) {
+      const d = new Date(y, m0 - k, 1);
+      keys12.push(mKey(d));
+    }
+
+    const last3: number[] = [];
+    for (let k = 0; k < 3; k++) {
+      const d = new Date(y, m0 - k, 1);
+      const v = uMap.get(mKey(d));
+      if (v != null && v > 0) last3.push(v);
+    }
+    const histVals = keys12.map(ym => uMap.get(ym) ?? 0);
+    const nz = histVals.filter(x => x > 0);
+    const histAvg = nz.length > 0 ? nz.reduce((a, b) => a + b, 0) / nz.length : material.monthly_consumption;
+    const trendBase = last3.length > 0 ? last3.reduce((a, b) => a + b, 0) / last3.length : histAvg;
+
+    const endK = mKey(new Date(y, m0, 1));
+    /** Inclusive YYYY-MM…YYYY-MM, ascending. */
+    const monthKeysFromTo = (a: string, b: string) => {
+      const out: string[] = [];
+      const [as, am] = a.split('-').map(Number);
+      const [bs, bm] = b.split('-').map(Number);
+      let d = new Date(as, am - 1, 1);
+      const endD = new Date(bs, bm - 1, 1);
+      while (d <= endD) {
+        out.push(mKey(d));
+        d = new Date(d.getFullYear(), d.getMonth() + 1, 1);
+      }
+      return out;
+    };
+
+    const uRows: { month: string; actual: number | null; forecast: number | null }[] = [];
+    if (usageHasData) {
+      const withReceipts = [...uMap.keys()].filter(k => (uMap.get(k) || 0) > 0).sort();
+      const capFrom = mKey(new Date(y, m0 - 35, 1));
+      let startK = withReceipts[0] ?? endK;
+      if (startK < capFrom) startK = capFrom;
+      if (startK > endK) {
+        for (let i = 0; i < 12; i++) {
+          const d = new Date(y, m0 - 11 + i, 1);
+          const k = mKey(d);
+          uRows.push({ month: mLab(d), actual: uMap.get(k) ?? 0, forecast: null });
+        }
+      } else {
+        for (const k of monthKeysFromTo(startK, endK)) {
+          const [Y, M] = k.split('-').map(Number);
+          const d = new Date(Y, M - 1, 1);
+          uRows.push({ month: mLab(d), actual: uMap.get(k) ?? 0, forecast: null });
+        }
+      }
+      if (USAGE_FORECAST_ENABLED) {
+        for (let f = 0; f < 3; f++) {
+          const d = new Date(y, m0 + 1 + f, 1);
+          uRows.push({
+            month: mLab(d),
+            actual: null,
+            forecast: Math.max(0, trendBase * (1 + 0.03 * (f + 1))),
+          });
+        }
+        for (let i = uRows.length - 1; i >= 0; i--) {
+          if (uRows[i].actual != null) {
+            uRows[i].forecast = uRows[i].actual;
+            break;
+          }
+        }
+      }
+    } else {
+      for (let i = 0; i < 12; i++) {
+        const d = new Date(y, m0 - 11 + i, 1);
+        const t = 0.72 + 0.02 * (i % 5) + 0.01 * i;
+        uRows.push({ month: mLab(d), actual: material.monthly_consumption * t, forecast: null });
+      }
+      if (USAGE_FORECAST_ENABLED) {
+        for (let f = 0; f < 3; f++) {
+          const d = new Date(y, m0 + 1 + f, 1);
+          uRows.push({
+            month: mLab(d),
+            actual: null,
+            forecast: Math.max(0, trendBase * (1 + 0.03 * (f + 1))),
+          });
+        }
+        for (let i = uRows.length - 1; i >= 0; i--) {
+          if (uRows[i].actual != null) {
+            uRows[i].forecast = uRows[i].actual;
+            break;
+          }
+        }
+      }
+    }
+
+    const pRows: { month: string; price: number | null }[] = [];
+    for (let k = 17; k >= 0; k--) {
+      const d = new Date(y, m0 - k, 1);
+      const key = mKey(d);
+      const ag = pAgg.get(key);
+      pRows.push({
+        month: mLab(d),
+        price: ag && ag.n > 0 ? Math.round((ag.sum / ag.n) * 100) / 100 : null,
+      });
+    }
+    const priceFromPo = pRows.some(r => r.price != null);
+    if (!priceFromPo && material.cost_per_unit > 0) {
+      for (let i = 0; i < pRows.length; i++) {
+        pRows[i].price = material.cost_per_unit;
+      }
+    } else if (priceFromPo) {
+      const i0 = pRows.findIndex(r => r.price != null);
+      if (i0 > 0) pRows.splice(0, i0);
+    }
+    if (!priceFromPo && material.cost_per_unit > 0 && pRows.length > 12) {
+      pRows.splice(0, pRows.length - 12);
+    }
+
+    return {
+      usageForecastData: uRows,
+      priceHistoryData: pRows,
+      usageHasPoData: usageHasData,
+      priceHasPoData: priceFromPo,
+    };
+  }, [material, poHistory]);
+
+  const handleHistorySort = (key: string) => {
+    if (historySortKey === key) {
+      setHistorySortDir(d => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setHistorySortKey(key);
+      setHistorySortDir('asc');
+    }
+  };
+
+  const historySortIcon = (col: string) => {
+    if (historySortKey !== col) return <ArrowUpDown className="w-3 h-3 ml-1 inline opacity-40" />;
+    return historySortDir === 'asc'
+      ? <ArrowUp className="w-3 h-3 ml-1 inline text-red-600" />
+      : <ArrowDown className="w-3 h-3 ml-1 inline text-red-600" />;
+  };
+
+  const distinctPoHistoryStatuses = useMemo(() => {
+    const s = new Set(
+      poHistory
+        .filter((r) => r.purchase_orders)
+        .map((r) => r.purchase_orders!.status)
+        .filter(Boolean)
+    );
+    return Array.from(s).sort((a, b) => a.localeCompare(b));
+  }, [poHistory]);
+
+  const historyRowsMatchingFilters = useMemo(() => {
+    const valid = poHistory.filter(
+      (r): r is POHistoryRow & { purchase_orders: NonNullable<POHistoryRow['purchase_orders']> } => r.purchase_orders != null
+    );
+    if (headerPoHistoryStatusFilter === '') return valid;
+    return valid.filter((r) => r.purchase_orders.status === headerPoHistoryStatusFilter);
+  }, [poHistory, headerPoHistoryStatusFilter]);
+
+  const sortedPoHistory = useMemo(() => {
+    const valid = historyRowsMatchingFilters;
+    const cmp = (a: string | number, b: string | number) => {
+      if (typeof a === 'number' && typeof b === 'number') {
+        if (a < b) return historySortDir === 'asc' ? -1 : 1;
+        if (a > b) return historySortDir === 'asc' ? 1 : -1;
+        return 0;
+      }
+      const as = String(a);
+      const bs = String(b);
+      if (as < bs) return historySortDir === 'asc' ? -1 : 1;
+      if (as > bs) return historySortDir === 'asc' ? 1 : -1;
+      return 0;
+    };
+    return [...valid].sort((a, b) => {
+      const poa = a.purchase_orders;
+      const pob = b.purchase_orders;
+      if (!poa || !pob) return 0;
+      let av: string | number;
+      let bv: string | number;
+      switch (historySortKey) {
+        case 'po_number': av = poa.po_number; bv = pob.po_number; break;
+        case 'supplier': av = poa.suppliers?.name ?? ''; bv = pob.suppliers?.name ?? ''; break;
+        case 'status': av = poa.status; bv = pob.status; break;
+        case 'order_date': av = poa.order_date; bv = pob.order_date; break;
+        case 'expected': av = poa.expected_delivery_date ?? ''; bv = pob.expected_delivery_date ?? ''; break;
+        case 'qty_ordered': av = a.quantity_ordered; bv = b.quantity_ordered; break;
+        case 'qty_received': av = a.quantity_received; bv = b.quantity_received; break;
+        case 'unit_price': av = a.unit_price; bv = b.unit_price; break;
+        default: av = poa.order_date; bv = pob.order_date;
+      }
+      return cmp(av, bv);
+    });
+  }, [historyRowsMatchingFilters, historySortKey, historySortDir]);
+
+  const historyTotalPages = Math.max(1, Math.ceil(sortedPoHistory.length / TABLE_PAGE_SIZE) || 1);
+  const pagedPoHistory = useMemo(() => {
+    const p = Math.min(historyTablePage, historyTotalPages);
+    const start = (p - 1) * TABLE_PAGE_SIZE;
+    return sortedPoHistory.slice(start, start + TABLE_PAGE_SIZE);
+  }, [sortedPoHistory, historyTablePage, historyTotalPages]);
+
+  useEffect(() => {
+    if (historyTablePage > historyTotalPages) setHistoryTablePage(historyTotalPages);
+  }, [historyTablePage, historyTotalPages]);
+
+  useEffect(() => {
+    setHeaderPoHistoryStatusFilter('');
+  }, [id]);
+
+  useEffect(() => {
+    setHistoryTablePage(1);
+  }, [id, poHistory.length, headerPoHistoryStatusFilter]);
 
   const handleCreatePO = async () => {
     if (!material) return;
@@ -179,14 +568,16 @@ export function MaterialDetailPage() {
         branchId = bd?.id ?? null;
       }
       const poNumber = `PO-${Date.now()}`;
+      const actor    = employeeName || session?.user?.email || 'User';
       const { data: poData, error: poErr } = await supabase
         .from('purchase_orders')
         .insert({
           po_number:    poNumber,
           branch_id:    branchId,
-          status:       'Draft',
+          status:       'Requested',
           order_date:   new Date().toISOString().split('T')[0],
           total_amount: material.cost_per_unit,
+          created_by:   actor,
         })
         .select('id')
         .single();
@@ -200,6 +591,16 @@ export function MaterialDetailPage() {
         unit_of_measure:   material.unit_of_measure,
       });
       if (itemErr) throw itemErr;
+      const logRole = poLogRoleMap[role] ?? 'System';
+      const { error: logErr } = await supabase.from('purchase_order_logs').insert({
+        order_id:         poData.id,
+        action:           'requested',
+        performed_by:     actor,
+        performed_by_role: logRole,
+        description:     `Purchase order requested from material screen (${material.name})`,
+        metadata:         { po_number: poNumber, material_id: material.id, material_sku: material.sku },
+      });
+      if (logErr && import.meta.env.DEV) console.warn('[PO request log]', logErr.message);
       navigate(`/purchase-orders/${poData.id}`);
     } catch (e: any) {
       alert(e.message);
@@ -266,18 +667,6 @@ export function MaterialDetailPage() {
     branch: s.branches?.name ?? 'Unknown',
     stock: s.quantity,
   }));
-
-  const forecastData = [
-    { month: 'Jan', actual: material.monthly_consumption * 0.75, forecast: null },
-    { month: 'Feb', actual: material.monthly_consumption * 0.82, forecast: null },
-    { month: 'Mar', actual: material.monthly_consumption * 0.95, forecast: null },
-    { month: 'Apr', actual: material.monthly_consumption * 0.88, forecast: null },
-    { month: 'May', actual: material.monthly_consumption * 1.05, forecast: null },
-    { month: 'Jun', actual: material.monthly_consumption, forecast: material.monthly_consumption },
-    { month: 'Jul', actual: null, forecast: material.monthly_consumption * 1.08 },
-    { month: 'Aug', actual: null, forecast: material.monthly_consumption * 1.12 },
-    { month: 'Sep', actual: null, forecast: material.monthly_consumption * 1.15 },
-  ];
 
   // Stock adjustment handlers
   const handleOpenAdjustment = () => {
@@ -570,7 +959,7 @@ export function MaterialDetailPage() {
                 : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
             }`}
           >
-            History ({poHistory.length})
+            History
           </button>
           <button
             onClick={() => setActiveTab('analytics')}
@@ -671,9 +1060,12 @@ export function MaterialDetailPage() {
           <Card>
             <CardHeader>
               <div className="flex items-center justify-between">
-                <CardTitle className="flex items-center gap-2">
+                <CardTitle className="flex items-center gap-2 flex-wrap">
                   <ClipboardList className="w-5 h-5" />
-                  Purchase Order History
+                  <span>Purchase Order History</span>
+                  <span className="text-base font-medium text-gray-500 tabular-nums">
+                    ({historyRowsMatchingFilters.length})
+                  </span>
                 </CardTitle>
                 <Button variant="primary" onClick={handleCreatePO} disabled={creatingPO} className="gap-2">
                   {creatingPO
@@ -682,6 +1074,21 @@ export function MaterialDetailPage() {
                   }
                 </Button>
               </div>
+              {!historyLoading && poHistory.length > 0 && (
+                <div className="md:hidden mt-3">
+                  <select
+                    aria-label="Filter by PO status"
+                    value={headerPoHistoryStatusFilter}
+                    onChange={(e) => setHeaderPoHistoryStatusFilter(e.target.value)}
+                    className="w-full text-sm text-gray-900 border border-gray-300 rounded-lg px-3 py-2 bg-white focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
+                  >
+                    <option value="">Status</option>
+                    {distinctPoHistoryStatuses.map((s) => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </CardHeader>
             <CardContent className="p-0">
               {historyLoading ? (
@@ -705,117 +1112,174 @@ export function MaterialDetailPage() {
                     <table className="w-full text-sm">
                       <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b">
                         <tr>
-                          <th className="px-5 py-3 text-left font-medium">PO Number</th>
-                          <th className="px-5 py-3 text-left font-medium">Supplier</th>
-                          <th className="px-5 py-3 text-left font-medium">Status</th>
-                          <th className="px-5 py-3 text-left font-medium">Order Date</th>
-                          <th className="px-5 py-3 text-left font-medium">Expected</th>
-                          <th className="px-5 py-3 text-right font-medium">Qty Ordered</th>
-                          <th className="px-5 py-3 text-right font-medium">Qty Received</th>
-                          <th className="px-5 py-3 text-right font-medium">Unit Price</th>
+                          <th onClick={() => handleHistorySort('po_number')} className="px-5 py-3 text-left font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                            <span className="inline-flex items-center">PO Number{historySortIcon('po_number')}</span>
+                          </th>
+                          <th onClick={() => handleHistorySort('supplier')} className="px-5 py-3 text-left font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                            <span className="inline-flex items-center">Supplier{historySortIcon('supplier')}</span>
+                          </th>
+                          <th className="px-3 py-3 text-center font-medium align-top min-w-[8.5rem] max-w-[12rem]">
+                            <div className="normal-case flex justify-center">
+                              <select
+                                aria-label="Filter by PO status"
+                                value={headerPoHistoryStatusFilter}
+                                onChange={(e) => setHeaderPoHistoryStatusFilter(e.target.value)}
+                                onClick={(e) => e.stopPropagation()}
+                                className="w-full max-w-[10rem] text-sm font-medium text-gray-800 border border-gray-200 rounded-md px-2 py-1.5 bg-white hover:border-gray-300 focus:outline-none focus:ring-1 focus:ring-red-500 focus:border-red-500"
+                              >
+                                <option value="">Status</option>
+                                {distinctPoHistoryStatuses.map((s) => (
+                                  <option key={s} value={s}>{s}</option>
+                                ))}
+                              </select>
+                            </div>
+                          </th>
+                          <th onClick={() => handleHistorySort('order_date')} className="px-5 py-3 text-left font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                            <span className="inline-flex items-center">Order Date{historySortIcon('order_date')}</span>
+                          </th>
+                          <th onClick={() => handleHistorySort('expected')} className="px-5 py-3 text-left font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                            <span className="inline-flex items-center">Expected{historySortIcon('expected')}</span>
+                          </th>
+                          <th onClick={() => handleHistorySort('qty_ordered')} className="px-5 py-3 text-right font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                            <span className="inline-flex items-center justify-end w-full">Qty Ordered{historySortIcon('qty_ordered')}</span>
+                          </th>
+                          <th onClick={() => handleHistorySort('qty_received')} className="px-5 py-3 text-right font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                            <span className="inline-flex items-center justify-end w-full">Qty Received{historySortIcon('qty_received')}</span>
+                          </th>
+                          <th onClick={() => handleHistorySort('unit_price')} className="px-5 py-3 text-right font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                            <span className="inline-flex items-center justify-end w-full">Unit Price{historySortIcon('unit_price')}</span>
+                          </th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-200">
-                        {poHistory.map(row => {
-                          const po = row.purchase_orders;
-                          if (!po) return null;
-                          const pct = row.quantity_ordered > 0
-                            ? Math.round((row.quantity_received / row.quantity_ordered) * 100)
-                            : 0;
-                          return (
-                            <tr
-                              key={row.id}
-                              className="hover:bg-gray-50 cursor-pointer"
-                              onClick={() => navigate(`/purchase-orders/${po.id}`)}
-                            >
-                              <td className="px-5 py-3 font-mono text-xs text-indigo-600 font-semibold">{po.po_number}</td>
-                              <td className="px-5 py-3 text-gray-900">{po.suppliers?.name ?? '—'}</td>
-                              <td className="px-5 py-3">
-                                <Badge variant={
-                                  po.status === 'Completed' ? 'success' :
-                                  po.status === 'Partially Received' ? 'warning' :
-                                  po.status === 'Cancelled' ? 'danger' : 'neutral'
-                                }>
-                                  {po.status}
-                                </Badge>
-                              </td>
-                              <td className="px-5 py-3 text-gray-600 text-xs">
-                                {new Date(po.order_date).toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' })}
-                              </td>
-                              <td className="px-5 py-3 text-gray-600 text-xs">
-                                {po.expected_delivery_date
-                                  ? new Date(po.expected_delivery_date).toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' })
-                                  : '—'}
-                              </td>
-                              <td className="px-5 py-3 text-right font-medium text-gray-900">
-                                {row.quantity_ordered.toLocaleString()} {row.unit_of_measure ?? material.unit_of_measure}
-                              </td>
-                              <td className="px-5 py-3 text-right">
-                                <span className={pct >= 100 ? 'text-green-600 font-semibold' : pct > 0 ? 'text-amber-600 font-semibold' : 'text-gray-400'}>
-                                  {row.quantity_received.toLocaleString()}
-                                </span>
-                                <span className="text-gray-400 text-xs ml-1">({pct}%)</span>
-                              </td>
-                              <td className="px-5 py-3 text-right text-gray-700 font-medium">
-                                ₱{row.unit_price.toLocaleString()}
-                              </td>
-                            </tr>
-                          );
-                        })}
+                        {historyRowsMatchingFilters.length === 0 ? (
+                          <tr>
+                            <td colSpan={8} className="px-5 py-12 text-center text-sm text-gray-500">
+                              No purchase orders match the selected status. Choose <span className="font-medium text-gray-700">Status</span> to show all.
+                            </td>
+                          </tr>
+                        ) : (
+                          pagedPoHistory.map(row => {
+                            const po = row.purchase_orders;
+                            if (!po) return null;
+                            const pct = row.quantity_ordered > 0
+                              ? Math.round((row.quantity_received / row.quantity_ordered) * 100)
+                              : 0;
+                            return (
+                              <tr
+                                key={row.id}
+                                className="hover:bg-gray-50 cursor-pointer"
+                                onClick={() => navigate(`/purchase-orders/${po.id}`)}
+                              >
+                                <td className="px-5 py-3 font-mono text-xs text-indigo-600 font-semibold">{po.po_number}</td>
+                                <td className="px-5 py-3 text-gray-900">{po.suppliers?.name ?? '—'}</td>
+                                <td className="px-5 py-3 text-center align-middle">
+                                  <Badge variant={
+                                    po.status === 'Completed' ? 'success' :
+                                    po.status === 'Partially Received' ? 'warning' :
+                                    po.status === 'Requested' ? 'warning' :
+                                    po.status === 'Rejected' || po.status === 'Cancelled' ? 'danger' :
+                                    po.status === 'Accepted' ? 'default' : 'neutral'
+                                  }>
+                                    {po.status}
+                                  </Badge>
+                                </td>
+                                <td className="px-5 py-3 text-gray-600 text-xs">
+                                  {new Date(po.order_date).toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' })}
+                                </td>
+                                <td className="px-5 py-3 text-gray-600 text-xs">
+                                  {po.expected_delivery_date
+                                    ? new Date(po.expected_delivery_date).toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' })
+                                    : '—'}
+                                </td>
+                                <td className="px-5 py-3 text-right font-medium text-gray-900">
+                                  {row.quantity_ordered.toLocaleString()} {row.unit_of_measure ?? material.unit_of_measure}
+                                </td>
+                                <td className="px-5 py-3 text-right">
+                                  <span className={pct >= 100 ? 'text-green-600 font-semibold' : pct > 0 ? 'text-amber-600 font-semibold' : 'text-gray-400'}>
+                                    {row.quantity_received.toLocaleString()}
+                                  </span>
+                                  <span className="text-gray-400 text-xs ml-1">({pct}%)</span>
+                                </td>
+                                <td className="px-5 py-3 text-right text-gray-700 font-medium">
+                                  ₱{row.unit_price.toLocaleString()}
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
                       </tbody>
                     </table>
                   </div>
 
                   {/* Mobile cards */}
                   <div className="md:hidden divide-y divide-gray-200">
-                    {poHistory.map(row => {
-                      const po = row.purchase_orders;
-                      if (!po) return null;
-                      const pct = row.quantity_ordered > 0
-                        ? Math.round((row.quantity_received / row.quantity_ordered) * 100)
-                        : 0;
-                      return (
-                        <div
-                          key={row.id}
-                          className="p-4 space-y-3 cursor-pointer hover:bg-gray-50"
-                          onClick={() => navigate(`/purchase-orders/${po.id}`)}
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0 flex-1">
-                              <p className="font-mono text-xs text-indigo-600 font-semibold break-all">{po.po_number}</p>
-                              <p className="text-sm font-medium text-gray-900 mt-0.5">{po.suppliers?.name ?? '—'}</p>
+                    {historyRowsMatchingFilters.length === 0 ? (
+                      <div className="p-6 text-center text-sm text-gray-500">
+                        No purchase orders match the selected status. Choose <span className="font-medium text-gray-700">Status</span> to show all.
+                      </div>
+                    ) : (
+                      pagedPoHistory.map(row => {
+                        const po = row.purchase_orders;
+                        if (!po) return null;
+                        const pct = row.quantity_ordered > 0
+                          ? Math.round((row.quantity_received / row.quantity_ordered) * 100)
+                          : 0;
+                        return (
+                          <div
+                            key={row.id}
+                            className="p-4 space-y-3 cursor-pointer hover:bg-gray-50"
+                            onClick={() => navigate(`/purchase-orders/${po.id}`)}
+                          >
+                            <div className="space-y-2">
+                              <div className="min-w-0">
+                                <p className="font-mono text-xs text-indigo-600 font-semibold break-all">{po.po_number}</p>
+                                <p className="text-sm font-medium text-gray-900 mt-0.5">{po.suppliers?.name ?? '—'}</p>
+                              </div>
+                              <div className="flex justify-center">
+                                <Badge variant={
+                                  po.status === 'Completed' ? 'success' :
+                                  po.status === 'Partially Received' ? 'warning' :
+                                  po.status === 'Requested' ? 'warning' :
+                                  po.status === 'Rejected' || po.status === 'Cancelled' ? 'danger' :
+                                  po.status === 'Accepted' ? 'default' : 'neutral'
+                                }>
+                                  {po.status}
+                                </Badge>
+                              </div>
                             </div>
-                            <Badge variant={
-                              po.status === 'Completed' ? 'success' :
-                              po.status === 'Partially Received' ? 'warning' :
-                              po.status === 'Cancelled' ? 'danger' : 'neutral'
-                            }>
-                              {po.status}
-                            </Badge>
+                            <div className="grid grid-cols-3 gap-2 text-xs">
+                              <div>
+                                <p className="text-gray-500">Ordered</p>
+                                <p className="font-medium text-gray-900">{row.quantity_ordered.toLocaleString()}</p>
+                              </div>
+                              <div>
+                                <p className="text-gray-500">Received</p>
+                                <p className={`font-medium ${pct >= 100 ? 'text-green-600' : pct > 0 ? 'text-amber-600' : 'text-gray-400'}`}>
+                                  {row.quantity_received.toLocaleString()} <span className="text-gray-400">({pct}%)</span>
+                                </p>
+                              </div>
+                              <div>
+                                <p className="text-gray-500">Unit Price</p>
+                                <p className="font-medium text-gray-700">₱{row.unit_price.toLocaleString()}</p>
+                              </div>
+                            </div>
+                            <p className="text-xs text-gray-400 pt-1 border-t">
+                              Ordered: {new Date(po.order_date).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}
+                            </p>
                           </div>
-                          <div className="grid grid-cols-3 gap-2 text-xs">
-                            <div>
-                              <p className="text-gray-500">Ordered</p>
-                              <p className="font-medium text-gray-900">{row.quantity_ordered.toLocaleString()}</p>
-                            </div>
-                            <div>
-                              <p className="text-gray-500">Received</p>
-                              <p className={`font-medium ${pct >= 100 ? 'text-green-600' : pct > 0 ? 'text-amber-600' : 'text-gray-400'}`}>
-                                {row.quantity_received.toLocaleString()} <span className="text-gray-400">({pct}%)</span>
-                              </p>
-                            </div>
-                            <div>
-                              <p className="text-gray-500">Unit Price</p>
-                              <p className="font-medium text-gray-700">₱{row.unit_price.toLocaleString()}</p>
-                            </div>
-                          </div>
-                          <p className="text-xs text-gray-400 pt-1 border-t">
-                            Ordered: {new Date(po.order_date).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}
-                          </p>
-                        </div>
-                      );
-                    })}
+                        );
+                      })
+                    )}
                   </div>
+
+                  {historyRowsMatchingFilters.length > 0 && (
+                    <TablePagination
+                      page={historyTablePage}
+                      total={sortedPoHistory.length}
+                      onPageChange={setHistoryTablePage}
+                    />
+                  )}
                 </>
               )}
             </CardContent>
@@ -826,58 +1290,119 @@ export function MaterialDetailPage() {
       {/* Tab Content - Analytics */}
       {activeTab === 'analytics' && (
         <div className="space-y-6">
-          {/* Usage & Forecast Chart */}
+          {/* Usage history (forecast hidden: USAGE_FORECAST_ENABLED) */}
           <Card>
             <CardHeader>
               <CardTitle className="text-base flex items-center gap-2">
                 <Activity className="w-4 h-4" />
-                Usage History & Forecast
+                Usage History
               </CardTitle>
+              {usageHasPoData ? (
+                <p className="text-xs text-gray-500 font-normal mt-1">
+                  Monthly <strong>quantity received</strong> on PO lines (receipts), summed by calendar month.
+                </p>
+              ) : (
+                <p className="text-xs text-amber-800/90 font-normal mt-1 bg-amber-50/80 border border-amber-100 rounded-lg px-2 py-1.5">
+                  No purchase receipts yet for this material — showing a <strong>model trend</strong> from monthly consumption. PO history will replace this when available.
+                </p>
+              )}
             </CardHeader>
             <CardContent>
-              <ResponsiveContainer width="100%" height={350}>
-                <LineChart data={forecastData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="month" />
-                  <YAxis />
-                  <Tooltip 
-                    formatter={(value: number) => [
-                      `${value.toLocaleString()} ${material.unit_of_measure}`,
-                      ''
-                    ]}
-                  />
-                  <Legend />
-                  <Line 
-                    type="monotone" 
-                    dataKey="actual" 
-                    stroke="#EF4444" 
-                    strokeWidth={2}
-                    name="Actual Usage"
-                    dot={{ fill: '#EF4444', r: 4 }}
-                    connectNulls={false}
-                  />
-                  <Line 
-                    type="monotone" 
-                    dataKey="forecast" 
-                    stroke="#F59E0B" 
-                    strokeWidth={2}
-                    strokeDasharray="5 5"
-                    name="Forecasted Usage"
-                    dot={{ fill: '#F59E0B', r: 4 }}
-                    connectNulls={false}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-              <div className="mt-4 flex items-center justify-center gap-6 text-xs text-gray-500">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-0.5 bg-red-500"></div>
-                  <span>Historical Usage</span>
+              {historyLoading ? (
+                <div className="flex h-[350px] items-center justify-center text-gray-400">
+                  <Loader2 className="w-8 h-8 animate-spin" />
                 </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-0.5 bg-orange-500 border-dashed"></div>
-                  <span>ML Forecast (Next 3 Months)</span>
+              ) : (
+                <>
+                  <ResponsiveContainer width="100%" height={350}>
+                    <LineChart data={usageForecastData} margin={{ top: 8, right: 12, left: 4, bottom: 8 }}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="month" tick={{ fontSize: 10 }} minTickGap={28} height={32} />
+                      <YAxis tick={{ fontSize: 11 }} width={52} tickFormatter={v => Number(v).toLocaleString()} />
+                      <Tooltip
+                        formatter={(value: number | string, name: string) => {
+                          if (value == null || value === '') return ['—', name];
+                          const n = typeof value === 'number' ? value : parseFloat(String(value));
+                          if (Number.isNaN(n)) return ['—', name];
+                          return [`${n.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${material.unit_of_measure}`, name];
+                        }}
+                      />
+                      <Line
+                        type="linear"
+                        dataKey="actual"
+                        stroke="#EF4444"
+                        strokeWidth={2}
+                        name="Usage (receipts)"
+                        dot={{ fill: '#EF4444', r: 2 }}
+                        activeDot={{ r: 4 }}
+                        connectNulls={false}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                  <div className="mt-1 flex flex-wrap items-center justify-center gap-6 text-xs text-gray-500">
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-0.5 bg-red-500" />
+                      <span>Usage (receipts)</span>
+                    </div>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Unit price history — from PO line prices */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <DollarSign className="w-4 h-4" />
+                Unit price history
+              </CardTitle>
+              {priceHasPoData ? (
+                <p className="text-xs text-gray-500 font-normal mt-1">
+                  Monthly <strong>average</strong> unit price from purchase order lines for this material.
+                </p>
+              ) : (
+                <p className="text-xs text-gray-500 font-normal mt-1">
+                  Flat line shows current <strong>cost per unit</strong> on the material — add PO lines with unit prices to see a real trend.
+                </p>
+              )}
+            </CardHeader>
+            <CardContent>
+              {historyLoading ? (
+                <div className="flex h-[300px] items-center justify-center text-gray-400">
+                  <Loader2 className="w-8 h-8 animate-spin" />
                 </div>
-              </div>
+              ) : (
+                <ResponsiveContainer width="100%" height={300}>
+                  <LineChart data={priceHistoryData} margin={{ top: 8, right: 12, left: 4, bottom: 8 }}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="month" tick={{ fontSize: 10 }} minTickGap={28} height={32} />
+                    <YAxis
+                      tick={{ fontSize: 10 }}
+                      width={56}
+                      tickFormatter={v => `₱${Number(v).toLocaleString()}`}
+                    />
+                    <Tooltip
+                      formatter={(value: number | string) => {
+                        if (value == null || value === '') return ['—', 'Price'];
+                        const n = typeof value === 'number' ? value : parseFloat(String(value));
+                        if (Number.isNaN(n)) return ['—', 'Price'];
+                        return [`₱${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, 'Avg unit price'];
+                      }}
+                    />
+                    <Line
+                      type="linear"
+                      dataKey="price"
+                      stroke="#3B82F6"
+                      strokeWidth={2}
+                      name="Avg unit price"
+                      dot={priceHasPoData ? { fill: '#3B82F6', r: 3 } : false}
+                      activeDot={{ r: 5 }}
+                      connectNulls
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
             </CardContent>
           </Card>
 
@@ -914,13 +1439,143 @@ export function MaterialDetailPage() {
 
             <Card>
               <CardHeader>
-                <CardTitle className="text-base">Linked Products</CardTitle>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Link2 className="w-4 h-4 text-indigo-500" />
+                  Linked Products
+                </CardTitle>
+                <p className="text-xs text-gray-500 font-normal">
+                  Product variants that include this material in their consumption (BOM) per unit.
+                </p>
               </CardHeader>
               <CardContent>
-                <p className="text-sm text-gray-500">No linked products</p>
+                {analyticsLoading ? (
+                  <div className="flex items-center gap-2 text-sm text-gray-400 py-4">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Loading…
+                  </div>
+                ) : linkedVariants.length === 0 ? (
+                  <p className="text-sm text-gray-500">No product variants use this material in their bill of materials yet.</p>
+                ) : (
+                  <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                    {linkedVariants.map(row => {
+                      const cat = row.categorySlug || 'uncategorized';
+                      const toProduct = () =>
+                        navigate(`/products/category/${encodeURIComponent(cat)}/family/${row.productId}`);
+                      return (
+                        <button
+                          key={row.pvrId}
+                          type="button"
+                          onClick={toProduct}
+                          className="w-full text-left p-3 rounded-lg border border-gray-100 bg-gray-50/80 hover:border-indigo-200 hover:bg-indigo-50/60 transition-colors flex items-start justify-between gap-2 group"
+                        >
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-gray-900 truncate group-hover:text-indigo-800">
+                              {row.productName}
+                            </p>
+                            <p className="text-xs text-gray-500 mt-0.5">
+                              <span className="font-mono text-gray-600">{row.sku}</span>
+                              {' · '}
+                              {row.size}
+                            </p>
+                            <p className="text-xs text-indigo-600 mt-1">
+                              {row.quantityNeeded.toLocaleString()}{' '}
+                              {row.uom || material.unit_of_measure} / unit
+                            </p>
+                          </div>
+                          <ExternalLink className="w-4 h-4 text-gray-300 group-hover:text-indigo-500 flex-shrink-0 mt-0.5" />
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </CardContent>
             </Card>
           </div>
+
+          <Card className="border-indigo-100 bg-gradient-to-b from-indigo-50/40 to-white">
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Building2 className="w-5 h-5 text-indigo-600" />
+                Existing suppliers
+              </CardTitle>
+              <p className="text-xs text-gray-500 font-normal">
+                Suppliers that list this material in your catalogue (pricing & lead times from the Suppliers page).
+              </p>
+            </CardHeader>
+            <CardContent>
+              {analyticsLoading ? (
+                <div className="flex items-center gap-2 text-sm text-gray-400 py-4">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Loading…
+                </div>
+              ) : materialSuppliers.length === 0 ? (
+                <p className="text-sm text-gray-500">
+                  No suppliers linked to this material yet. Add links under{' '}
+                  <span className="font-medium text-gray-700">Suppliers</span> to see who can supply it.
+                </p>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+                  {materialSuppliers.map(sup => (
+                    <div
+                      key={sup.smId}
+                      role="link"
+                      tabIndex={0}
+                      title="View supplier in Suppliers"
+                      onClick={() => navigate(`/suppliers?supplier=${encodeURIComponent(sup.supplierId)}`)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          navigate(`/suppliers?supplier=${encodeURIComponent(sup.supplierId)}`);
+                        }
+                      }}
+                      className="group rounded-xl border border-indigo-100 bg-white p-4 shadow-sm flex flex-col gap-2 cursor-pointer hover:border-indigo-300 hover:shadow-md transition-all focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-1"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="text-sm font-semibold text-indigo-900 leading-tight group-hover:underline">
+                          {sup.name}
+                        </p>
+                        <div className="flex flex-wrap gap-1 justify-end">
+                          {sup.isCatalogPreferred && (
+                            <Badge variant="default" className="text-[10px] bg-amber-100 text-amber-800 border-amber-200">
+                              Cat. preferred
+                            </Badge>
+                          )}
+                          {sup.supplierPreferred && (
+                            <Badge variant="default" className="text-[10px] bg-slate-100 text-slate-700">
+                              Preferred supplier
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+                      <p className="text-xs text-gray-500">Listed net price (catalogue)</p>
+                      <p className="text-lg font-bold text-indigo-700">₱{sup.unitPrice.toLocaleString()}</p>
+                      <div className="grid grid-cols-2 gap-2 text-xs text-gray-600 pt-1 border-t border-gray-100">
+                        <div>
+                          <span className="text-gray-400 block">Lead time</span>
+                          <span className="font-medium">{sup.leadTimeDays} days</span>
+                        </div>
+                        <div>
+                          <span className="text-gray-400 block">Min. order</span>
+                          <span className="font-medium">{sup.minOrderQty.toLocaleString()}</span>
+                        </div>
+                        {sup.paymentTerms && (
+                          <div className="col-span-2">
+                            <span className="text-gray-400">Est. terms / delivery</span>
+                            <span className="ml-1 font-medium text-gray-800">{sup.paymentTerms}</span>
+                          </div>
+                        )}
+                        <div className="col-span-2">
+                          <span className={`text-[11px] px-1.5 py-0.5 rounded ${sup.status === 'Active' ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                            {sup.status}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </div>
       )}
 

@@ -1494,7 +1494,7 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
   branch_id              UUID REFERENCES branches(id)   ON DELETE SET NULL,
   supplier_id            UUID REFERENCES suppliers(id)  ON DELETE SET NULL,
   status                 TEXT NOT NULL DEFAULT 'Draft'
-                           CHECK (status IN ('Draft','Sent','Confirmed','Partially Received','Completed','Cancelled')),
+                           CHECK (status IN ('Draft','Requested','Rejected','Accepted','Sent','Confirmed','Partially Received','Completed','Cancelled')),
   order_date             DATE NOT NULL DEFAULT CURRENT_DATE,
   expected_delivery_date DATE,
   actual_delivery_date   DATE,
@@ -1502,6 +1502,10 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
   currency               TEXT NOT NULL DEFAULT 'PHP',
   notes                  TEXT,
   created_by             TEXT,
+  accepted_by            TEXT,
+  accepted_at            TIMESTAMPTZ,
+  rejected_by            TEXT,
+  rejection_reason       TEXT,
   -- Payment tracking
   payment_status         TEXT NOT NULL DEFAULT 'Unpaid'
                            CHECK (payment_status IN ('Unpaid','Partially Paid','Paid','Overdue')),
@@ -1552,6 +1556,20 @@ CREATE TABLE IF NOT EXISTS purchase_order_receipts (
   note        TEXT,
   uploaded_by TEXT,
   created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Activity log for a purchase order (who requested, status changes, receive, payment, etc.)
+CREATE TABLE IF NOT EXISTS purchase_order_logs (
+  id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id            UUID        NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+  action              TEXT        NOT NULL,
+  performed_by        TEXT,
+  performed_by_role   TEXT,
+  description         TEXT,
+  old_value           JSONB,
+  new_value           JSONB,
+  metadata            JSONB,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Worker-raised purchase requests (suggest materials/suppliers; executive converts to PO)
@@ -2462,6 +2480,7 @@ CREATE INDEX IF NOT EXISTS idx_purchase_orders_branch ON purchase_orders(branch_
 CREATE INDEX IF NOT EXISTS idx_purchase_order_items_order ON purchase_order_items(order_id);
 CREATE INDEX IF NOT EXISTS idx_purchase_order_items_material ON purchase_order_items(material_id);
 CREATE INDEX IF NOT EXISTS idx_po_receipts_order ON purchase_order_receipts(order_id);
+CREATE INDEX IF NOT EXISTS idx_po_logs_order ON purchase_order_logs(order_id);
 CREATE INDEX IF NOT EXISTS idx_purchase_requests_branch ON purchase_requests(branch_id);
 CREATE INDEX IF NOT EXISTS idx_purchase_requests_status ON purchase_requests(status);
 CREATE INDEX IF NOT EXISTS idx_grn_po ON goods_receipt_notes(purchase_order_id);

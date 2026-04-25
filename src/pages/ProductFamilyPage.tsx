@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
@@ -31,6 +31,9 @@ const stringToColor = (str: string) => {
   return `hsl(${hash % 360}, 70%, 50%)`;
 };
 
+/** Order line rows tied to these are omitted from the variant comparison sales chart. */
+const CHART_EXCLUDED_ORDER_STATUSES = new Set<string>(['Cancelled', 'Rejected', 'Draft']);
+
 // â”€â”€ UI-facing variant shape (matches the original mock structure) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 interface DisplayVariant {
   id: string;
@@ -47,6 +50,8 @@ interface DisplayVariant {
   cost: number;
   monthlyUsage: number;
   unitsSold: number;
+  /** Sum of line revenue for this variant year-to-date (from DB). */
+  revenueYtd: number;
   status: string;
   monthlyProductionQuota: number;
   currentMonthProduced: number;
@@ -139,6 +144,7 @@ function toDisplayVariant(v: VariantRow, selectedBranch: string): DisplayVariant
     cost,
     monthlyUsage,
     unitsSold: v.units_sold_ytd,
+    revenueYtd: Number(v.revenue_ytd) || 0,
     status,
     monthlyProductionQuota: Math.round(monthlyUsage * 1.5),
     currentMonthProduced:   Math.round(monthlyUsage * 1.1),
@@ -197,6 +203,9 @@ export default function ProductFamilyPage() {
   const [showStockAdjustmentModal, setShowStockAdjustmentModal] = useState(false);
   const [selectedItemForAdjustment, setSelectedItemForAdjustment] = useState<any>(null);
   const [showMaterialPickerModal, setShowMaterialPickerModal] = useState(false);
+  /** Comparison chart: one row per month, keys = variant id → units sold from order lines */
+  const [usageChartData, setUsageChartData]     = useState<Record<string, string | number>[]>([]);
+  const [usageChartLoading, setUsageChartLoading] = useState(false);
 
   // â”€â”€ Fetch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   useEffect(() => {
@@ -239,7 +248,105 @@ export default function ProductFamilyPage() {
     })();
   }, [familyId]);
 
-  // â”€â”€ Image carousel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  /** Variant comparison chart: up to 12 months of order lines, trimmed to first/last month with any sale, optional branch. */
+  useEffect(() => {
+    const vids = variants.map(v => v.id).filter(id => !id.startsWith('NEW-'));
+    if (vids.length === 0) {
+      setUsageChartData([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      setUsageChartLoading(true);
+      const [{ data, error }, brRes] = await Promise.all([
+        supabase
+          .from('order_line_items')
+          .select('variant_id, quantity, orders!inner(order_date, status, branch_id)')
+          .in('variant_id', vids),
+        supabase.from('branches').select('id, name'),
+      ]);
+
+      if (cancelled) return;
+
+      if (error) {
+        if (import.meta.env.DEV) console.warn('[usage chart]', error.message);
+        setUsageChartData([]);
+        setUsageChartLoading(false);
+        return;
+      }
+
+      const branchNameById = new Map<string, string>();
+      for (const b of brRes.data ?? []) {
+        if (b.id && b.name) branchNameById.set(b.id, b.name);
+      }
+
+      const end = new Date();
+      const monthSlots: { ymk: string; label: string }[] = [];
+      for (let k = 11; k >= 0; k--) {
+        const d = new Date(end.getFullYear(), end.getMonth() - k, 1);
+        const ymk = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        const label = d.toLocaleDateString('en-PH', { month: 'short', year: '2-digit' });
+        monthSlots.push({ ymk, label });
+      }
+      const monthSet = new Set(monthSlots.map(s => s.ymk));
+      const agg = new Map<string, Map<string, number>>();
+
+      type LineRow = {
+        variant_id: string | null;
+        quantity: number | null;
+        orders: { order_date: string; status: string; branch_id: string | null } | { order_date: string; status: string; branch_id: string | null }[] | null;
+      };
+      for (const r of (data as LineRow[] | null) || []) {
+        const rawO = r.orders;
+        const ord = rawO == null ? null : Array.isArray(rawO) ? rawO[0] : rawO;
+        if (!ord?.order_date) continue;
+        if (CHART_EXCLUDED_ORDER_STATUSES.has(ord.status)) continue;
+        if (selectedBranch) {
+          const bid = ord.branch_id;
+          const bn = bid ? branchNameById.get(bid) : null;
+          if (bn !== selectedBranch) continue;
+        }
+        const od = new Date(ord.order_date);
+        const ymk = `${od.getFullYear()}-${String(od.getMonth() + 1).padStart(2, '0')}`;
+        if (!monthSet.has(ymk)) continue;
+        const vid = r.variant_id;
+        if (!vid) continue;
+        const q = Number(r.quantity) || 0;
+        if (!agg.has(ymk)) agg.set(ymk, new Map());
+        const m = agg.get(ymk)!;
+        m.set(vid, (m.get(vid) || 0) + q);
+      }
+
+      const rows: Record<string, string | number>[] = monthSlots.map(({ ymk, label }) => {
+        const row: Record<string, string | number> = { month: label };
+        for (const id of vids) {
+          row[id] = agg.get(ymk)?.get(id) ?? 0;
+        }
+        return row;
+      });
+
+      const rowHasSales = (row: Record<string, string | number>) =>
+        vids.some(id => Number(row[id] ?? 0) > 0);
+
+      let last = rows.length - 1;
+      while (last >= 0 && !rowHasSales(rows[last])) last -= 1;
+      let first = 0;
+      while (first <= last && !rowHasSales(rows[first])) first += 1;
+
+      const trimmed =
+        last < 0 ? [] : rows.slice(first, last + 1);
+
+      if (!cancelled) {
+        setUsageChartData(trimmed);
+        setUsageChartLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [variants, selectedBranch]);
+
+  // â”€â”€ Image carousel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const productImages = product?.images?.length
     ? product.images
     : product?.image_url
@@ -447,6 +554,32 @@ export default function ProductFamilyPage() {
   // â”€â”€ Derived â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const displayVariant = isEditingVariant ? editedVariant : selectedVariant;
 
+  const variantsPurchaseSummary = useMemo(() => {
+    if (variants.length === 0) {
+      return {
+        totalUnits: 0,
+        totalRevenue: 0,
+        totalStock: 0,
+        topByUnits: null as { size: string; units: number } | null,
+        variantCount: 0,
+      };
+    }
+    const totalUnits = variants.reduce((s, v) => s + (Number(v.unitsSold) || 0), 0);
+    const totalRevenue = variants.reduce((s, v) => s + (Number(v.revenueYtd) || 0), 0);
+    const totalStock = variants.reduce((s, v) => s + (Number(v.stock) || 0), 0);
+    const top = variants.reduce(
+      (best, v) => ((v.unitsSold || 0) > (best.unitsSold || 0) ? v : best),
+      variants[0],
+    );
+    return {
+      totalUnits,
+      totalRevenue,
+      totalStock,
+      topByUnits: { size: top.size, units: top.unitsSold },
+      variantCount: variants.length,
+    };
+  }, [variants]);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64 gap-3 text-gray-500">
@@ -493,6 +626,7 @@ export default function ProductFamilyPage() {
                 cost: 0,
                 monthlyUsage: 0,
                 unitsSold: 0,
+                revenueYtd: 0,
                 status: 'In Stock',
                 monthlyProductionQuota: 0,
                 currentMonthProduced: 0,
@@ -684,7 +818,7 @@ export default function ProductFamilyPage() {
                   id: `NEW-${Date.now()}`,
                   variantName: '', sku: '', size: '', length: '', weight: '',
                   thickness: '', pressure: '', stock: 0, reorderPoint: 0,
-                  price: 0, cost: 0, monthlyUsage: 0, unitsSold: 0,
+                  price: 0, cost: 0, monthlyUsage: 0, unitsSold: 0, revenueYtd: 0,
                   status: 'In Stock', monthlyProductionQuota: 0, currentMonthProduced: 0,
                   leadTimeDays: 7, minOrderQty: 100,
                   specs: [], rawMaterials: [], bulkDiscounts: [],
@@ -1150,13 +1284,71 @@ export default function ProductFamilyPage() {
           </div>
         </CardHeader>
         <CardContent>
+          {variants.length > 0 && (
+            <div className="mb-5 rounded-lg border border-gray-100 bg-gradient-to-b from-gray-50/80 to-white p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Product and variants (sales)</p>
+                  <p className="mt-0.5 text-sm text-gray-700">
+                    <span className="font-semibold text-gray-900">{product?.name ?? 'This product'}</span>
+                    <span className="text-gray-500"> — </span>
+                    {variantsPurchaseSummary.variantCount} variant{variantsPurchaseSummary.variantCount !== 1 ? 's' : ''} in this family
+                    {product?.product_categories?.name && (
+                      <span className="text-gray-500"> · {product.product_categories.name}</span>
+                    )}
+                  </p>
+                </div>
+                {variantsPurchaseSummary.topByUnits && variantsPurchaseSummary.topByUnits.units > 0 && (
+                  <p className="text-xs text-gray-600">
+                    <span className="font-medium text-gray-800">Top by units (YTD):</span>{' '}
+                    {variantsPurchaseSummary.topByUnits.size} ({variantsPurchaseSummary.topByUnits.units.toLocaleString()} sold)
+                  </p>
+                )}
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <div className="rounded-md border border-gray-100 bg-white/90 px-3 py-2.5">
+                  <p className="text-xs text-gray-500">Total units (YTD)</p>
+                  <p className="text-lg font-bold tabular-nums text-gray-900">
+                    {variantsPurchaseSummary.totalUnits.toLocaleString()}
+                  </p>
+                </div>
+                <div className="rounded-md border border-gray-100 bg-white/90 px-3 py-2.5">
+                  <p className="text-xs text-gray-500">Total revenue (YTD)</p>
+                  <p className="text-lg font-bold tabular-nums text-gray-900">
+                    ₱{variantsPurchaseSummary.totalRevenue.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                  </p>
+                </div>
+                <div className="rounded-md border border-gray-100 bg-white/90 px-3 py-2.5">
+                  <p className="text-xs text-gray-500">Combined stock</p>
+                  <p className="text-lg font-bold tabular-nums text-gray-900">
+                    {variantsPurchaseSummary.totalStock.toLocaleString()} <span className="text-sm font-medium text-gray-500">on hand</span>
+                  </p>
+                </div>
+                <div className="rounded-md border border-gray-100 bg-white/90 px-3 py-2.5">
+                  <p className="text-xs text-gray-500">Avg / variant (units YTD)</p>
+                  <p className="text-lg font-bold tabular-nums text-gray-900">
+                    {Math.round(
+                      variantsPurchaseSummary.totalUnits / Math.max(variantsPurchaseSummary.variantCount, 1),
+                    ).toLocaleString()}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
           {comparisonView === 'table' ? (
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
                   <tr className="border-b border-gray-200">
-                    {['Size', 'SKU', 'Stock', 'Price', 'Monthly Usage', 'Units Sold YTD', 'Status'].map(h => (
-                      <th key={h} className={`py-3 px-4 text-xs font-semibold text-gray-600 uppercase ${h === 'Size' || h === 'SKU' ? 'text-left' : 'text-right'} ${h === 'Status' ? '!text-center' : ''}`}>{h}</th>
+                    {['Size', 'SKU', 'Stock', 'Price', 'Monthly Usage', 'Units Sold YTD', 'Revenue YTD', 'Status'].map(h => (
+                      <th
+                        key={h}
+                        className={`py-3 px-4 text-xs font-semibold text-gray-600 uppercase ${
+                          h === 'Size' || h === 'SKU' ? 'text-left' : 'text-right'
+                        } ${h === 'Status' ? '!text-center' : ''}`}
+                      >
+                        {h}
+                      </th>
                     ))}
                   </tr>
                 </thead>
@@ -1179,6 +1371,9 @@ export default function ProductFamilyPage() {
                         <td className="py-3 px-4 text-right font-semibold text-gray-900">₱{variant.price.toLocaleString()}</td>
                         <td className="py-3 px-4 text-right text-gray-600">{variant.monthlyUsage}</td>
                         <td className="py-3 px-4 text-right font-medium text-gray-900">{variant.unitsSold.toLocaleString()}</td>
+                        <td className="py-3 px-4 text-right text-gray-800 tabular-nums">
+                          ₱{variant.revenueYtd.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                        </td>
                         <td className="py-3 px-4 text-center">
                           <Badge variant={variant.status === 'Critical' ? 'destructive' : variant.status === 'Low Stock' ? 'warning' : 'success'} size="sm">{variant.status}</Badge>
                         </td>
@@ -1189,29 +1384,67 @@ export default function ProductFamilyPage() {
               </table>
             </div>
           ) : (
-            <div className="h-[400px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart
-                  data={(() => {
-                    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-                    return months.map((month, i) => {
-                      const pt: any = { month };
-                      variants.forEach(v => { pt[v.variantName] = Math.round(v.monthlyUsage * (Math.sin(i * 0.5) * 0.15 + 1)); });
-                      return pt;
-                    });
-                  })()}
-                  margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                  <XAxis dataKey="month" stroke="#6b7280" style={{ fontSize: '12px' }} />
-                  <YAxis stroke="#6b7280" style={{ fontSize: '12px' }} label={{ value: 'Monthly Usage (units)', angle: -90, position: 'insideLeft', style: { fontSize: '12px' } }} />
-                  <Tooltip contentStyle={{ backgroundColor: 'white', border: '1px solid #e5e7eb', borderRadius: '8px', padding: '8px' }} />
-                  <Legend wrapperStyle={{ fontSize: '12px' }} iconType="line" />
-                  {variants.map(v => (
-                    <Line key={v.id} type="monotone" dataKey={v.variantName} name={`${v.size} (${v.sku})`} stroke={stringToColor(v.variantName)} strokeWidth={2} dot={{ r: 3, strokeWidth: 2 }} activeDot={{ r: 5 }} />
-                  ))}
-                </LineChart>
-              </ResponsiveContainer>
+            <div className="space-y-2">
+              <p className="text-xs text-gray-500">
+                Units sold from customer <strong>order line items</strong> (by order month). Only months with at least one sale are shown (up to 12 months back).
+                {selectedBranch ? (
+                  <span> Branch: <span className="font-medium text-gray-700">{selectedBranch}</span> only.</span>
+                ) : (
+                  <span> All branches.</span>
+                )}
+              </p>
+              <div className="h-[400px]">
+                {usageChartLoading ? (
+                  <div className="flex h-full items-center justify-center gap-2 text-gray-500">
+                    <Loader2 className="w-7 h-7 animate-spin" />
+                    <span className="text-sm">Loading order data…</span>
+                  </div>
+                ) : usageChartData.length === 0 ? (
+                  <div className="flex h-full min-h-[280px] items-center justify-center rounded-lg border border-dashed border-gray-200 bg-gray-50/50 px-4 text-center text-sm text-gray-500">
+                    No order sales in the last 12 months for this product (with the current branch filter).
+                  </div>
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart
+                      data={usageChartData}
+                      margin={{ top: 5, right: 24, left: 8, bottom: 5 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                      <XAxis dataKey="month" stroke="#6b7280" style={{ fontSize: '11px' }} minTickGap={16} />
+                      <YAxis
+                        stroke="#6b7280"
+                        style={{ fontSize: '12px' }}
+                        width={48}
+                        tickFormatter={n => (Number(n) >= 1000 ? Number(n).toLocaleString() : String(n))}
+                        label={{ value: 'Units sold (per month)', angle: -90, position: 'insideLeft', style: { fontSize: '12px' } }}
+                      />
+                      <Tooltip
+                        contentStyle={{ backgroundColor: 'white', border: '1px solid #e5e7eb', borderRadius: '8px', padding: '8px' }}
+                        formatter={(value: number | string) => {
+                          if (value == null || value === '') return ['—', ''];
+                          const n = typeof value === 'number' ? value : parseFloat(String(value));
+                          if (Number.isNaN(n)) return ['—', ''];
+                          return [n.toLocaleString(), ''];
+                        }}
+                      />
+                      <Legend wrapperStyle={{ fontSize: '12px' }} iconType="line" />
+                      {variants.map(v => (
+                        <Line
+                          key={v.id}
+                          type="linear"
+                          dataKey={v.id}
+                          name={v.size}
+                          stroke={stringToColor(v.id)}
+                          strokeWidth={2}
+                          dot={{ r: 2, strokeWidth: 2 }}
+                          activeDot={{ r: 5 }}
+                          connectNulls={false}
+                        />
+                      ))}
+                    </LineChart>
+                  </ResponsiveContainer>
+                )}
+              </div>
             </div>
           )}
         </CardContent>

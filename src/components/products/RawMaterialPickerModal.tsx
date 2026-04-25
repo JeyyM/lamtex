@@ -82,23 +82,58 @@ export default function RawMaterialPickerModal({
   const [search, setSearch]                     = useState('');
   // Material IDs this supplier carries (null = no filter active)
   const [supplierMatIds, setSupplierMatIds]     = useState<Set<string> | null>(null);
+  /** When supplier is selected: category IDs that have ≥1 of that supplier’s materials; empty = none */
+  const [supplierCategoryIds, setSupplierCategoryIds] = useState<Set<string> | null>(null);
   const [loadingSupplier, setLoadingSupplier]   = useState(false);
 
-  // Fetch supplier's material IDs whenever supplierId changes
+  // Fetch supplier catalogue, then which categories actually contain those materials
   useEffect(() => {
     if (!isOpen || !supplierId) {
       setSupplierMatIds(null);
+      setSupplierCategoryIds(null);
+      setLoadingSupplier(false);
       return;
     }
     setLoadingSupplier(true);
-    supabase
-      .from('supplier_materials')
-      .select('material_id')
-      .eq('supplier_id', supplierId)
-      .then(({ data }) => {
-        setSupplierMatIds(new Set((data ?? []).map((r: any) => r.material_id as string)));
+    setSupplierMatIds(null);
+    setSupplierCategoryIds(null);
+    (async () => {
+      const { data: smRows, error: smErr } = await supabase
+        .from('supplier_materials')
+        .select('material_id')
+        .eq('supplier_id', supplierId);
+      if (smErr) {
+        if (import.meta.env.DEV) console.warn('[RawMaterialPickerModal]', smErr);
+        setSupplierMatIds(new Set());
+        setSupplierCategoryIds(new Set());
         setLoadingSupplier(false);
-      });
+        return;
+      }
+      const idSet = new Set((smRows ?? []).map((r: { material_id: string }) => r.material_id));
+      setSupplierMatIds(idSet);
+      if (idSet.size === 0) {
+        setSupplierCategoryIds(new Set());
+        setLoadingSupplier(false);
+        return;
+      }
+      const { data: matRows, error: matErr } = await supabase
+        .from('raw_materials')
+        .select('category_id')
+        .in('id', [...idSet])
+        .not('category_id', 'is', null);
+      if (matErr) {
+        if (import.meta.env.DEV) console.warn('[RawMaterialPickerModal]', matErr);
+        setSupplierCategoryIds(new Set());
+      } else {
+        const catIds = new Set(
+          (matRows ?? [])
+            .map((r: { category_id: string | null }) => r.category_id)
+            .filter((id): id is string => id != null),
+        );
+        setSupplierCategoryIds(catIds);
+      }
+      setLoadingSupplier(false);
+    })();
   }, [isOpen, supplierId]);
 
   // Fetch categories on open
@@ -133,6 +168,12 @@ export default function RawMaterialPickerModal({
     setView('materials');
     setSearch('');
     setLoadingMats(true);
+    // Supplier selected but has no materials in DB — nothing to list
+    if (supplierId && supplierMatIds && supplierMatIds.size === 0) {
+      setMaterials([]);
+      setLoadingMats(false);
+      return;
+    }
     let q = supabase
       .from('raw_materials')
       .select('id, name, sku, unit_of_measure, cost_per_unit, total_stock, status, category_id, image_url')
@@ -152,15 +193,13 @@ export default function RawMaterialPickerModal({
     onClose();
   };
 
-  // For categories view: if supplier filter is active, only show categories
-  // that have at least one material from this supplier
+  // With a supplier, only show categories that have ≥1 of that supplier’s materials
   const visibleCategories = (() => {
     const base = categories.filter(c =>
       c.name.toLowerCase().includes(search.toLowerCase())
     );
-    // We can't cheaply know which categories have supplier materials without an extra query,
-    // so we show all categories and let the materials view show the filtered list.
-    return base;
+    if (supplierCategoryIds === null) return base;
+    return base.filter(c => supplierCategoryIds.has(c.id));
   })();
 
   const filteredMaterials = materials.filter(m =>
@@ -253,9 +292,25 @@ export default function RawMaterialPickerModal({
                 <span className="text-sm">Loading…</span>
               </div>
             ) : visibleCategories.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-16 text-gray-400 gap-2">
+              <div className="flex flex-col items-center justify-center py-16 text-gray-400 gap-2 text-center px-4">
                 <Package className="w-8 h-8" />
-                <p className="text-sm">No categories found</p>
+                <p className="text-sm">
+                  {search.trim() !== ''
+                    ? 'No matching categories'
+                    : supplierId && supplierCategoryIds != null && supplierCategoryIds.size === 0
+                      ? 'This supplier has no materials linked'
+                      : supplierId && supplierCategoryIds != null && supplierCategoryIds.size > 0
+                        ? 'No categories to show for this supplier in this branch'
+                        : 'No categories found'}
+                </p>
+                {supplierId && supplierCategoryIds != null && supplierCategoryIds.size === 0 && (
+                  <p className="text-xs max-w-sm">
+                    Link materials on the Suppliers page, or choose a different supplier.
+                  </p>
+                )}
+                {search.trim() !== '' && (
+                  <p className="text-xs">Try a different search.</p>
+                )}
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

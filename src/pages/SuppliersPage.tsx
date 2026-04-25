@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
@@ -13,7 +13,6 @@ import {
   MapPin,
   Calendar,
   DollarSign,
-  TrendingUp,
   Clock,
   AlertTriangle,
   Package,
@@ -26,41 +25,24 @@ import {
   Plus,
   Edit,
   Eye,
-  Star,
   ShoppingCart,
   Truck,
-  Activity,
   Award,
-  Zap,
-  PackageCheck,
-  Timer,
   Shield,
-  TrendingUpDown,
   ChevronDown,
   Loader2,
   RefreshCw,
   X,
-  CheckCircle,
-  XCircle,
   GitBranch,
   Save,
   Trash2,
 } from 'lucide-react';
 import {
-  ComposedChart,
-  Line,
-  Bar,
-  Area,
-  XAxis,
-  YAxis,
-  CartesianGrid,
   Tooltip,
-  Legend,
   ResponsiveContainer,
   PieChart,
   Pie,
   Cell,
-  BarChart,
 } from 'recharts';
 
 // ── DB row shapes ──────────────────────────────────────────
@@ -113,11 +95,13 @@ interface SupplierRow {
   supplier_materials: SupplierMaterialRow[];
 }
 
-type ViewMode = 'overview' | 'performance' | 'spending' | 'materials';
+type ViewMode = 'overview' | 'spending';
 
 export function SuppliersPage() {
   const { branch } = useAppContext();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const openSupplierId = searchParams.get('supplier');
 
   const [viewMode, setViewMode] = useState<ViewMode>('overview');
   const [suppliers, setSuppliers] = useState<SupplierRow[]>([]);
@@ -143,6 +127,11 @@ export function SuppliersPage() {
   const [addMatMinQty, setAddMatMinQty] = useState('');
   const [addMatPreferred, setAddMatPreferred] = useState(false);
 
+  /** Live aggregates from `purchase_orders` (authoritative for Spending Analysis) */
+  const [poSpendBySupplier, setPoSpendBySupplier] = useState<
+    Record<string, { ytd: number; ytdN: number; lifetime: number; n: number }>
+  >({});
+
   // ── Fetch ──────────────────────────────────────────────
   const fetchSuppliers = useCallback(async () => {
     setLoading(true);
@@ -164,7 +153,7 @@ export function SuppliersPage() {
             )
           `)
           .order('preferred_supplier', { ascending: false })
-          .order('performance_score', { ascending: false }),
+          .order('name', { ascending: true }),
       ]);
 
       if (suppliersResult.error) throw suppliersResult.error;
@@ -193,6 +182,16 @@ export function SuppliersPage() {
 
   useEffect(() => { fetchSuppliers(); }, [fetchSuppliers]);
 
+  // Deep link: /suppliers?supplier=<uuid> (e.g. from raw material analytics)
+  useEffect(() => {
+    if (!openSupplierId || loading) return;
+    const s = suppliers.find(x => x.id === openSupplierId);
+    if (s) {
+      setSelectedSupplier(s);
+      setViewMode('overview');
+    }
+  }, [openSupplierId, loading, suppliers]);
+
   // Keep detail panel in sync after every fetch
   useEffect(() => {
     if (selectedSupplier) {
@@ -200,6 +199,54 @@ export function SuppliersPage() {
       if (updated) setSelectedSupplier(updated);
     }
   }, [suppliers]);
+
+  const EXCLUDED_PO_FOR_SPEND = ['Draft', 'Requested', 'Rejected', 'Cancelled'] as const;
+
+  const fetchPOSpendBySupplier = useCallback(async (branchId: string | null) => {
+    try {
+      let q = supabase
+        .from('purchase_orders')
+        .select('supplier_id, total_amount, order_date, status, branch_id')
+        .not('supplier_id', 'is', null);
+      if (branchId) {
+        q = q.eq('branch_id', branchId);
+      }
+      const { data, error } = await q;
+      if (error) throw error;
+      const year      = new Date().getFullYear();
+      const yearStart = `${year}-01-01`;
+      const ex        = new Set<string>(EXCLUDED_PO_FOR_SPEND);
+      const map: Record<string, { ytd: number; ytdN: number; lifetime: number; n: number }> = {};
+      for (const row of (data ?? []) as Array<{
+        supplier_id: string;
+        total_amount: number;
+        order_date: string;
+        status: string;
+      }>) {
+        if (ex.has(row.status)) continue;
+        const sid = row.supplier_id;
+        if (!map[sid]) map[sid] = { ytd: 0, ytdN: 0, lifetime: 0, n: 0 };
+        const amt = Number(row.total_amount) || 0;
+        map[sid].lifetime += amt;
+        map[sid].n += 1;
+        const od = row.order_date?.slice(0, 10) ?? '';
+        if (od >= yearStart) {
+          map[sid].ytd += amt;
+          map[sid].ytdN += 1;
+        }
+      }
+      setPoSpendBySupplier(map);
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn('[Suppliers] PO spend aggregate', e);
+      setPoSpendBySupplier({});
+    }
+  }, []);
+
+  // Load PO-based spend for Spending Analysis (and keep in sync with branch filter)
+  useEffect(() => {
+    if (loading) return;
+    void fetchPOSpendBySupplier(resolvedBranchId);
+  }, [loading, resolvedBranchId, fetchPOSpendBySupplier]);
 
   // ── Edit handlers ──────────────────────────────────────
   const fetchEditResources = useCallback(async () => {
@@ -243,7 +290,7 @@ export function SuppliersPage() {
         phone:              editForm.phone,
         email:              editForm.email,
         payment_terms:      editForm.payment_terms,
-        currency:           editForm.currency,
+        currency:           'PHP',
         status:             editForm.status,
         risk_level:         editForm.risk_level,
         preferred_supplier: editForm.preferred_supplier,
@@ -351,26 +398,46 @@ export function SuppliersPage() {
     return matchesSearch && matchesType && matchesRisk && matchesStatus;
   });
 
-  const supplierPerformance = filteredSuppliers
-    .filter(s => s.performance_score > 0)
-    .map(s => ({
-      supplier: s.name.length > 20 ? s.name.slice(0, 18) + '…' : s.name,
-      onTimeDelivery: s.on_time_delivery_rate,
-      qualityScore: Math.round(s.quality_rating * 20),
-      leadTime: s.avg_lead_time,
-      defectRate: s.defect_rate,
-    }))
-    .sort((a, b) => b.onTimeDelivery - a.onTimeDelivery);
+  /** YTD = calendar year; uses purchase_orders when available, else `suppliers.total_purchases_ytd`. */
+  const totalYTD = useMemo(() => {
+    return filteredSuppliers.reduce((sum, s) => {
+      const a = poSpendBySupplier[s.id];
+      if (a && a.n > 0) return sum + a.ytd;
+      return sum + s.total_purchases_ytd;
+    }, 0);
+  }, [filteredSuppliers, poSpendBySupplier]);
 
-  const totalYTD = filteredSuppliers.reduce((s, x) => s + x.total_purchases_ytd, 0);
-  const avgPerf  = filteredSuppliers.filter(s => s.performance_score > 0);
+  const getSpend = (s: SupplierRow) => {
+    const a = poSpendBySupplier[s.id];
+    if (a && a.n > 0) {
+      return {
+        ytd: a.ytd,
+        lifetime: a.lifetime,
+        orderCount: a.n,
+        ytdOrderCount: a.ytdN,
+        avgOrder: a.n > 0 ? a.lifetime / a.n : 0,
+        fromPO: true as const,
+      };
+    }
+    return {
+      ytd: s.total_purchases_ytd,
+      lifetime: s.total_purchases_lifetime,
+      orderCount: s.order_count,
+      ytdOrderCount: 0,
+      avgOrder: s.avg_order_value,
+      fromPO: false as const,
+    };
+  };
 
   // ── Helpers ────────────────────────────────────────────
-  const getPerformanceColor = (score: number): 'success' | 'warning' | 'danger' => {
-    if (score >= 85) return 'success';
-    if (score >= 70) return 'warning';
-    return 'danger';
-  };
+  /*
+   * [REVISIT — performance metrics]
+   * Previously: `supplierPerformance` (chart data from performance_score, on_time_delivery_rate,
+   * quality_rating, defect_rate, avg_lead_time), `avgPerf` (quick stat "Avg Performance"),
+   * `getPerformanceColor`, and the `renderStars` helper (see git history) powered the
+   * "Performance Metrics" tab, overview card rows, and the detail "Performance" section.
+   * Restore when you want to surface scores / star ratings in the UI again; DB fields remain on `suppliers`.
+   */
 
   const getRiskColor = (risk: string): 'success' | 'warning' | 'danger' => {
     if (risk === 'Low')    return 'success';
@@ -396,22 +463,16 @@ export function SuppliersPage() {
     }
   };
 
-  const formatCurrency = (amount: number, currency = 'PHP') =>
-    currency === 'USD'
-      ? `$${(amount / 1000000).toFixed(2)}M`
-      : `₱${(amount / 1000000).toFixed(2)}M`;
-
-  const renderStars = (rating: number) => (
-    <div className="flex items-center gap-1">
-      {[1, 2, 3, 4, 5].map(star => (
-        <Star
-          key={star}
-          className={`w-4 h-4 ${star <= rating ? 'fill-yellow-400 text-yellow-400' : 'text-gray-300'}`}
-        />
-      ))}
-      <span className="text-sm text-gray-600 ml-1">{rating > 0 ? rating.toFixed(1) : '—'}</span>
-    </div>
-  );
+  /** Formats money in Philippine peso (₱); uses millions only when |amount| ≥ 1M. */
+  const formatCurrency = (amount: number) => {
+    if (amount == null || Number.isNaN(amount)) return '—';
+    const n = Number(amount);
+    if (n === 0) return '₱0';
+    if (Math.abs(n) < 1_000_000) {
+      return `₱${n.toLocaleString('en-PH', { maximumFractionDigits: 0, minimumFractionDigits: 0 })}`;
+    }
+    return `₱${(n / 1_000_000).toFixed(2)}M`;
+  };
 
   const COLORS = ['#EF4444', '#F59E0B', '#10B981', '#3B82F6', '#8B5CF6'];
 
@@ -443,14 +504,14 @@ export function SuppliersPage() {
   }
 
   return (
-    <div className="space-y-4 sm:space-y-6">
+    <div className="space-y-4 sm:space-y-6 min-w-0 max-w-full">
 
       {/* ── Header ──────────────────────────────────────── */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Supplier Management</h1>
           <p className="text-xs sm:text-sm text-gray-500 mt-1">
-            Procurement partners &amp; performance for{' '}
+            Procurement partners for{' '}
             <span className="font-medium text-gray-700">{branch || 'all branches'}</span>
           </p>
         </div>
@@ -469,7 +530,7 @@ export function SuppliersPage() {
       </div>
 
       {/* ── Quick Stats ──────────────────────────────────── */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 2xl:grid-cols-5 gap-3 sm:gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-2 2xl:grid-cols-4 gap-3 sm:gap-4">
         <Card>
           <CardContent className="p-3 sm:p-4 md:p-6">
             <div className="flex items-center justify-between">
@@ -520,31 +581,17 @@ export function SuppliersPage() {
             </div>
           </CardContent>
         </Card>
-        <Card>
-          <CardContent className="p-3 sm:p-4 md:p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs sm:text-sm text-gray-500">Avg Performance</p>
-                <p className="text-xl sm:text-2xl font-bold text-gray-900 mt-1">
-                  {avgPerf.length > 0
-                    ? Math.round(avgPerf.reduce((s, x) => s + x.performance_score, 0) / avgPerf.length)
-                    : '—'}
-                </p>
-              </div>
-              <div className="p-3 bg-red-100 rounded-lg"><TrendingUp className="w-6 h-6 text-red-600" /></div>
-            </div>
-          </CardContent>
-        </Card>
+        {/*
+         * [REVISIT — Avg Performance quick stat] Was the 5th card (avg of supplier.performance_score). Restore with performance metrics tab.
+         */}
       </div>
 
       {/* ── Tabs — Desktop ───────────────────────────────── */}
       <div className="hidden md:block border-b border-gray-200">
         <nav className="flex gap-8">
           {[
-            { id: 'overview',     label: 'Supplier Overview',     icon: <Factory className="w-4 h-4" /> },
-            { id: 'performance',  label: 'Performance Metrics',   icon: <BarChart3 className="w-4 h-4" /> },
-            { id: 'spending',     label: 'Spending Analysis',     icon: <DollarSign className="w-4 h-4" /> },
-            { id: 'materials',    label: 'Materials Tracking',    icon: <Package className="w-4 h-4" /> },
+            { id: 'overview',  label: 'Supplier Overview',  icon: <Factory className="w-4 h-4" /> },
+            { id: 'spending',  label: 'Spending Analysis',  icon: <DollarSign className="w-4 h-4" /> },
           ].map(tab => (
             <button
               key={tab.id}
@@ -563,16 +610,14 @@ export function SuppliersPage() {
 
       {/* ── Tabs — Mobile ────────────────────────────────── */}
       <div className="md:hidden relative">
-        <select
-          value={viewMode}
+          <select
+            value={viewMode}
           onChange={e => setViewMode(e.target.value as ViewMode)}
-          className="w-full px-4 py-3 pr-10 border border-gray-300 rounded-lg text-sm font-medium focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none appearance-none bg-white"
-        >
-          <option value="overview">Supplier Overview</option>
-          <option value="performance">Performance Metrics</option>
-          <option value="spending">Spending Analysis</option>
-          <option value="materials">Materials Tracking</option>
-        </select>
+            className="w-full px-4 py-3 pr-10 border border-gray-300 rounded-lg text-sm font-medium focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none appearance-none bg-white"
+          >
+            <option value="overview">Supplier Overview</option>
+            <option value="spending">Spending Analysis</option>
+          </select>
         <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
       </div>
 
@@ -649,7 +694,7 @@ export function SuppliersPage() {
               </CardContent>
             </Card>
           ) : (
-            <div className="grid grid-cols-1 gap-4">
+          <div className="grid grid-cols-1 gap-4">
               {filteredSuppliers.map(supplier => {
                 const ts = getTypeStyle(supplier.type);
                 const branchNames = supplier.supplier_branches
@@ -658,24 +703,24 @@ export function SuppliersPage() {
                 const materialCount = supplier.supplier_materials.length;
 
                 return (
-                  <Card key={supplier.id} className="hover:shadow-lg transition-shadow">
-                    <CardContent className="p-4 sm:p-6">
+              <Card key={supplier.id} className="hover:shadow-lg transition-shadow">
+                <CardContent className="p-4 sm:p-6">
                       {/* Top row */}
                       <div className="flex items-start gap-4">
                         <div className={`p-3 rounded-lg flex-shrink-0 ${ts.bg}`}>
                           <Factory className={`w-6 h-6 ${ts.icon}`} />
-                        </div>
+                      </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex flex-wrap items-center gap-2 mb-1">
-                            <h3 className="text-base sm:text-lg font-bold text-gray-900">{supplier.name}</h3>
+                              <h3 className="text-base sm:text-lg font-bold text-gray-900">{supplier.name}</h3>
                             {supplier.preferred_supplier && (
-                              <Badge variant="success">
+                                  <Badge variant="success">
                                 <Award className="w-3 h-3 mr-1" />Preferred
-                              </Badge>
-                            )}
-                            <Badge variant={getStatusColor(supplier.status)}>{supplier.status}</Badge>
+                                  </Badge>
+                                )}
+                                <Badge variant={getStatusColor(supplier.status)}>{supplier.status}</Badge>
                             <Badge variant={getRiskColor(supplier.risk_level)}>{supplier.risk_level} Risk</Badge>
-                          </div>
+                              </div>
                           <p className="text-sm text-gray-500">
                             {supplier.type} · {supplier.category ?? '—'}
                           </p>
@@ -684,116 +729,80 @@ export function SuppliersPage() {
                               <GitBranch className="w-3 h-3" /> {branchNames}
                             </p>
                           )}
-                        </div>
+                            </div>
                         <div className="flex gap-2 flex-shrink-0">
                           <Button variant="outline" size="sm" onClick={() => setSelectedSupplier(supplier)}>
                             <Eye className="w-4 h-4 sm:mr-1" />
                             <span className="hidden sm:inline">View</span>
-                          </Button>
-                        </div>
+                        </Button>
                       </div>
+                    </div>
 
                       {/* Info grid */}
                       <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
-                        <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2">
                           <User className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                          <div>
+                        <div>
                             <div className="text-gray-500 text-xs">Contact</div>
                             <div className="text-gray-900 truncate">{supplier.contact_person ?? '—'}</div>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Phone className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                          <div>
-                            <div className="text-gray-500 text-xs">Phone</div>
-                            <div className="text-gray-900 truncate">{supplier.phone ?? '—'}</div>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Clock className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                          <div>
-                            <div className="text-gray-500 text-xs">Avg Delivery</div>
-                            <div className="text-gray-900">{supplier.payment_terms ? `${supplier.payment_terms.replace(/[^0-9]/g, '')} days` : '—'}</div>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Package className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                          <div>
-                            <div className="text-gray-500 text-xs">Materials Linked</div>
-                            <div className="text-gray-900">{materialCount}</div>
-                          </div>
                         </div>
                       </div>
+                      <div className="flex items-center gap-2">
+                          <Phone className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                        <div>
+                            <div className="text-gray-500 text-xs">Phone</div>
+                            <div className="text-gray-900 truncate">{supplier.phone ?? '—'}</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                          <Clock className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                        <div>
+                            <div className="text-gray-500 text-xs">Avg Delivery</div>
+                            <div className="text-gray-900">{supplier.payment_terms ? `${supplier.payment_terms.replace(/[^0-9]/g, '')} days` : '—'}</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                          <Package className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                        <div>
+                            <div className="text-gray-500 text-xs">Materials Linked</div>
+                            <div className="text-gray-900">{materialCount}</div>
+                        </div>
+                      </div>
+                    </div>
 
-                      {/* Metrics summary */}
+                      {/* Financial summary (performance score / quality / on-time / defect UI removed — [REVISIT] with Performance Metrics tab) */}
                       <div className="mt-4 pt-4 border-t border-gray-100">
-                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-3">
-                          <div>
-                            <div className="text-xs text-gray-500 mb-1">YTD Spending</div>
-                            <div className="text-sm font-bold text-blue-600">
-                              {formatCurrency(supplier.total_purchases_ytd, supplier.currency)}
-                            </div>
-                          </div>
-                          <div>
+                        <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
+                      <div>
+                        <div className="text-xs text-gray-500 mb-1">YTD Spending</div>
+                        <div className="text-sm font-bold text-blue-600">
+                              {formatCurrency(supplier.total_purchases_ytd)}
+                        </div>
+                      </div>
+                      <div>
                             <div className="text-xs text-gray-500 mb-1">Orders YTD</div>
                             <div className="text-sm font-bold text-gray-900">{supplier.order_count}</div>
-                          </div>
-                          <div>
-                            <div className="text-xs text-gray-500 mb-1">Avg Order Value</div>
-                            <div className="text-sm font-bold text-green-600">
-                              {supplier.avg_order_value > 0 ? formatCurrency(supplier.avg_order_value, supplier.currency) : '—'}
-                            </div>
-                          </div>
-                          <div>
-                            <div className="text-xs text-gray-500 mb-1">Performance</div>
-                            {supplier.performance_score > 0
-                              ? <Badge variant={getPerformanceColor(supplier.performance_score)}>{supplier.performance_score}/100</Badge>
-                              : <span className="text-xs text-gray-400">Not rated</span>
-                            }
-                          </div>
-                          <div>
-                            <div className="text-xs text-gray-500 mb-1">Quality</div>
-                            {supplier.quality_rating > 0 ? renderStars(supplier.quality_rating) : <span className="text-xs text-gray-400">Not rated</span>}
-                          </div>
-                          <div>
-                            <div className="text-xs text-gray-500 mb-1">Last Purchase</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-gray-500 mb-1">Avg Order Value</div>
+                        <div className="text-sm font-bold text-green-600">
+                              {supplier.avg_order_value > 0 ? formatCurrency(supplier.avg_order_value) : '—'}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-gray-500 mb-1">Last Purchase</div>
                             <div className="text-sm font-medium text-gray-900">
                               {supplier.last_purchase_date ?? 'Never'}
-                            </div>
-                          </div>
+                      </div>
+                    </div>
                         </div>
-
-                        {supplier.performance_score > 0 && (
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                            <div>
-                              <div className="flex items-center justify-between text-xs mb-1">
-                                <span className="text-gray-500">On-Time Delivery</span>
-                                <span className="font-medium">{supplier.on_time_delivery_rate}%</span>
-                              </div>
-                              <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
-                                <div className={`h-full ${supplier.on_time_delivery_rate >= 90 ? 'bg-green-600' : supplier.on_time_delivery_rate >= 75 ? 'bg-orange-600' : 'bg-red-600'}`}
-                                  style={{ width: `${supplier.on_time_delivery_rate}%` }} />
-                              </div>
-                            </div>
-                            <div>
-                              <div className="flex items-center justify-between text-xs mb-1">
-                                <span className="text-gray-500">Defect Rate</span>
-                                <span className="font-medium">{supplier.defect_rate}%</span>
-                              </div>
-                              <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
-                                <div className={`h-full ${supplier.defect_rate <= 1 ? 'bg-green-600' : supplier.defect_rate <= 3 ? 'bg-orange-600' : 'bg-red-600'}`}
-                                  style={{ width: `${Math.min(supplier.defect_rate * 10, 100)}%` }} />
-                              </div>
-                            </div>
-                          </div>
-                        )}
 
                         {supplier.notes && (
                           <p className="mt-3 text-xs text-gray-500 italic border-l-2 border-gray-200 pl-2">{supplier.notes}</p>
                         )}
-                      </div>
-                    </CardContent>
-                  </Card>
+              </div>
+            </CardContent>
+          </Card>
                 );
               })}
             </div>
@@ -801,372 +810,197 @@ export function SuppliersPage() {
         </div>
       )}
 
-      {/* ══════════════════════════════════════════════════ */}
-      {/* PERFORMANCE METRICS                               */}
-      {/* ══════════════════════════════════════════════════ */}
-      {viewMode === 'performance' && (
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Performance Comparison */}
-            <Card className="lg:col-span-2">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <BarChart3 className="w-5 h-5 text-red-600" />
-                  Supplier Performance Comparison
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                {supplierPerformance.length > 0 ? (
-                  <ResponsiveContainer width="100%" height={400}>
-                    <BarChart data={supplierPerformance} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
-                      <XAxis dataKey="supplier" stroke="#9CA3AF" angle={-30} textAnchor="end" height={90} tickMargin={8} tick={{ fontSize: 12, fill: '#374151' }} />
-                      <YAxis stroke="#9CA3AF" />
-                      <Tooltip contentStyle={{ backgroundColor: 'rgba(255,255,255,0.95)', borderRadius: '8px', border: '1px solid #E5E7EB' }} />
-                      <Legend />
-                      <Bar dataKey="onTimeDelivery" fill="#10B981" name="On-Time Delivery %" />
-                      <Bar dataKey="qualityScore"   fill="#3B82F6" name="Quality Score" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <div className="h-48 flex items-center justify-center text-gray-400">No rated suppliers yet</div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Lead Time */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Timer className="w-5 h-5 text-red-600" />Average Lead Time (Days)
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={supplierPerformance} layout="horizontal">
-                    <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
-                    <XAxis type="number" stroke="#9CA3AF" />
-                    <YAxis dataKey="supplier" type="category" stroke="#9CA3AF" width={140} tick={{ fontSize: 11 }} />
-                    <Tooltip contentStyle={{ backgroundColor: 'rgba(255,255,255,0.95)', borderRadius: '8px', border: '1px solid #E5E7EB' }} />
-                    <Bar dataKey="leadTime" fill="#F59E0B" name="Lead Time (Days)" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
-
-            {/* Defect Rate */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <AlertTriangle className="w-5 h-5 text-red-600" />Defect Rate (%)
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={supplierPerformance} layout="horizontal">
-                    <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
-                    <XAxis type="number" stroke="#9CA3AF" />
-                    <YAxis dataKey="supplier" type="category" stroke="#9CA3AF" width={140} tick={{ fontSize: 11 }} />
-                    <Tooltip contentStyle={{ backgroundColor: 'rgba(255,255,255,0.95)', borderRadius: '8px', border: '1px solid #E5E7EB' }} />
-                    <Bar dataKey="defectRate" fill="#EF4444" name="Defect Rate %" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Detailed Performance Table */}
-          <Card>
-            <CardHeader><CardTitle>Detailed Performance Metrics</CardTitle></CardHeader>
-            <CardContent>
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-gray-50 border-b border-gray-200">
-                    <tr>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Supplier</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Category</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Score</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Quality</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Delivery</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">On-Time %</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Lead Time</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Defect %</th>
-                    </tr>
-                  </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
-                    {filteredSuppliers.map(s => (
-                      <tr key={s.id} className="hover:bg-gray-50">
-                        <td className="px-6 py-4">
-                          <div className="font-medium text-gray-900">{s.name}</div>
-                          {s.preferred_supplier && <Badge variant="success" className="text-xs mt-1">Preferred</Badge>}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{s.category ?? '—'}</td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <Badge variant={getStatusColor(s.status)}>{s.status}</Badge>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          {s.performance_score > 0
-                            ? <Badge variant={getPerformanceColor(s.performance_score)}>{s.performance_score}/100</Badge>
-                            : <span className="text-xs text-gray-400">N/A</span>}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          {s.quality_rating > 0 ? renderStars(s.quality_rating) : <span className="text-xs text-gray-400">—</span>}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          {s.delivery_rating > 0 ? renderStars(s.delivery_rating) : <span className="text-xs text-gray-400">—</span>}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <span className={`font-medium ${s.on_time_delivery_rate >= 90 ? 'text-green-600' : s.on_time_delivery_rate >= 75 ? 'text-orange-600' : s.on_time_delivery_rate > 0 ? 'text-red-600' : 'text-gray-400'}`}>
-                            {s.on_time_delivery_rate > 0 ? `${s.on_time_delivery_rate}%` : '—'}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-gray-900">
-                          {s.avg_lead_time > 0 ? `${s.avg_lead_time} days` : '—'}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <span className={`font-medium ${s.defect_rate <= 1 ? 'text-green-600' : s.defect_rate <= 3 ? 'text-orange-600' : s.defect_rate > 0 ? 'text-red-600' : 'text-gray-400'}`}>
-                            {s.defect_rate > 0 ? `${s.defect_rate}%` : '—'}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
+      {/*
+       * [REVISIT] Full "Performance Metrics" tab was here: BarCharts (comparison, lead time, defect rate),
+       * `supplierPerformance` data, and the detailed performance table. See git history to restore. DB columns unchanged.
+       */}
 
       {/* ══════════════════════════════════════════════════ */}
       {/* SPENDING ANALYSIS                                 */}
       {/* ══════════════════════════════════════════════════ */}
-      {viewMode === 'spending' && (
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Spending by Type (Pie) */}
-            <Card>
+      {viewMode === 'spending' && (() => {
+        const ytdLabelYear = new Date().getFullYear();
+        const pieTypeData   = ['Raw Materials', 'Chemicals', 'Packaging', 'Equipment', 'Services'].map(t => ({
+          name: t,
+          value: filteredSuppliers.filter(s => s.type === t).reduce((sum, s) => sum + getSpend(s).ytd, 0),
+        })).filter(d => d.value > 0);
+        const sortedByYtd   = [...filteredSuppliers].sort((a, b) => getSpend(b).ytd - getSpend(a).ytd);
+        const tableRows     = sortedByYtd;
+        const sumYtd        = tableRows.reduce((s, r) => s + getSpend(r).ytd, 0);
+        const sumLifetime   = tableRows.reduce((s, r) => s + getSpend(r).lifetime, 0);
+        const sumOrders     = tableRows.reduce((s, r) => s + getSpend(r).orderCount, 0);
+        return (
+        <div className="space-y-6 min-w-0">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 min-w-0">
+            <Card className="min-w-0">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  <PieChartIcon className="w-5 h-5 text-red-600" />Spending by Supplier Type (YTD)
+                  <PieChartIcon className="w-5 h-5 text-red-600" />
+                  Spending by supplier type (YTD {ytdLabelYear})
                 </CardTitle>
               </CardHeader>
               <CardContent>
+                {pieTypeData.length === 0 ? (
+                  <div className="h-[300px] flex flex-col items-center justify-center text-gray-400 text-sm">
+                    <PieChartIcon className="w-10 h-10 mb-2 opacity-40" />
+                    No YTD spend in the current filters — add or receive purchase orders to see a breakdown.
+                  </div>
+                ) : (
                 <ResponsiveContainer width="100%" height={300}>
                   <PieChart>
                     <Pie
-                      data={['Raw Materials', 'Chemicals', 'Packaging', 'Equipment', 'Services'].map(t => ({
-                        name: t,
-                        value: filteredSuppliers.filter(s => s.type === t).reduce((sum, s) => sum + s.total_purchases_ytd, 0),
-                      })).filter(d => d.value > 0)}
-                      cx="50%" cy="50%"
+                        data={pieTypeData}
+                        cx="50%" cy="50%"
                       labelLine={false}
                       label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
-                      outerRadius={90} dataKey="value"
+                        outerRadius={90} dataKey="value"
                     >
-                      {COLORS.map((color, i) => <Cell key={i} fill={color} />)}
+                        {pieTypeData.map((_, i) => (
+                          <Cell key={pieTypeData[i].name} fill={COLORS[i % COLORS.length]} />
+                      ))}
                     </Pie>
-                    <Tooltip formatter={(v: number) => formatCurrency(v)} />
+                      <Tooltip formatter={(v: number) => formatCurrency(v)} />
                   </PieChart>
                 </ResponsiveContainer>
+                )}
               </CardContent>
             </Card>
 
-            {/* Top Suppliers by Spending */}
-            <Card>
+            <Card className="min-w-0">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  <DollarSign className="w-5 h-5 text-red-600" />Top Suppliers by YTD Spending
+                  <DollarSign className="w-5 h-5 text-red-600" />
+                  Top suppliers by YTD spending ({ytdLabelYear})
                 </CardTitle>
               </CardHeader>
               <CardContent>
+                {sortedByYtd.length === 0 || totalYTD === 0 ? (
+                  <div className="h-[200px] flex items-center justify-center text-gray-400 text-sm">No YTD spend to rank yet.</div>
+                ) : (
                 <div className="space-y-4">
-                  {[...filteredSuppliers]
-                    .sort((a, b) => b.total_purchases_ytd - a.total_purchases_ytd)
-                    .slice(0, 6)
-                    .map((s, i) => {
-                      const pct = totalYTD > 0 ? (s.total_purchases_ytd / totalYTD) * 100 : 0;
+                    {sortedByYtd
+                      .filter(s => getSpend(s).ytd > 0)
+                      .slice(0, 6)
+                      .map((s, i) => {
+                        const y = getSpend(s).ytd;
+                        const pct = totalYTD > 0 ? (y / totalYTD) * 100 : 0;
                       return (
-                        <div key={s.id}>
-                          <div className="flex items-center justify-between text-sm mb-1">
-                            <div className="flex items-center gap-2">
-                              <div className="w-6 h-6 bg-red-100 rounded-full flex items-center justify-center text-red-600 font-bold text-xs">{i + 1}</div>
-                              <span className="font-medium text-gray-900 truncate max-w-[160px]">{s.name}</span>
-                            </div>
-                            <span className="font-bold text-gray-900">{formatCurrency(s.total_purchases_ytd, s.currency)}</span>
+                          <div key={s.id}>
+                            <div className="flex items-center justify-between text-sm mb-1">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <div className="w-6 h-6 bg-red-100 rounded-full flex items-center justify-center text-red-600 font-bold text-xs flex-shrink-0">{i + 1}</div>
+                                <span className="font-medium text-gray-900 truncate">{s.name}</span>
+                                {getSpend(s).fromPO && (
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 flex-shrink-0">PO</span>
+                                )}
+                              </div>
+                              <span className="font-bold text-gray-900 flex-shrink-0 ml-2">{formatCurrency(y)}</span>
                           </div>
                           <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
-                            <div className="h-full bg-red-600" style={{ width: `${pct}%` }} />
+                              <div className="h-full bg-red-600" style={{ width: `${Math.min(100, pct)}%` }} />
                           </div>
                         </div>
                       );
                     })}
                 </div>
+                )}
               </CardContent>
             </Card>
           </div>
 
-          {/* Spending Table */}
-          <Card>
-            <CardHeader><CardTitle>Supplier Spending Summary</CardTitle></CardHeader>
-            <CardContent>
-              <div className="overflow-x-auto">
-                <table className="w-full">
+          <Card className="min-w-0">
+            <CardHeader>
+              <CardTitle>Supplier spending summary</CardTitle>
+              <p className="text-xs text-gray-500 font-normal mt-1">
+                Sorted by YTD ({ytdLabelYear}). Avg order = lifetime spend ÷ PO count when sourced from purchase orders.
+              </p>
+            </CardHeader>
+            <CardContent className="min-w-0">
+              <div className="w-full min-w-0 max-w-full">
+                <table className="w-full max-w-full table-auto border-collapse">
                   <thead className="bg-gray-50 border-b border-gray-200">
                     <tr>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Supplier</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">YTD Spending</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Lifetime</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Orders</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Avg Order</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Currency</th>
+                      <th className="px-3 py-3 align-middle min-w-0 text-left text-xs font-medium text-gray-500 uppercase">Supplier</th>
+                      <th className="w-0 px-3 py-3 align-middle text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Type</th>
+                      <th className="w-0 px-3 py-3 align-middle text-center text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Status</th>
+                      <th className="w-0 px-1.5 sm:px-2 py-3 align-middle text-right text-xs font-medium text-gray-500 uppercase whitespace-nowrap">YTD</th>
+                      <th className="w-0 px-1.5 sm:px-2 py-3 align-middle text-right text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Lifetime</th>
+                      <th className="w-0 px-1.5 sm:px-2 py-3 align-middle text-right text-xs font-medium text-gray-500 uppercase whitespace-nowrap">POs</th>
+                      <th className="w-0 px-2 sm:px-3 py-3 align-middle text-right text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Avg order</th>
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
-                    {[...filteredSuppliers].sort((a, b) => b.total_purchases_ytd - a.total_purchases_ytd).map(s => (
-                      <tr key={s.id} className="hover:bg-gray-50">
-                        <td className="px-6 py-4">
-                          <div className="flex items-center gap-2">
-                            <Factory className="w-4 h-4 text-gray-400" />
-                            <div>
-                              <div className="font-medium text-gray-900">{s.name}</div>
-                              {s.preferred_supplier && <Badge variant="success" className="text-xs">Preferred</Badge>}
+                    {tableRows.map(s => {
+                      const sp = getSpend(s);
+                      return (
+                        <tr key={s.id} className="hover:bg-gray-50">
+                          <td className="px-3 py-3 align-middle min-w-0">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <Factory className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                              <div className="min-w-0 flex-1">
+                                <div className="font-medium text-gray-900 truncate" title={s.name}>{s.name}</div>
+                                {s.preferred_supplier && <Badge variant="success" className="text-xs mt-1">Preferred</Badge>}
+                              </div>
                             </div>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{s.type}</td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <Badge variant={getStatusColor(s.status)}>{s.status}</Badge>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap font-bold text-blue-600">
-                          {s.total_purchases_ytd > 0 ? formatCurrency(s.total_purchases_ytd, s.currency) : '₱0'}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap font-medium text-gray-900">
-                          {s.total_purchases_lifetime > 0 ? formatCurrency(s.total_purchases_lifetime, s.currency) : '₱0'}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-gray-900">{s.order_count}</td>
-                        <td className="px-6 py-4 whitespace-nowrap font-medium text-green-600">
-                          {s.avg_order_value > 0 ? formatCurrency(s.avg_order_value, s.currency) : '—'}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <Badge variant="neutral">{s.currency}</Badge>
-                        </td>
-                      </tr>
-                    ))}
+                          </td>
+                          <td className="w-0 px-3 py-3 align-middle text-sm text-gray-600 whitespace-nowrap" title={s.type}>
+                            {s.type}
+                          </td>
+                          <td className="w-0 px-3 py-3 align-middle text-center whitespace-nowrap">
+                            <Badge variant={getStatusColor(s.status)}>{s.status}</Badge>
+                          </td>
+                          <td className="w-0 px-1.5 sm:px-2 py-3 align-middle whitespace-nowrap text-right text-sm font-bold text-blue-600 tabular-nums">
+                            {formatCurrency(sp.ytd)}
+                          </td>
+                          <td className="w-0 px-1.5 sm:px-2 py-3 align-middle whitespace-nowrap text-right text-sm font-medium text-gray-900 tabular-nums">
+                            {formatCurrency(sp.lifetime)}
+                          </td>
+                          <td className="w-0 px-1.5 sm:px-2 py-3 align-middle text-right text-sm text-gray-900 tabular-nums">
+                            {sp.orderCount}
+                            {sp.fromPO && sp.ytdOrderCount > 0 && sp.ytdOrderCount !== sp.orderCount && (
+                              <span className="block text-[10px] text-gray-400 leading-tight">{sp.ytdOrderCount} in {ytdLabelYear}</span>
+                            )}
+                          </td>
+                          <td className="w-0 px-2 sm:px-3 py-3 align-middle whitespace-nowrap text-right text-sm font-medium text-green-600 tabular-nums">
+                            {sp.avgOrder > 0 ? formatCurrency(sp.avgOrder) : '—'}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
+                  <tfoot>
+                    <tr className="bg-gray-100 border-t-2 border-gray-200 font-semibold text-sm">
+                      <td className="px-3 py-3 align-middle text-gray-800" colSpan={3}>
+                        Total ({tableRows.length} suppliers in view)
+                      </td>
+                      <td className="w-0 px-1.5 sm:px-2 py-3 align-middle text-right text-sm text-blue-700 tabular-nums whitespace-nowrap">
+                        {formatCurrency(sumYtd)}
+                      </td>
+                      <td className="w-0 px-1.5 sm:px-2 py-3 align-middle text-right text-sm text-gray-900 tabular-nums whitespace-nowrap">
+                        {formatCurrency(sumLifetime)}
+                      </td>
+                      <td className="w-0 px-1.5 sm:px-2 py-3 align-middle text-right text-sm text-gray-900 tabular-nums whitespace-nowrap">
+                        {sumOrders}
+                      </td>
+                      <td className="w-0 px-2 sm:px-3 py-3 align-middle min-w-0 text-right text-[11px] sm:text-xs text-gray-500 font-normal leading-snug break-words max-w-[12rem] sm:max-w-[14rem]">
+                        {sumOrders > 0 ? (
+                          <>
+                            <span className="block font-medium text-gray-600">Blended avg</span>
+                            <span className="text-gray-500">≈ {formatCurrency(sumLifetime / sumOrders)} · all rows</span>
+                          </>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+                    </tr>
+                  </tfoot>
                 </table>
               </div>
             </CardContent>
           </Card>
         </div>
-      )}
-
-      {/* ══════════════════════════════════════════════════ */}
-      {/* MATERIALS TRACKING                                */}
-      {/* ══════════════════════════════════════════════════ */}
-      {viewMode === 'materials' && (
-        <div className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Package className="w-5 h-5 text-red-600" />Supplier → Material Assignments
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {filteredSuppliers.every(s => s.supplier_materials.length === 0) ? (
-                <div className="text-center py-12 text-gray-500">
-                  <Package className="w-12 h-12 mx-auto mb-3 text-gray-300" />
-                  <p className="font-medium">No material assignments yet.</p>
-                  <p className="text-sm mt-1">Link raw materials to suppliers via the supplier detail view.</p>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="bg-gray-50 border-b border-gray-200">
-                      <tr>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Supplier</th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Material</th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">SKU</th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Unit Price</th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Lead Time</th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Min Order</th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Preferred</th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Stock Status</th>
-                      </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                      {filteredSuppliers.flatMap(s =>
-                        s.supplier_materials.map(sm => (
-                          <tr key={`${s.id}-${sm.material_id}`} className="hover:bg-gray-50">
-                            <td className="px-6 py-4">
-                              <div className="font-medium text-gray-900">{s.name}</div>
-                              {s.preferred_supplier && <Badge variant="success" className="text-xs">Preferred</Badge>}
-                            </td>
-                            <td className="px-6 py-4">
-                              <div className="flex items-center gap-2">
-                                <Package className="w-4 h-4 text-gray-400" />
-                                <span className="font-medium text-gray-900">{sm.raw_materials?.name ?? '—'}</span>
-                              </div>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{sm.raw_materials?.sku ?? '—'}</td>
-                            <td className="px-6 py-4 whitespace-nowrap font-medium text-gray-900">
-                              ₱{sm.unit_price.toLocaleString()}/{sm.raw_materials?.unit_of_measure ?? 'unit'}
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-gray-900">{sm.lead_time_days} days</td>
-                            <td className="px-6 py-4 whitespace-nowrap text-gray-900">
-                              {sm.min_order_qty.toLocaleString()} {sm.raw_materials?.unit_of_measure ?? ''}
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              {sm.is_preferred
-                                ? <Badge variant="success"><CheckCircle className="w-3 h-3 mr-1" />Yes</Badge>
-                                : <Badge variant="neutral"><XCircle className="w-3 h-3 mr-1" />No</Badge>
-                              }
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              {sm.raw_materials?.status
-                                ? <Badge variant={
-                                    sm.raw_materials.status === 'Active'     ? 'success' :
-                                    sm.raw_materials.status === 'Low Stock'  ? 'warning' :
-                                    sm.raw_materials.status === 'Critical'   ? 'danger'  :
-                                    sm.raw_materials.status === 'Out of Stock' ? 'danger' : 'neutral'
-                                  }>
-                                    {sm.raw_materials.status === 'Active' ? 'In Stock' : sm.raw_materials.status}
-                                  </Badge>
-                                : <span className="text-gray-400 text-xs">—</span>
-                              }
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <TrendingUpDown className="w-5 h-5 text-red-600" />Material Price Trends &amp; Forecasting
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-center py-12 text-gray-500">
-                <Zap className="w-16 h-16 mx-auto mb-4 text-gray-300" />
-                <p className="text-lg font-medium mb-2">Price Trend Analytics</p>
-                <p className="text-sm">Track historical pricing, identify cost-saving opportunities, and forecast future material costs.</p>
-                <Button variant="primary" className="mt-4">
-                  <BarChart3 className="w-4 h-4 mr-2" />Generate Price Trends Report
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ══════════════════════════════════════════════════ */}
       {/* SUPPLIER DETAIL PANEL                             */}
@@ -1239,8 +1073,7 @@ export function SuppliersPage() {
                     {selectedSupplier.preferred_supplier && <Badge variant="success"><Award className="w-3 h-3 mr-1" />Preferred Supplier</Badge>}
                     <Badge variant={getStatusColor(selectedSupplier.status)}>{selectedSupplier.status}</Badge>
                     <Badge variant={getRiskColor(selectedSupplier.risk_level)}>{selectedSupplier.risk_level} Risk</Badge>
-                    <Badge variant="neutral">{selectedSupplier.currency}</Badge>
-                  </div>
+                          </div>
 
                   {/* Contact info */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1285,10 +1118,10 @@ export function SuppliersPage() {
                     <h3 className="text-sm font-semibold text-gray-700 mb-3">Financial Summary</h3>
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                       {[
-                        { label: 'YTD Spending',    value: formatCurrency(selectedSupplier.total_purchases_ytd, selectedSupplier.currency), color: 'text-blue-600' },
-                        { label: 'Lifetime Spend',  value: formatCurrency(selectedSupplier.total_purchases_lifetime, selectedSupplier.currency), color: 'text-gray-900' },
+                        { label: 'YTD Spending',    value: formatCurrency(selectedSupplier.total_purchases_ytd), color: 'text-blue-600' },
+                        { label: 'Lifetime Spend',  value: formatCurrency(selectedSupplier.total_purchases_lifetime), color: 'text-gray-900' },
                         { label: 'Order Count',     value: String(selectedSupplier.order_count), color: 'text-gray-900' },
-                        { label: 'Avg Order Value', value: selectedSupplier.avg_order_value > 0 ? formatCurrency(selectedSupplier.avg_order_value, selectedSupplier.currency) : '—', color: 'text-green-600' },
+                        { label: 'Avg Order Value', value: selectedSupplier.avg_order_value > 0 ? formatCurrency(selectedSupplier.avg_order_value) : '—', color: 'text-green-600' },
                         { label: 'Last Purchase',   value: selectedSupplier.last_purchase_date ?? 'Never', color: 'text-gray-900' },
                         { label: 'Materials Linked', value: String(selectedSupplier.supplier_materials.length), color: 'text-purple-600' },
                       ].map(item => (
@@ -1300,44 +1133,7 @@ export function SuppliersPage() {
                     </div>
                   </div>
 
-                  {/* Performance */}
-                  {selectedSupplier.performance_score > 0 && (
-                    <div>
-                      <h3 className="text-sm font-semibold text-gray-700 mb-3">Performance</h3>
-                      <div className="space-y-3">
-                        {[
-                          { label: 'Performance Score', value: `${selectedSupplier.performance_score}/100`, pct: selectedSupplier.performance_score, color: selectedSupplier.performance_score >= 85 ? 'bg-green-500' : selectedSupplier.performance_score >= 70 ? 'bg-orange-500' : 'bg-red-500' },
-                          { label: 'On-Time Delivery',  value: `${selectedSupplier.on_time_delivery_rate}%`,  pct: selectedSupplier.on_time_delivery_rate, color: selectedSupplier.on_time_delivery_rate >= 90 ? 'bg-green-500' : selectedSupplier.on_time_delivery_rate >= 75 ? 'bg-orange-500' : 'bg-red-500' },
-                        ].map(m => (
-                          <div key={m.label}>
-                            <div className="flex justify-between text-xs mb-1">
-                              <span className="text-gray-500">{m.label}</span>
-                              <span className="font-medium text-gray-900">{m.value}</span>
-                            </div>
-                            <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
-                              <div className={`h-full ${m.color}`} style={{ width: `${m.pct}%` }} />
-                            </div>
-                          </div>
-                        ))}
-                        <div className="grid grid-cols-3 gap-3 mt-2">
-                          <div className="text-center bg-gray-50 rounded-lg p-2">
-                            <div className="text-xs text-gray-500">Quality</div>
-                            {renderStars(selectedSupplier.quality_rating)}
-                          </div>
-                          <div className="text-center bg-gray-50 rounded-lg p-2">
-                            <div className="text-xs text-gray-500">Delivery</div>
-                            {renderStars(selectedSupplier.delivery_rating)}
-                          </div>
-                          <div className="text-center bg-gray-50 rounded-lg p-2">
-                            <div className="text-xs text-gray-500">Defect Rate</div>
-                            <div className={`text-sm font-bold ${selectedSupplier.defect_rate <= 1 ? 'text-green-600' : selectedSupplier.defect_rate <= 3 ? 'text-orange-600' : 'text-red-600'}`}>
-                              {selectedSupplier.defect_rate}%
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  )}
+                  {/* [REVISIT] Detail "Performance" block (score, on-time bars, quality/delivery stars, defect %) — see git history */}
 
                   {/* Linked Materials */}
                   {selectedSupplier.supplier_materials.length > 0 && (
@@ -1346,12 +1142,12 @@ export function SuppliersPage() {
                       <div className="space-y-2">
                         {selectedSupplier.supplier_materials.map(sm => (
                           <div key={sm.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-100">
-                            <div className="flex items-center gap-2">
-                              <Package className="w-4 h-4 text-gray-400" />
+                          <div className="flex items-center gap-2">
+                            <Package className="w-4 h-4 text-gray-400" />
                               <div>
                                 <div className="text-sm font-medium text-gray-900">{sm.raw_materials?.name ?? '—'}</div>
                                 <div className="text-xs text-gray-500">{sm.raw_materials?.sku} · Lead: {sm.lead_time_days}d · Min: {sm.min_order_qty.toLocaleString()} {sm.raw_materials?.unit_of_measure}</div>
-                              </div>
+                          </div>
                             </div>
                             <div className="text-right">
                               <div className="text-sm font-bold text-gray-900">₱{sm.unit_price.toLocaleString()}/{sm.raw_materials?.unit_of_measure ?? 'unit'}</div>
@@ -1359,7 +1155,7 @@ export function SuppliersPage() {
                             </div>
                           </div>
                         ))}
-                      </div>
+              </div>
                     </div>
                   )}
 
@@ -1368,7 +1164,7 @@ export function SuppliersPage() {
                     <div>
                       <h3 className="text-sm font-semibold text-gray-700 mb-2">Notes</h3>
                       <p className="text-sm text-gray-600 bg-yellow-50 border border-yellow-200 rounded-lg p-3">{selectedSupplier.notes}</p>
-                    </div>
+              </div>
                   )}
                 </>
               )}
@@ -1392,7 +1188,7 @@ export function SuppliersPage() {
                             <option key={t} value={t}>{t}</option>
                           ))}
                         </select>
-                      </div>
+        </div>
 
                       <div>
                         <label className="block text-xs font-medium text-gray-600 mb-1">Category</label>
@@ -1467,18 +1263,6 @@ export function SuppliersPage() {
                           {['Low', 'Medium', 'High'].map(r => (
                             <option key={r} value={r}>{r}</option>
                           ))}
-                        </select>
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-medium text-gray-600 mb-1">Currency</label>
-                        <select
-                          value={editForm.currency ?? 'PHP'}
-                          onChange={e => setEditForm(f => ({ ...f, currency: e.target.value }))}
-                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                        >
-                          <option value="PHP">PHP</option>
-                          <option value="USD">USD</option>
                         </select>
                       </div>
 

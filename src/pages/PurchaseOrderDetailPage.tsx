@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import RawMaterialPickerModal from '@/src/components/products/RawMaterialPickerModal';
 import ImageGalleryModal from '@/src/components/ImageGalleryModal';
 import { useAppContext } from '@/src/store/AppContext';
-import { Card, CardContent } from '@/src/components/ui/Card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { supabase } from '@/src/lib/supabase';
@@ -34,13 +34,20 @@ import {
   ZoomIn,
   CreditCard,
   Banknote,
+  ClipboardList,
+  XCircle,
+  ShieldCheck,
+  ThumbsUp,
+  Clock,
+  User,
+  CheckCircle2,
 } from 'lucide-react';
 
 const IMAGES_BUCKET = 'images';
 const PO_RECEIPTS_FOLDER = 'po-receipts';
 
 // ── Types ──────────────────────────────────────────────────
-type POStatus        = 'Draft' | 'Sent' | 'Confirmed' | 'Partially Received' | 'Completed' | 'Cancelled';
+type POStatus = 'Draft' | 'Requested' | 'Rejected' | 'Accepted' | 'Sent' | 'Confirmed' | 'Partially Received' | 'Completed' | 'Cancelled';
 type PaymentStatus   = 'Unpaid' | 'Partially Paid' | 'Paid' | 'Overdue';
 const PAYMENT_METHODS = ['Cash', 'Bank Transfer', 'Check', 'Online Transfer', 'Credit Card'] as const;
 
@@ -52,6 +59,19 @@ interface ReceiptRow {
   file_size: number | null;
   note: string | null;
   uploaded_by: string | null;
+  created_at: string;
+}
+
+interface POLogRow {
+  id: string;
+  order_id: string;
+  action: string;
+  performed_by: string | null;
+  performed_by_role: string | null;
+  description: string | null;
+  old_value: unknown;
+  new_value: unknown;
+  metadata: unknown;
   created_at: string;
 }
 
@@ -80,6 +100,10 @@ interface PORow {
   currency: string;
   notes: string | null;
   created_by: string | null;
+  accepted_by: string | null;
+  accepted_at: string | null;
+  rejected_by: string | null;
+  rejection_reason: string | null;
   created_at: string;
   // Payment
   payment_status: PaymentStatus;
@@ -91,16 +115,29 @@ interface PORow {
   branches:  { name: string } | null;
 }
 
-const STATUS_OPTIONS: POStatus[] = ['Draft', 'Sent', 'Confirmed', 'Partially Received', 'Completed', 'Cancelled'];
+const STATUS_OPTIONS: POStatus[] = [
+  'Draft', 'Requested', 'Rejected', 'Accepted', 'Sent', 'Confirmed', 'Partially Received', 'Completed', 'Cancelled',
+];
 
 // ── Helpers ────────────────────────────────────────────────
 const fmt = (date: string | null) =>
   date ? new Date(date).toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' }) : '—';
 
+const fmtDateTime = (iso: string | null | undefined) => {
+  if (!iso) return '—';
+  try {
+    return new Date(iso).toLocaleString('en-PH', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return '—';
+  }
+};
+
 const getStatusVariant = (status: POStatus): 'success' | 'warning' | 'danger' | 'neutral' | 'default' => {
   if (status === 'Completed')          return 'success';
   if (status === 'Partially Received') return 'warning';
-  if (status === 'Cancelled')          return 'danger';
+  if (status === 'Cancelled' || status === 'Rejected') return 'danger';
+  if (status === 'Requested')         return 'warning';
+  if (status === 'Accepted')           return 'default';
   if (status === 'Confirmed')          return 'default';
   if (status === 'Sent')               return 'default';
   return 'neutral';
@@ -112,14 +149,25 @@ const getStatusIcon = (status: POStatus) => {
   if (status === 'Confirmed')          return <Truck className="w-4 h-4" />;
   if (status === 'Partially Received') return <Package className="w-4 h-4" />;
   if (status === 'Cancelled')          return <Ban className="w-4 h-4" />;
+  if (status === 'Requested')          return <ClipboardList className="w-4 h-4" />;
+  if (status === 'Rejected')           return <XCircle className="w-4 h-4" />;
+  if (status === 'Accepted')            return <ThumbsUp className="w-4 h-4" />;
   return <FileText className="w-4 h-4" />;
+};
+
+const logRoleMap: Record<string, string> = {
+  Executive:  'Admin',
+  Agent:      'Agent',
+  Warehouse:  'Warehouse Staff',
+  Logistics:  'Logistics',
+  Driver:     'Logistics',
 };
 
 // ── Page ───────────────────────────────────────────────────
 export function PurchaseOrderDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { branch } = useAppContext();
+  const { branch, role, session, employeeName } = useAppContext();
 
   const [po, setPO]               = useState<PORow | null>(null);
   const [items, setItems]         = useState<POItemRow[]>([]);
@@ -130,7 +178,9 @@ export function PurchaseOrderDetailPage() {
   const [saving, setSaving]             = useState(false);
   const [editForm, setEditForm]         = useState<Partial<PORow>>({});
   // Supplier list for the dropdown
-  const [supplierList, setSupplierList] = useState<{ id: string; name: string }[]>([]);
+  const [supplierList, setSupplierList] = useState<{ id: string; name: string; payment_terms: string | null; preferred_supplier: boolean }[]>([]);
+  const [eligibleSupplierIds, setEligibleSupplierIds]   = useState<Set<string> | null>(null);
+  const [eligibleSuppliersLoading, setEligibleSuppliersLoading] = useState(false);
   // Staged items — all changes live here during editing; committed on Save
   const [stagedItems, setStagedItems]   = useState<POItemRow[]>([]);
   const [originalItems, setOriginalItems] = useState<POItemRow[]>([]);
@@ -146,6 +196,7 @@ export function PurchaseOrderDetailPage() {
 
   // ── Receipts (proofs of receiving) ───────────────────────
   const [receipts, setReceipts]               = useState<ReceiptRow[]>([]);
+  const [poLogs, setPoLogs]                    = useState<POLogRow[]>([]);
   const [lightboxUrl, setLightboxUrl]         = useState<string | null>(null);
   // Gallery modal for edit mode (add more images directly to PO)
   const [showReceiptGallery, setShowReceiptGallery] = useState(false);
@@ -166,6 +217,26 @@ export function PurchaseOrderDetailPage() {
   // URLs selected from gallery in receive modal (already uploaded/optimized; inserted on confirm)
   const [stagedReceiptUrls, setStagedReceiptUrls]     = useState<{ url: string; name: string }[]>([]);
   const [showReceiveGallery, setShowReceiveGallery]   = useState(false);
+  const [workflowSaving, setWorkflowSaving]            = useState(false);
+  const [showAcceptModal, setShowAcceptModal]          = useState(false);
+  const [showRejectModal, setShowRejectModal]          = useState(false);
+  const [rejectionReason, setRejectionReason]         = useState('');
+  const [approvalLoading, setApprovalLoading]          = useState(false);
+
+  // ── Fetch activity logs (also called after logging an event) ──
+  const fetchPoLogs = useCallback(async (orderId: string) => {
+    const { data, error } = await supabase
+      .from('purchase_order_logs')
+      .select('id, order_id, action, performed_by, performed_by_role, description, old_value, new_value, metadata, created_at')
+      .eq('order_id', orderId)
+      .order('created_at', { ascending: false });
+    if (error) {
+      if (import.meta.env.DEV) console.warn('[PO logs]', error.message);
+      setPoLogs([]);
+      return;
+    }
+    setPoLogs((data ?? []) as unknown as POLogRow[]);
+  }, []);
 
   // ── Fetch ────────────────────────────────────────────────
   const fetchPO = useCallback(async () => {
@@ -173,7 +244,7 @@ export function PurchaseOrderDetailPage() {
     setLoading(true);
     setError(null);
     try {
-      const [poRes, itemsRes] = await Promise.all([
+      const [poRes, itemsRes, logsRes] = await Promise.all([
         supabase
           .from('purchase_orders')
           .select('*, suppliers(name), branches(name)')
@@ -184,10 +255,21 @@ export function PurchaseOrderDetailPage() {
           .select('*, sync_price_on_receive, raw_materials(id, name, sku, unit_of_measure, image_url)')
           .eq('order_id', id)
           .order('created_at'),
+        supabase
+          .from('purchase_order_logs')
+          .select('id, order_id, action, performed_by, performed_by_role, description, old_value, new_value, metadata, created_at')
+          .eq('order_id', id)
+          .order('created_at', { ascending: false }),
       ]);
       if (poRes.error) throw poRes.error;
       setPO(poRes.data as unknown as PORow);
       setItems((itemsRes.data ?? []) as unknown as POItemRow[]);
+      if (!logsRes.error) {
+        setPoLogs((logsRes.data ?? []) as unknown as POLogRow[]);
+      } else {
+        if (import.meta.env.DEV) console.warn('[PO logs]', logsRes.error.message);
+        setPoLogs([]);
+      }
     } catch (e: any) {
       setError(e.message ?? 'Failed to load purchase order');
     } finally {
@@ -205,13 +287,104 @@ export function PurchaseOrderDetailPage() {
     setReceipts((data ?? []) as ReceiptRow[]);
   }, [id]);
 
+  const insertPoLog = useCallback(
+    async (
+      action: string,
+      description: string,
+      oldValue?: object | null,
+      newValue?: object | null,
+      metadata?: object | null,
+    ) => {
+      if (!id) return;
+      const actorName = employeeName || session?.user?.email || 'User';
+      const { error } = await supabase.from('purchase_order_logs').insert({
+        order_id: id,
+        action,
+        performed_by:        actorName,
+        performed_by_role:   logRoleMap[role] ?? 'System',
+        description,
+        old_value:  oldValue  ?? null,
+        new_value:  newValue  ?? null,
+        metadata:   metadata  ?? null,
+      });
+      if (error) {
+        if (import.meta.env.DEV) console.warn('[insertPoLog]', error.message);
+        return;
+      }
+      await fetchPoLogs(id);
+    },
+    [id, role, session, employeeName, fetchPoLogs],
+  );
+
   useEffect(() => { fetchPO(); fetchReceipts(); }, [fetchPO, fetchReceipts]);
 
-  // Fetch all suppliers for the dropdown (only needed once)
+  // Fetch all suppliers for the dropdown — preferred first, then alphabetical
   useEffect(() => {
-    supabase.from('suppliers').select('id, name').eq('status', 'Active').order('name')
+    supabase
+      .from('suppliers')
+      .select('id, name, payment_terms, preferred_supplier')
+      .eq('status', 'Active')
+      .order('preferred_supplier', { ascending: false })
+      .order('name')
       .then(({ data }) => setSupplierList(data ?? []));
   }, []);
+
+  // Suppliers that list every material on this PO (e.g. BOM from product) — required materials ⊆ supplier’s catalogue
+  const materialIdsOnPO = useMemo(() => {
+    const rows = isEditing ? stagedItems : items;
+    const u = new Set<string>();
+    for (const it of rows) {
+      if (it.material_id) u.add(it.material_id);
+    }
+    return Array.from(u);
+  }, [isEditing, stagedItems, items]);
+  const materialIdsKey = useMemo(() => [...materialIdsOnPO].sort().join(','), [materialIdsOnPO]);
+
+  useEffect(() => {
+    if (materialIdsOnPO.length === 0) {
+      setEligibleSupplierIds(null);
+      setEligibleSuppliersLoading(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      setEligibleSuppliersLoading(true);
+      const { data, error } = await supabase
+        .from('supplier_materials')
+        .select('supplier_id, material_id')
+        .in('material_id', materialIdsOnPO);
+      if (cancelled) return;
+      if (error) {
+        if (import.meta.env.DEV) console.warn('[PO eligible suppliers]', error.message);
+        setEligibleSupplierIds(null);
+        setEligibleSuppliersLoading(false);
+        return;
+      }
+      const need = new Set(materialIdsOnPO);
+      const bySup = new Map<string, Set<string>>();
+      for (const row of data ?? []) {
+        const sid = (row as { supplier_id: string; material_id: string }).supplier_id;
+        const mid = (row as { supplier_id: string; material_id: string }).material_id;
+        if (!bySup.has(sid)) bySup.set(sid, new Set());
+        bySup.get(sid)!.add(mid);
+      }
+      const ok = new Set<string>();
+      for (const [sid, mids] of bySup) {
+        if ([...need].every(m => mids.has(m))) ok.add(sid);
+      }
+      setEligibleSupplierIds(ok);
+      setEligibleSuppliersLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [materialIdsKey]);
+
+  const selectedSupplierIdForFilter = (editForm.supplier_id ?? po?.supplier_id) ?? null;
+  const suppliersForSelect = useMemo(() => {
+    if (eligibleSupplierIds === null) return supplierList;
+    return supplierList.filter(
+      s => eligibleSupplierIds.has(s.id) || s.id === selectedSupplierIdForFilter,
+    );
+  }, [supplierList, eligibleSupplierIds, selectedSupplierIdForFilter]);
 
   // ── Helpers for receipt file staging ─────────────────────
   // ── Handlers ─────────────────────────────────────────────
@@ -310,6 +483,16 @@ export function PurchaseOrderDetailPage() {
         }
       }
 
+      await insertPoLog(
+        'updated',
+        'Saved changes to the purchase order (details, line items, or prices).',
+        { status: po.status, total_amount: po.total_amount },
+        {
+          status:     editForm.status                  ?? po.status,
+          total_amount: po.total_amount, // may be recalculated client-side; header total comes from line items in DB
+        },
+        { line_item_count: stagedItems.length, po_number: po.po_number },
+      );
       await fetchPO();
       setIsEditing(false);
       setEditForm({});
@@ -445,6 +628,18 @@ export function PurchaseOrderDetailPage() {
         if (insertErr) throw insertErr;
       }
 
+      const totalReceived = items.reduce(
+        (s, it) => s + (parseFloat(receiveQtys[it.id] ?? '0') || 0),
+        0,
+      );
+      await insertPoLog(
+        'receipt_posted',
+        'Recorded delivery receipt (partial or full) and updated quantities received.',
+        { status: po.status },
+        { status: allFulfilled ? 'Completed' : anyReceived ? 'Partially Received' : po.status, po_number: po.po_number },
+        { quantity_received_on_event: totalReceived, receipt_image_count: stagedReceiptUrls.length },
+      );
+
       await fetchPO();
       await fetchReceipts();
       setIsReceiving(false);
@@ -471,6 +666,13 @@ export function PurchaseOrderDetailPage() {
           .insert({ order_id: po.id, file_url: url, file_name: name });
         if (error) throw error;
       }
+      await insertPoLog(
+        'proof_uploaded',
+        `Added ${urls.length} proof of receiving image${urls.length === 1 ? '' : 's'}.`,
+        null,
+        null,
+        { count: urls.length, po_number: po.po_number },
+      );
       await fetchReceipts();
     } catch (err: any) {
       alert(err.message);
@@ -486,6 +688,9 @@ export function PurchaseOrderDetailPage() {
       await supabase.storage.from(IMAGES_BUCKET).remove([match[1]]);
     }
     await supabase.from('purchase_order_receipts').delete().eq('id', receipt.id);
+    if (id) {
+      await insertPoLog('proof_removed', `Removed proof of receiving image: ${receipt.file_name}.`, { file_name: receipt.file_name }, null, { po_number: po?.po_number });
+    }
     setReceipts(prev => prev.filter(r => r.id !== receipt.id));
   };
 
@@ -528,6 +733,13 @@ export function PurchaseOrderDetailPage() {
         payment_notes:  paymentNoteInput || po.payment_notes,
       }).eq('id', po.id);
       if (error) throw error;
+      await insertPoLog(
+        'payment_recorded',
+        `Recorded company payment: ₱${adding.toLocaleString()}. New payment status: ${newStatus}.`,
+        { amount_paid: po.amount_paid, payment_status: po.payment_status },
+        { amount_paid: newPaid, payment_status: newStatus, payment_method: paymentMethod },
+        { po_number: po.po_number, notes: paymentNoteInput || null },
+      );
       await fetchPO();
       setShowPayment(false);
     } catch (e: any) {
@@ -541,7 +753,98 @@ export function PurchaseOrderDetailPage() {
     po?.expected_delivery_date &&
     !po.actual_delivery_date &&
     new Date(po.expected_delivery_date) < new Date() &&
-    !['Completed', 'Cancelled'].includes(po.status ?? '');
+    !['Completed', 'Cancelled', 'Requested', 'Rejected', 'Accepted', 'Draft'].includes(po.status ?? '');
+
+  // Receive / pay only when the order is in a fulfillment-capable state (not while awaiting approval or confirm)
+  const canReceiveOrRecordPayment = po && !['Completed', 'Cancelled', 'Draft', 'Requested', 'Rejected', 'Accepted'].includes(po.status);
+
+  // Payment summary card only after Confirm Order (Confirmed) or receiving / done
+  const showPaymentSummary =
+    po && ['Confirmed', 'Partially Received', 'Completed'].includes(po.status);
+
+  const handleAcceptRequest = async () => {
+    if (!po) return;
+    setApprovalLoading(true);
+    const actor = employeeName || session?.user?.email || role;
+    const now   = new Date().toISOString();
+    try {
+      const { error } = await supabase.from('purchase_orders').update({
+        status: 'Accepted',
+        accepted_by: actor,
+        accepted_at: now,
+        rejected_by: null,
+        rejection_reason: null,
+      }).eq('id', po.id);
+      if (error) throw error;
+      await insertPoLog(
+        'approved',
+        `Request accepted by ${actor}. Awaiting confirmation with the supplier (use Confirm Order).`,
+        { status: po.status },
+        { status: 'Accepted', accepted_by: actor, accepted_at: now },
+      );
+      await fetchPO();
+      setShowAcceptModal(false);
+    } catch (e: any) {
+      alert(e.message ?? 'Failed to accept');
+    } finally {
+      setApprovalLoading(false);
+    }
+  };
+
+  const handleRejectRequest = async () => {
+    if (!po) return;
+    setApprovalLoading(true);
+    const actor = employeeName || session?.user?.email || role;
+    const reason = rejectionReason.trim();
+    try {
+      const { error } = await supabase.from('purchase_orders').update({
+        status: 'Rejected',
+        rejected_by: actor,
+        rejection_reason: reason || null,
+        accepted_by: null,
+        accepted_at: null,
+      }).eq('id', po.id);
+      if (error) throw error;
+      const desc = reason
+        ? `Purchase order request rejected by ${actor}. Reason: ${reason}`
+        : `Purchase order request rejected by ${actor}.`;
+      await insertPoLog(
+        'rejected',
+        desc,
+        { status: po.status },
+        { status: 'Rejected', rejected_by: actor, rejection_reason: reason || null },
+        reason ? { reason } : null,
+      );
+      await fetchPO();
+      setShowRejectModal(false);
+      setRejectionReason('');
+    } catch (e: any) {
+      alert(e.message ?? 'Failed to reject');
+    } finally {
+      setApprovalLoading(false);
+    }
+  };
+
+  /** Executive confirms the supplier order is placed / incoming — then warehouse can receive. */
+  const handleConfirmOrder = async () => {
+    if (!po) return;
+    setWorkflowSaving(true);
+    try {
+      const { error } = await supabase.from('purchase_orders').update({ status: 'Confirmed' }).eq('id', po.id);
+      if (error) throw error;
+      await insertPoLog(
+        'order_confirmed',
+        'Order confirmed with supplier (incoming). Receiving and payment can proceed.',
+        { status: 'Accepted' },
+        { status: 'Confirmed' },
+      );
+      await fetchPO();
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setWorkflowSaving(false);
+    }
+  };
 
   // View mode uses real items; edit mode uses the working copy
   const displayItems = isEditing ? stagedItems : items;
@@ -613,7 +916,41 @@ export function PurchaseOrderDetailPage() {
             </>
           ) : (
             <>
-              {!['Completed', 'Cancelled'].includes(po.status ?? '') && (
+              {['Requested', 'Draft'].includes(po.status ?? '') && (
+                <>
+                  <Button
+                    variant="primary"
+                    onClick={() => setShowAcceptModal(true)}
+                    disabled={workflowSaving}
+                    className="gap-2"
+                  >
+                    <CheckCircle className="w-4 h-4" />
+                    Accept
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => setShowRejectModal(true)}
+                    disabled={workflowSaving}
+                    className="gap-2 border-red-300 text-red-700 hover:bg-red-50"
+                  >
+                    <XCircle className="w-4 h-4" /> Reject
+                  </Button>
+                </>
+              )}
+              {po.status === 'Accepted' && (
+                <Button
+                  variant="primary"
+                  onClick={handleConfirmOrder}
+                  disabled={workflowSaving}
+                  className="gap-2 bg-violet-600 hover:bg-violet-700"
+                >
+                  {workflowSaving
+                    ? <Loader2 className="w-4 h-4 animate-spin" />
+                    : <ShieldCheck className="w-4 h-4" />}
+                  Confirm Order
+                </Button>
+              )}
+              {canReceiveOrRecordPayment && (
                 <Button
                   variant="outline"
                   onClick={handleStartReceive}
@@ -622,7 +959,7 @@ export function PurchaseOrderDetailPage() {
                   <PackageCheck className="w-4 h-4" /> Receive
                 </Button>
               )}
-              {(po.payment_status ?? 'Unpaid') !== 'Paid' && !['Cancelled'].includes(po.status ?? '') && (
+              {canReceiveOrRecordPayment && showPaymentSummary && (po.payment_status ?? 'Unpaid') !== 'Paid' && (
                 <Button
                   variant="outline"
                   onClick={handleOpenPayment}
@@ -675,65 +1012,101 @@ export function PurchaseOrderDetailPage() {
           </CardContent>
         </Card>
 
-        {/* Payment status card */}
-        <Card className="col-span-2 sm:col-span-4">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between flex-wrap gap-3">
-              <div className="flex items-center gap-4">
-                <div className="w-9 h-9 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
-                  <CreditCard className="w-5 h-5 text-blue-500" />
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500 mb-0.5">Payment</p>
-                  <Badge variant={getPaymentVariant(po.payment_status ?? 'Unpaid')}>
-                    {po.payment_status ?? 'Unpaid'}
-                  </Badge>
-                </div>
-                <div className="h-8 w-px bg-gray-200 hidden sm:block" />
-                <div className="hidden sm:block">
-                  <p className="text-xs text-gray-500">Paid</p>
-                  <p className="text-sm font-bold text-gray-900">
-                    {po.currency === 'USD' ? '$' : '₱'}{(po.amount_paid ?? 0).toLocaleString()}
-                    <span className="text-xs font-normal text-gray-400"> / {po.currency === 'USD' ? '$' : '₱'}{po.total_amount.toLocaleString()}</span>
-                  </p>
-                </div>
-                <div className="hidden sm:block">
-                  <p className="text-xs text-gray-500">Remaining</p>
-                  <p className="text-sm font-bold text-blue-700">
-                    {po.currency === 'USD' ? '$' : '₱'}{Math.max(0, po.total_amount - (po.amount_paid ?? 0)).toLocaleString()}
-                  </p>
-                </div>
-                {po.payment_due_date && (
+        {showPaymentSummary && (
+          <Card className="col-span-2 sm:col-span-4">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <div className="flex items-center gap-4">
+                  <div className="w-9 h-9 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
+                    <CreditCard className="w-5 h-5 text-blue-500" />
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 mb-0.5">Payment</p>
+                    <Badge variant={getPaymentVariant(po.payment_status ?? 'Unpaid')}>
+                      {po.payment_status ?? 'Unpaid'}
+                    </Badge>
+                  </div>
+                  <div className="h-8 w-px bg-gray-200 hidden sm:block" />
                   <div className="hidden sm:block">
-                    <p className="text-xs text-gray-500">Due Date</p>
-                    <p className={`text-sm font-semibold ${(po.payment_status ?? 'Unpaid') === 'Overdue' ? 'text-red-600' : 'text-gray-900'}`}>
-                      {fmt(po.payment_due_date)}
+                    <p className="text-xs text-gray-500">Paid</p>
+                    <p className="text-sm font-bold text-gray-900">
+                      {po.currency === 'USD' ? '$' : '₱'}{(po.amount_paid ?? 0).toLocaleString()}
+                      <span className="text-xs font-normal text-gray-400"> / {po.currency === 'USD' ? '$' : '₱'}{po.total_amount.toLocaleString()}</span>
                     </p>
                   </div>
-                )}
-                {po.payment_method && (
-                  <div className="hidden md:block">
-                    <p className="text-xs text-gray-500">Method</p>
-                    <p className="text-sm font-semibold text-gray-700">{po.payment_method}</p>
+                  <div className="hidden sm:block">
+                    <p className="text-xs text-gray-500">Remaining</p>
+                    <p className="text-sm font-bold text-blue-700">
+                      {po.currency === 'USD' ? '$' : '₱'}{Math.max(0, po.total_amount - (po.amount_paid ?? 0)).toLocaleString()}
+                    </p>
                   </div>
-                )}
-              </div>
-              {/* Mini progress bar */}
-              <div className="w-full sm:w-40">
-                <div className="flex justify-between text-xs text-gray-400 mb-1">
-                  <span>{Math.round(((po.amount_paid ?? 0) / (po.total_amount || 1)) * 100)}% paid</span>
+                  {po.payment_due_date && (
+                    <div className="hidden sm:block">
+                      <p className="text-xs text-gray-500">Due Date</p>
+                      <p className={`text-sm font-semibold ${(po.payment_status ?? 'Unpaid') === 'Overdue' ? 'text-red-600' : 'text-gray-900'}`}>
+                        {fmt(po.payment_due_date)}
+                      </p>
+                    </div>
+                  )}
+                  {po.payment_method && (
+                    <div className="hidden md:block">
+                      <p className="text-xs text-gray-500">Method</p>
+                      <p className="text-sm font-semibold text-gray-700">{po.payment_method}</p>
+                    </div>
+                  )}
                 </div>
-                <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
-                  <div
-                    className="h-2 rounded-full bg-blue-500 transition-all"
-                    style={{ width: `${Math.min(100, ((po.amount_paid ?? 0) / (po.total_amount || 1)) * 100)}%` }}
-                  />
+                <div className="w-full sm:w-40">
+                  <div className="flex justify-between text-xs text-gray-400 mb-1">
+                    <span>{Math.round(((po.amount_paid ?? 0) / (po.total_amount || 1)) * 100)}% paid</span>
+                  </div>
+                  <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+                    <div
+                      className="h-2 rounded-full bg-blue-500 transition-all"
+                      style={{ width: `${Math.min(100, ((po.amount_paid ?? 0) / (po.total_amount || 1)) * 100)}%` }}
+                    />
+                  </div>
                 </div>
               </div>
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        )}
       </div>
+
+      {/* ── Request accepted / rejected (after approval or rejection) ── */}
+      {po.status === 'Accepted' && (
+        <div className="flex items-start gap-3 p-4 rounded-xl border border-green-200 bg-green-50/90">
+          <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0">
+            <ThumbsUp className="w-5 h-5 text-green-700" />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-green-900">Request accepted</p>
+            {(po.accepted_by || po.accepted_at) && (
+              <p className="text-xs text-green-800 mt-0.5">
+                {po.accepted_by && <span>By {po.accepted_by}</span>}
+                {po.accepted_by && po.accepted_at && <span> · </span>}
+                {po.accepted_at && <span>{fmtDateTime(po.accepted_at)}</span>}
+              </p>
+            )}
+            <p className="text-xs text-green-700/90 mt-1">Use Confirm order when the supplier is finalized.</p>
+          </div>
+        </div>
+      )}
+      {po.status === 'Rejected' && (
+        <div className="flex items-start gap-3 p-4 rounded-xl border border-red-200 bg-red-50/90">
+          <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+            <XCircle className="w-5 h-5 text-red-600" />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-red-900">Request rejected</p>
+            {po.rejected_by && (
+              <p className="text-xs text-red-800 mt-0.5">By {po.rejected_by}</p>
+            )}
+            {po.rejection_reason && (
+              <p className="text-xs text-red-800 mt-1.5"><span className="font-medium">Reason:</span> {po.rejection_reason}</p>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
@@ -798,22 +1171,69 @@ export function PurchaseOrderDetailPage() {
               ) : (
                 <div className="space-y-3">
                   <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Supplier</label>
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <label className="block text-xs font-medium text-gray-600">Supplier</label>
+                      {eligibleSuppliersLoading && materialIdsOnPO.length > 0 && (
+                        <span className="text-xs text-gray-400 flex items-center gap-1">
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                          Matching catalogue…
+                        </span>
+                      )}
+                    </div>
+                    {eligibleSupplierIds !== null && materialIdsOnPO.length > 0 && !eligibleSuppliersLoading && (
+                      <p className="text-xs text-amber-800/90 bg-amber-50 border border-amber-100 rounded-lg px-2.5 py-1.5 mb-2">
+                        Only suppliers that stock <span className="font-semibold">all {materialIdsOnPO.length} material{materialIdsOnPO.length !== 1 ? 's' : ''}</span> on this order are shown.
+                        {eligibleSupplierIds.size === 0 && (
+                          <span className="block mt-1 text-red-700 font-medium">
+                            None qualify yet — link these materials to a supplier (Suppliers page) or adjust line items.
+                          </span>
+                        )}
+                      </p>
+                    )}
                     <select
                       value={editForm.supplier_id ?? po.supplier_id ?? ''}
                       onChange={e => setEditForm(f => ({ ...f, supplier_id: e.target.value || null }))}
                       className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500"
                     >
                       <option value="">— No supplier —</option>
-                      {supplierList.map(s => (
-                        <option key={s.id} value={s.id}>{s.name}</option>
-                      ))}
+                      {suppliersForSelect.some(s => s.preferred_supplier) && (
+                        <optgroup label="⭐ Preferred Suppliers">
+                          {suppliersForSelect.filter(s => s.preferred_supplier).map(s => (
+                            <option key={s.id} value={s.id}>
+                              {s.name}{s.payment_terms ? ` · Est. ${s.payment_terms}` : ''}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                      {suppliersForSelect.some(s => !s.preferred_supplier) && (
+                        <optgroup label="All Suppliers">
+                          {suppliersForSelect.filter(s => !s.preferred_supplier).map(s => (
+                            <option key={s.id} value={s.id}>
+                              {s.name}{s.payment_terms ? ` · Est. ${s.payment_terms}` : ''}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
                     </select>
-                    {(editForm.supplier_id ?? po.supplier_id) && (
-                      <p className="text-xs text-indigo-600 mt-1 flex items-center gap-1">
-                        <span>✓ Material picker will show only this supplier's items</span>
-                      </p>
-                    )}
+                    {/* Selected supplier info pill */}
+                    {(() => {
+                      const sel = supplierList.find(s => s.id === (editForm.supplier_id ?? po.supplier_id));
+                      if (!sel) return null;
+                      return (
+                        <div className="mt-2 flex items-center gap-2 flex-wrap">
+                          {sel.preferred_supplier && (
+                            <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                              ⭐ Preferred
+                            </span>
+                          )}
+                          {sel.payment_terms && (
+                            <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700">
+                              <Truck className="w-3 h-3" /> Est. {sel.payment_terms}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">Status</label>
@@ -909,7 +1329,17 @@ export function PurchaseOrderDetailPage() {
               </div>
 
               {displayItems.length === 0 ? (
-                <p className="text-sm text-gray-400 text-center py-8">No materials on this order yet.</p>
+                <div className="text-center py-8 space-y-2 max-w-md mx-auto">
+                  <p className="text-sm text-gray-500">No materials on this order yet.</p>
+                  {(editForm.supplier_id ?? po.supplier_id) && (
+                    <p className="text-xs text-indigo-600">{'✓ Picker shows only this supplier\'s items'}</p>
+                  )}
+                  {isEditing && !(editForm.supplier_id ?? po.supplier_id) && (
+                    <p className="text-xs text-gray-500">
+                      {'Select a supplier in Order Details to filter the material list to that supplier\'s catalogue.'}
+                    </p>
+                  )}
+                </div>
               ) : (
                 <div className="space-y-2">
                   {displayItems.map(item => {
@@ -1139,6 +1569,97 @@ export function PurchaseOrderDetailPage() {
               )}
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      {/* Activity log (same account / role pattern as customer orders) */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Clock className="w-5 h-5" />
+            Purchase order activity
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-3">
+            {poLogs.length === 0 ? (
+              <p className="text-sm text-gray-500 text-center py-8">No activity recorded yet. Actions (save, approval, receive, payment) will appear here.</p>
+            ) : (
+              poLogs.map((log, index) => {
+                const isLast = index === poLogs.length - 1;
+                const getActionIcon = () => {
+                  switch (log.action) {
+                    case 'requested':         return <ClipboardList className="w-4 h-4" />;
+                    case 'updated':         return <FileText className="w-4 h-4" />;
+                    case 'approved':         return <CheckCircle className="w-4 h-4" />;
+                    case 'rejected':         return <XCircle className="w-4 h-4" />;
+                    case 'order_confirmed':  return <ShieldCheck className="w-4 h-4" />;
+                    case 'receipt_posted':   return <PackageCheck className="w-4 h-4" />;
+                    case 'payment_recorded': return <CreditCard className="w-4 h-4" />;
+                    case 'proof_uploaded':   return <ImageIcon className="w-4 h-4" />;
+                    case 'proof_removed':    return <Trash2 className="w-4 h-4" />;
+                    case 'status_changed':   return <Clock className="w-4 h-4" />;
+                    default:                 return <Clock className="w-4 h-4" />;
+                  }
+                };
+                const getActionColor = () => {
+                  switch (log.action) {
+                    case 'approved':
+                    case 'order_confirmed':   return 'text-green-600 bg-green-50';
+                    case 'rejected':          return 'text-red-600 bg-red-50';
+                    case 'payment_recorded':  return 'text-violet-600 bg-violet-50';
+                    case 'receipt_posted':    return 'text-emerald-600 bg-emerald-50';
+                    case 'proof_uploaded':    return 'text-blue-600 bg-blue-50';
+                    case 'proof_removed':     return 'text-orange-600 bg-orange-50';
+                    case 'requested':         return 'text-amber-600 bg-amber-50';
+                    default:                 return 'text-gray-600 bg-gray-50';
+                  }
+                };
+                const getRoleBadgeColor = () => {
+                  switch (log.performed_by_role) {
+                    case 'Agent':            return 'bg-blue-100 text-blue-800';
+                    case 'Manager':         return 'bg-purple-100 text-purple-800';
+                    case 'Warehouse Staff': return 'bg-orange-100 text-orange-800';
+                    case 'Logistics':       return 'bg-green-100 text-green-800';
+                    case 'Admin':            return 'bg-red-100 text-red-800';
+                    case 'System':          return 'bg-gray-100 text-gray-800';
+                    default:                return 'bg-gray-100 text-gray-800';
+                  }
+                };
+                const t = new Date(log.created_at);
+                const timeStr = t.toLocaleString('en-PH', {
+                  year:    'numeric',
+                  month:   'short',
+                  day:     'numeric',
+                  hour:    'numeric',
+                  minute:  '2-digit',
+                });
+                return (
+                  <div key={log.id} className="relative pl-8 pb-3">
+                    {!isLast && <div className="absolute left-3 top-8 bottom-0 w-0.5 bg-gray-200" aria-hidden />}
+                    <div className={`absolute left-0 top-1 w-6 h-6 rounded-full flex items-center justify-center ${getActionColor()}`}>
+                      {getActionIcon()}
+                    </div>
+                    <div className="bg-gray-50 rounded-lg p-3 hover:bg-gray-100 transition-colors">
+                      <div className="flex items-start justify-between gap-2 mb-1">
+                        <p className="text-sm font-medium text-gray-900 flex-1">{log.description || log.action}</p>
+                        {log.performed_by_role && (
+                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${getRoleBadgeColor()}`}>
+                            {log.performed_by_role}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 text-xs text-gray-500">
+                        <User className="w-3.5 h-3.5 flex-shrink-0" />
+                        <span className="font-medium text-gray-700">{log.performed_by ?? '—'}</span>
+                        <span>· {timeStr}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
         </CardContent>
       </Card>
 
@@ -1533,6 +2054,114 @@ export function PurchaseOrderDetailPage() {
                   ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</>
                   : <><Banknote className="w-4 h-4" /> Confirm Payment</>
                 }
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Accept request modal ── */}
+      {showAcceptModal && po && (
+        <div
+          className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
+          onClick={() => !approvalLoading && setShowAcceptModal(false)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="px-6 py-5 border-b border-gray-100 flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0">
+                <CheckCircle2 className="w-5 h-5 text-green-600" />
+              </div>
+              <div>
+                <h2 className="text-lg font-bold text-gray-900">Accept request</h2>
+                <p className="text-sm text-gray-500">{po.po_number}</p>
+              </div>
+            </div>
+            <div className="px-6 py-5">
+              <p className="text-sm text-gray-700">
+                Are you sure you want to <span className="font-semibold text-green-700">accept</span> this purchase order request?
+                The status will be set to <span className="font-semibold">Accepted</span> so you can confirm the order with the supplier.
+              </p>
+            </div>
+            <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowAcceptModal(false)}
+                disabled={approvalLoading}
+                className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleAcceptRequest}
+                disabled={approvalLoading}
+                className="px-5 py-2 rounded-lg bg-green-600 text-white font-semibold hover:bg-green-700 transition-colors disabled:opacity-50 flex items-center gap-2"
+              >
+                {approvalLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                Confirm acceptance
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Reject request modal ── */}
+      {showRejectModal && po && (
+        <div
+          className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
+          onClick={() => { if (!approvalLoading) { setShowRejectModal(false); setRejectionReason(''); } }}
+        >
+          <div
+            className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="px-6 py-5 border-b border-gray-100 flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+                <XCircle className="w-5 h-5 text-red-600" />
+              </div>
+              <div>
+                <h2 className="text-lg font-bold text-gray-900">Reject request</h2>
+                <p className="text-sm text-gray-500">{po.po_number}</p>
+              </div>
+            </div>
+            <div className="px-6 py-5 space-y-4">
+              <p className="text-sm text-gray-700">
+                Are you sure you want to <span className="font-semibold text-red-700">reject</span> this purchase order request?
+                It will be marked <span className="font-semibold">Rejected</span> and this action is recorded in the activity log.
+              </p>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Reason for rejection <span className="text-gray-400 font-normal">(optional)</span>
+                </label>
+                <textarea
+                  rows={3}
+                  value={rejectionReason}
+                  onChange={e => setRejectionReason(e.target.value)}
+                  placeholder="e.g. Budget not approved, wrong supplier, duplicate request…"
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-red-500"
+                />
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => { setShowRejectModal(false); setRejectionReason(''); }}
+                disabled={approvalLoading}
+                className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleRejectRequest}
+                disabled={approvalLoading}
+                className="px-5 py-2 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-700 transition-colors disabled:opacity-50 flex items-center gap-2"
+              >
+                {approvalLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <XCircle className="w-4 h-4" />}
+                Confirm rejection
               </button>
             </div>
           </div>

@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
+import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagination';
 import { supabase } from '@/src/lib/supabase';
 import { getOrdersByCustomer } from '@/src/mock/orders';
 import {
@@ -25,7 +26,6 @@ import {
   Search,
   Filter,
   Plus,
-  Edit,
   Eye,
   Star,
   ShoppingCart,
@@ -87,6 +87,7 @@ export function CustomersPage() {
   const [showFilters, setShowFilters] = useState(false);
   const [sortKey, setSortKey] = useState<string>('name');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [tablePage, setTablePage] = useState(1);
   const [allCustomers, setAllCustomers] = useState<CustomerRow[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -203,22 +204,41 @@ export function CustomersPage() {
       : <ArrowDown className="w-3 h-3 ml-1 text-red-600" />;
   };
 
-  const sortedCustomers = [...filteredCustomers].sort((a, b) => {
-    let av: any, bv: any;
-    switch (sortKey) {
-      case 'name':            av = a.name;                  bv = b.name; break;
-      case 'type':            av = a.type;                  bv = b.type; break;
-      case 'contact':         av = a.contact_person;        bv = b.contact_person; break;
-      case 'ytd':             av = a.total_purchases_ytd;   bv = b.total_purchases_ytd; break;
-      case 'outstanding':     av = a.outstanding_balance;   bv = b.outstanding_balance; break;
-      case 'risk':            av = a.risk_level;            bv = b.risk_level; break;
-      case 'last_order':      av = a.last_order_date ?? ''; bv = b.last_order_date ?? ''; break;
-      default:                av = a.name;                  bv = b.name;
-    }
-    if (av < bv) return sortDir === 'asc' ? -1 : 1;
-    if (av > bv) return sortDir === 'asc' ? 1 : -1;
-    return 0;
-  });
+  const sortedCustomers = useMemo(
+    () =>
+      [...filteredCustomers].sort((a, b) => {
+        let av: any, bv: any;
+        switch (sortKey) {
+          case 'name': av = a.name; bv = b.name; break;
+          case 'type': av = a.type; bv = b.type; break;
+          case 'contact': av = a.contact_person; bv = b.contact_person; break;
+          case 'ytd': av = a.total_purchases_ytd; bv = b.total_purchases_ytd; break;
+          case 'outstanding': av = a.outstanding_balance; bv = b.outstanding_balance; break;
+          case 'risk': av = a.risk_level; bv = b.risk_level; break;
+          case 'last_order': av = a.last_order_date ?? ''; bv = b.last_order_date ?? ''; break;
+          default: av = a.name; bv = b.name;
+        }
+        if (av < bv) return sortDir === 'asc' ? -1 : 1;
+        if (av > bv) return sortDir === 'asc' ? 1 : -1;
+        return 0;
+      }),
+    [filteredCustomers, sortKey, sortDir],
+  );
+
+  const totalListPages = Math.max(1, Math.ceil(sortedCustomers.length / TABLE_PAGE_SIZE) || 1);
+  const pagedCustomers = useMemo(() => {
+    const p = Math.min(tablePage, totalListPages);
+    const start = (p - 1) * TABLE_PAGE_SIZE;
+    return sortedCustomers.slice(start, start + TABLE_PAGE_SIZE);
+  }, [sortedCustomers, tablePage, totalListPages]);
+
+  useEffect(() => {
+    if (tablePage > totalListPages) setTablePage(totalListPages);
+  }, [tablePage, totalListPages]);
+
+  useEffect(() => {
+    setTablePage(1);
+  }, [searchTerm, activeTab, filterType, filterStatus, filterRisk, filterPayment, branch]);
 
   const handleViewCustomer = (customer: CustomerRow) => {
     addAuditLog('Viewed Customer', 'Customer', `Viewed customer ${customer.name}`);
@@ -439,6 +459,7 @@ export function CustomersPage() {
 
           {/* Desktop Table View */}
           {!loading && (
+          <>
           <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b border-gray-200">
@@ -464,11 +485,10 @@ export function CustomersPage() {
                   <th onClick={() => handleSort('last_order')} className="px-6 py-3 text-left font-medium hidden min-[1100px]:table-cell cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
                     <span className="flex items-center">Last Order{sortIcon('last_order')}</span>
                   </th>
-                  <th className="px-6 py-3 text-center font-medium hidden min-[601px]:table-cell">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
-                {sortedCustomers.map((customer) => (
+                {pagedCustomers.map((customer) => (
                   <tr
                     key={customer.id}
                     className="hover:bg-gray-50"
@@ -564,23 +584,11 @@ export function CustomersPage() {
                     >
                       {customer.last_order_date || 'Never'}
                     </td>
-                    <td className="px-6 py-4 text-center hidden min-[601px]:table-cell">
-                      <Button 
-                        variant="ghost" 
-                        size="sm"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          navigate(`/customers/${customer.id}/edit`);
-                        }}
-                      >
-                        <Edit className="w-4 h-4" />
-                      </Button>
-                    </td>
                   </tr>
                 ))}
                 {filteredCustomers.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="px-6 py-12 text-center text-gray-500">
+                    <td colSpan={7} className="px-6 py-12 text-center text-gray-500">
                       <Building2 className="w-12 h-12 mx-auto mb-3 text-gray-400" />
                       <p className="font-medium">No customers found</p>
                       <p className="text-sm mt-1">Try adjusting your search or filters</p>
@@ -590,12 +598,10 @@ export function CustomersPage() {
               </tbody>
             </table>
           </div>
-          )}
 
           {/* Mobile Card View */}
-          {!loading && (
           <div className="md:hidden divide-y divide-gray-200">
-            {sortedCustomers.map((customer) => (
+            {pagedCustomers.map((customer) => (
               <div key={customer.id} className="p-4 space-y-3 hover:bg-gray-50 cursor-pointer" onClick={() => handleViewCustomer(customer)}>
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
@@ -639,28 +645,17 @@ export function CustomersPage() {
                   </div>
                 </div>
 
-                <div className="flex gap-2 pt-2">
+                <div className="pt-2">
                   <Button
                     variant="primary"
                     size="sm"
-                    className="flex-1"
+                    className="w-full"
                     onClick={(e) => {
                       e.stopPropagation();
                       handleViewCustomer(customer);
                     }}
                   >
                     <Eye className="w-4 h-4" />
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="flex-1"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      navigate(`/customers/${customer.id}/edit`);
-                    }}
-                  >
-                    <Edit className="w-4 h-4" />
                   </Button>
                 </div>
               </div>
@@ -673,6 +668,13 @@ export function CustomersPage() {
               </div>
             )}
           </div>
+
+          <TablePagination
+            page={tablePage}
+            total={sortedCustomers.length}
+            onPageChange={setTablePage}
+          />
+          </>
           )}
         </CardContent>
       </Card>
