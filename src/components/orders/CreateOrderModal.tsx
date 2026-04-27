@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { Button } from '@/src/components/ui/Button';
 import { Badge } from '@/src/components/ui/Badge';
@@ -52,6 +53,7 @@ interface OrderItem {
 }
 
 export function CreateOrderModal({ customerId: initialCustomerId, customerName: initialCustomerName, onClose, onSuccess }: CreateOrderModalProps) {
+  const navigate = useNavigate();
   const { branch, addAuditLog } = useAppContext();
 
   // Customers fetched from Supabase
@@ -102,7 +104,8 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
   const [selectedVariant, setSelectedVariant] = useState<DBVariant | null>(null);
   /** Digits only; empty allowed while typing. Validated in addItemFromVariant. */
   const [variantQtyInput, setVariantQtyInput] = useState('1');
-  const [variantPrice, setVariantPrice] = useState(0);
+  /** Free text while typing; empty allowed. */
+  const [variantPriceInput, setVariantPriceInput] = useState('0');
   const [variantDiscounts, setVariantDiscounts] = useState<Array<{ name: string; percentage: number }>>([]);
   const [editingItemIndex, setEditingItemIndex] = useState<number | null>(null);
   const [deliveryDate, setDeliveryDate] = useState('');
@@ -231,6 +234,14 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
     return Number.isFinite(n) && n >= 0 ? n : 0;
   };
 
+  /** Price preview; empty while typing → 0 for totals only. */
+  const priceForPreview = () => {
+    const t = variantPriceInput.trim();
+    if (t === '') return 0;
+    const n = parseFloat(t);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  };
+
   const parseStepQty = () => {
     const t = variantQtyInput.trim();
     if (t === '') return 1;
@@ -251,10 +262,21 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
       return;
     }
 
+    const priceRaw = variantPriceInput.trim();
+    if (priceRaw === '') {
+      alert('Enter a price per unit.');
+      return;
+    }
+    const unitPrice = parseFloat(priceRaw);
+    if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+      alert('Enter a valid price per unit.');
+      return;
+    }
+
     // Apply discounts multiplicatively to get final price
     const finalPrice = variantDiscounts.reduce((currentPrice, discount) => {
       return currentPrice * (1 - discount.percentage / 100);
-    }, variantPrice);
+    }, unitPrice);
     
     const itemData: OrderItem = {
       productId: product.id,
@@ -265,7 +287,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
       quantity,
       price: variant.unit_price,
       originalPrice: variant.unit_price,
-      negotiatedPrice: variantPrice, // Agent-set price
+      negotiatedPrice: unitPrice, // Agent-set price
       discounts: [...variantDiscounts], // Copy of applied discounts
       subtotal: finalPrice * quantity,
       stockAvailable: variant.stock,
@@ -287,7 +309,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
         // Reopen the existing item in the edit modal instead of stacking
         const existing = orderItems[existingIndex];
         setVariantQtyInput(String(existing.quantity));
-        setVariantPrice(existing.negotiatedPrice);
+        setVariantPriceInput(String(existing.negotiatedPrice));
         setVariantDiscounts([...existing.discounts]);
         setEditingItemIndex(existingIndex);
         // Keep selectedProduct & selectedVariant open (already set by the caller)
@@ -302,7 +324,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
     setSelectedProduct(null);
     setSelectedVariant(null);
     setVariantQtyInput('1');
-    setVariantPrice(0);
+    setVariantPriceInput('0');
     setVariantDiscounts([]);
   };
 
@@ -326,7 +348,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
 
   const calculateTotalDiscount = () => {
     // Calculate effective discount percentage from cascading discounts
-    const subtotal = variantPrice * qtyForPreview();
+    const subtotal = priceForPreview() * qtyForPreview();
     if (subtotal === 0) return 0;
     
     const finalPrice = variantDiscounts.reduce((currentPrice, discount) => {
@@ -338,7 +360,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
   };
 
   const calculateFinalPrice = () => {
-    const subtotal = variantPrice * qtyForPreview();
+    const subtotal = priceForPreview() * qtyForPreview();
     // Apply discounts multiplicatively (cascading)
     return variantDiscounts.reduce((currentPrice, discount) => {
       return currentPrice * (1 - discount.percentage / 100);
@@ -370,7 +392,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
     setSelectedProduct(product);
     setSelectedVariant(variant);
     setVariantQtyInput(String(item.quantity));
-    setVariantPrice(item.negotiatedPrice);
+    setVariantPriceInput(String(item.negotiatedPrice));
     setVariantDiscounts([...item.discounts]);
     setEditingItemIndex(index);
   };
@@ -422,7 +444,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
           required_date:    deliveryDate,
           estimated_delivery: deliveryDate,
           delivery_address: deliveryAddress || null,
-          status:           'Pending',
+          status:           'Draft',
           payment_status:   'Unbilled',
           subtotal,
           total_amount:     subtotal,
@@ -454,15 +476,14 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
       if (itemsError) throw itemsError;
 
       addAuditLog(
-        'Order Created',
+        'Order Created (draft)',
         'Order',
-        `Created order ${orderNumber} for ${selectedCustomerName} with ${orderItems.length} items, total ₱${subtotal.toLocaleString()}`
+        `Created order ${orderNumber} for ${selectedCustomerName} with ${orderItems.length} items as draft — open detail to submit for approval`
       );
-
-      alert(`Order ${orderNumber} created successfully!\n\nStatus: Pending\nCustomer: ${selectedCustomerName}\nItems: ${orderItems.length}\nTotal: ₱${subtotal.toLocaleString()}\nScheduled Delivery: ${deliveryDate}`);
 
       onSuccess();
       onClose();
+      navigate(`/orders/${newOrder.id}`);
     } catch (err: any) {
       alert(`Failed to create order: ${err.message ?? 'Unknown error'}`);
     } finally {
@@ -714,7 +735,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                               setSelectedProduct(product);
                               setSelectedVariant(product.variants[0]);
                               setVariantQtyInput('1');
-                              setVariantPrice(product.variants[0].unit_price);
+                              setVariantPriceInput(String(product.variants[0].unit_price));
                             }}
                             className="flex flex-col items-center p-3 border border-gray-200 rounded-lg hover:border-red-500 hover:bg-red-50 transition-all group relative"
                           >
@@ -746,7 +767,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                           setSelectedProduct(product);
                           setSelectedVariant(product.variants[0]);
                           setVariantQtyInput('1');
-                          setVariantPrice(product.variants[0].unit_price);
+                          setVariantPriceInput(String(product.variants[0].unit_price));
                         }}
                         className="flex flex-col items-center p-3 border border-gray-200 rounded-lg hover:border-red-500 hover:bg-red-50 transition-all group relative"
                       >
@@ -982,7 +1003,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                 setSelectedProduct(null);
                 setSelectedVariant(null);
                 setVariantQtyInput('1');
-                setVariantPrice(0);
+                setVariantPriceInput('0');
                 setVariantDiscounts([]);
                 setEditingItemIndex(null); // Cancel editing
               }}
@@ -1013,13 +1034,28 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                     <div className="flex items-center gap-2">
                       <span className="text-2xl font-bold text-gray-900">₱</span>
                       <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={variantPrice}
-                        onChange={(e) => setVariantPrice(Math.max(0, parseFloat(e.target.value) || 0))}
+                        type="text"
+                        inputMode="decimal"
+                        autoComplete="off"
+                        value={variantPriceInput}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (v === '') {
+                            setVariantPriceInput('');
+                            return;
+                          }
+                          if (/^\d*\.?\d*$/.test(v)) setVariantPriceInput(v);
+                        }}
+                        onBlur={() => {
+                          setVariantPriceInput((prev) => {
+                            const t = prev.trim();
+                            if (t === '') return '';
+                            if (t.endsWith('.')) return t.slice(0, -1) || '0';
+                            return prev;
+                          });
+                        }}
                         onWheel={(e) => e.preventDefault()}
-                        className="flex-1 min-w-0 text-4xl font-bold text-gray-900 bg-white px-3 py-2 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                        className="flex-1 min-w-0 text-4xl font-bold text-gray-900 bg-white px-3 py-2 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500"
                       />
                     </div>
                     <p className="text-xs text-gray-500 mt-2">Base price: ₱{selectedVariant.unit_price.toLocaleString()}</p>
@@ -1055,7 +1091,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                           onClick={() => {
                             setSelectedVariant(variant);
                             setVariantQtyInput('1');
-                            setVariantPrice(variant.unit_price);
+                            setVariantPriceInput(String(variant.unit_price));
                           }}
                           className={`px-4 py-3 border-2 rounded-lg font-medium transition-all text-left relative ${
                             selectedVariant.id === variant.id
@@ -1193,13 +1229,13 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                     <div className="flex items-center justify-between">
                       <span className="text-sm font-medium text-blue-900">Subtotal</span>
                       <span className="text-lg font-bold text-blue-900">
-                        ₱{(variantPrice * qtyForPreview()).toLocaleString()}
+                        ₱{(priceForPreview() * qtyForPreview()).toLocaleString()}
                       </span>
                     </div>
                     {variantDiscounts.length > 0 && (
                       <>
                         {(() => {
-                          let currentPrice = variantPrice * qtyForPreview();
+                          let currentPrice = priceForPreview() * qtyForPreview();
                           return variantDiscounts.map((discount, index) => {
                             const priceBeforeDiscount = currentPrice;
                             const discountAmount = currentPrice * (discount.percentage / 100);

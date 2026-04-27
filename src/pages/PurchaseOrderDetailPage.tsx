@@ -250,7 +250,7 @@ export function PurchaseOrderDetailPage() {
       const [poRes, itemsRes, logsRes] = await Promise.all([
         supabase
           .from('purchase_orders')
-          .select('*, suppliers(name), branches(name)')
+          .select('*, suppliers(name), branches:branches!branch_id(name)')
           .eq('id', id)
           .single(),
         supabase

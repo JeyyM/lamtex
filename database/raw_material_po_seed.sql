@@ -124,7 +124,7 @@ BEGIN
 
     SELECT id INTO v_branch
     FROM branches
-    WHERE name IN ('Manila', 'Cebu', 'Batangas')
+    WHERE code IN ('MNL', 'CEB', 'BTG')
     ORDER BY random()
     LIMIT 1;
 

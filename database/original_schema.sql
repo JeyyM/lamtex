@@ -33,7 +33,7 @@ DO $$ BEGIN CREATE TYPE material_movement_type AS ENUM ('Receipt', 'Issue', 'Tra
 DO $$ BEGIN CREATE TYPE movement_reference_type AS ENUM ('PO', 'PR', 'Production', 'Transfer Request', 'Manual'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- Order enums
-DO $$ BEGIN CREATE TYPE order_status AS ENUM ('Draft', 'Pending', 'Approved', 'Picking', 'Packed', 'Ready', 'Scheduled', 'In Transit', 'Delivered', 'Completed', 'Cancelled', 'Rejected'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE order_status AS ENUM ('Draft', 'Pending', 'Approved', 'Scheduled', 'Loading', 'Packed', 'Ready', 'In Transit', 'Delivered', 'Completed', 'Cancelled', 'Rejected'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE payment_status AS ENUM ('Unbilled', 'Invoiced', 'Partially Paid', 'Paid', 'Overdue'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE delivery_type AS ENUM ('Truck', 'Ship', 'Pickup'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE payment_terms AS ENUM ('COD', '15 Days', '30 Days', '45 Days', '60 Days', '90 Days', 'Custom'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
@@ -81,7 +81,7 @@ DO $$ BEGIN CREATE TYPE shipment_status AS ENUM ('Preparing', 'In Transit', 'Arr
 DO $$ BEGIN CREATE TYPE maintenance_category AS ENUM ('Preventive', 'Corrective', 'Emergency'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- Warehouse enums
-DO $$ BEGIN CREATE TYPE fulfillment_status AS ENUM ('To Pick', 'Picking', 'Packing', 'Ready', 'Blocked'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE fulfillment_status AS ENUM ('To Pick', 'Loading', 'Packing', 'Ready', 'Blocked'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE warehouse_stock_status AS ENUM ('Fully Available', 'Partial', 'Not Available'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE loading_detail_status AS ENUM ('Pending', 'Loading', 'Partial', 'Full', 'Out of Stock', 'Ready'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE qa_status AS ENUM ('Pending', 'Testing', 'Passed', 'Failed', 'Rework'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;

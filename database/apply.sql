@@ -1,4 +1,4 @@
-﻿-- ============================================================
+-- ============================================================
 -- apply.sql  –  Seed example specifications on raw materials
 -- Run this in the Supabase SQL Editor (safe to re-run)
 -- ============================================================
@@ -149,32 +149,32 @@ ORDER BY mc.name, rm.name;
 -- Safe to re-run (existence checks before every INSERT)
 -- ============================================================
 
--- 1. Ensure the three app branches exist
+-- 1. Ensure the three app branches exist (see `branches_lamtex_three_sites_seed.sql` + `src/constants/lamtexBranches.ts`)
 INSERT INTO branches (code, name, address) VALUES
-  ('MNL', 'Manila',   'Valenzuela City, Metro Manila'),
-  ('CEB', 'Cebu',     'Cebu City, Cebu'),
-  ('BTG', 'Batangas', 'Batangas City, Batangas')
+  ('MNL', 'Manila (NCR) - LAMTEX HQ, warehouse & NCR market',   'Valenzuela City, Metro Manila'),
+  ('CEB', 'Cebu (Visayas) - LAMTEX regional hub & warehouse',  'Cebu City, Cebu'),
+  ('BTG', 'Batangas - LAMTEX plant & Calabarzon staging',      'Batangas City, Batangas')
 ON CONFLICT (code) DO UPDATE
   SET name    = EXCLUDED.name,
       address = EXCLUDED.address;
 
 -- 2. Ensure branch-specific product categories exist
 INSERT INTO product_categories (name, slug, description, sort_order, is_active, branch) VALUES
-  ('M_HDPE Pipes',        'm-hdpe-pipes',        'Heavy-duty HDPE piping for industrial use',         1, true, 'Manila'),
-  ('M_HDPE Fittings',     'm-hdpe-fittings',     'Elbows, tees, couplings for HDPE systems',          2, true, 'Manila'),
-  ('M_UPVC Sanitary',     'm-upvc-sanitary',     'Sanitary drainage and sewage pipes',                3, true, 'Manila'),
-  ('M_UPVC Electrical',   'm-upvc-electrical',   'Conduit pipes for electrical wiring',               4, true, 'Manila'),
-  ('M_Pressure Line',     'm-pressure-line',     'High-pressure rated water supply pipes',            5, true, 'Manila'),
-  ('M_PPR Pipes',         'm-ppr-pipes',         'Polypropylene random copolymer hot/cold pipes',     6, true, 'Manila'),
-  ('C_HDPE Pipes',        'c-hdpe-pipes',        'HDPE distribution pipes for Cebu operations',       1, true, 'Cebu'),
-  ('C_PVC Conduits',      'c-pvc-conduits',      'PVC electrical conduit pipes',                       2, true, 'Cebu'),
-  ('C_Sanitary Fittings', 'c-sanitary-fittings', 'Drainage fittings and traps',                        3, true, 'Cebu'),
-  ('C_Garden Hoses',      'c-garden-hoses',      'Flexible garden and irrigation hoses',               4, true, 'Cebu'),
-  ('B_Industrial Pipes',  'b-industrial-pipes',  'Heavy industrial grade piping systems',             1, true, 'Batangas'),
-  ('B_HDPE Fittings',     'b-hdpe-fittings',     'HDPE couplings and reducers',                        2, true, 'Batangas'),
-  ('B_Chemical PVC',      'b-chemical-pvc',      'Chemical-resistant PVC pipe systems',                3, true, 'Batangas'),
-  ('B_Drainage Systems',  'b-drainage-systems',  'Underground drainage and stormwater pipes',          4, true, 'Batangas'),
-  ('B_Flexible Hoses',    'b-flexible-hoses',    'Industrial flexible hose assemblies',                5, true, 'Batangas')
+  ('M_HDPE Pipes',        'm-hdpe-pipes',        'Heavy-duty HDPE piping for industrial use',         1, true, 'Manila (NCR) - LAMTEX HQ, warehouse & NCR market'),
+  ('M_HDPE Fittings',     'm-hdpe-fittings',     'Elbows, tees, couplings for HDPE systems',          2, true, 'Manila (NCR) - LAMTEX HQ, warehouse & NCR market'),
+  ('M_UPVC Sanitary',     'm-upvc-sanitary',     'Sanitary drainage and sewage pipes',                3, true, 'Manila (NCR) - LAMTEX HQ, warehouse & NCR market'),
+  ('M_UPVC Electrical',   'm-upvc-electrical',   'Conduit pipes for electrical wiring',               4, true, 'Manila (NCR) - LAMTEX HQ, warehouse & NCR market'),
+  ('M_Pressure Line',     'm-pressure-line',     'High-pressure rated water supply pipes',            5, true, 'Manila (NCR) - LAMTEX HQ, warehouse & NCR market'),
+  ('M_PPR Pipes',         'm-ppr-pipes',         'Polypropylene random copolymer hot/cold pipes',     6, true, 'Manila (NCR) - LAMTEX HQ, warehouse & NCR market'),
+  ('C_HDPE Pipes',        'c-hdpe-pipes',        'HDPE distribution pipes for Cebu operations',       1, true, 'Cebu (Visayas) - LAMTEX regional hub & warehouse'),
+  ('C_PVC Conduits',      'c-pvc-conduits',      'PVC electrical conduit pipes',                       2, true, 'Cebu (Visayas) - LAMTEX regional hub & warehouse'),
+  ('C_Sanitary Fittings', 'c-sanitary-fittings', 'Drainage fittings and traps',                        3, true, 'Cebu (Visayas) - LAMTEX regional hub & warehouse'),
+  ('C_Garden Hoses',      'c-garden-hoses',      'Flexible garden and irrigation hoses',               4, true, 'Cebu (Visayas) - LAMTEX regional hub & warehouse'),
+  ('B_Industrial Pipes',  'b-industrial-pipes',  'Heavy industrial grade piping systems',             1, true, 'Batangas - LAMTEX plant & Calabarzon staging'),
+  ('B_HDPE Fittings',     'b-hdpe-fittings',     'HDPE couplings and reducers',                        2, true, 'Batangas - LAMTEX plant & Calabarzon staging'),
+  ('B_Chemical PVC',      'b-chemical-pvc',      'Chemical-resistant PVC pipe systems',                3, true, 'Batangas - LAMTEX plant & Calabarzon staging'),
+  ('B_Drainage Systems',  'b-drainage-systems',  'Underground drainage and stormwater pipes',          4, true, 'Batangas - LAMTEX plant & Calabarzon staging'),
+  ('B_Flexible Hoses',    'b-flexible-hoses',    'Industrial flexible hose assemblies',                5, true, 'Batangas - LAMTEX plant & Calabarzon staging')
 ON CONFLICT (slug) DO NOTHING;
 
 -- 3. Seed products + variants via PL/pgSQL
@@ -206,7 +206,7 @@ DECLARE
   v_sku      TEXT;
 BEGIN
   FOR r_branch IN
-    SELECT id, name FROM branches WHERE name IN ('Manila','Cebu','Batangas')
+    SELECT id, name FROM branches WHERE code IN ('MNL', 'CEB', 'BTG')
   LOOP
     -- Only load categories belonging to this branch
     FOR r_cat IN
@@ -332,7 +332,7 @@ BEGIN
 
           -- Per-branch stock rows
           FOR r_branch2 IN
-            SELECT id, name FROM branches WHERE name IN ('Manila','Cebu','Batangas')
+            SELECT id, name FROM branches WHERE code IN ('MNL', 'CEB', 'BTG')
           LOOP
             v_qty := CASE WHEN r_branch2.name = r_branch.name THEN v_stk ELSE (v_stk / 5)::INT END;
             INSERT INTO product_variant_stock (variant_id, branch_id, quantity)
@@ -370,6 +370,6 @@ SELECT b.name AS branch,
 FROM branches b
 LEFT JOIN products        p  ON p.branch     = b.name
 LEFT JOIN product_variants pv ON pv.product_id = p.id
-WHERE b.name IN ('Manila','Cebu','Batangas')
+WHERE b.code IN ('MNL', 'CEB', 'BTG')
 GROUP BY b.name ORDER BY b.name;
 

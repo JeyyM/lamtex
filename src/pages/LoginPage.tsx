@@ -3,6 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/src/lib/supabase';
 import { LogIn, Loader2, Eye, EyeOff } from 'lucide-react';
 import lamtexLogo from '@/src/assets/Lamtex Logo.png';
+import {
+  LAMTEX_BRANCH_CALABARZON,
+  LAMTEX_BRANCH_NCR,
+  LAMTEX_BRANCH_VISAYAS,
+} from '@/src/constants/lamtexBranches';
 
 interface AccountEntry {
   branch: string;
@@ -16,37 +21,37 @@ interface AccountEntry {
 const ACCOUNTS: AccountEntry[] = [
   // Executive
   { branch: 'Executive', id: 'EXEC-001', name: 'Executive', email: 'executive@lamtex.com', role: 'Executive', password: 'Lamtex@2026' },
-  // Manila
-  { branch: 'Manila', id: 'AGT-MNL-001', name: 'Ana Reyes', email: 'ana.reyes.manila@lamtex.com', role: 'Agent', password: 'Lamtex@2026' },
-  { branch: 'Manila', id: 'AGT-MNL-002', name: 'Carlos Buenaventura', email: 'carlos.buenaventura.manila@lamtex.com', role: 'Agent', password: 'Lamtex@2026' },
-  { branch: 'Manila', id: 'AGT-MNL-003', name: 'Rica Lim', email: 'rica.lim.manila@lamtex.com', role: 'Agent', password: 'Lamtex@2026' },
-  { branch: 'Manila', id: 'LOG-MNL-001', name: 'Miguel Santos', email: 'miguel.santos.manila@lamtex.com', role: 'Logistics', password: 'Lamtex@2026' },
-  { branch: 'Manila', id: 'LOG-MNL-002', name: 'Jasmine Cruz', email: 'jasmine.cruz.manila@lamtex.com', role: 'Logistics', password: 'Lamtex@2026' },
-  { branch: 'Manila', id: 'WH-MNL-001', name: 'Jose Ramos', email: 'jose.ramos.manila@lamtex.com', role: 'Warehouse', password: 'Lamtex@2026' },
-  { branch: 'Manila', id: 'WH-MNL-002', name: 'Patricia Navarro', email: 'patricia.navarro.manila@lamtex.com', role: 'Warehouse', password: 'Lamtex@2026' },
-  // Cebu
-  { branch: 'Cebu', id: 'AGT-CEB-001', name: 'Marco Villanueva', email: 'marco.villanueva.cebu@lamtex.com', role: 'Agent', password: 'Lamtex@2026' },
-  { branch: 'Cebu', id: 'AGT-CEB-002', name: 'Sofia Tan', email: 'sofia.tan.cebu@lamtex.com', role: 'Agent', password: 'Lamtex@2026' },
-  { branch: 'Cebu', id: 'AGT-CEB-003', name: 'Diego Flores', email: 'diego.flores.cebu@lamtex.com', role: 'Agent', password: 'Lamtex@2026' },
-  { branch: 'Cebu', id: 'LOG-CEB-001', name: 'Ramon Dela Cruz', email: 'ramon.delacruz.cebu@lamtex.com', role: 'Logistics', password: 'Lamtex@2026' },
-  { branch: 'Cebu', id: 'LOG-CEB-002', name: 'Elena Reyes', email: 'elena.reyes.cebu@lamtex.com', role: 'Logistics', password: 'Lamtex@2026' },
-  { branch: 'Cebu', id: 'WH-CEB-001', name: 'Antonio Garces', email: 'antonio.garces.cebu@lamtex.com', role: 'Warehouse', password: 'Lamtex@2026' },
-  { branch: 'Cebu', id: 'WH-CEB-002', name: 'Maria Ledesma', email: 'maria.ledesma.cebu@lamtex.com', role: 'Warehouse', password: 'Lamtex@2026' },
-  // Batangas
-  { branch: 'Batangas', id: 'AGT-BTG-001', name: 'Leo Marasigan', email: 'leo.marasigan.batangas@lamtex.com', role: 'Agent', password: 'Lamtex@2026' },
-  { branch: 'Batangas', id: 'AGT-BTG-002', name: 'Nina Ilagan', email: 'nina.ilagan.batangas@lamtex.com', role: 'Agent', password: 'Lamtex@2026' },
-  { branch: 'Batangas', id: 'AGT-BTG-003', name: 'Roy Castillo', email: 'roy.castillo.batangas@lamtex.com', role: 'Agent', password: 'Lamtex@2026' },
-  { branch: 'Batangas', id: 'LOG-BTG-001', name: 'Bernard Ocampo', email: 'bernard.ocampo.batangas@lamtex.com', role: 'Logistics', password: 'Lamtex@2026' },
-  { branch: 'Batangas', id: 'LOG-BTG-002', name: 'Cynthia Bautista', email: 'cynthia.bautista.batangas@lamtex.com', role: 'Logistics', password: 'Lamtex@2026' },
-  { branch: 'Batangas', id: 'WH-BTG-001', name: 'Roberto Mendoza', email: 'roberto.mendoza.batangas@lamtex.com', role: 'Warehouse', password: 'Lamtex@2026' },
-  { branch: 'Batangas', id: 'WH-BTG-002', name: 'Luz Aguilar', email: 'luz.aguilar.batangas@lamtex.com', role: 'Warehouse', password: 'Lamtex@2026' },
+  // Manila (NCR)
+  { branch: LAMTEX_BRANCH_NCR, id: 'AGT-MNL-001', name: 'Ana Reyes', email: 'ana.reyes.manila@lamtex.com', role: 'Agent', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_NCR, id: 'AGT-MNL-002', name: 'Carlos Buenaventura', email: 'carlos.buenaventura.manila@lamtex.com', role: 'Agent', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_NCR, id: 'AGT-MNL-003', name: 'Rica Lim', email: 'rica.lim.manila@lamtex.com', role: 'Agent', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_NCR, id: 'LOG-MNL-001', name: 'Miguel Santos', email: 'miguel.santos.manila@lamtex.com', role: 'Logistics', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_NCR, id: 'LOG-MNL-002', name: 'Jasmine Cruz', email: 'jasmine.cruz.manila@lamtex.com', role: 'Logistics', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_NCR, id: 'WH-MNL-001', name: 'Jose Ramos', email: 'jose.ramos.manila@lamtex.com', role: 'Warehouse', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_NCR, id: 'WH-MNL-002', name: 'Patricia Navarro', email: 'patricia.navarro.manila@lamtex.com', role: 'Warehouse', password: 'Lamtex@2026' },
+  // Cebu (Visayas)
+  { branch: LAMTEX_BRANCH_VISAYAS, id: 'AGT-CEB-001', name: 'Marco Villanueva', email: 'marco.villanueva.cebu@lamtex.com', role: 'Agent', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_VISAYAS, id: 'AGT-CEB-002', name: 'Sofia Tan', email: 'sofia.tan.cebu@lamtex.com', role: 'Agent', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_VISAYAS, id: 'AGT-CEB-003', name: 'Diego Flores', email: 'diego.flores.cebu@lamtex.com', role: 'Agent', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_VISAYAS, id: 'LOG-CEB-001', name: 'Ramon Dela Cruz', email: 'ramon.delacruz.cebu@lamtex.com', role: 'Logistics', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_VISAYAS, id: 'LOG-CEB-002', name: 'Elena Reyes', email: 'elena.reyes.cebu@lamtex.com', role: 'Logistics', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_VISAYAS, id: 'WH-CEB-001', name: 'Antonio Garces', email: 'antonio.garces.cebu@lamtex.com', role: 'Warehouse', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_VISAYAS, id: 'WH-CEB-002', name: 'Maria Ledesma', email: 'maria.ledesma.cebu@lamtex.com', role: 'Warehouse', password: 'Lamtex@2026' },
+  // Batangas (Calabarzon)
+  { branch: LAMTEX_BRANCH_CALABARZON, id: 'AGT-BTG-001', name: 'Leo Marasigan', email: 'leo.marasigan.batangas@lamtex.com', role: 'Agent', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_CALABARZON, id: 'AGT-BTG-002', name: 'Nina Ilagan', email: 'nina.ilagan.batangas@lamtex.com', role: 'Agent', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_CALABARZON, id: 'AGT-BTG-003', name: 'Roy Castillo', email: 'roy.castillo.batangas@lamtex.com', role: 'Agent', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_CALABARZON, id: 'LOG-BTG-001', name: 'Bernard Ocampo', email: 'bernard.ocampo.batangas@lamtex.com', role: 'Logistics', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_CALABARZON, id: 'LOG-BTG-002', name: 'Cynthia Bautista', email: 'cynthia.bautista.batangas@lamtex.com', role: 'Logistics', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_CALABARZON, id: 'WH-BTG-001', name: 'Roberto Mendoza', email: 'roberto.mendoza.batangas@lamtex.com', role: 'Warehouse', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_CALABARZON, id: 'WH-BTG-002', name: 'Luz Aguilar', email: 'luz.aguilar.batangas@lamtex.com', role: 'Warehouse', password: 'Lamtex@2026' },
 ];
 
 const BRANCH_COLORS: Record<string, string> = {
   Executive: 'bg-purple-100 text-purple-700 border-purple-200',
-  Manila:    'bg-blue-100 text-blue-700 border-blue-200',
-  Cebu:      'bg-teal-100 text-teal-700 border-teal-200',
-  Batangas:  'bg-orange-100 text-orange-700 border-orange-200',
+  [LAMTEX_BRANCH_NCR]:        'bg-blue-100 text-blue-700 border-blue-200',
+  [LAMTEX_BRANCH_VISAYAS]:   'bg-teal-100 text-teal-700 border-teal-200',
+  [LAMTEX_BRANCH_CALABARZON]: 'bg-orange-100 text-orange-700 border-orange-200',
 };
 
 const ROLE_COLORS: Record<string, string> = {
@@ -56,8 +61,7 @@ const ROLE_COLORS: Record<string, string> = {
   Warehouse: 'text-rose-600',
 };
 
-const BRANCHES = ['Executive', 'Manila', 'Cebu', 'Batangas'];
-const BRANCH_OPTIONS = ['Manila', 'Cebu', 'Batangas'];
+const BRANCH_OPTIONS = [LAMTEX_BRANCH_NCR, LAMTEX_BRANCH_VISAYAS, LAMTEX_BRANCH_CALABARZON] as const;
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -67,7 +71,7 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [activeAccount, setActiveAccount] = useState<string>('executive@lamtex.com');
-  const [selectedBranch, setSelectedBranch] = useState<string>('Manila');
+  const [selectedBranch, setSelectedBranch] = useState<string>(LAMTEX_BRANCH_NCR);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();

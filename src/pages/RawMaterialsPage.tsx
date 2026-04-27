@@ -15,8 +15,6 @@ import {
   FileText,
   Download,
   RefreshCw,
-  Truck,
-  ArrowRightLeft,
   ShoppingCart,
   Users,
   Edit,
@@ -24,8 +22,6 @@ import {
 } from 'lucide-react';
 import { getAllRawMaterials } from '@/src/mock/rawMaterials';
 import type { MaterialCategory, MaterialStatus, StockOutRisk } from '@/src/types/materials';
-import { ReceiveMaterialModal } from '@/src/components/materials/ReceiveMaterialModal';
-import { StockTransferModal } from '@/src/components/materials/StockTransferModal';
 import AddMaterialCategoryModal, { MaterialCategoryFormData } from '@/src/components/materials/AddMaterialCategoryModal';
 import { supabase } from '@/src/lib/supabase';
 
@@ -73,8 +69,6 @@ export function RawMaterialsPage() {
   const { role, branch } = useAppContext();
   
   // Modal states
-  const [showReceiveModal, setShowReceiveModal] = useState(false);
-  const [showTransferModal, setShowTransferModal] = useState(false);
   const [showAddCategoryModal, setShowAddCategoryModal] = useState(false);
   const [editingCategory, setEditingCategory] = useState<MaterialCategoryFormData | null>(null);
   const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
@@ -463,18 +457,6 @@ export function RawMaterialsPage() {
             <span className="sm:hidden">Export</span>
           </Button>
 
-          <Button variant="outline" onClick={() => setShowReceiveModal(true)} className="flex-1 sm:flex-none">
-            <Truck className="w-4 h-4 mr-2" />
-            <span className="hidden sm:inline">Receive</span>
-            <span className="sm:hidden">Receive</span>
-          </Button>
-
-          <Button variant="outline" onClick={() => setShowTransferModal(true)} className="flex-1 sm:flex-none">
-            <ArrowRightLeft className="w-4 h-4 mr-2" />
-            <span className="hidden sm:inline">Transfer</span>
-            <span className="sm:hidden">Transfer</span>
-          </Button>
-
           <Button variant="outline" onClick={() => navigate('/purchase-orders')} className="flex-1 sm:flex-none">
             <ShoppingCart className="w-4 h-4 mr-2" />
             <span className="hidden sm:inline">Purchase Orders</span>
@@ -768,27 +750,6 @@ export function RawMaterialsPage() {
         </CardContent>
       </Card>
       
-      {/* Modals */}
-      {showReceiveModal && (
-        <ReceiveMaterialModal
-          onClose={() => setShowReceiveModal(false)}
-          onSuccess={() => {
-            setShowReceiveModal(false);
-            // Refresh data in real implementation
-          }}
-        />
-      )}
-
-      {showTransferModal && (
-        <StockTransferModal
-          onClose={() => setShowTransferModal(false)}
-          onSuccess={() => {
-            setShowTransferModal(false);
-            // Refresh data in real implementation
-          }}
-        />
-      )}
-
       {/* Add/Edit Material Category Modal */}
       {(showAddCategoryModal || editingCategory) && (
         <AddMaterialCategoryModal

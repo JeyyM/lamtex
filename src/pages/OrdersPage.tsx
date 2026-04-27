@@ -4,10 +4,19 @@ import { Card, CardContent, CardHeader } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagination';
-import { CreateOrderModal } from '@/src/components/orders/CreateOrderModal';
 import { ProofOfDeliveryModal } from '@/src/components/orders/ProofOfDeliveryModal';
 import { useAppContext } from '@/src/store/AppContext';
 import { supabase } from '@/src/lib/supabase';
+
+const orderLogRoleMap: Record<string, 'Agent' | 'Warehouse Staff' | 'Manager' | 'Admin' | 'System' | 'Logistics'> = {
+  Executive: 'Admin',
+  Manager: 'Manager',
+  Agent: 'Agent',
+  'Warehouse Staff': 'Warehouse Staff',
+  Warehouse: 'Warehouse Staff',
+  Logistics: 'Logistics',
+  Driver: 'Logistics',
+};
 import {
   Search,
   Filter,
@@ -48,11 +57,10 @@ interface OrderRow {
 
 export function OrdersPage() {
   const navigate = useNavigate();
-  const { branch, addAuditLog, role } = useAppContext();
+  const { branch, addAuditLog, role, employeeName, session } = useAppContext();
   const [activeTab, setActiveTab] = useState<OrderTab>('all');
   const [searchTerm, setSearchTerm] = useState('');
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [selectedCustomer, setSelectedCustomer] = useState<{ id: string; name: string } | null>(null);
+  const [creating, setCreating] = useState(false);
   const [showProofModal, setShowProofModal] = useState(false);
   const [selectedOrderForProof, setSelectedOrderForProof] = useState<{ id: string; customer: string } | null>(null);
   const [allOrders, setAllOrders] = useState<OrderRow[]>([]);
@@ -91,13 +99,40 @@ export function OrdersPage() {
     setHeaderPaymentFilter('');
   }, [branch]);
 
+  /** Consistent list order: Approved → … → logistics pipeline (not alphabetical). */
+  const orderStatusListOrder: string[] = useMemo(
+    () => [
+      'Draft',
+      'Pending',
+      'Approved',
+      'Scheduled',
+      'Loading',
+      'Packed',
+      'Ready',
+      'In Transit',
+      'Partially Fulfilled',
+      'Delivered',
+      'Completed',
+      'Cancelled',
+      'Rejected',
+    ],
+    [],
+  );
+
   const distinctOrderStatuses = useMemo(() => {
-    const s = new Set(allOrders.map((o) => o.status).filter(Boolean));
-    return Array.from(s).sort((a, b) => a.localeCompare(b));
-  }, [allOrders]);
+    const s = new Set<string>(allOrders.map((o) => o.status).filter((v): v is string => Boolean(v)));
+    return Array.from(s).sort((a, b) => {
+      const ia = orderStatusListOrder.indexOf(a);
+      const ib = orderStatusListOrder.indexOf(b);
+      if (ia === -1 && ib === -1) return a.localeCompare(b);
+      if (ia === -1) return 1;
+      if (ib === -1) return -1;
+      return ia - ib;
+    });
+  }, [allOrders, orderStatusListOrder]);
 
   const distinctPaymentStatuses = useMemo(() => {
-    const s = new Set(allOrders.map((o) => o.payment_status).filter(Boolean));
+    const s = new Set<string>(allOrders.map((o) => o.payment_status).filter((v): v is string => Boolean(v)));
     return Array.from(s).sort((a, b) => a.localeCompare(b));
   }, [allOrders]);
 
@@ -110,7 +145,7 @@ export function OrdersPage() {
       activeTab === 'all' ||
       (activeTab === 'draft'     && order.status === 'Draft') ||
       (activeTab === 'pending'   && order.status === 'Pending') ||
-      (activeTab === 'approved'  && ['Approved', 'Picking', 'Packed', 'Ready', 'Scheduled'].includes(order.status)) ||
+      (activeTab === 'approved'  && ['Approved', 'Scheduled', 'Loading', 'Packed', 'Ready'].includes(order.status)) ||
       (activeTab === 'intransit' && order.status === 'In Transit') ||
       (activeTab === 'delivered' && ['Delivered', 'Completed'].includes(order.status)) ||
       (activeTab === 'rejected'  && ['Rejected', 'Cancelled'].includes(order.status));
@@ -182,7 +217,7 @@ export function OrdersPage() {
 
   const getStatusBadgeVariant = (status: string): 'success' | 'warning' | 'danger' | 'info' | 'default' | 'neutral' | 'outline' | 'destructive' => {
     if (['Delivered', 'Completed', 'Approved'].includes(status)) return 'success';
-    if (['Pending', 'Picking', 'Packed', 'Ready', 'Scheduled'].includes(status)) return 'warning';
+    if (['Pending', 'Scheduled', 'Loading', 'Packed', 'Ready'].includes(status)) return 'warning';
     if (['Rejected', 'Cancelled'].includes(status)) return 'danger';
     if (status === 'In Transit') return 'info';
     if (status === 'Draft') return 'neutral';
@@ -202,6 +237,54 @@ export function OrdersPage() {
     addAuditLog('Viewed Order', 'Order', `Viewed order ${orderId}`);
   };
 
+  /** Same pattern as production requests: create an empty shell as Draft, then edit on the detail page. */
+  const handleNewOrder = async () => {
+    setCreating(true);
+    try {
+      let branchId: string | null = null;
+      if (branch) {
+        const { data: bd } = await supabase.from('branches').select('id').eq('name', branch).single();
+        branchId = bd?.id ?? null;
+      }
+      if (!branchId) {
+        alert('Select a branch in the header first.');
+        return;
+      }
+      const orderNumber = `ORD-${Date.now().toString(36).toUpperCase()}`;
+      const actor = employeeName || session?.user?.email || 'User';
+      const { data, error: insErr } = await supabase
+        .from('orders')
+        .insert({
+          order_number: orderNumber,
+          branch_id: branchId,
+          status: 'Draft',
+          order_date: new Date().toISOString().split('T')[0],
+          subtotal: 0,
+          total_amount: 0,
+          payment_status: 'Unbilled',
+        })
+        .select('id')
+        .single();
+      if (insErr) throw insErr;
+      const logRole = orderLogRoleMap[role] ?? 'System';
+      const { error: logErr } = await supabase.from('order_logs').insert({
+        order_id: data.id,
+        action: 'created',
+        performed_by: actor,
+        performed_by_role: logRole,
+        description: 'Created as draft — add customer and lines, then submit for approval',
+        metadata: { order_number: orderNumber },
+      });
+      if (logErr && import.meta.env.DEV) console.warn('[order log]', logErr.message);
+      addAuditLog('Created Order (draft)', 'Order', orderNumber);
+      navigate(`/orders/${data.id}`);
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : 'Failed to create order');
+    } finally {
+      setCreating(false);
+    }
+  };
+
   const handleSendProof = (orderId: string, customer: string) => {
     setSelectedOrderForProof({ id: orderId, customer });
     setShowProofModal(true);
@@ -216,7 +299,7 @@ export function OrdersPage() {
     all:       allOrders.length,
     draft:     allOrders.filter(o => o.status === 'Draft').length,
     pending:   allOrders.filter(o => o.status === 'Pending').length,
-    approved:  allOrders.filter(o => ['Approved', 'Picking', 'Packed', 'Ready', 'Scheduled'].includes(o.status)).length,
+    approved:  allOrders.filter(o => ['Approved', 'Scheduled', 'Loading', 'Packed', 'Ready'].includes(o.status)).length,
     intransit: allOrders.filter(o => o.status === 'In Transit').length,
     delivered: allOrders.filter(o => ['Delivered', 'Completed'].includes(o.status)).length,
     rejected:  allOrders.filter(o => ['Rejected', 'Cancelled'].includes(o.status)).length,
@@ -317,9 +400,17 @@ export function OrdersPage() {
           <h1 className="text-2xl font-bold text-gray-900">Orders Management</h1>
           <p className="text-sm text-gray-500 mt-1">Create, track, and manage customer orders</p>
         </div>
-        <Button variant="primary" className="gap-2 w-full sm:w-auto" onClick={() => setShowCreateModal(true)}>
-          <Plus className="w-4 h-4" />Create Order
-        </Button>
+        <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+          <Button
+            variant="primary"
+            className="gap-2 w-full sm:w-auto"
+            onClick={() => void handleNewOrder()}
+            disabled={creating}
+          >
+            {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+            New order
+          </Button>
+        </div>
       </div>
 
       {/* Tabs - Mobile Dropdown */}
@@ -545,20 +636,6 @@ export function OrdersPage() {
           )}
         </CardContent>
       </Card>
-
-      {showCreateModal && (
-        <CreateOrderModal
-          customerId={selectedCustomer?.id}
-          customerName={selectedCustomer?.name}
-          onClose={() => { setShowCreateModal(false); setSelectedCustomer(null); }}
-          onSuccess={() => {
-            setShowCreateModal(false);
-            setSelectedCustomer(null);
-            addAuditLog('Created Order', 'Order', 'Created new order');
-            fetchOrders();
-          }}
-        />
-      )}
 
       {showProofModal && selectedOrderForProof && (
         <ProofOfDeliveryModal orderId={selectedOrderForProof.id} customerName={selectedOrderForProof.customer}

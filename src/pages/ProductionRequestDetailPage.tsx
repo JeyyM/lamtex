@@ -11,6 +11,7 @@ import type { PRStatus } from '@/src/pages/ProductionRequestsPage';
 import {
   OrderProductSelectionModal,
   type OrderProductSelectionConfirm,
+  type OrderProductInitialEdit,
 } from '@/src/components/orders/OrderProductSelectionModal';
 import {
   RecordProductionModal,
@@ -44,6 +45,7 @@ import {
   ArrowUpDown,
   Edit,
   Save,
+  ArrowRightLeft,
 } from 'lucide-react';
 
 interface PRItemRow {
@@ -74,7 +76,12 @@ interface PRHeader {
   rejected_by: string | null;
   rejection_reason: string | null;
   created_at: string;
+  is_transfer_request: boolean;
+  transfer_requesting_branch_id: string | null;
   branches: { name: string } | null;
+  tr_branch: { name: string } | null;
+  inter_branch_request_id: string | null;
+  inter_branch: { id: string; ibr_number: string; status: string } | null;
 }
 
 function asOne<T>(v: T | T[] | null | undefined): T | null {
@@ -220,7 +227,7 @@ function orderStatusBadgeVariant(
   status: string,
 ): 'success' | 'warning' | 'danger' | 'info' | 'default' | 'neutral' {
   if (['Delivered', 'Completed', 'Approved'].includes(status)) return 'success';
-  if (['Pending', 'Picking', 'Packed', 'Ready', 'Scheduled'].includes(status)) return 'warning';
+  if (['Pending', 'Scheduled', 'Loading', 'Packed', 'Ready'].includes(status)) return 'warning';
   if (['Rejected', 'Cancelled'].includes(status)) return 'danger';
   if (status === 'In Transit') return 'info';
   if (status === 'Draft') return 'neutral';
@@ -380,6 +387,8 @@ export function ProductionRequestDetailPage() {
   const [showReject, setShowReject] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [showAddLine, setShowAddLine] = useState(false);
+  /** `production_request_items.id` when opening the picker to edit that line; `null` = add. */
+  const [editingPrLineId, setEditingPrLineId] = useState<string | null>(null);
   const [expDate, setExpDate] = useState('');
   const [notes, setNotes] = useState('');
   const [involvedOrders, setInvolvedOrders] = useState<InvolvedOrderRow[]>([]);
@@ -477,7 +486,7 @@ export function ProductionRequestDetailPage() {
       const { data, error: qErr } = await supabase
         .from('production_requests')
         .select(
-          'id, pr_number, branch_id, status, request_date, expected_completion_date, notes, created_by, accepted_by, accepted_at, rejected_by, rejection_reason, created_at, branches(name), production_request_items(id, product_id, product_variant_id, quantity, quantity_completed, product_variants(sku, size, products(name)))',
+          'id, pr_number, branch_id, status, request_date, expected_completion_date, notes, created_by, accepted_by, accepted_at, rejected_by, rejection_reason, created_at, is_transfer_request, transfer_requesting_branch_id, inter_branch_request_id, branches:branches!branch_id(name), tr_branch:branches!transfer_requesting_branch_id(name), inter_branch:inter_branch_requests!inter_branch_request_id(id, ibr_number, status), production_request_items(id, product_id, product_variant_id, quantity, quantity_completed, product_variants(sku, size, products(name)))',
         )
         .eq('id', id)
         .single();
@@ -503,7 +512,12 @@ export function ProductionRequestDetailPage() {
         rejected_by: string | null;
         rejection_reason: string | null;
         created_at: string;
+        is_transfer_request: boolean;
+        transfer_requesting_branch_id: string | null;
         branches: { name: string } | { name: string }[] | null;
+        tr_branch: { name: string } | null;
+        inter_branch_request_id: string | null;
+        inter_branch: { id: string; ibr_number: string; status: string } | null;
         production_request_items: PRItemRow[] | null;
       };
       const br = raw.branches;
@@ -522,7 +536,12 @@ export function ProductionRequestDetailPage() {
         rejected_by: raw.rejected_by,
         rejection_reason: raw.rejection_reason,
         created_at: raw.created_at,
+        is_transfer_request: raw.is_transfer_request === true,
+        transfer_requesting_branch_id: raw.transfer_requesting_branch_id,
         branches: branchOne,
+        tr_branch: raw.tr_branch ?? null,
+        inter_branch_request_id: raw.inter_branch_request_id,
+        inter_branch: raw.inter_branch ?? null,
       });
       const itemRows = (raw.production_request_items ?? []) as PRItemRow[];
       setItems(itemRows);
@@ -806,31 +825,52 @@ export function ProductionRequestDetailPage() {
     }
   };
 
-  const openAddLine = () => setShowAddLine(true);
+  const openAddLine = () => {
+    setEditingPrLineId(null);
+    setShowAddLine(true);
+  };
 
   const handleProductLinePicked = async (p: OrderProductSelectionConfirm) => {
     if (!id || !pr) return;
-    if (items.some((i) => i.product_variant_id === p.variantId)) {
+    const duplicateOther = items.some(
+      (i) => i.product_variant_id === p.variantId && i.id !== editingPrLineId,
+    );
+    if (duplicateOther) {
       alert('This variant is already on the request. Remove the existing line first if you need to change it.');
       return;
     }
     const label = `${p.productName} — ${p.variantSizeLabel} (${p.sku || '—'})`;
     setSaving(true);
     try {
-      const { error: ins } = await supabase.from('production_request_items').insert({
-        request_id: id,
-        product_id: p.productId,
-        product_variant_id: p.variantId,
-        quantity: p.quantity,
-        quantity_completed: 0,
-      });
-      if (ins) throw ins;
-      await insertLog('line_added', `Added line: ${label} × ${p.quantity}`);
-      addAuditLog('PR line added', 'Production', `${pr.pr_number} ${p.sku} ×${p.quantity}`);
+      if (editingPrLineId) {
+        const { error: u } = await supabase
+          .from('production_request_items')
+          .update({
+            product_id: p.productId,
+            product_variant_id: p.variantId,
+            quantity: p.quantity,
+          })
+          .eq('id', editingPrLineId);
+        if (u) throw u;
+        await insertLog('line_updated', `Updated line: ${label} × ${p.quantity}`);
+        addAuditLog('PR line updated', 'Production', `${pr.pr_number} ${p.sku} ×${p.quantity}`);
+      } else {
+        const { error: ins } = await supabase.from('production_request_items').insert({
+          request_id: id,
+          product_id: p.productId,
+          product_variant_id: p.variantId,
+          quantity: p.quantity,
+          quantity_completed: 0,
+        });
+        if (ins) throw ins;
+        await insertLog('line_added', `Added line: ${label} × ${p.quantity}`);
+        addAuditLog('PR line added', 'Production', `${pr.pr_number} ${p.sku} ×${p.quantity}`);
+      }
       setShowAddLine(false);
+      setEditingPrLineId(null);
       void fetchPR({ silent: true });
     } catch (e: unknown) {
-      alert(e instanceof Error ? e.message : 'Failed to add line');
+      alert(e instanceof Error ? e.message : 'Failed to save line');
     } finally {
       setSaving(false);
     }
@@ -969,7 +1009,25 @@ export function ProductionRequestDetailPage() {
     setShowOrderPicker(true);
   };
 
-  const existingVariantIds = useMemo(() => new Set(items.map((i) => i.product_variant_id)), [items]);
+  const existingVariantIds = useMemo(() => {
+    const s = new Set(items.map((i) => i.product_variant_id));
+    if (editingPrLineId) {
+      const row = items.find((i) => i.id === editingPrLineId);
+      if (row?.product_variant_id) s.delete(row.product_variant_id);
+    }
+    return s;
+  }, [items, editingPrLineId]);
+
+  const prProductModalInitial = useMemo((): OrderProductInitialEdit | null => {
+    if (!editingPrLineId) return null;
+    const row = items.find((i) => i.id === editingPrLineId);
+    if (!row) return null;
+    return {
+      productId: row.product_id,
+      variantId: row.product_variant_id,
+      quantity: Math.max(1, Math.floor(Number(row.quantity) || 1)),
+    };
+  }, [editingPrLineId, items]);
   const involvedOrderIdSet = useMemo(() => new Set(involvedOrders.map((o) => o.orderId)), [involvedOrders]);
   const filteredOrderPicker = useMemo(() => {
     const q = orderSearch.trim().toLowerCase();
@@ -1044,7 +1102,30 @@ export function ProductionRequestDetailPage() {
               <Factory className="w-5 h-5 text-blue-600" />
             </div>
             <div className="min-w-0">
-              <h1 className="text-xl sm:text-2xl font-bold text-gray-900 truncate">{pr.pr_number}</h1>
+              <div className="flex flex-wrap items-center gap-2 min-w-0">
+                <h1 className="text-xl sm:text-2xl font-bold text-gray-900 truncate">{pr.pr_number}</h1>
+                {(pr.inter_branch_request_id || pr.is_transfer_request) && (
+                  pr.inter_branch?.id ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="text-[10px] sm:text-xs h-7 px-2 border-violet-200 bg-violet-50 text-violet-800 gap-1 shrink-0"
+                      onClick={() => navigate(`/inter-branch-requests/${pr.inter_branch!.id}`)}
+                    >
+                      <ArrowRightLeft className="w-3.5 h-3.5" />
+                      Inter-branch · {pr.inter_branch.ibr_number}
+                    </Button>
+                  ) : (
+                    <Badge
+                      variant="default"
+                      className="text-[10px] sm:text-xs border-violet-200 bg-violet-50 text-violet-800 gap-0.5 shrink-0"
+                    >
+                      <ArrowRightLeft className="w-3.5 h-3.5" />
+                      Transfer{pr.tr_branch?.name ? ` · ${pr.tr_branch.name}` : ''}
+                    </Badge>
+                  )
+                )}
+              </div>
               <p className="text-sm text-gray-500">— · {pr.branches?.name ?? '—'}</p>
             </div>
           </div>
@@ -1406,13 +1487,43 @@ export function ProductionRequestDetailPage() {
                     const pv = asOne(row.product_variants);
                     const prod = pv ? asOne(pv.products) : null;
                     const name = prod?.name ?? '—';
+                    const canEditLine = ['Draft', 'Requested'].includes(pr.status) && !saving && !isEditing;
                     return (
-                      <div key={row.id} className="border border-gray-100 rounded-xl overflow-hidden">
-                        <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-4">
+                      <div
+                        key={row.id}
+                        className={`border rounded-xl overflow-hidden ${
+                          canEditLine ? 'border-gray-100 cursor-pointer hover:border-indigo-200 hover:bg-indigo-50/30' : 'border-gray-100'
+                        }`}
+                      >
+                        <div
+                          role={canEditLine ? 'button' : undefined}
+                          tabIndex={canEditLine ? 0 : undefined}
+                          className="flex flex-col sm:flex-row sm:items-center gap-3 p-4"
+                          onClick={
+                            canEditLine
+                              ? () => {
+                                  setEditingPrLineId(row.id);
+                                  setShowAddLine(true);
+                                }
+                              : undefined
+                          }
+                          onKeyDown={
+                            canEditLine
+                              ? (e) => {
+                                  if (e.key === 'Enter' || e.key === ' ') {
+                                    e.preventDefault();
+                                    setEditingPrLineId(row.id);
+                                    setShowAddLine(true);
+                                  }
+                                }
+                              : undefined
+                          }
+                        >
                           <div className="flex-1 min-w-0">
                             <p className="text-sm font-semibold text-gray-900">{name}</p>
                             <p className="text-xs text-gray-500 font-mono mt-0.5">
                               {pv?.sku} · {pv?.size}
+                              {canEditLine ? ' · click to edit' : ''}
                             </p>
                           </div>
                           <div className="flex items-center justify-between sm:justify-end gap-6 sm:gap-8 text-sm">
@@ -1429,7 +1540,10 @@ export function ProductionRequestDetailPage() {
                             {['Draft', 'Requested'].includes(pr.status) && (
                               <button
                                 type="button"
-                                onClick={() => void removeLine(row.id)}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void removeLine(row.id);
+                                }}
                                 disabled={saving || isEditing}
                                 className="p-2 text-red-600 hover:bg-red-50 rounded-lg disabled:opacity-40"
                                 title="Remove line"
@@ -1837,9 +1951,14 @@ export function ProductionRequestDetailPage() {
 
       <OrderProductSelectionModal
         open={showAddLine}
-        onClose={() => !saving && setShowAddLine(false)}
+        onClose={() => {
+          if (saving) return;
+          setShowAddLine(false);
+          setEditingPrLineId(null);
+        }}
         purpose="production"
         excludeVariantIds={existingVariantIds}
+        initialEdit={editingPrLineId ? prProductModalInitial : null}
         onConfirm={(p) => void handleProductLinePicked(p)}
       />
     </div>

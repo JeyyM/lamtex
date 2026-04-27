@@ -4,10 +4,10 @@ export type OrderStatus =
   | 'Draft' 
   | 'Pending' 
   | 'Approved' 
-  | 'Picking' 
+  | 'Scheduled' 
+  | 'Loading' 
   | 'Packed' 
   | 'Ready' 
-  | 'Scheduled' 
   | 'In Transit' 
   | 'Delivered'
   | 'Partially Fulfilled'
@@ -61,8 +61,13 @@ export interface OrderDetail {
   rejectedDate?: string;
   rejectionReason?: string;
   
+  /** Branch UUID (for per-branch product stock on shipment). */
+  branchId?: string;
+
   // Delivery tracking
   estimatedDelivery?: string;
+  /** Planned date the order leaves the branch (set when status becomes Scheduled). */
+  scheduledDepartureDate?: string;
   actualDelivery?: string;
   deliveryStatus?: 'On Time' | 'Delayed' | 'Failed';
   delayReason?: string;
@@ -98,6 +103,10 @@ export interface OrderLineItem {
   lineTotal: number;
   stockHint: StockHint;
   availableStock?: number;
+  /** Cumulative units put in transit from the warehouse (sum of all “mark in transit” amounts). */
+  quantityShipped?: number;
+  /** Cumulative units recorded as delivered (partial or full). */
+  quantityDelivered?: number;
   batchDiscount?: number; // Batch/bulk pricing discount percentage
   discountsBreakdown?: Array<{ name: string; percentage: number }>; // Individual discount entries
 }

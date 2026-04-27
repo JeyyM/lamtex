@@ -1,6 +1,15 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { X, ChevronRight, ArrowLeft, Search, Package, Loader2, Building2 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
+import { getMaterialIdsWithStockAtBothBranches } from '../../lib/interBranchRequest';
+
+/** Same as lib: `VITE_DEBUG_IBR=true` forces logs in production builds. */
+const ibrPickerLog = (...args: unknown[]) => {
+  if (import.meta.env.DEV || import.meta.env.VITE_DEBUG_IBR === 'true') {
+    // eslint-disable-next-line no-console -- explicit IBR diagnostic
+    console.log('[IBR RawPicker]', ...args);
+  }
+};
 
 interface RawMaterial {
   id: string;
@@ -29,6 +38,9 @@ interface Props {
   alreadyAdded: string[];
   supplierId?: string | null;
   supplierName?: string | null;
+  /** Inter-branch: when both are set, only materials with `material_stock` at both branches are listed. */
+  interBranchRequestingBranchId?: string | null;
+  interBranchFulfillingBranchId?: string | null;
 }
 
 function CategoryImage({ url, name }: { url: string | null; name: string }) {
@@ -72,7 +84,35 @@ function MaterialImage({ url, name }: { url: string | null; name: string }) {
 export default function RawMaterialPickerModal({
   isOpen, onClose, onSelect, branch, alreadyAdded,
   supplierId = null, supplierName = null,
+  interBranchRequestingBranchId = null,
+  interBranchFulfillingBranchId = null,
 }: Props) {
+  const useDualBranchFilter = Boolean(
+    interBranchRequestingBranchId &&
+      interBranchFulfillingBranchId &&
+      interBranchRequestingBranchId !== interBranchFulfillingBranchId,
+  );
+
+  useEffect(() => {
+    if (!isOpen) return;
+    ibrPickerLog('modal opened', {
+      useDualBranchFilter,
+      branch,
+      interBranchRequestingBranchId,
+      interBranchFulfillingBranchId,
+      supplierId: supplierId ?? null,
+    });
+  }, [
+    isOpen,
+    useDualBranchFilter,
+    branch,
+    interBranchRequestingBranchId,
+    interBranchFulfillingBranchId,
+    supplierId,
+  ]);
+  const [dualBranchMaterialIds, setDualBranchMaterialIds] = useState<Set<string> | null>(null);
+  const [dualBranchCategoryIds, setDualBranchCategoryIds] = useState<Set<string> | null>(null);
+  const [loadingDualBranch, setLoadingDualBranch] = useState(false);
   const [view, setView]                         = useState<'categories' | 'materials'>('categories');
   const [categories, setCategories]             = useState<MaterialCategory[]>([]);
   const [materials, setMaterials]               = useState<RawMaterial[]>([]);
@@ -136,6 +176,81 @@ export default function RawMaterialPickerModal({
     })();
   }, [isOpen, supplierId]);
 
+  // Inter-branch: dual-branch set from getMaterialIdsWithStockAtBothBranches
+  useEffect(() => {
+    if (!isOpen) {
+      setDualBranchMaterialIds(null);
+      setDualBranchCategoryIds(null);
+      setLoadingDualBranch(false);
+      return;
+    }
+    if (!useDualBranchFilter) {
+      setDualBranchMaterialIds(null);
+      setDualBranchCategoryIds(null);
+      setLoadingDualBranch(false);
+      return;
+    }
+    setLoadingDualBranch(true);
+    setDualBranchMaterialIds(null);
+    setDualBranchCategoryIds(null);
+    void (async () => {
+      try {
+        ibrPickerLog('dual-branch fetch start', {
+          requesting: interBranchRequestingBranchId,
+          fulfilling: interBranchFulfillingBranchId,
+        });
+        const { data: authUser, error: authErr } = await supabase.auth.getUser();
+        ibrPickerLog('auth.getUser', {
+          hasUser: Boolean(authUser?.user),
+          uid: authUser?.user?.id ?? null,
+          error: authErr?.message ?? null,
+        });
+        if (!authUser?.user) {
+          console.warn(
+            '[IBR RawPicker] No Supabase auth user — RLS policies that require auth.uid() will return no material_stock. Sign in with supabase.auth.signInWithPassword.',
+          );
+        }
+        const s = await getMaterialIdsWithStockAtBothBranches(
+          supabase,
+          interBranchRequestingBranchId!,
+          interBranchFulfillingBranchId!,
+        );
+        ibrPickerLog('dual-branch material ids', s.size, '(first 10)', [...s].slice(0, 10));
+        setDualBranchMaterialIds(s);
+        if (s.size === 0) {
+          setDualBranchCategoryIds(new Set());
+          return;
+        }
+        const idList = [...s];
+        const { data: matCat, error: mcErr } = await supabase
+          .from('raw_materials')
+          .select('category_id')
+          .in('id', idList)
+          .not('category_id', 'is', null);
+        if (mcErr) {
+          ibrPickerLog('raw_materials category_id query error', mcErr);
+          console.error('[IBR RawPicker] raw_materials.in failed', mcErr);
+          setDualBranchCategoryIds(new Set());
+          return;
+        }
+        const catSet = new Set(
+          (matCat ?? [])
+            .map((r: { category_id: string | null }) => r.category_id)
+            .filter((id): id is string => id != null),
+        );
+        ibrPickerLog('dual-branch category ids from materials', catSet.size, [...catSet].slice(0, 12));
+        setDualBranchCategoryIds(catSet);
+      } catch (e) {
+        ibrPickerLog('dual-branch exception', e);
+        console.error('[IBR RawPicker] dual-branch load failed', e);
+        setDualBranchMaterialIds(new Set());
+        setDualBranchCategoryIds(new Set());
+      } finally {
+        setLoadingDualBranch(false);
+      }
+    })();
+  }, [isOpen, useDualBranchFilter, interBranchRequestingBranchId, interBranchFulfillingBranchId]);
+
   // Fetch categories on open
   useEffect(() => {
     if (!isOpen) return;
@@ -144,24 +259,52 @@ export default function RawMaterialPickerModal({
     setSearch('');
     (async () => {
       setLoadingCats(true);
-      let branchId: string | null = null;
-      if (branch) {
-        const { data: branchRow } = await supabase
-          .from('branches').select('id').eq('name', branch).single();
-        branchId = branchRow?.id ?? null;
-      }
-
       let q = supabase
         .from('material_categories')
         .select('id, name, description, image_url')
         .eq('is_active', true);
-      if (branchId) q = q.eq('branch_id', branchId) as typeof q;
 
-      const { data } = await q.order('sort_order');
-      setCategories((data as MaterialCategory[]) ?? []);
+      if (
+        useDualBranchFilter &&
+        interBranchRequestingBranchId &&
+        interBranchFulfillingBranchId
+      ) {
+        const bid = [interBranchRequestingBranchId, interBranchFulfillingBranchId].filter(
+          (id, i, a) => id && a.indexOf(id) === i,
+        );
+        q = q.in('branch_id', bid) as typeof q;
+      } else {
+        let branchId: string | null = null;
+        if (branch) {
+          const { data: branchRow } = await supabase
+            .from('branches')
+            .select('id')
+            .eq('name', branch)
+            .single();
+          branchId = branchRow?.id ?? null;
+        }
+        if (branchId) q = q.eq('branch_id', branchId) as typeof q;
+      }
+
+      const { data, error: catErr } = await q.order('sort_order');
+      if (catErr) {
+        ibrPickerLog('material_categories query error', catErr);
+        console.error('[IBR RawPicker] material_categories failed', catErr);
+      }
+      const list = (data as MaterialCategory[]) ?? [];
+      ibrPickerLog('material_categories loaded', {
+        count: list.length,
+        dualMode: Boolean(
+          useDualBranchFilter &&
+            interBranchRequestingBranchId &&
+            interBranchFulfillingBranchId,
+        ),
+        names: list.slice(0, 15).map((c) => c.name),
+      });
+      setCategories(list);
       setLoadingCats(false);
     })();
-  }, [isOpen]);
+  }, [isOpen, branch, useDualBranchFilter, interBranchRequestingBranchId, interBranchFulfillingBranchId]);
 
   const handleCategoryClick = async (cat: MaterialCategory) => {
     setSelectedCategory(cat);
@@ -184,7 +327,14 @@ export default function RawMaterialPickerModal({
     }
     const { data, error } = await q.order('name');
     if (error) console.error('[RawMaterialPickerModal]', error);
-    setMaterials((data as RawMaterial[]) ?? []);
+    let list: RawMaterial[] = (data as RawMaterial[]) ?? [];
+    if (useDualBranchFilter && dualBranchMaterialIds) {
+      list =
+        dualBranchMaterialIds.size > 0
+          ? list.filter((m) => dualBranchMaterialIds.has(m.id))
+          : [];
+    }
+    setMaterials(list);
     setLoadingMats(false);
   };
 
@@ -193,14 +343,49 @@ export default function RawMaterialPickerModal({
     onClose();
   };
 
-  // With a supplier, only show categories that have ≥1 of that supplier’s materials
-  const visibleCategories = (() => {
+  // With a supplier, only show categories that have ≥1 of that supplier’s materials;
+  // inter-branch: only categories that have ≥1 material stocked at both branches
+  const visibleCategories = useMemo(() => {
     const base = categories.filter(c =>
       c.name.toLowerCase().includes(search.toLowerCase())
     );
-    if (supplierCategoryIds === null) return base;
-    return base.filter(c => supplierCategoryIds.has(c.id));
-  })();
+    let step = base;
+    if (supplierCategoryIds === null) {
+      // keep
+    } else {
+      step = step.filter(c => supplierCategoryIds.has(c.id));
+    }
+    if (useDualBranchFilter && dualBranchCategoryIds !== null) {
+      step = step.filter(c => dualBranchCategoryIds.has(c.id));
+    }
+    return step;
+  }, [categories, search, supplierCategoryIds, useDualBranchFilter, dualBranchCategoryIds]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    ibrPickerLog('visibleCategories summary', {
+      visibleCount: visibleCategories.length,
+      categoriesLoaded: categories.length,
+      loadingCats,
+      loadingDualBranch,
+      loadingSupplier,
+      dualBranchMaterialIds: dualBranchMaterialIds?.size ?? 'null',
+      dualBranchCategoryIds: dualBranchCategoryIds?.size ?? 'null',
+      supplierCategoryIds: supplierCategoryIds?.size ?? 'null',
+      useDualBranchFilter,
+    });
+  }, [
+    isOpen,
+    visibleCategories.length,
+    categories.length,
+    loadingCats,
+    loadingDualBranch,
+    loadingSupplier,
+    dualBranchMaterialIds,
+    dualBranchCategoryIds,
+    supplierCategoryIds,
+    useDualBranchFilter,
+  ]);
 
   const filteredMaterials = materials.filter(m =>
     m.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -286,7 +471,7 @@ export default function RawMaterialPickerModal({
 
           {/* ── Categories ── */}
           {view === 'categories' && (
-            loadingCats || loadingSupplier ? (
+            loadingCats || loadingSupplier || (useDualBranchFilter && loadingDualBranch) ? (
               <div className="flex items-center justify-center py-16 gap-3 text-gray-400">
                 <Loader2 className="w-5 h-5 animate-spin" />
                 <span className="text-sm">Loading…</span>
@@ -295,13 +480,15 @@ export default function RawMaterialPickerModal({
               <div className="flex flex-col items-center justify-center py-16 text-gray-400 gap-2 text-center px-4">
                 <Package className="w-8 h-8" />
                 <p className="text-sm">
-                  {search.trim() !== ''
-                    ? 'No matching categories'
-                    : supplierId && supplierCategoryIds != null && supplierCategoryIds.size === 0
-                      ? 'This supplier has no materials linked'
-                      : supplierId && supplierCategoryIds != null && supplierCategoryIds.size > 0
-                        ? 'No categories to show for this supplier in this branch'
-                        : 'No categories found'}
+                  {useDualBranchFilter && !loadingDualBranch && (dualBranchMaterialIds?.size ?? 0) === 0
+                    ? 'No material names have stock at both the requesting and fulfilling branch'
+                    : search.trim() !== ''
+                      ? 'No matching categories'
+                      : supplierId && supplierCategoryIds != null && supplierCategoryIds.size === 0
+                        ? 'This supplier has no materials linked'
+                        : supplierId && supplierCategoryIds != null && supplierCategoryIds.size > 0
+                          ? 'No categories to show for this supplier in this branch'
+                          : 'No categories found'}
                 </p>
                 {supplierId && supplierCategoryIds != null && supplierCategoryIds.size === 0 && (
                   <p className="text-xs max-w-sm">

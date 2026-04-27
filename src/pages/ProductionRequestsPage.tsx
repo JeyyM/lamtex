@@ -24,6 +24,7 @@ import {
   XCircle,
   Ban,
   FileText,
+  ArrowRightLeft,
 } from 'lucide-react';
 
 export type PRStatus = 'Draft' | 'Requested' | 'Rejected' | 'Accepted' | 'In Progress' | 'Completed' | 'Cancelled';
@@ -37,7 +38,12 @@ interface PRRow {
   expected_completion_date: string | null;
   created_by: string | null;
   created_at: string;
+  is_transfer_request: boolean;
+  transfer_requesting_branch_id: string | null;
   branches: { name: string } | null;
+  tr_branch: { name: string } | null;
+  inter_branch_request_id: string | null;
+  inter_branch: { ibr_number: string; status: string } | null;
   production_request_items: { id: string }[];
 }
 
@@ -53,6 +59,11 @@ const getStatusVariant = (status: PRStatus): 'success' | 'warning' | 'danger' | 
   if (status === 'Draft') return 'neutral';
   return 'neutral';
 };
+
+/** IBR approval can create a PR for products to send; track those under Inter-branch requests, not this list. */
+function isIbrFlowProductionRequest(r: PRRow): boolean {
+  return r.inter_branch_request_id != null || r.pr_number.startsWith('PR-IBR-');
+}
 
 const getPRStatusIcon = (status: PRStatus) => {
   if (status === 'Completed') return <CheckCircle className="w-3.5 h-3.5" />;
@@ -102,7 +113,9 @@ export function ProductionRequestsPage() {
           : Promise.resolve({ data: null }),
         supabase
           .from('production_requests')
-          .select('id, pr_number, branch_id, status, request_date, expected_completion_date, created_by, created_at, branches(name), production_request_items(id)')
+          .select(
+            'id, pr_number, branch_id, status, request_date, expected_completion_date, created_by, created_at, is_transfer_request, transfer_requesting_branch_id, inter_branch_request_id, branches:branches!branch_id(name), tr_branch:branches!transfer_requesting_branch_id(name), inter_branch:inter_branch_requests!inter_branch_request_id(ibr_number, status), production_request_items(id)',
+          )
           .order('created_at', { ascending: false }),
       ]);
       if (prResult.error) throw prResult.error;
@@ -127,17 +140,23 @@ export function ProductionRequestsPage() {
 
   const branchFiltered = rows.filter((r) => !resolvedBranchId || r.branch_id === resolvedBranchId);
 
-  const distinctStatuses = useMemo((): string[] => {
-    const s = new Set<string>(branchFiltered.map((r) => String(r.status)).filter(Boolean));
-    return Array.from(s).sort((a, b) => a.localeCompare(b));
-  }, [branchFiltered]);
+  const prRowsExcludingIbr = useMemo(
+    () => branchFiltered.filter((r) => !isIbrFlowProductionRequest(r)),
+    [branchFiltered],
+  );
 
-  const filtered = branchFiltered.filter((r) => {
+  const distinctStatuses = useMemo((): string[] => {
+    const s = new Set<string>(prRowsExcludingIbr.map((r) => String(r.status)).filter(Boolean));
+    return Array.from(s).sort((a, b) => a.localeCompare(b));
+  }, [prRowsExcludingIbr]);
+
+  const filtered = prRowsExcludingIbr.filter((r) => {
     const q = searchQuery.toLowerCase();
     const matchesSearch =
       r.pr_number.toLowerCase().includes(q) ||
       (r.created_by ?? '').toLowerCase().includes(q) ||
-      (r.branches?.name ?? '').toLowerCase().includes(q);
+      (r.branches?.name ?? '').toLowerCase().includes(q) ||
+      (r.tr_branch?.name ?? '').toLowerCase().includes(q);
     const matchesStatus = statusFilter === '' || r.status === statusFilter;
     return matchesSearch && matchesStatus;
   });
@@ -217,11 +236,11 @@ export function ProductionRequestsPage() {
     setTablePage(1);
   }, [searchQuery, statusFilter, resolvedBranchId]);
 
-  const totalPRs = branchFiltered.length;
-  const drafts = branchFiltered.filter((r) => r.status === 'Draft').length;
-  const awaiting = branchFiltered.filter((r) => r.status === 'Requested').length;
-  const inProgress = branchFiltered.filter((r) => r.status === 'In Progress').length;
-  const completed = branchFiltered.filter((r) => r.status === 'Completed').length;
+  const totalPRs = prRowsExcludingIbr.length;
+  const drafts = prRowsExcludingIbr.filter((r) => r.status === 'Draft').length;
+  const awaiting = prRowsExcludingIbr.filter((r) => r.status === 'Requested').length;
+  const inProgress = prRowsExcludingIbr.filter((r) => r.status === 'In Progress').length;
+  const completed = prRowsExcludingIbr.filter((r) => r.status === 'Completed').length;
 
   const handleNewPR = async () => {
     setCreating(true);
@@ -295,18 +314,29 @@ export function ProductionRequestsPage() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Production Requests</h1>
+          <p className="text-sm text-gray-500 mt-0.5">Inter-branch “send” PRs are managed from Inter-branch requests, not this list.</p>
         </div>
-        <Button variant="primary" onClick={() => void handleNewPR()} disabled={creating} className="w-full sm:w-auto gap-2">
-          {creating ? (
-            <>
-              <Loader2 className="w-4 h-4 animate-spin" /> Creating…
-            </>
-          ) : (
-            <>
-              <Plus className="w-4 h-4" /> New Production Request
-            </>
-          )}
-        </Button>
+        <div className="flex flex-col sm:flex-row flex-wrap gap-2 w-full sm:w-auto">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => navigate('/inter-branch-requests')}
+            className="w-full sm:w-auto gap-2"
+          >
+            <ArrowRightLeft className="w-4 h-4" /> Inter-branch
+          </Button>
+          <Button variant="primary" onClick={() => void handleNewPR()} disabled={creating} className="w-full sm:w-auto gap-2">
+            {creating ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" /> Creating…
+              </>
+            ) : (
+              <>
+                <Plus className="w-4 h-4" /> New Production Request
+              </>
+            )}
+          </Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -421,6 +451,17 @@ export function ProductionRequestsPage() {
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <div className="font-medium text-blue-600">{r.pr_number}</div>
+                        {(r.inter_branch_request_id || r.is_transfer_request) && (
+                          <Badge
+                            variant="default"
+                            className="mt-1 text-[10px] border-violet-200 bg-violet-50 text-violet-800 gap-0.5"
+                          >
+                            <ArrowRightLeft className="w-3 h-3" />
+                            {r.inter_branch?.ibr_number
+                              ? `Inter-branch · ${r.inter_branch.ibr_number}`
+                              : `Transfer${r.tr_branch?.name ? ` · ${r.tr_branch.name}` : ''}`}
+                          </Badge>
+                        )}
                         <div className="text-sm text-gray-900 mt-0.5">{r.branches?.name ?? '—'}</div>
                       </div>
                       <Badge variant={getStatusVariant(r.status)} className="inline-flex items-center gap-1 whitespace-nowrap shrink-0">
@@ -523,6 +564,17 @@ export function ProductionRequestsPage() {
                       >
                         <td className="px-6 py-4">
                           <div className="font-medium text-blue-600 hover:underline">{r.pr_number}</div>
+                          {(r.inter_branch_request_id || r.is_transfer_request) && (
+                            <Badge
+                              variant="default"
+                              className="mt-1 text-[10px] border-violet-200 bg-violet-50 text-violet-800 gap-0.5"
+                            >
+                              <ArrowRightLeft className="w-3 h-3" />
+                              {r.inter_branch?.ibr_number
+                                ? `Inter-branch · ${r.inter_branch.ibr_number}`
+                                : `Transfer · ${r.tr_branch?.name ?? '—'}`}
+                            </Badge>
+                          )}
                         </td>
                         <td className="px-6 py-4 text-gray-600">{fmt(r.request_date)}</td>
                         <td className="px-6 py-4 font-medium text-gray-900">{r.branches?.name ?? '—'}</td>
@@ -559,6 +611,7 @@ export function ProductionRequestsPage() {
           )}
         </CardContent>
       </Card>
+
     </div>
   );
 }

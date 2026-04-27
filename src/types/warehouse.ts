@@ -52,7 +52,7 @@ export interface OrderFulfillment {
   requiredDate: string;
   productsSummary: string;
   stockStatus: 'Fully Available' | 'Partial' | 'Not Available';
-  fulfillmentStatus: 'To Pick' | 'Picking' | 'Packing' | 'Ready' | 'Blocked';
+  fulfillmentStatus: 'To Pick' | 'Loading' | 'Packing' | 'Ready' | 'Blocked';
   loadingDetails: {
     productName: string;
     qty: number;

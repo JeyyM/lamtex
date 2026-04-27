@@ -36,6 +36,8 @@ import { PurchaseOrdersPage } from './pages/PurchaseOrdersPage';
 import { PurchaseOrderDetailPage } from './pages/PurchaseOrderDetailPage';
 import { ProductionRequestsPage } from './pages/ProductionRequestsPage';
 import { ProductionRequestDetailPage } from './pages/ProductionRequestDetailPage';
+import { InterBranchRequestsPage } from './pages/InterBranchRequestsPage';
+import { InterBranchRequestDetailPage } from './pages/InterBranchRequestDetailPage';
 import { TruckDetailPage } from './pages/TruckDetailPage';
 import WarehousePage from './pages/WarehousePage';
 import ChatsPage from './pages/ChatsPage';
@@ -133,6 +135,8 @@ function AppRoutes() {
             <Route path="purchase-orders/:id" element={<PurchaseOrderDetailPage />} />
             <Route path="production-requests" element={<ProductionRequestsPage />} />
             <Route path="production-requests/:id" element={<ProductionRequestDetailPage />} />
+            <Route path="inter-branch-requests" element={<InterBranchRequestsPage />} />
+            <Route path="inter-branch-requests/:id" element={<InterBranchRequestDetailPage />} />
             <Route path="*" element={<PlaceholderPage />} />
           </Route>
         </Routes>

@@ -28,7 +28,6 @@ import {
   ArrowDown,
   ArrowUpDown,
 } from 'lucide-react';
-
 // ── Types ──────────────────────────────────────────────────
 type POStatus = 'Draft' | 'Requested' | 'Rejected' | 'Accepted' | 'Sent' | 'Confirmed' | 'Partially Received' | 'Completed' | 'Cancelled';
 
@@ -46,6 +45,8 @@ interface PORow {
   notes: string | null;
   created_by: string | null;
   created_at: string;
+  is_transfer_request: boolean;
+  inter_branch_request_id: string | null;
   suppliers: { name: string } | null;
   branches:  { name: string } | null;
   purchase_order_items: { id: string }[];
@@ -64,6 +65,15 @@ const getStatusVariant = (status: POStatus): 'success' | 'warning' | 'danger' | 
   if (status === 'Sent')               return 'default';
   return 'neutral';
 };
+
+/** Inter-branch/transfer POs are not listed here; use **Inter-branch requests** in the app nav. */
+function hideFromMainPurchaseOrderList(po: PORow): boolean {
+  return (
+    po.inter_branch_request_id != null ||
+    po.po_number.startsWith('PO-IBR-') ||
+    po.is_transfer_request === true
+  );
+}
 
 const getStatusIcon = (status: POStatus) => {
   if (status === 'Completed')          return <CheckCircle className="w-3.5 h-3.5" />;
@@ -112,7 +122,7 @@ export function PurchaseOrdersPage() {
           : Promise.resolve({ data: null }),
         supabase
           .from('purchase_orders')
-          .select('*, suppliers(name), branches(name), purchase_order_items(id)')
+          .select('*, suppliers(name), branches:branches!branch_id(name), purchase_order_items(id)')
           .order('created_at', { ascending: false }),
       ]);
       if (ordersResult.error) throw ordersResult.error;
@@ -137,16 +147,22 @@ export function PurchaseOrdersPage() {
     !resolvedBranchId || po.branch_id === resolvedBranchId
   );
 
-  const distinctPoStatuses = useMemo(() => {
-    const s = new Set(branchFiltered.map((po) => po.status).filter(Boolean));
-    return Array.from(s).sort((a, b) => a.localeCompare(b));
-  }, [branchFiltered]);
+  const visiblePurchaseOrders = useMemo(
+    () => branchFiltered.filter((po) => !hideFromMainPurchaseOrderList(po)),
+    [branchFiltered],
+  );
 
-  const filtered = branchFiltered.filter(po => {
+  const distinctPoStatuses = useMemo(() => {
+    const s = new Set<POStatus>(visiblePurchaseOrders.map((po) => po.status).filter((v): v is POStatus => Boolean(v)));
+    return Array.from(s).sort((a, b) => a.localeCompare(b));
+  }, [visiblePurchaseOrders]);
+
+  const filtered = visiblePurchaseOrders.filter((po) => {
     const q = searchQuery.toLowerCase();
     const matchesSearch =
       po.po_number.toLowerCase().includes(q) ||
-      (po.suppliers?.name ?? '').toLowerCase().includes(q);
+      (po.suppliers?.name ?? '').toLowerCase().includes(q) ||
+      (po.branches?.name ?? '').toLowerCase().includes(q);
     const matchesStatus = statusFilter === '' || po.status === statusFilter;
     return matchesSearch && matchesStatus;
   });
@@ -210,12 +226,12 @@ export function PurchaseOrdersPage() {
   }, [searchQuery, statusFilter, resolvedBranchId]);
 
   // ── KPIs ───────────────────────────────────────────────
-  const totalPOs     = branchFiltered.length;
-  const pendingPOs   = branchFiltered.filter(po =>
+  const totalPOs     = visiblePurchaseOrders.length;
+  const pendingPOs   = visiblePurchaseOrders.filter(po =>
     ['Requested', 'Accepted', 'Sent', 'Confirmed', 'Partially Received'].includes(po.status)
   ).length;
-  const completedPOs = branchFiltered.filter(po => po.status === 'Completed').length;
-  const totalValue   = branchFiltered.reduce((s, po) => s + (po.total_amount ?? 0), 0);
+  const completedPOs = visiblePurchaseOrders.filter(po => po.status === 'Completed').length;
+  const totalValue   = visiblePurchaseOrders.reduce((s, po) => s + (po.total_amount ?? 0), 0);
 
   const isOverdue = (po: PORow) =>
     po.expected_delivery_date &&
@@ -300,11 +316,11 @@ export function PurchaseOrdersPage() {
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Purchase Orders</h1>
         </div>
-        <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+        <div className="flex flex-col sm:flex-row flex-wrap gap-2 w-full sm:w-auto sm:items-center">
           <Button variant="outline" className="w-full sm:w-auto gap-2">
             <Download className="w-4 h-4" /> Export
           </Button>
-          <Button variant="primary" onClick={handleNewPO} disabled={creating} className="w-full sm:w-auto gap-2">
+          <Button variant="primary" onClick={() => void handleNewPO()} disabled={creating} className="w-full sm:w-auto gap-2">
             {creating
               ? <><Loader2 className="w-4 h-4 animate-spin" /> Creating…</>
               : <><Plus className="w-4 h-4" /> New Purchase Order</>

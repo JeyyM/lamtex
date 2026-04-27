@@ -77,7 +77,7 @@ export function WarehouseDashboard() {
 
   const getStatusColor = (status: string) => {
     if (status === 'Ready') return 'success';
-    if (status === 'Picking' || status === 'Packing') return 'warning';
+    if (status === 'Loading' || status === 'Packing') return 'warning';
     if (status === 'Blocked') return 'danger';
     return 'default';
   };

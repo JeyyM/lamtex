@@ -51,7 +51,7 @@ DO $$ BEGIN CREATE TYPE material_movement_type AS ENUM ('Receipt', 'Issue', 'Tra
 DO $$ BEGIN CREATE TYPE movement_reference_type AS ENUM ('PO', 'PR', 'Production', 'Transfer Request', 'Manual'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- ── Order Enums ─────────────────────────────────────────────────────────────
-DO $$ BEGIN CREATE TYPE order_status AS ENUM ('Draft', 'Pending', 'Approved', 'Picking', 'Packed', 'Ready', 'Scheduled', 'In Transit', 'Delivered', 'Completed', 'Cancelled', 'Rejected'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE order_status AS ENUM ('Draft', 'Pending', 'Approved', 'Scheduled', 'Loading', 'Packed', 'Ready', 'In Transit', 'Delivered', 'Completed', 'Cancelled', 'Rejected'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE payment_status AS ENUM ('Unbilled', 'Invoiced', 'Partially Paid', 'Paid', 'Overdue'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE delivery_type AS ENUM ('Truck', 'Ship', 'Pickup'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE payment_terms AS ENUM ('COD', '15 Days', '30 Days', '45 Days', '60 Days', '90 Days', 'Custom'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
@@ -106,7 +106,7 @@ DO $$ BEGIN CREATE TYPE shipment_status AS ENUM ('Preparing', 'In Transit', 'Arr
 DO $$ BEGIN CREATE TYPE maintenance_category AS ENUM ('Preventive', 'Corrective', 'Emergency'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- ── Warehouse Enums ─────────────────────────────────────────────────────────
-DO $$ BEGIN CREATE TYPE fulfillment_status AS ENUM ('To Pick', 'Picking', 'Packing', 'Ready', 'Blocked'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE fulfillment_status AS ENUM ('To Pick', 'Loading', 'Packing', 'Ready', 'Blocked'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE warehouse_stock_status AS ENUM ('Fully Available', 'Partial', 'Not Available'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE loading_detail_status AS ENUM ('Pending', 'Loading', 'Partial', 'Full', 'Out of Stock', 'Ready'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE qa_status AS ENUM ('Pending', 'Testing', 'Passed', 'Failed', 'Rework'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
@@ -552,7 +552,7 @@ CREATE TABLE IF NOT EXISTS products (
   total_revenue    NUMERIC(14,2) DEFAULT 0,  -- YTD
   total_units_sold INT DEFAULT 0,            -- YTD
   
-  branch          VARCHAR(10),               -- optional branch filter
+  branch          VARCHAR(100),              -- optional branch filter (matches `branches.name` when set)
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -598,7 +598,7 @@ CREATE TABLE IF NOT EXISTS product_variants (
   lead_time_days  INT NOT NULL DEFAULT 7,
   min_order_qty   INT NOT NULL DEFAULT 100,
   
-  branch          VARCHAR(10),
+  branch          VARCHAR(100),              -- denormalized; matches `branches.name` when set
   last_restocked  TIMESTAMPTZ,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -1009,6 +1009,8 @@ CREATE TABLE IF NOT EXISTS orders (
   -- Dates
   order_date        DATE NOT NULL DEFAULT CURRENT_DATE,
   required_date     DATE,
+  -- Planned date the order leaves the branch (set when status becomes Scheduled)
+  scheduled_departure_date DATE,
   
   -- Delivery
   delivery_type     delivery_type DEFAULT 'Truck',
@@ -1085,10 +1087,14 @@ CREATE TABLE IF NOT EXISTS order_line_items (
   discount_percent NUMERIC(5,2) DEFAULT 0,
   discount_amount NUMERIC(12,2) DEFAULT 0,
   batch_discount  NUMERIC(5,2),           -- Bulk pricing discount %
+  discounts_breakdown JSONB,             -- [{name, percentage}, …] per-item discounts
   line_total      NUMERIC(14,2) NOT NULL DEFAULT 0,
   
   stock_hint      stock_hint DEFAULT 'Available',
   available_stock INT,
+  
+  quantity_shipped  INT,            -- set when order goes In Transit; units deducted from stock
+  quantity_delivered INT,           -- cumulative units marked delivered (partial/ full)
   
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -1514,7 +1520,11 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
   payment_method         TEXT,
   payment_notes          TEXT,
   created_at             TIMESTAMPTZ DEFAULT NOW(),
-  updated_at             TIMESTAMPTZ DEFAULT NOW()
+  updated_at             TIMESTAMPTZ DEFAULT NOW(),
+  -- Inter-branch: receiving materials from another site (PO still used for the workflow)
+  is_transfer_request     BOOLEAN NOT NULL DEFAULT false,
+  transfer_requesting_branch_id UUID REFERENCES branches(id) ON DELETE SET NULL,
+  inter_branch_request_id UUID
 );
 
 -- Add FK from purchase_requisitions to purchase_orders
@@ -1605,7 +1615,11 @@ CREATE TABLE IF NOT EXISTS production_requests (
   rejected_by              TEXT,
   rejection_reason         TEXT,
   created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  -- Inter-branch: transfer / fulfillment request (same PR table)
+  is_transfer_request      BOOLEAN NOT NULL DEFAULT false,
+  transfer_requesting_branch_id UUID REFERENCES branches(id) ON DELETE SET NULL,
+  inter_branch_request_id UUID
 );
 
 CREATE TABLE IF NOT EXISTS production_request_items (
@@ -1639,6 +1653,83 @@ CREATE TABLE IF NOT EXISTS production_request_orders (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (request_id, order_id)
 );
+
+-- 12c2: Inter-branch requests (unified; approved → linked PO + PR)
+CREATE TABLE IF NOT EXISTS inter_branch_requests (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  ibr_number        TEXT NOT NULL UNIQUE,
+  requesting_branch_id  UUID NOT NULL REFERENCES branches(id) ON DELETE RESTRICT,
+  fulfilling_branch_id  UUID NOT NULL REFERENCES branches(id) ON DELETE RESTRICT,
+  status            TEXT NOT NULL DEFAULT 'Draft'
+    CHECK (status IN (
+      'Draft','Pending','Approved','Rejected','Fulfilled','Cancelled',
+      'Scheduled','Loading','Packed','Ready','In Transit','Delivered','Partially Fulfilled','Completed'
+    )),
+  notes             TEXT,
+  created_by        TEXT,
+  submitted_at      TIMESTAMPTZ,
+  approved_by       TEXT,
+  approved_at       TIMESTAMPTZ,
+  rejected_by       TEXT,
+  rejection_reason  TEXT,
+  cancelled_by      TEXT,
+  cancelled_at      TIMESTAMPTZ,
+  fulfilled_by      TEXT,
+  fulfilled_at      TIMESTAMPTZ,
+  linked_purchase_order_id   UUID,
+  linked_production_request_id UUID,
+  scheduled_departure_date DATE,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT ibr_different_branches CHECK (requesting_branch_id IS DISTINCT FROM fulfilling_branch_id)
+);
+
+CREATE TABLE IF NOT EXISTS inter_branch_request_items (
+  id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  request_id         UUID NOT NULL REFERENCES inter_branch_requests(id) ON DELETE CASCADE,
+  line_kind          TEXT NOT NULL
+    CHECK (line_kind IN ('raw_material', 'product')),
+  raw_material_id    UUID REFERENCES raw_materials(id) ON DELETE RESTRICT,
+  product_id         UUID REFERENCES products(id) ON DELETE RESTRICT,
+  product_variant_id UUID REFERENCES product_variants(id) ON DELETE RESTRICT,
+  quantity           NUMERIC(14,2) NOT NULL CHECK (quantity > 0),
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT ibr_item_raw CHECK (
+    line_kind <> 'raw_material' OR
+    (raw_material_id IS NOT NULL AND product_id IS NULL AND product_variant_id IS NULL)
+  ),
+  CONSTRAINT ibr_item_product CHECK (
+    line_kind <> 'product' OR
+    (raw_material_id IS NULL AND product_id IS NOT NULL AND product_variant_id IS NOT NULL)
+  )
+);
+
+CREATE INDEX IF NOT EXISTS idx_ibr_status ON inter_branch_requests(status);
+CREATE INDEX IF NOT EXISTS idx_ibr_requesting ON inter_branch_requests(requesting_branch_id);
+CREATE INDEX IF NOT EXISTS idx_ibr_fulfilling ON inter_branch_requests(fulfilling_branch_id);
+CREATE INDEX IF NOT EXISTS idx_ibr_items_request ON inter_branch_request_items(request_id);
+
+-- FKs: IBR → PO/PR and back-references
+DO $$ BEGIN
+  ALTER TABLE inter_branch_requests
+    ADD CONSTRAINT fk_ibr_linked_po
+    FOREIGN KEY (linked_purchase_order_id) REFERENCES purchase_orders(id) ON DELETE SET NULL;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  ALTER TABLE inter_branch_requests
+    ADD CONSTRAINT fk_ibr_linked_pr
+    FOREIGN KEY (linked_production_request_id) REFERENCES production_requests(id) ON DELETE SET NULL;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  ALTER TABLE purchase_orders
+    ADD CONSTRAINT fk_po_inter_branch_request
+    FOREIGN KEY (inter_branch_request_id) REFERENCES inter_branch_requests(id) ON DELETE SET NULL;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  ALTER TABLE production_requests
+    ADD CONSTRAINT fk_pr_inter_branch_request
+    FOREIGN KEY (inter_branch_request_id) REFERENCES inter_branch_requests(id) ON DELETE SET NULL;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- 12d: Goods Receipt Notes (GRN)
 CREATE TABLE IF NOT EXISTS goods_receipt_notes (
@@ -2528,6 +2619,10 @@ CREATE INDEX IF NOT EXISTS idx_purchase_requisitions_status ON purchase_requisit
 CREATE INDEX IF NOT EXISTS idx_purchase_orders_supplier ON purchase_orders(supplier_id);
 CREATE INDEX IF NOT EXISTS idx_purchase_orders_status ON purchase_orders(status);
 CREATE INDEX IF NOT EXISTS idx_purchase_orders_branch ON purchase_orders(branch_id);
+CREATE INDEX IF NOT EXISTS idx_purchase_orders_transfer ON purchase_orders(is_transfer_request) WHERE is_transfer_request = true;
+CREATE INDEX IF NOT EXISTS idx_purchase_orders_transfer_req_branch ON purchase_orders(transfer_requesting_branch_id) WHERE transfer_requesting_branch_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_purchase_orders_ibr
+  ON purchase_orders(inter_branch_request_id) WHERE inter_branch_request_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_purchase_order_items_order ON purchase_order_items(order_id);
 CREATE INDEX IF NOT EXISTS idx_purchase_order_items_material ON purchase_order_items(material_id);
 CREATE INDEX IF NOT EXISTS idx_po_receipts_order ON purchase_order_receipts(order_id);
@@ -2536,6 +2631,10 @@ CREATE INDEX IF NOT EXISTS idx_purchase_requests_branch ON purchase_requests(bra
 CREATE INDEX IF NOT EXISTS idx_purchase_requests_status ON purchase_requests(status);
 CREATE INDEX IF NOT EXISTS idx_production_requests_branch ON production_requests(branch_id);
 CREATE INDEX IF NOT EXISTS idx_production_requests_status ON production_requests(status);
+CREATE INDEX IF NOT EXISTS idx_production_requests_transfer ON production_requests(is_transfer_request) WHERE is_transfer_request = true;
+CREATE INDEX IF NOT EXISTS idx_production_requests_transfer_req_branch ON production_requests(transfer_requesting_branch_id) WHERE transfer_requesting_branch_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_production_requests_ibr
+  ON production_requests(inter_branch_request_id) WHERE inter_branch_request_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_production_request_items_request ON production_request_items(request_id);
 CREATE INDEX IF NOT EXISTS idx_production_request_logs_req ON production_request_logs(request_id);
 CREATE INDEX IF NOT EXISTS idx_production_request_orders_request ON production_request_orders(request_id);
@@ -2719,33 +2818,33 @@ END $$;
 -- SECTION 26: SEED DATA
 -- ============================================================================
 
--- Branches
+-- Branches (titles: region + LAMTEX role; keep in sync with `src/constants/lamtexBranches.ts`)
 INSERT INTO branches (code, name, is_active) VALUES
-  ('MNL', 'Manila',    TRUE),
-  ('CEB', 'Cebu',      TRUE),
-  ('BTG', 'Batangas',  TRUE)
+  ('MNL', 'Manila (NCR) - LAMTEX HQ, warehouse & NCR market',    TRUE),
+  ('CEB', 'Cebu (Visayas) - LAMTEX regional hub & warehouse',  TRUE),
+  ('BTG', 'Batangas - LAMTEX plant & Calabarzon staging',       TRUE)
 ON CONFLICT (code) DO NOTHING;
 
--- Product categories (branch-specific; slug is the unique key)
+-- Product categories (branch-specific; slug is the unique key; `branch` = `branches.name`)
 INSERT INTO product_categories (name, slug, description, sort_order, is_active, branch) VALUES
-  -- Manila
-  ('M_HDPE Pipes',        'm-hdpe-pipes',        'Heavy-duty HDPE piping for industrial use',         1, true, 'Manila'),
-  ('M_HDPE Fittings',     'm-hdpe-fittings',     'Elbows, tees, couplings for HDPE systems',          2, true, 'Manila'),
-  ('M_UPVC Sanitary',     'm-upvc-sanitary',     'Sanitary drainage and sewage pipes',                3, true, 'Manila'),
-  ('M_UPVC Electrical',   'm-upvc-electrical',   'Conduit pipes for electrical wiring',               4, true, 'Manila'),
-  ('M_Pressure Line',     'm-pressure-line',     'High-pressure rated water supply pipes',            5, true, 'Manila'),
-  ('M_PPR Pipes',         'm-ppr-pipes',         'Polypropylene random copolymer hot/cold pipes',     6, true, 'Manila'),
-  -- Cebu
-  ('C_HDPE Pipes',        'c-hdpe-pipes',        'HDPE distribution pipes for Cebu operations',       1, true, 'Cebu'),
-  ('C_PVC Conduits',      'c-pvc-conduits',      'PVC electrical conduit pipes',                       2, true, 'Cebu'),
-  ('C_Sanitary Fittings', 'c-sanitary-fittings', 'Drainage fittings and traps',                        3, true, 'Cebu'),
-  ('C_Garden Hoses',      'c-garden-hoses',      'Flexible garden and irrigation hoses',               4, true, 'Cebu'),
-  -- Batangas
-  ('B_Industrial Pipes',  'b-industrial-pipes',  'Heavy industrial grade piping systems',             1, true, 'Batangas'),
-  ('B_HDPE Fittings',     'b-hdpe-fittings',     'HDPE couplings and reducers',                        2, true, 'Batangas'),
-  ('B_Chemical PVC',      'b-chemical-pvc',      'Chemical-resistant PVC pipe systems',                3, true, 'Batangas'),
-  ('B_Drainage Systems',  'b-drainage-systems',  'Underground drainage and stormwater pipes',          4, true, 'Batangas'),
-  ('B_Flexible Hoses',    'b-flexible-hoses',    'Industrial flexible hose assemblies',                5, true, 'Batangas')
+  -- Manila (NCR)
+  ('M_HDPE Pipes',        'm-hdpe-pipes',        'Heavy-duty HDPE piping for industrial use',         1, true, 'Manila (NCR) - LAMTEX HQ, warehouse & NCR market'),
+  ('M_HDPE Fittings',     'm-hdpe-fittings',     'Elbows, tees, couplings for HDPE systems',          2, true, 'Manila (NCR) - LAMTEX HQ, warehouse & NCR market'),
+  ('M_UPVC Sanitary',     'm-upvc-sanitary',     'Sanitary drainage and sewage pipes',                3, true, 'Manila (NCR) - LAMTEX HQ, warehouse & NCR market'),
+  ('M_UPVC Electrical',   'm-upvc-electrical',   'Conduit pipes for electrical wiring',               4, true, 'Manila (NCR) - LAMTEX HQ, warehouse & NCR market'),
+  ('M_Pressure Line',     'm-pressure-line',     'High-pressure rated water supply pipes',            5, true, 'Manila (NCR) - LAMTEX HQ, warehouse & NCR market'),
+  ('M_PPR Pipes',         'm-ppr-pipes',         'Polypropylene random copolymer hot/cold pipes',     6, true, 'Manila (NCR) - LAMTEX HQ, warehouse & NCR market'),
+  -- Cebu (Visayas)
+  ('C_HDPE Pipes',        'c-hdpe-pipes',        'HDPE distribution pipes for Cebu operations',       1, true, 'Cebu (Visayas) - LAMTEX regional hub & warehouse'),
+  ('C_PVC Conduits',      'c-pvc-conduits',      'PVC electrical conduit pipes',                       2, true, 'Cebu (Visayas) - LAMTEX regional hub & warehouse'),
+  ('C_Sanitary Fittings', 'c-sanitary-fittings', 'Drainage fittings and traps',                        3, true, 'Cebu (Visayas) - LAMTEX regional hub & warehouse'),
+  ('C_Garden Hoses',      'c-garden-hoses',      'Flexible garden and irrigation hoses',               4, true, 'Cebu (Visayas) - LAMTEX regional hub & warehouse'),
+  -- Batangas (Calabarzon)
+  ('B_Industrial Pipes',  'b-industrial-pipes',  'Heavy industrial grade piping systems',             1, true, 'Batangas - LAMTEX plant & Calabarzon staging'),
+  ('B_HDPE Fittings',     'b-hdpe-fittings',     'HDPE couplings and reducers',                        2, true, 'Batangas - LAMTEX plant & Calabarzon staging'),
+  ('B_Chemical PVC',      'b-chemical-pvc',      'Chemical-resistant PVC pipe systems',                3, true, 'Batangas - LAMTEX plant & Calabarzon staging'),
+  ('B_Drainage Systems',  'b-drainage-systems',  'Underground drainage and stormwater pipes',          4, true, 'Batangas - LAMTEX plant & Calabarzon staging'),
+  ('B_Flexible Hoses',    'b-flexible-hoses',    'Industrial flexible hose assemblies',                5, true, 'Batangas - LAMTEX plant & Calabarzon staging')
 ON CONFLICT (slug) DO NOTHING;
 
 -- Material categories

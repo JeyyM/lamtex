@@ -136,7 +136,7 @@ BEGIN
     ELSIF v_r < 0.94 THEN
       v_status := 'Packed';
     ELSIF v_r < 0.97 THEN
-      v_status := 'Picking';
+      v_status := 'Loading';
     ELSIF v_r < 0.99 THEN
       v_status := 'Pending';
     ELSE
@@ -177,7 +177,7 @@ BEGIN
       v_pmethod := 'Offline';
     END IF;
 
-    SELECT c.id, c.name, coalesce(c.branch_id, (SELECT id FROM branches WHERE name = 'Manila' LIMIT 1))
+    SELECT c.id, c.name, coalesce(c.branch_id, (SELECT id FROM branches WHERE code = 'MNL' LIMIT 1))
     INTO v_cust, v_cust_name, v_branch
     FROM customers c
     WHERE c.email LIKE 'hist.analytics.%@seed.lamtex'

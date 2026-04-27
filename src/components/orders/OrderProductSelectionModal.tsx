@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAppContext } from '@/src/store/AppContext';
 import { Button } from '@/src/components/ui/Button';
 import { supabase } from '@/src/lib/supabase';
+import { getVariantIdsWithStockAtBothBranches } from '@/src/lib/interBranchRequest';
 import {
   X,
   Search,
@@ -232,6 +233,13 @@ const VARIANT_SELECT = `
   product_bulk_discounts(min_qty, max_qty, discount_percent, is_active)
 `;
 
+export type OrderProductInitialEdit = {
+  productId: string;
+  variantId: string;
+  /** Whole units */
+  quantity: number;
+};
+
 interface OrderProductSelectionModalProps {
   open: boolean;
   onClose: () => void;
@@ -240,6 +248,14 @@ interface OrderProductSelectionModalProps {
   /** Variants that are already on the request/order and cannot be added again. */
   excludeVariantIds: Set<string>;
   onConfirm: (payload: OrderProductSelectionConfirm) => void;
+  /** Inter-branch: when both are set, only variants with `product_variant_stock` at both branches are listed. */
+  interBranchRequestingBranchId?: string | null;
+  interBranchFulfillingBranchId?: string | null;
+  /**
+   * When set (e.g. click existing IBR/PR line), fetches the product and opens the detail view with
+   * quantity and variant pre-filled. Parent should omit the line’s `variantId` from `excludeVariantIds`.
+   */
+  initialEdit?: OrderProductInitialEdit | null;
 }
 
 /**
@@ -252,8 +268,19 @@ export function OrderProductSelectionModal({
   purpose,
   excludeVariantIds,
   onConfirm,
+  interBranchRequestingBranchId = null,
+  interBranchFulfillingBranchId = null,
+  initialEdit = null,
 }: OrderProductSelectionModalProps) {
   const { branch } = useAppContext();
+
+  const useDualBranchFilter = Boolean(
+    interBranchRequestingBranchId &&
+      interBranchFulfillingBranchId &&
+      interBranchRequestingBranchId !== interBranchFulfillingBranchId,
+  );
+  const [dualVariantIds, setDualVariantIds] = useState<Set<string> | null>(null);
+  const [loadingDualBranch, setLoadingDualBranch] = useState(false);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [searchLoading, setSearchLoading] = useState(false);
@@ -269,10 +296,14 @@ export function OrderProductSelectionModal({
   const [selectedVariant, setSelectedVariant] = useState<DBVariant | null>(null);
   /** String so the field can be cleared; parsed on confirm / ±. */
   const [variantQtyInput, setVariantQtyInput] = useState('1');
-  const [variantPrice, setVariantPrice] = useState(0);
+  /** Free text while typing; empty allowed (order mode only). */
+  const [variantPriceInput, setVariantPriceInput] = useState('0');
   const [variantDiscounts, setVariantDiscounts] = useState<Array<{ name: string; percentage: number }>>([]);
 
   const isProduction = purpose === 'production';
+  const [initializingEdit, setInitializingEdit] = useState(false);
+  /** Bumps when user hits “back” on the detail overlay while `initialEdit` is set, so the line re-opens. */
+  const [initialEditReopen, setInitialEditReopen] = useState(0);
 
   const resetBrowser = useCallback(() => {
     setSearchQuery('');
@@ -285,9 +316,21 @@ export function OrderProductSelectionModal({
     setSelectedProduct(null);
     setSelectedVariant(null);
     setVariantQtyInput('1');
-    setVariantPrice(0);
+    setVariantPriceInput('0');
     setVariantDiscounts([]);
   }, []);
+
+  /** Back from product detail: if editing an existing line, re-bootstrap that line’s product. */
+  const backFromProductDetail = useCallback(() => {
+    setSelectedProduct(null);
+    setSelectedVariant(null);
+    setVariantQtyInput('1');
+    setVariantPriceInput('0');
+    setVariantDiscounts([]);
+    if (initialEdit) {
+      setInitialEditReopen((n) => n + 1);
+    }
+  }, [initialEdit]);
 
   const resetAll = useCallback(() => {
     resetBrowser();
@@ -300,27 +343,38 @@ export function OrderProductSelectionModal({
     }
   }, [open, resetAll]);
 
-  // Load categories when modal opens (refetch if branch context changes)
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setDualVariantIds(null);
+      setLoadingDualBranch(false);
+      return;
+    }
+    if (!useDualBranchFilter) {
+      setDualVariantIds(null);
+      setLoadingDualBranch(false);
+      return;
+    }
     let cancelled = false;
     (async () => {
-      setCategoriesLoading(true);
-      const { data } = await supabase
-        .from('product_categories')
-        .select('id, name, image_url')
-        .or(`branch.eq.${branch},branch.is.null`)
-        .eq('is_active', true)
-        .order('sort_order');
-      if (!cancelled) {
-        setCategories(data ?? []);
-        setCategoriesLoading(false);
+      setLoadingDualBranch(true);
+      setDualVariantIds(null);
+      try {
+        const set = await getVariantIdsWithStockAtBothBranches(
+          supabase,
+          interBranchRequestingBranchId!,
+          interBranchFulfillingBranchId!,
+        );
+        if (!cancelled) setDualVariantIds(set);
+      } catch {
+        if (!cancelled) setDualVariantIds(new Set());
+      } finally {
+        if (!cancelled) setLoadingDualBranch(false);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [open, branch]);
+  }, [open, useDualBranchFilter, interBranchRequestingBranchId, interBranchFulfillingBranchId]);
 
   const branchIdPromise = useCallback(async () => {
     const { data } = await supabase.from('branches').select('id').eq('name', branch).single();
@@ -344,8 +398,149 @@ export function OrderProductSelectionModal({
     [],
   );
 
+  /** For inter-branch, show the tighter of the two branch quantities (bottleneck). */
+  const fetchStockMapMin = useCallback(
+    async (variantIds: string[], branchA: string, branchB: string) => {
+      const out: Record<string, number> = {};
+      if (variantIds.length === 0) return out;
+      const [{ data: da }, { data: db }] = await Promise.all([
+        supabase
+          .from('product_variant_stock')
+          .select('variant_id, quantity')
+          .eq('branch_id', branchA)
+          .in('variant_id', variantIds),
+        supabase
+          .from('product_variant_stock')
+          .select('variant_id, quantity')
+          .eq('branch_id', branchB)
+          .in('variant_id', variantIds),
+      ]);
+      const mapA = new Map<string, number>();
+      const mapB = new Map<string, number>();
+      (da ?? []).forEach((r: { variant_id: string; quantity: number }) => mapA.set(r.variant_id, r.quantity));
+      (db ?? []).forEach((r: { variant_id: string; quantity: number }) => mapB.set(r.variant_id, r.quantity));
+      for (const id of variantIds) {
+        out[id] = Math.min(mapA.get(id) ?? 0, mapB.get(id) ?? 0);
+      }
+      return out;
+    },
+    [],
+  );
+
+  // Open detail view with a specific product/variant/qty (e.g. click existing IBR/PR line)
+  useEffect(() => {
+    if (!open || !initialEdit) {
+      setInitializingEdit(false);
+      return;
+    }
+    if (useDualBranchFilter && (loadingDualBranch || dualVariantIds == null)) {
+      setInitializingEdit(true);
+      return;
+    }
+    let cancelled = false;
+    setInitializingEdit(true);
+    void (async () => {
+      try {
+        const branchId = await branchIdPromise();
+        const { data: productRow, error } = await supabase
+          .from('products')
+          .select(`id, name, image_url, product_variants(${VARIANT_SELECT})`)
+          .eq('id', initialEdit.productId)
+          .eq('status', 'Active')
+          .maybeSingle();
+        if (error || !productRow || cancelled) {
+          if (!cancelled) setInitializingEdit(false);
+          return;
+        }
+        const allVariantIds = (productRow as { product_variants?: { id: string }[] }).product_variants?.map((v) => v.id) ?? [];
+        const stockMap =
+          useDualBranchFilter && interBranchRequestingBranchId && interBranchFulfillingBranchId
+            ? await fetchStockMapMin(allVariantIds, interBranchRequestingBranchId, interBranchFulfillingBranchId)
+            : await fetchStockMap(allVariantIds, branchId);
+        const [base] = mapRowsToProducts([productRow as any], stockMap);
+        if (!base || cancelled) {
+          if (!cancelled) setInitializingEdit(false);
+          return;
+        }
+        let variants = base.variants;
+        if (useDualBranchFilter && dualVariantIds) {
+          variants = base.variants.filter(
+            (v) => dualVariantIds.has(v.id) || v.id === initialEdit.variantId,
+          );
+        }
+        const vSel = variants.find((v) => v.id === initialEdit.variantId) ?? base.variants.find((v) => v.id === initialEdit.variantId);
+        if (!vSel || cancelled) {
+          if (!cancelled) setInitializingEdit(false);
+          return;
+        }
+        if (cancelled) return;
+        setSelectedProduct({ ...base, variants });
+        setSelectedVariant(vSel);
+        setVariantQtyInput(String(Math.max(1, Math.floor(Number(initialEdit.quantity)) || 1)));
+        setVariantPriceInput(String(vSel.unit_price));
+        setVariantDiscounts([]);
+        setSearchQuery('');
+        setSelectedCategory(null);
+        setCategoryProducts([]);
+        setSearchResults([]);
+      } finally {
+        if (!cancelled) setInitializingEdit(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    open,
+    initialEdit,
+    initialEditReopen,
+    useDualBranchFilter,
+    loadingDualBranch,
+    dualVariantIds,
+    interBranchRequestingBranchId,
+    interBranchFulfillingBranchId,
+    branchIdPromise,
+    fetchStockMap,
+    fetchStockMapMin,
+  ]);
+
+  // Load categories when modal opens (refetch if branch context changes)
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    (async () => {
+      setCategoriesLoading(true);
+      const { data } = await supabase
+        .from('product_categories')
+        .select('id, name, image_url')
+        .or(`branch.eq.${branch},branch.is.null`)
+        .eq('is_active', true)
+        .order('sort_order');
+      if (!cancelled) {
+        setCategories(data ?? []);
+        setCategoriesLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, branch]);
+
+  const applyDualVariantFilter = useCallback(
+    (list: DBProduct[]): DBProduct[] => {
+      if (!useDualBranchFilter || !dualVariantIds) return list;
+      return list
+        .map((p) => ({ ...p, variants: p.variants.filter((v) => dualVariantIds.has(v.id)) }))
+        .filter((p) => p.variants.length > 0);
+    },
+    [useDualBranchFilter, dualVariantIds],
+  );
+
   const loadProductsForCategory = useCallback(
     async (cat: DBCategory) => {
+      if (useDualBranchFilter && (loadingDualBranch || dualVariantIds == null)) {
+        return;
+      }
       setSelectedCategory(cat);
       setProductsLoading(true);
       setCategoryProducts([]);
@@ -365,12 +560,25 @@ export function OrderProductSelectionModal({
       const allVariantIds = productsData.flatMap(
         (p: any) => p.product_variants?.map((v: any) => v.id) ?? [],
       );
-      const stockMap = await fetchStockMap(allVariantIds, branchId);
-      const mapped = mapRowsToProducts(productsData, stockMap);
+      const stockMap =
+        useDualBranchFilter && interBranchRequestingBranchId && interBranchFulfillingBranchId
+          ? await fetchStockMapMin(allVariantIds, interBranchRequestingBranchId, interBranchFulfillingBranchId)
+          : await fetchStockMap(allVariantIds, branchId);
+      const mapped = applyDualVariantFilter(mapRowsToProducts(productsData, stockMap));
       setCategoryProducts(mapped);
       setProductsLoading(false);
     },
-    [branchIdPromise, fetchStockMap],
+    [
+      branchIdPromise,
+      fetchStockMap,
+      fetchStockMapMin,
+      applyDualVariantFilter,
+      useDualBranchFilter,
+      loadingDualBranch,
+      dualVariantIds,
+      interBranchRequestingBranchId,
+      interBranchFulfillingBranchId,
+    ],
   );
 
   // Debounced name search (global), same need as create-order "search" branch
@@ -379,6 +587,11 @@ export function OrderProductSelectionModal({
     const q = searchQuery.trim();
     if (q.length < 2) {
       setSearchResults([]);
+      return;
+    }
+    if (useDualBranchFilter && (loadingDualBranch || dualVariantIds == null)) {
+      setSearchResults([]);
+      setSearchLoading(loadingDualBranch);
       return;
     }
     const t = setTimeout(() => {
@@ -400,13 +613,28 @@ export function OrderProductSelectionModal({
         const allVariantIds = productsData.flatMap(
           (p: any) => p.product_variants?.map((v: any) => v.id) ?? [],
         );
-        const stockMap = await fetchStockMap(allVariantIds, branchId);
-        setSearchResults(mapRowsToProducts(productsData, stockMap));
+        const stockMap =
+          useDualBranchFilter && interBranchRequestingBranchId && interBranchFulfillingBranchId
+            ? await fetchStockMapMin(allVariantIds, interBranchRequestingBranchId, interBranchFulfillingBranchId)
+            : await fetchStockMap(allVariantIds, branchId);
+        setSearchResults(applyDualVariantFilter(mapRowsToProducts(productsData, stockMap)));
         setSearchLoading(false);
       })();
     }, 300);
     return () => clearTimeout(t);
-  }, [searchQuery, open, branchIdPromise, fetchStockMap]);
+  }, [
+    searchQuery,
+    open,
+    branchIdPromise,
+    fetchStockMap,
+    fetchStockMapMin,
+    applyDualVariantFilter,
+    useDualBranchFilter,
+    loadingDualBranch,
+    dualVariantIds,
+    interBranchRequestingBranchId,
+    interBranchFulfillingBranchId,
+  ]);
 
   const filteredLocal = useMemo(() => {
     if (searchQuery.trim() === '') return categoryProducts;
@@ -420,25 +648,31 @@ export function OrderProductSelectionModal({
     return searchResults;
   }, [searchQuery, filteredLocal, searchResults]);
 
-  const hasAvailableVariant = (p: DBProduct) =>
-    p.variants.some((v) => !excludeVariantIds.has(v.id));
+  const variantIsSelectable = useCallback(
+    (variantId: string) =>
+      !excludeVariantIds.has(variantId) ||
+      (initialEdit != null && variantId === initialEdit.variantId),
+    [excludeVariantIds, initialEdit],
+  );
+
+  const hasAvailableVariant = (p: DBProduct) => p.variants.some((v) => variantIsSelectable(v.id));
 
   const openProduct = (p: DBProduct) => {
     if (!hasAvailableVariant(p)) return;
-    const available = p.variants.filter((v) => !excludeVariantIds.has(v.id));
+    const available = p.variants.filter((v) => variantIsSelectable(v.id));
     if (available.length === 0) return;
     setSelectedProduct({ ...p, variants: p.variants });
     const first = available[0]!;
     setSelectedVariant(first);
     setVariantQtyInput('1');
-    setVariantPrice(first.unit_price);
+    setVariantPriceInput(String(first.unit_price));
     setVariantDiscounts([]);
   };
 
   const visibleVariants = useMemo(() => {
     if (!selectedProduct) return [];
-    return selectedProduct.variants.filter((v) => !excludeVariantIds.has(v.id));
-  }, [selectedProduct, excludeVariantIds]);
+    return selectedProduct.variants.filter((v) => variantIsSelectable(v.id));
+  }, [selectedProduct, variantIsSelectable]);
 
   const addDiscount = () => setVariantDiscounts((d) => [...d, { name: '', percentage: 0 }]);
   const updateDiscount = (index: number, field: 'name' | 'percentage', value: string) => {
@@ -476,6 +710,21 @@ export function OrderProductSelectionModal({
     }
     const qty = parsed;
 
+    let orderUnitPrice: number | undefined;
+    if (purpose === 'order') {
+      const priceRaw = variantPriceInput.trim();
+      if (priceRaw === '') {
+        alert('Enter a price per unit.');
+        return;
+      }
+      const up = parseFloat(priceRaw);
+      if (!Number.isFinite(up) || up < 0) {
+        alert('Enter a valid price per unit.');
+        return;
+      }
+      orderUnitPrice = up;
+    }
+
     const desc = [selectedVariant.size, selectedVariant.description].filter(Boolean).join(' — ');
     const payload: OrderProductSelectionConfirm = {
       productId: selectedProduct.id,
@@ -487,8 +736,8 @@ export function OrderProductSelectionModal({
       stock: selectedVariant.stock,
     };
 
-    if (purpose === 'order') {
-      payload.unitPrice = variantPrice;
+    if (purpose === 'order' && orderUnitPrice !== undefined) {
+      payload.unitPrice = orderUnitPrice;
       payload.originalPrice = selectedVariant.unit_price;
       payload.discounts = [...variantDiscounts];
     }
@@ -517,10 +766,18 @@ export function OrderProductSelectionModal({
               )}
               <div>
                 <h2 className="text-lg sm:text-xl font-bold text-gray-900">
-                  {isProduction ? 'Add product to produce' : 'Add products to order'}
+                  {initialEdit
+                    ? 'Edit product line'
+                    : isProduction
+                      ? 'Add product to produce'
+                      : 'Add products to order'}
                 </h2>
                 <p className="text-sm text-gray-500 mt-0.5">
-                  {isProduction ? 'Category or search, then a size' : 'Browse categories and select a product'}
+                  {initialEdit
+                    ? 'Update quantity or variant, then apply.'
+                    : isProduction
+                      ? 'Category or search, then a size'
+                      : 'Browse categories and select a product'}
                 </p>
               </div>
             </div>
@@ -544,13 +801,26 @@ export function OrderProductSelectionModal({
               />
             </div>
 
+            {initialEdit && initializingEdit && !selectedProduct && (
+              <div className="flex flex-col items-center justify-center py-16 text-gray-500 gap-2">
+                <Loader2 className="w-8 h-8 animate-spin text-red-500" />
+                <p className="text-sm">Loading line…</p>
+              </div>
+            )}
+
+            {!(initialEdit && initializingEdit && !selectedProduct) && (
+            <>
             {searchQuery.trim() === '' && !selectedCategory ? (
               <div>
                 <p className="text-xs text-gray-500 mb-2">Select a category</p>
-                {categoriesLoading ? (
+                {categoriesLoading || (useDualBranchFilter && loadingDualBranch) ? (
                   <div className="flex items-center justify-center h-32 text-gray-400 text-sm gap-2">
                     <Loader2 className="w-4 h-4 animate-spin" />
                     Loading…
+                  </div>
+                ) : useDualBranchFilter && dualVariantIds && dualVariantIds.size === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-32 text-amber-800 text-sm text-center px-4">
+                    No product names have variant stock at both the requesting and fulfilling branch.
                   </div>
                 ) : (
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 max-h-80 overflow-y-auto p-1">
@@ -558,8 +828,9 @@ export function OrderProductSelectionModal({
                       <button
                         key={cat.id}
                         type="button"
+                        disabled={useDualBranchFilter && (loadingDualBranch || dualVariantIds == null)}
                         onClick={() => void loadProductsForCategory(cat)}
-                        className="flex flex-col items-center p-4 border border-gray-200 rounded-lg hover:border-red-500 hover:bg-red-50 transition-all group"
+                        className="flex flex-col items-center p-4 border border-gray-200 rounded-lg hover:border-red-500 hover:bg-red-50 transition-all group disabled:opacity-50 disabled:pointer-events-none"
                       >
                         {cat.image_url ? (
                           <img src={cat.image_url} alt={cat.name} className="w-12 h-12 object-cover rounded-lg mb-2" />
@@ -676,6 +947,8 @@ export function OrderProductSelectionModal({
                 </div>
               </div>
             )}
+            </>
+            )}
           </div>
 
           <div className="px-4 md:px-6 py-4 border-t border-gray-200 flex justify-end">
@@ -691,7 +964,7 @@ export function OrderProductSelectionModal({
           <div className="bg-white rounded-none lg:rounded-lg shadow-2xl w-full h-full lg:h-auto lg:max-w-4xl lg:max-h-[85vh] overflow-hidden flex flex-col">
             <button
               type="button"
-              onClick={resetDetail}
+              onClick={backFromProductDetail}
               className="absolute top-4 right-4 z-20 p-2 bg-white rounded-full shadow-lg hover:bg-gray-100"
               aria-label="Back to list"
             >
@@ -714,13 +987,28 @@ export function OrderProductSelectionModal({
                       <div className="flex items-center gap-2 min-w-0">
                         <span className="text-lg font-bold text-gray-900 flex-shrink-0">₱</span>
                         <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={variantPrice}
-                          onChange={(e) => setVariantPrice(Math.max(0, parseFloat(e.target.value) || 0))}
+                          type="text"
+                          inputMode="decimal"
+                          autoComplete="off"
+                          value={variantPriceInput}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            if (v === '') {
+                              setVariantPriceInput('');
+                              return;
+                            }
+                            if (/^\d*\.?\d*$/.test(v)) setVariantPriceInput(v);
+                          }}
+                          onBlur={() => {
+                            setVariantPriceInput((prev) => {
+                              const t = prev.trim();
+                              if (t === '') return '';
+                              if (t.endsWith('.')) return t.slice(0, -1) || '0';
+                              return prev;
+                            });
+                          }}
                           onWheel={(e) => e.preventDefault()}
-                          className="min-w-0 w-full text-xl font-bold text-gray-900 bg-white px-3 py-2 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                          className="min-w-0 w-full text-xl font-bold text-gray-900 bg-white px-3 py-2 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
                         />
                       </div>
                       <p className="text-xs text-gray-500 mt-2">Base price: ₱{selectedVariant.unit_price.toLocaleString()}</p>
@@ -812,7 +1100,7 @@ export function OrderProductSelectionModal({
                           onClick={() => {
                             setSelectedVariant(v);
                             setVariantQtyInput('1');
-                            setVariantPrice(v.unit_price);
+                            setVariantPriceInput(String(v.unit_price));
                           }}
                           className={`px-4 py-3 border-2 rounded-lg font-medium transition-all text-left ${
                             v.id === selectedVariant.id

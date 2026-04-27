@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
@@ -8,8 +9,15 @@ import { useAppContext } from '@/src/store/AppContext';
 import { OrderDetail, OrderStatus, OrderLineItem, OrderLog, ProofDocument } from '@/src/types/orders';
 import { PaymentLink } from '@/src/types/payments';
 import { PaymentLinkModal } from '@/src/components/payments/PaymentLinkModal';
-import { CancelOrderModal, CancellationData } from '@/src/components/orders/CancelOrderModal';
-import { FulfillOrderModal, FulfillmentData } from '@/src/components/orders/FulfillOrderModal';
+import {
+  FulfillOrderModal,
+  FulfillmentData,
+  fulfillmentRemaining,
+} from '@/src/components/orders/FulfillOrderModal';
+import { MarkInTransitModal } from '@/src/components/orders/MarkInTransitModal';
+import ImageGalleryModal from '@/src/components/ImageGalleryModal';
+
+const ORDER_PROOF_GALLERY_FOLDER = 'order-proofs';
 import {
   ArrowLeft,
   Edit,
@@ -33,7 +41,6 @@ import {
   Search,
   ShoppingCart,
   Minus,
-  Check,
   ArrowUp,
   Download,
   Upload,
@@ -50,6 +57,11 @@ interface DBBulkDiscount { min_qty: number; max_qty: number | null; discount_per
 interface DBVariantDet { id: string; size: string; description: string | null; unit_price: number; stock: number; bulk_discounts: DBBulkDiscount[]; }
 interface DBProductDet { id: string; name: string; image_url: string | null; variants: DBVariantDet[]; }
 interface DBCategoryDet { id: string; name: string; image_url: string | null; }
+
+/** `order_line_items.id` must be a DB UUID — unsaved rows may use temp ids like `item-…`. */
+function isPersistedOrderLineId(id: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+}
 
 export function OrderDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -75,17 +87,18 @@ export function OrderDetailPage() {
   // Cache fetched products by id for instant lookup when re-editing items
   const [productCache, setProductCache] = useState<Record<string, DBProductDet>>({});
   
-  // Cancel order state
-  const [showCancelModal, setShowCancelModal] = useState(false);
-  
   // Fulfill order state
   const [showFulfillModal, setShowFulfillModal] = useState(false);
   
   // Invoice and Proof states
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
   const [showProofModal, setShowProofModal] = useState(false);
+  const [showProofImageGallery, setShowProofImageGallery] = useState(false);
   const [proofType, setProofType] = useState<'delivery' | 'payment' | 'receipt'>('delivery');
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  /** Public URL from Image Gallery (compressed upload). */
+  const [selectedProofImageUrl, setSelectedProofImageUrl] = useState<string | null>(null);
+  /** Optional PDF when image gallery is not used. */
+  const [selectedProofPdf, setSelectedProofPdf] = useState<File | null>(null);
   const [proofNotes, setProofNotes] = useState('');
   const [proofs, setProofs] = useState<ProofDocument[]>([]);
   
@@ -99,10 +112,17 @@ export function OrderDetailPage() {
   const [rejectionReason, setRejectionReason] = useState('');
   const [approvalLoading, setApprovalLoading] = useState(false);
 
+  const [showScheduleModal, setShowScheduleModal] = useState(false);
+  const [pickScheduleDate, setPickScheduleDate] = useState('');
+  const [logisticsLoading, setLogisticsLoading] = useState(false);
+  const [showInTransitModal, setShowInTransitModal] = useState(false);
+  const [inTransitSubmitting, setInTransitSubmitting] = useState(false);
+
   // Supabase data state
   const [order, setOrder] = useState<OrderDetail | null>(null);
   const [orderLogs, setOrderLogs] = useState<OrderLog[]>([]);
   const [loading, setLoading] = useState(true);
+  const [customerList, setCustomerList] = useState<{ id: string; name: string }[]>([]);
 
   useEffect(() => {
     if (!id) return;
@@ -113,15 +133,15 @@ export function OrderDetailPage() {
       const { data: row } = await supabase
         .from('orders')
         .select(`
-          id, order_number, customer_id, customer_name, agent_id, agent_name,
+          id, order_number, branch_id, customer_id, customer_name, agent_id, agent_name,
           order_date, required_date, delivery_type, payment_terms, payment_method,
           status, payment_status, subtotal, discount_percent, discount_amount,
           tax_amount, total_amount, requires_approval, approval_reasons,
           approved_by, approved_date, rejected_by, rejection_reason,
-          estimated_delivery, actual_delivery, order_notes, internal_notes,
+          estimated_delivery, scheduled_departure_date, actual_delivery, order_notes, internal_notes,
           invoice_id, invoice_date, due_date, amount_paid, balance_due,
           created_at, updated_at, cancelled_at, cancellation_reason,
-          branches(name)
+          branches(name, code)
         `)
         .eq('id', id)
         .single();
@@ -131,7 +151,7 @@ export function OrderDetailPage() {
       // Fetch line items
       const { data: items } = await supabase
         .from('order_line_items')
-        .select('id, sku, variant_id, product_name, variant_description, quantity, unit_price, original_price, negotiated_price, discount_percent, discount_amount, batch_discount, discounts_breakdown, line_total, stock_hint, available_stock')
+        .select('id, sku, variant_id, product_name, variant_description, quantity, unit_price, original_price, negotiated_price, discount_percent, discount_amount, batch_discount, discounts_breakdown, line_total, stock_hint, available_stock, quantity_shipped, quantity_delivered')
         .eq('order_id', id)
         .order('created_at');
 
@@ -161,10 +181,13 @@ export function OrderDetailPage() {
         lineTotal: item.line_total,
         stockHint: item.stock_hint ?? 'Available',
         availableStock: item.available_stock,
+        quantityShipped: item.quantity_shipped != null ? Number(item.quantity_shipped) : undefined,
+        quantityDelivered: item.quantity_delivered != null ? Number(item.quantity_delivered) : undefined,
       }));
 
       const mappedOrder: OrderDetail = {
         id: (row as any).order_number,
+        branchId: (row as any).branch_id ?? undefined,
         customer: (row as any).customer_name ?? '',
         customerId: (row as any).customer_id ?? '',
         agent: (row as any).agent_name ?? '',
@@ -189,6 +212,9 @@ export function OrderDetailPage() {
         rejectedBy: (row as any).rejected_by,
         rejectionReason: (row as any).rejection_reason,
         estimatedDelivery: (row as any).estimated_delivery,
+        scheduledDepartureDate: (row as any).scheduled_departure_date
+          ? String((row as any).scheduled_departure_date).slice(0, 10)
+          : undefined,
         actualDelivery: (row as any).actual_delivery,
         invoiceId: (row as any).invoice_id,
         invoiceDate: (row as any).invoice_date,
@@ -229,6 +255,17 @@ export function OrderDetailPage() {
   // This mirrors CreateOrderModal: products (with image_url, variants, stock) are
   // loaded into productCache BEFORE the user clicks an item, so handleEditItem
   // can be synchronous — no async lookup needed on click.
+  useEffect(() => {
+    if (!isEditing) return;
+    void supabase
+      .from('customers')
+      .select('id, name')
+      .eq('status', 'Active')
+      .order('name')
+      .limit(500)
+      .then(({ data }) => setCustomerList(data ?? []));
+  }, [isEditing]);
+
   useEffect(() => {
     if (!isEditing || !order) return;
 
@@ -349,7 +386,7 @@ export function OrderDetailPage() {
     };
 
     prefetchProducts();
-  }, [isEditing]);
+  }, [isEditing, order, branch]);
 
   // ── Order log helper ──────────────────────────────────────────────────────
   // Maps UserRole → order_log_role enum
@@ -401,6 +438,229 @@ export function OrderDetailPage() {
     }
   };
 
+  const advanceLogisticsStatus = async (
+    next: OrderStatus,
+    extra?: { scheduled_departure_date?: string | null; actual_delivery?: string | null },
+  ) => {
+    if (!id || !order) return;
+    if (logisticsLoading) return;
+    setLogisticsLoading(true);
+    const prev = order.status;
+    const updatePayload: Record<string, unknown> = {
+      status: next,
+      updated_at: new Date().toISOString(),
+    };
+    if (extra?.scheduled_departure_date !== undefined) {
+      updatePayload.scheduled_departure_date = extra.scheduled_departure_date;
+    }
+    if (extra?.actual_delivery !== undefined) {
+      updatePayload.actual_delivery = extra.actual_delivery;
+    }
+    try {
+      const { error } = await supabase.from('orders').update(updatePayload).eq('id', id);
+      if (error) throw error;
+      await insertOrderLog(
+        'status_changed',
+        `Logistics: ${prev} → ${next}`,
+        { status: prev },
+        { status: next, ...extra },
+      );
+      setOrder((o) => {
+        if (!o) return o;
+        const n: OrderDetail = { ...o, status: next };
+        if (extra?.scheduled_departure_date !== undefined) {
+          n.scheduledDepartureDate = extra.scheduled_departure_date || undefined;
+        }
+        if (extra?.actual_delivery !== undefined) {
+          n.actualDelivery = extra.actual_delivery || undefined;
+        }
+        return n;
+      });
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : 'Update failed');
+    } finally {
+      setLogisticsLoading(false);
+    }
+  };
+
+  const openScheduleDepartureModal = () => {
+    if (!order) return;
+    const d =
+      order.scheduledDepartureDate ||
+      (order.requiredDate ? String(order.requiredDate).slice(0, 10) : '') ||
+      new Date().toISOString().slice(0, 10);
+    setPickScheduleDate(d);
+    setShowScheduleModal(true);
+  };
+
+  const confirmScheduleDeparture = async () => {
+    if (!pickScheduleDate) {
+      alert('Choose a date.');
+      return;
+    }
+    await advanceLogisticsStatus('Scheduled', { scheduled_departure_date: pickScheduleDate });
+    setShowScheduleModal(false);
+  };
+
+  const handleConfirmInTransit = async (rows: { itemId: string; shippedQuantity: number }[]) => {
+    if (!id || !order) return;
+    const byLine = new Map(rows.map((r) => [r.itemId, r.shippedQuantity]));
+    for (const li of order.items) {
+      const ship = byLine.get(li.id);
+      if (ship === undefined) continue;
+      if (ship < 0) {
+        alert('Each sent quantity must be 0 or more.');
+        return;
+      }
+      const prevCumulative = li.quantityShipped ?? 0;
+      if (prevCumulative + ship > li.quantity) {
+        alert(
+          `“${li.productName}”: cannot send more than the remaining to fulfill this line (ordered ${li.quantity}, already ${prevCumulative} in transit to date, this shipment: ${ship}).`,
+        );
+        return;
+      }
+    }
+    if (!order.branchId) {
+      alert('This order has no branch assigned. Set a branch on the order before moving stock in transit.');
+      return;
+    }
+    if (order.items.some((li) => !isPersistedOrderLineId(li.id))) {
+      alert(
+        'Some line items are not saved to the server yet. Use Edit order → Save changes, then mark in transit again.',
+      );
+      return;
+    }
+    setInTransitSubmitting(true);
+    const branchId = order.branchId;
+    const { data: br } = await supabase.from('branches').select('code').eq('id', branchId).maybeSingle();
+    const branchCode = (br as { code?: string } | null)?.code ?? '';
+
+    const lineWithShip = order.items.map((li) => ({ line: li, ship: byLine.get(li.id) ?? 0 }));
+
+    for (const { line: l, ship } of lineWithShip) {
+      if (!l.variantId || ship <= 0) continue;
+      const { data: pvs, error: pErr } = await supabase
+        .from('product_variant_stock')
+        .select('id, quantity')
+        .eq('variant_id', l.variantId)
+        .eq('branch_id', branchId)
+        .maybeSingle();
+      if (pErr) {
+        setInTransitSubmitting(false);
+        alert(pErr.message);
+        return;
+      }
+      const onHand = pvs ? Number(pvs.quantity) : 0;
+      if (onHand < ship) {
+        setInTransitSubmitting(false);
+        alert(
+          `Not enough stock for “${l.productName}” at this branch. On hand: ${onHand}, sending: ${ship}.`
+        );
+        return;
+      }
+    }
+
+    try {
+      for (const { line: l, ship } of lineWithShip) {
+        if (l.variantId && ship > 0) {
+          const { data: pvs } = await supabase
+            .from('product_variant_stock')
+            .select('id, quantity')
+            .eq('variant_id', l.variantId)
+            .eq('branch_id', branchId)
+            .single();
+          if (!pvs) {
+            throw new Error(`No inventory row for “${l.productName}” at this branch.`);
+          }
+          const newBranch = Math.max(0, Number(pvs.quantity) - ship);
+          const { error: u1 } = await supabase
+            .from('product_variant_stock')
+            .update({ quantity: newBranch, updated_at: new Date().toISOString() })
+            .eq('id', pvs.id);
+          if (u1) throw u1;
+
+          const { data: vrow } = await supabase
+            .from('product_variants')
+            .select('total_stock, sku')
+            .eq('id', l.variantId)
+            .single();
+          if (vrow) {
+            const newTotal = Math.max(0, Number(vrow.total_stock ?? 0) - ship);
+            const { error: u2 } = await supabase
+              .from('product_variants')
+              .update({ total_stock: newTotal, updated_at: new Date().toISOString() })
+              .eq('id', l.variantId);
+            if (u2) throw u2;
+          }
+
+          const { error: mErr } = await supabase.from('product_stock_movements').insert({
+            variant_id: l.variantId,
+            variant_sku: vrow?.sku ?? l.sku,
+            product_name: l.productName,
+            movement_type: 'Out',
+            quantity: ship,
+            from_branch: branchCode || null,
+            reason: 'Order in transit (shipment)',
+            performed_by: employeeName || session?.user?.email || role,
+            reference_number: order.id,
+            timestamp: new Date().toISOString(),
+          });
+          if (mErr) throw mErr;
+        }
+
+        const prevCum = l.quantityShipped ?? 0;
+        const nextCumulative = prevCum + ship;
+        const { error: lineErr } = await supabase
+          .from('order_line_items')
+          .update({
+            quantity_shipped: nextCumulative,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', l.id);
+        if (lineErr) throw lineErr;
+      }
+
+      const { error: ordErr } = await supabase
+        .from('orders')
+        .update({ status: 'In Transit', updated_at: new Date().toISOString() })
+        .eq('id', id);
+      if (ordErr) throw ordErr;
+
+      const prev = order.status;
+      await insertOrderLog(
+        'shipped',
+        `Logistics: ${prev} → In Transit (stock deducted)`,
+        { status: prev },
+        { status: 'In Transit', lines: rows },
+        { inTransit: rows },
+      );
+      setOrder((o) => {
+        if (!o) return o;
+        return {
+          ...o,
+          status: 'In Transit',
+          items: o.items.map((li) => {
+            const ship = byLine.get(li.id) ?? 0;
+            const nextC = (li.quantityShipped ?? 0) + ship;
+            return { ...li, quantityShipped: nextC };
+          }),
+        };
+      });
+      setShowInTransitModal(false);
+      addAuditLog('In transit (shipment)', 'Order', `Order ${order.id} marked in transit with stock move`);
+    } catch (e: unknown) {
+      const msg =
+        e && typeof e === 'object' && 'message' in e && typeof (e as { message: unknown }).message === 'string'
+          ? (e as { message: string }).message
+          : e instanceof Error
+            ? e.message
+            : 'Failed to confirm in transit';
+      alert(msg);
+    } finally {
+      setInTransitSubmitting(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-32 gap-3 text-gray-500">
@@ -430,7 +690,7 @@ export function OrderDetailPage() {
 
   const getStatusBadgeVariant = (status: OrderStatus): 'success' | 'warning' | 'danger' | 'info' | 'neutral' => {
     if (['Delivered', 'Completed', 'Approved'].includes(status)) return 'success';
-    if (['Pending', 'Picking', 'Packed', 'Ready', 'Scheduled'].includes(status)) return 'warning';
+    if (['Pending', 'Scheduled', 'Loading', 'Packed', 'Ready'].includes(status)) return 'warning';
     if (['Rejected', 'Cancelled'].includes(status)) return 'danger';
     if (['In Transit', 'Partially Fulfilled'].includes(status)) return 'info';
     return 'neutral';
@@ -454,57 +714,6 @@ export function OrderDetailPage() {
     setEditedOrder(null);
   };
 
-  const handleCancelOrder = () => {
-    setShowCancelModal(true);
-  };
-
-  const handleConfirmCancellation = async (cancellationData: CancellationData) => {
-    if (!order || !id) return;
-
-    const now = new Date().toISOString();
-
-    const { error } = await supabase
-      .from('orders')
-      .update({
-        status: 'Cancelled',
-        cancelled_at: now,
-        cancellation_reason: cancellationData.reason,
-      })
-      .eq('id', id);
-
-    if (error) {
-      alert('Failed to cancel order: ' + error.message);
-      return;
-    }
-
-    const logMessage =
-      `Order cancelled by ${cancellationData.initiatedBy}. ` +
-      `Reason: ${cancellationData.reason}. ` +
-      `Refund: ${cancellationData.refundRequired ? `₱${cancellationData.refundAmount.toLocaleString()}` : 'No'}. ` +
-      `Restock: ${cancellationData.restockItems ? 'Yes' : 'No'}. ` +
-      `Notify customer: ${cancellationData.notifyCustomer ? 'Yes' : 'No'}.` +
-      (cancellationData.additionalNotes ? ` Notes: ${cancellationData.additionalNotes}` : '');
-
-    await insertOrderLog(
-      'cancelled',
-      logMessage,
-      { status: order.status },
-      { status: 'Cancelled', cancelled_at: now, cancellation_reason: cancellationData.reason },
-      {
-        initiatedBy: cancellationData.initiatedBy,
-        refundRequired: cancellationData.refundRequired,
-        refundAmount: cancellationData.refundAmount,
-        restockItems: cancellationData.restockItems,
-        notifyCustomer: cancellationData.notifyCustomer,
-      },
-    );
-
-    addAuditLog('Cancelled Order', 'Order', logMessage);
-
-    setShowCancelModal(false);
-    navigate('/orders');
-  };
-
   const handleResubmit = () => {
     if (order.status === 'Rejected') {
       alert(`Resubmitting order ${order.id} for approval`);
@@ -512,17 +721,45 @@ export function OrderDetailPage() {
     }
   };
 
-  const handleFulfillOrder = async (fulfillmentData: FulfillmentData[]) => {
+  const handleFulfillOrder = async (fulfillmentData: FulfillmentData[], proofImageUrls: string[] = []) => {
     if (!order || !id) return;
 
-    const isFullyFulfilled = fulfillmentData.every(
-      item => item.deliveredQuantity === item.orderedQuantity
-    );
-    const newStatus: OrderStatus = isFullyFulfilled ? 'Delivered' : 'Partially Fulfilled';
-    const now = new Date().toISOString();
+    if (fulfillmentData.some((f) => !isPersistedOrderLineId(f.itemId))) {
+      alert('Some line items are not saved to the server yet. Use Edit order → Save changes, then record delivery again.');
+      return;
+    }
 
-    const updatePayload: Record<string, unknown> = { status: newStatus };
-    if (isFullyFulfilled) updatePayload.actual_delivery = now;
+    const lineCap = (l: OrderLineItem) =>
+      l.quantityShipped != null ? l.quantityShipped : l.quantity;
+    const newDeliveredFor = (l: OrderLineItem) => {
+      const fd = fulfillmentData.find((f) => f.itemId === l.id);
+      return (l.quantityDelivered ?? 0) + (fd ? fd.deliveredQuantity : 0);
+    };
+    // Delivered only when every line matches original ordered qty (not just vs shipped/in-transit cap).
+    // Example: 100 ordered, 90 in transit, 90 received → still Partially Fulfilled until 100 delivered.
+    const isOrderDeliveryComplete = order.items.every(
+      (l) => newDeliveredFor(l) === l.quantity,
+    );
+    const newStatus: OrderStatus = isOrderDeliveryComplete ? 'Delivered' : 'Partially Fulfilled';
+    const now = new Date().toISOString();
+    const today = now.slice(0, 10);
+
+    for (const fd of fulfillmentData) {
+      const line = order.items.find((i) => i.id === fd.itemId);
+      if (!line) continue;
+      const acc = (line.quantityDelivered ?? 0) + fd.deliveredQuantity;
+      const { error: lineErr } = await supabase
+        .from('order_line_items')
+        .update({ quantity_delivered: acc, updated_at: new Date().toISOString() })
+        .eq('id', fd.itemId);
+      if (lineErr) {
+        alert('Failed to save line items: ' + lineErr.message);
+        return;
+      }
+    }
+
+    const updatePayload: Record<string, unknown> = { status: newStatus, updated_at: now };
+    if (isOrderDeliveryComplete) updatePayload.actual_delivery = today;
 
     const { error } = await supabase
       .from('orders')
@@ -534,10 +771,12 @@ export function OrderDetailPage() {
       return;
     }
 
-    const itemSummary = fulfillmentData.map(item => {
-      const orderItem = order.items.find(i => i.id === item.itemId);
-      return `${orderItem?.productName}: ${item.deliveredQuantity}/${item.orderedQuantity}`;
-    }).join(', ');
+    const itemSummary = fulfillmentData
+      .map((item) => {
+        const orderItem = order.items.find((i) => i.id === item.itemId);
+        return `${orderItem?.productName}: +${item.deliveredQuantity} (this time)`;
+      })
+      .join(', ');
 
     await insertOrderLog(
       'delivered',
@@ -549,10 +788,57 @@ export function OrderDetailPage() {
 
     addAuditLog('Fulfilled Order', 'Order', `Order ${order.id} marked as ${newStatus}. Items: ${itemSummary}`);
 
+    if (proofImageUrls.length > 0) {
+      const uploaderRole: ProofDocument['uploadedByRole'] =
+        role === 'Logistics' || role === 'Driver' ? 'Logistics' : 'Agent';
+      const t = Date.now();
+      const newProofs: ProofDocument[] = proofImageUrls.map((fileUrl, i) => {
+        const raw = fileUrl.split('/').pop()?.split('?')[0] ?? 'image';
+        let fileName = raw;
+        try {
+          fileName = decodeURIComponent(raw);
+        } catch {
+          fileName = raw;
+        }
+        return {
+          id: `proof-${t}-${i}`,
+          orderId: order.id,
+          type: 'delivery' as const,
+          fileName,
+          fileUrl,
+          fileSize: 0,
+          uploadedBy: order.agent,
+          uploadedByRole: uploaderRole,
+          uploadedAt: new Date().toISOString(),
+          status: 'verified' as const,
+          notes: 'Recorded with delivery (gallery)',
+        };
+      });
+      setProofs((prev) => [...prev, ...newProofs]);
+      const names = newProofs.map((p) => p.fileName).join(', ');
+      await insertOrderLog(
+        'proof_uploaded',
+        `Proof of delivery: ${proofImageUrls.length} image(s) — ${names}`,
+        null,
+        null,
+        { count: proofImageUrls.length, fileNames: names, source: 'image_gallery' },
+      );
+      addAuditLog(
+        'Proof of Delivery',
+        'Order',
+        `Attached ${proofImageUrls.length} image(s) with delivery for order ${order.id}`,
+      );
+    }
+
     setOrder({
       ...order,
       status: newStatus,
-      ...(isFullyFulfilled ? { actualDelivery: now } : {}),
+      items: order.items.map((l) => {
+        const fd = fulfillmentData.find((f) => f.itemId === l.id);
+        if (!fd) return l;
+        return { ...l, quantityDelivered: (l.quantityDelivered ?? 0) + fd.deliveredQuantity };
+      }),
+      ...(isOrderDeliveryComplete ? { actualDelivery: now } : {}),
     });
     setShowFulfillModal(false);
   };
@@ -622,9 +908,14 @@ export function OrderDetailPage() {
         discount_amount: discountAmount,
         total_amount: totalAmount,
         required_date: editedOrder.requiredDate || null,
+        estimated_delivery: editedOrder.estimatedDelivery || null,
+        scheduled_departure_date: editedOrder.scheduledDepartureDate || null,
         delivery_type: editedOrder.deliveryType,
         payment_terms: editedOrder.paymentTerms,
         payment_method: editedOrder.paymentMethod,
+        customer_id: editedOrder.customerId || null,
+        customer_name: editedOrder.customer?.trim() ? editedOrder.customer : null,
+        updated_at: new Date().toISOString(),
       })
       .eq('id', id);
 
@@ -650,6 +941,8 @@ export function OrderDetailPage() {
         stock_hint: item.stockHint ?? 'Available',
         available_stock: item.availableStock ?? null,
         discounts_breakdown: item.discountsBreakdown ?? null,
+        quantity_shipped: item.quantityShipped ?? null,
+        quantity_delivered: item.quantityDelivered ?? null,
       }));
       const { error: itemsErr } = await supabase.from('order_line_items').insert(rows);
       if (itemsErr) { alert('Order header saved but items failed: ' + itemsErr.message); return; }
@@ -751,6 +1044,43 @@ export function OrderDetailPage() {
     setOrder({ ...editedOrder, subtotal, totalAmount });
     setIsEditing(false);
     setEditedOrder(null);
+  };
+
+  const handleSubmitForApproval = async () => {
+    if (!id || !order) return;
+    if (order.status !== 'Draft') return;
+    const hasCustomer = (order.customerId && order.customerId.length > 0) || (order.customer && order.customer.trim().length > 0);
+    if (!hasCustomer) {
+      alert('Choose a customer: click Edit order, select a customer, save, then submit for approval.');
+      return;
+    }
+    if (order.items.length === 0) {
+      alert('Add at least one product line, save, then submit for approval (Edit order).');
+      return;
+    }
+    setApprovalLoading(true);
+    try {
+      const { error } = await supabase
+        .from('orders')
+        .update({
+          status: 'Pending',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', id);
+      if (error) throw error;
+      await insertOrderLog(
+        'status_changed',
+        'Submitted for approval: Draft → Pending',
+        { status: 'Draft' },
+        { status: 'Pending' },
+      );
+      setOrder({ ...order, status: 'Pending' });
+      addAuditLog('Order submitted for approval', 'Order', `${order.id}: Draft → Pending`);
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : 'Failed to submit');
+    } finally {
+      setApprovalLoading(false);
+    }
   };
 
   const handleQuantityChange = (itemId: string, newQuantity: number) => {
@@ -1007,35 +1337,56 @@ export function OrderDetailPage() {
     alert(`Downloading invoice ${order.invoiceId}...\n\n(PDF download would happen here)`);
   };
 
-  // Proof of Delivery/Payment Upload
-  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+  // Proof: images via Image Gallery (optimizer); optional PDF upload
+  const handleProofPdfSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
       if (file.size > 10 * 1024 * 1024) { alert('File size must be less than 10MB'); return; }
-      const validTypes = ['image/jpeg', 'image/png', 'image/jpg', 'application/pdf'];
-      if (!validTypes.includes(file.type)) { alert('Only JPG, PNG, and PDF files are allowed'); return; }
-      setSelectedFile(file);
+      if (file.type !== 'application/pdf') { alert('Only PDF is allowed in this field'); return; }
+      setSelectedProofPdf(file);
+      setSelectedProofImageUrl(null);
     }
   };
 
+  const openProofDocumentModal = () => {
+    setSelectedProofImageUrl(null);
+    setSelectedProofPdf(null);
+    setProofNotes('');
+    setShowProofModal(true);
+  };
+
   const handleUploadProof = () => {
-    if (!order || !selectedFile) return;
+    if (!order) return;
+    if (!selectedProofImageUrl && !selectedProofPdf) return;
+    const fileName = selectedProofPdf
+      ? selectedProofPdf.name
+      : (() => {
+          try {
+            const u = new URL(selectedProofImageUrl!);
+            return decodeURIComponent(u.pathname.split('/').pop() || 'image');
+          } catch {
+            return 'image';
+          }
+        })();
     const newProof: ProofDocument = {
       id: `proof-${Date.now()}`,
       orderId: order.id,
       type: proofType,
-      fileName: selectedFile.name,
-      fileUrl: URL.createObjectURL(selectedFile),
-      fileSize: selectedFile.size,
+      fileName,
+      fileUrl: selectedProofImageUrl || URL.createObjectURL(selectedProofPdf!),
+      fileSize: selectedProofPdf?.size ?? 0,
       uploadedBy: order.agent,
       uploadedByRole: 'Agent',
       uploadedAt: new Date().toISOString(),
-      status: 'pending',
-      notes: proofNotes,
+      status: 'verified',
+      notes: proofNotes.trim() || undefined,
     };
     setProofs([...proofs, newProof]);
-    alert(`${proofType === 'delivery' ? 'Proof of Delivery' : proofType === 'payment' ? 'Proof of Payment' : 'Receipt'} uploaded successfully!\n\nFile: ${selectedFile.name}\nStatus: Pending Verification`);
-    setSelectedFile(null);
+    alert(
+      `${proofType === 'delivery' ? 'Proof of Delivery' : proofType === 'payment' ? 'Proof of Payment' : 'Receipt'} added.\n\nFile: ${fileName}`,
+    );
+    setSelectedProofImageUrl(null);
+    setSelectedProofPdf(null);
     setProofNotes('');
     setShowProofModal(false);
   };
@@ -1060,30 +1411,88 @@ export function OrderDetailPage() {
     return 0;
   };
 
-  // All available statuses
+  // All available statuses (workflow: Approved → Scheduled → Loading → … → In Transit → Delivered)
   const allStatuses: OrderStatus[] = [
     'Draft',
     'Pending',
     'Approved',
-    'Picking',
+    'Scheduled',
+    'Loading',
     'Packed',
     'Ready',
-    'Scheduled',
     'In Transit',
     'Partially Fulfilled',
     'Delivered',
     'Completed',
     'Cancelled',
-    'Rejected'
+    'Rejected',
   ];
 
   const allPaymentStatuses = ['Unbilled', 'Invoiced', 'Partially Paid', 'Paid', 'Overdue'];
 
+  const canUseLogisticsUi = !['Agent', 'Driver', 'Customer'].includes(role ?? '');
+  const LOGISTICS_FLOW_STEPS: OrderStatus[] = [
+    'Approved',
+    'Scheduled',
+    'Loading',
+    'Packed',
+    'Ready',
+    'In Transit',
+    'Delivered',
+  ];
+  const showLogisticsBadges = !isEditing && LOGISTICS_FLOW_STEPS.includes(order.status);
+  const logisticsReplacesFulfill =
+    canUseLogisticsUi &&
+    !isEditing &&
+    ['Approved', 'Scheduled', 'Loading', 'Packed', 'Ready', 'In Transit'].includes(order.status);
+  /** After partial delivery, same next step as Approved: schedule remaining shipment. */
+  const showScheduleAction =
+    canUseLogisticsUi && !isEditing && (order.status === 'Approved' || order.status === 'Partially Fulfilled');
+  const logisticsStepIndex = LOGISTICS_FLOW_STEPS.indexOf(order.status);
+  const logisticsStepState = (i: number): 'complete' | 'current' | 'upcoming' => {
+    if (order.status === 'Delivered') return 'complete';
+    if (i < logisticsStepIndex) return 'complete';
+    if (i === logisticsStepIndex) return 'current';
+    return 'upcoming';
+  };
+  const showLegacyFulfillButton =
+    !logisticsReplacesFulfill &&
+    (['Approved', 'In Transit', 'Processing'].includes(order.status) ||
+      (order.status === 'Partially Fulfilled' && !canUseLogisticsUi));
+
   return (
     <div className="p-4 md:p-6 lg:p-8 space-y-6">
+      {showLogisticsBadges && (
+        <div className="flex min-w-0 flex-wrap items-center justify-center gap-y-2 gap-x-0.5 sm:justify-start">
+          {LOGISTICS_FLOW_STEPS.map((step, i) => {
+            const st = logisticsStepState(i);
+            return (
+              <span key={step} className="inline-flex max-w-full items-center">
+                {i > 0 && (
+                  <span className="px-0.5 text-gray-300 sm:px-1" aria-hidden>
+                    →
+                  </span>
+                )}
+                <span
+                  className={`shrink-0 rounded-full border px-2 py-0.5 text-left text-[10px] font-medium leading-tight sm:text-xs ${
+                    st === 'complete'
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                      : st === 'current'
+                        ? 'border-amber-300 bg-amber-50 text-amber-900'
+                        : 'border-gray-200 bg-gray-50 text-gray-400'
+                  }`}
+                >
+                  {step}
+                </span>
+              </span>
+            );
+          })}
+        </div>
+      )}
+
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="flex items-center gap-4">
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div className="flex min-w-0 items-center gap-4">
           <Button
             variant="ghost"
             size="sm"
@@ -1099,7 +1508,7 @@ export function OrderDetailPage() {
             <p className="text-sm text-gray-500 mt-1">Order Details</p>
           </div>
         </div>
-        <div className="flex items-center gap-2 md:gap-3 flex-wrap">
+        <div className="flex min-h-[2.75rem] flex-wrap items-center justify-end gap-2 self-center md:gap-3">
           {isEditing ? (
             <>
               <Button variant="outline" onClick={handleCancelEdit}>
@@ -1112,11 +1521,118 @@ export function OrderDetailPage() {
             </>
           ) : (
             <>
-              <Button variant="outline" onClick={handleEdit} className="gap-2">
-                <Edit className="w-4 h-4" />
-                Edit Order
-              </Button>
-              {['Approved', 'In Transit', 'Processing', 'Partially Fulfilled'].includes(order.status) && (
+              {order.status === 'Pending' && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setShowApproveModal(true)}
+                    className="inline-flex min-h-[2.5rem] shrink-0 items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-slate-800 sm:px-5"
+                  >
+                    <CheckCircle2 className="h-4 w-4 shrink-0" />
+                    Accept
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowRejectModal(true)}
+                    className="inline-flex min-h-[2.5rem] shrink-0 items-center justify-center gap-2 rounded-lg border-2 border-red-600 bg-white px-4 py-2 text-sm font-semibold text-red-600 transition-colors hover:bg-red-50 sm:px-5"
+                  >
+                    <XCircle className="h-4 w-4 shrink-0" />
+                    Reject
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleEdit}
+                    className="inline-flex min-h-[2.5rem] shrink-0 items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-900 transition-colors hover:bg-gray-50 sm:px-5"
+                  >
+                    <Edit className="h-4 w-4 shrink-0" />
+                    Edit request
+                  </button>
+                </>
+              )}
+              {order.status !== 'Pending' && (
+                <Button variant="outline" onClick={handleEdit} className="gap-2">
+                  <Edit className="w-4 h-4" />
+                  Edit Order
+                </Button>
+              )}
+              {order.status === 'Draft' && (
+                <Button
+                  variant="primary"
+                  onClick={() => void handleSubmitForApproval()}
+                  disabled={approvalLoading}
+                  className="gap-2"
+                >
+                  {approvalLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                  Submit for approval
+                </Button>
+              )}
+              {showScheduleAction && (
+                <Button
+                  variant="primary"
+                  className="gap-2"
+                  disabled={logisticsLoading}
+                  onClick={() => openScheduleDepartureModal()}
+                >
+                  {logisticsLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Calendar className="w-4 h-4" />}
+                  Schedule
+                </Button>
+              )}
+              {logisticsReplacesFulfill && order.status === 'Scheduled' && (
+                <Button
+                  variant="primary"
+                  className="gap-2"
+                  disabled={logisticsLoading}
+                  onClick={() => void advanceLogisticsStatus('Loading')}
+                >
+                  {logisticsLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Package className="w-4 h-4" />}
+                  Mark Loading
+                </Button>
+              )}
+              {logisticsReplacesFulfill && order.status === 'Loading' && (
+                <Button
+                  variant="primary"
+                  className="gap-2"
+                  disabled={logisticsLoading}
+                  onClick={() => void advanceLogisticsStatus('Packed')}
+                >
+                  {logisticsLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Package className="w-4 h-4" />}
+                  Mark Packed
+                </Button>
+              )}
+              {logisticsReplacesFulfill && order.status === 'Packed' && (
+                <Button
+                  variant="primary"
+                  className="gap-2"
+                  disabled={logisticsLoading}
+                  onClick={() => void advanceLogisticsStatus('Ready')}
+                >
+                  {logisticsLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                  Mark Ready
+                </Button>
+              )}
+              {logisticsReplacesFulfill && order.status === 'Ready' && (
+                <Button
+                  variant="primary"
+                  className="gap-2"
+                  disabled={logisticsLoading}
+                  onClick={() => setShowInTransitModal(true)}
+                >
+                  {logisticsLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Truck className="w-4 h-4" />}
+                  Mark in transit
+                </Button>
+              )}
+              {logisticsReplacesFulfill && order.status === 'In Transit' && (
+                <Button
+                  variant="primary"
+                  className="gap-2 bg-emerald-600 hover:bg-emerald-700"
+                  disabled={logisticsLoading}
+                  onClick={() => setShowFulfillModal(true)}
+                >
+                  {logisticsLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                  Record delivery
+                </Button>
+              )}
+              {showLegacyFulfillButton && (
                 <Button variant="primary" onClick={() => setShowFulfillModal(true)} className="gap-2">
                   <Package className="w-4 h-4" />
                   Fulfill Order
@@ -1128,16 +1644,55 @@ export function OrderDetailPage() {
                   Resubmit
                 </Button>
               )}
-              {!['Delivered', 'Completed', 'Cancelled', 'Rejected'].includes(order.status) && (
-                <Button variant="outline" onClick={handleCancelOrder} className="gap-2 text-red-600 hover:text-red-700">
-                  <Trash2 className="w-4 h-4" />
-                  Cancel Order
-                </Button>
-              )}
             </>
           )}
         </div>
       </div>
+
+      {!isEditing && (order.status === 'Approved' || order.status === 'Rejected') && (
+        <div
+          className={`flex items-center gap-3 rounded-xl border p-4 ${
+            order.status === 'Approved' ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'
+          }`}
+        >
+          {order.status === 'Approved' ? (
+            <CheckCircle2 className="h-5 w-5 shrink-0 text-green-600" />
+          ) : (
+            <XCircle className="h-5 w-5 shrink-0 text-red-600" />
+          )}
+          <div className="min-w-0 flex-1">
+            <p className={`text-sm font-semibold ${order.status === 'Approved' ? 'text-green-900' : 'text-red-900'}`}>
+              Order {order.status}
+              {order.status === 'Approved' && order.approvedBy && ` by ${order.approvedBy}`}
+              {order.status === 'Rejected' && order.rejectedBy && ` by ${order.rejectedBy}`}
+            </p>
+            {order.status === 'Rejected' && order.rejectionReason && (
+              <p className="mt-0.5 text-xs text-red-700">Reason: {order.rejectionReason}</p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={async () => {
+              if (!id) return;
+              await supabase
+                .from('orders')
+                .update({ status: 'Pending', approved_by: null, approved_date: null, rejected_by: null, rejection_reason: null })
+                .eq('id', id);
+              setOrder({
+                ...order,
+                status: 'Pending',
+                approvedBy: undefined,
+                approvedDate: undefined,
+                rejectedBy: undefined,
+                rejectionReason: undefined,
+              });
+            }}
+            className="shrink-0 text-xs text-gray-500 underline hover:text-gray-700"
+          >
+            Undo
+          </button>
+        </div>
+      )}
 
       {/* Edit Mode Banner */}
       {isEditing && (
@@ -1209,6 +1764,56 @@ export function OrderDetailPage() {
         </CardContent>
       </Card>
 
+      {showScheduleModal &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[100] flex min-h-dvh w-full items-center justify-center overflow-y-auto bg-black/50 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="schedule-departure-title"
+          >
+            <div className="my-auto w-full max-w-md space-y-4 rounded-xl bg-white p-6 shadow-xl">
+              <h2 id="schedule-departure-title" className="text-lg font-semibold text-gray-900">
+                Set departure date
+              </h2>
+              <p className="text-sm text-gray-600">
+                Choose the date the order is planned to leave the branch. The order will move to <strong>Scheduled</strong>
+                .
+              </p>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-600">Date</label>
+                <input
+                  type="date"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                  value={pickScheduleDate}
+                  onChange={(e) => setPickScheduleDate(e.target.value)}
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setShowScheduleModal(false)}
+                  disabled={logisticsLoading}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  variant="primary"
+                  onClick={() => void confirmScheduleDeparture()}
+                  disabled={logisticsLoading}
+                  className="gap-2"
+                >
+                  {logisticsLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Calendar className="w-4 h-4" />}
+                  Confirm
+                </Button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
+
       {/* Customer, Order Details, Agent & Branch in one row */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {/* Customer Information */}
@@ -1220,12 +1825,74 @@ export function OrderDetailPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="space-y-3">
-              <div>
-                <p className="text-sm font-medium text-gray-900">{order.customer}</p>
-                <p className="text-xs text-gray-500 mt-1">Customer ID: {order.customerId}</p>
+            {isEditing && editedOrder ? (
+              <div className="space-y-2">
+                <label className="text-xs text-gray-500">Customer</label>
+                <select
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
+                  value={editedOrder.customerId || ''}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    const c = customerList.find((x) => x.id === v);
+                    setEditedOrder({ ...editedOrder, customerId: v, customer: c?.name ?? '' });
+                  }}
+                >
+                  <option value="">— Select customer —</option>
+                  {customerList.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+                <div className="pt-2">
+                  <label className="text-xs text-gray-500" htmlFor="edit-scheduled-departure">
+                    Planned departure
+                  </label>
+                  <input
+                    id="edit-scheduled-departure"
+                    type="date"
+                    className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-red-500 focus:ring-1 focus:ring-red-500"
+                    value={editedOrder.scheduledDepartureDate ? editedOrder.scheduledDepartureDate.slice(0, 10) : ''}
+                    onChange={(e) =>
+                      setEditedOrder({
+                        ...editedOrder,
+                        scheduledDepartureDate: e.target.value || undefined,
+                      })
+                    }
+                  />
+                  <p className="mt-1 text-[11px] text-gray-400">Save to apply.</p>
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="space-y-3">
+                <div>
+                  <p className="text-sm font-medium text-gray-900">{order.customer || '—'}</p>
+                </div>
+                {order.scheduledDepartureDate ? (
+                  <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5">
+                    <div className="flex items-center gap-2.5">
+                      <Calendar className="h-4 w-4 shrink-0 text-gray-400" aria-hidden />
+                      <div className="min-w-0">
+                        <p className="text-xs text-gray-500">Planned departure</p>
+                        <p className="text-sm font-semibold text-gray-900 tabular-nums">
+                          {new Date(`${order.scheduledDepartureDate}T12:00:00`).toLocaleDateString(undefined, {
+                            weekday: 'short',
+                            year: 'numeric',
+                            month: 'short',
+                            day: 'numeric',
+                          })}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-3 text-xs text-gray-500">
+                    No planned departure date — use <span className="text-gray-600">Schedule</span> or{' '}
+                    <span className="text-gray-600">Edit Order</span>.
+                  </p>
+                )}
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -1241,11 +1908,20 @@ export function OrderDetailPage() {
             <div className="space-y-3 text-sm">
               <div className="flex justify-between">
                 <span className="text-gray-600">Order Date:</span>
-                <span className="font-medium text-gray-900">{order.orderDate}</span>
+                <span className="font-medium text-gray-900">{isEditing && editedOrder ? editedOrder.orderDate : order.orderDate}</span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex flex-col gap-1 sm:flex-row sm:justify-between sm:items-center">
                 <span className="text-gray-600">Required Date:</span>
-                <span className="font-medium text-gray-900">{order.requiredDate}</span>
+                {isEditing && editedOrder ? (
+                  <input
+                    type="date"
+                    className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm font-medium text-gray-900 w-full sm:w-auto max-w-[12rem]"
+                    value={editedOrder.requiredDate ? editedOrder.requiredDate.slice(0, 10) : ''}
+                    onChange={(e) => setEditedOrder({ ...editedOrder, requiredDate: e.target.value })}
+                  />
+                ) : (
+                  <span className="font-medium text-gray-900">{order.requiredDate || '—'}</span>
+                )}
               </div>
               {order.actualDelivery && (
                 <div className="flex justify-between">
@@ -1540,66 +2216,6 @@ export function OrderDetailPage() {
         </CardContent>
       </Card>
 
-          {/* Approve / Reject Action Bar */}
-          {order.status !== 'Approved' && order.status !== 'Rejected' && (
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl">
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-amber-900">Order Decision</p>
-                <p className="text-xs text-amber-700 mt-0.5">
-                  Current status: <span className="font-medium">{order.status}</span>
-                  {order.requiresApproval && ' · Requires approval'}
-                </p>
-              </div>
-              <div className="flex gap-3">
-                <button
-                  onClick={() => setShowRejectModal(true)}
-                  className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg border-2 border-red-600 text-red-600 font-semibold hover:bg-red-50 transition-colors"
-                >
-                  <XCircle className="w-4 h-4" />
-                  Reject
-                </button>
-                <button
-                  onClick={() => setShowApproveModal(true)}
-                  className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg bg-green-600 text-white font-semibold hover:bg-green-700 transition-colors"
-                >
-                  <CheckCircle2 className="w-4 h-4" />
-                  Approve
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Already decided banner */}
-          {(order.status === 'Approved' || order.status === 'Rejected') && (
-            <div className={`flex items-center gap-3 p-4 rounded-xl border ${order.status === 'Approved' ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
-              {order.status === 'Approved'
-                ? <CheckCircle2 className="w-5 h-5 text-green-600 flex-shrink-0" />
-                : <XCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
-              }
-              <div className="flex-1 min-w-0">
-                <p className={`text-sm font-semibold ${order.status === 'Approved' ? 'text-green-900' : 'text-red-900'}`}>
-                  Order {order.status}
-                  {order.status === 'Approved' && order.approvedBy && ` by ${order.approvedBy}`}
-                  {order.status === 'Rejected' && order.rejectedBy && ` by ${order.rejectedBy}`}
-                </p>
-                {order.status === 'Rejected' && order.rejectionReason && (
-                  <p className="text-xs text-red-700 mt-0.5">Reason: {order.rejectionReason}</p>
-                )}
-              </div>
-              {/* Allow un-deciding (reset to Pending) */}
-              <button
-                onClick={async () => {
-                  if (!id) return;
-                  await supabase.from('orders').update({ status: 'Pending', approved_by: null, approved_date: null, rejected_by: null, rejection_reason: null }).eq('id', id);
-                  setOrder({ ...order, status: 'Pending', approvedBy: undefined, approvedDate: undefined, rejectedBy: undefined, rejectionReason: undefined });
-                }}
-                className="text-xs underline text-gray-500 hover:text-gray-700 flex-shrink-0"
-              >
-                Undo
-              </button>
-            </div>
-          )}
-
           {/* Approval Information */}
           {order.requiresApproval && (
             <Card>
@@ -1733,7 +2349,7 @@ export function OrderDetailPage() {
                   <span className="sm:hidden">Invoice</span>
                 </Button>
               )}
-              <Button variant="outline" size="sm" onClick={() => setShowProofModal(true)} className="gap-2 flex-1 sm:flex-none">
+              <Button variant="outline" size="sm" onClick={openProofDocumentModal} className="gap-2 flex-1 sm:flex-none">
                 <Upload className="w-4 h-4" />
                 <span className="hidden sm:inline">Upload Proof</span>
                 <span className="sm:hidden">Upload</span>
@@ -1847,27 +2463,14 @@ export function OrderDetailPage() {
                           })}
                         </span>
                       </div>
+                      {proof.notes && (
+                        <p className="text-xs text-gray-600 mt-2 pr-1 whitespace-pre-wrap border-t border-gray-200/80 pt-2">
+                          {proof.notes}
+                        </p>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-2 sm:gap-3 justify-end sm:justify-start flex-shrink-0">
-                    {proof.status === 'pending' && (
-                      <Badge className="bg-yellow-100 text-yellow-700 text-xs">
-                        <Clock className="w-3 h-3 mr-1" />
-                        Pending
-                      </Badge>
-                    )}
-                    {proof.status === 'verified' && (
-                      <Badge className="bg-green-100 text-green-700 text-xs">
-                        <CheckCircle2 className="w-3 h-3 mr-1" />
-                        Verified
-                      </Badge>
-                    )}
-                    {proof.status === 'rejected' && (
-                      <Badge className="bg-red-100 text-red-700 text-xs">
-                        <XCircle className="w-3 h-3 mr-1" />
-                        Rejected
-                      </Badge>
-                    )}
                     <Button variant="outline" size="sm" onClick={() => window.open(proof.fileUrl, '_blank')}>
                       View
                     </Button>
@@ -2552,30 +3155,38 @@ export function OrderDetailPage() {
         </div>
       )}
 
-      {/* Proof Upload Modal */}
-      {showProofModal && (
+      {/* Proof Upload Modal — image gallery (optimizer) + optional PDF */}
+      {showProofModal && id && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-lg w-full">
+          <div className="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
             <div className="border-b border-gray-200 px-6 py-4 flex items-center justify-between">
               <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
                 <Upload className="w-6 h-6 text-red-600" />
                 Upload Proof Document
               </h2>
-              <button onClick={() => setShowProofModal(false)} className="text-gray-400 hover:text-gray-600">
+              <button
+                onClick={() => {
+                  setShowProofModal(false);
+                  setShowProofImageGallery(false);
+                }}
+                className="text-gray-400 hover:text-gray-600"
+              >
                 <X className="w-6 h-6" />
               </button>
             </div>
-            
+
             <div className="p-6">
               <div className="space-y-4">
-                {/* Proof Type Selection */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Document Type
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Document Type</label>
                   <div className="grid grid-cols-3 gap-2 md:gap-3">
                     <button
-                      onClick={() => setProofType('delivery')}
+                      type="button"
+                      onClick={() => {
+                        setProofType('delivery');
+                        setSelectedProofImageUrl(null);
+                        setSelectedProofPdf(null);
+                      }}
                       className={`p-2 md:p-3 border-2 rounded-lg text-center transition-colors ${
                         proofType === 'delivery'
                           ? 'border-blue-500 bg-blue-50 text-blue-700'
@@ -2586,7 +3197,12 @@ export function OrderDetailPage() {
                       <span className="text-xs font-medium">Delivery</span>
                     </button>
                     <button
-                      onClick={() => setProofType('payment')}
+                      type="button"
+                      onClick={() => {
+                        setProofType('payment');
+                        setSelectedProofImageUrl(null);
+                        setSelectedProofPdf(null);
+                      }}
                       className={`p-2 md:p-3 border-2 rounded-lg text-center transition-colors ${
                         proofType === 'payment'
                           ? 'border-green-500 bg-green-50 text-green-700'
@@ -2597,7 +3213,12 @@ export function OrderDetailPage() {
                       <span className="text-xs font-medium">Payment</span>
                     </button>
                     <button
-                      onClick={() => setProofType('receipt')}
+                      type="button"
+                      onClick={() => {
+                        setProofType('receipt');
+                        setSelectedProofImageUrl(null);
+                        setSelectedProofPdf(null);
+                      }}
                       className={`p-2 md:p-3 border-2 rounded-lg text-center transition-colors ${
                         proofType === 'receipt'
                           ? 'border-purple-500 bg-purple-50 text-purple-700'
@@ -2610,43 +3231,60 @@ export function OrderDetailPage() {
                   </div>
                 </div>
 
-                {/* File Upload */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Upload File (JPG, PNG, PDF - Max 10MB)
-                  </label>
-                  <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-gray-400 transition-colors">
-                    <input
-                      type="file"
-                      accept="image/jpeg,image/png,image/jpg,application/pdf"
-                      onChange={handleFileSelect}
-                      className="hidden"
-                      id="proof-file-input"
-                    />
-                    <label htmlFor="proof-file-input" className="cursor-pointer">
-                      <Upload className="w-8 h-8 mx-auto mb-2 text-gray-400" />
-                      {selectedFile ? (
-                        <div>
-                          <p className="text-sm font-medium text-gray-900">{selectedFile.name}</p>
-                          <p className="text-xs text-gray-500 mt-1">
-                            {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
-                          </p>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Image (recommended)</label>
+                  <p className="text-xs text-gray-500 mb-2">
+                    Uses the image gallery and upload pipeline (client compression before storage), same as other screens.
+                  </p>
+                  <div className="rounded-xl border-2 border-dashed border-gray-300 bg-gray-50/80 p-4 text-center">
+                    {selectedProofImageUrl ? (
+                      <div className="space-y-2">
+                        <div className="mx-auto h-32 w-full max-w-[12rem] overflow-hidden rounded-lg border border-gray-200">
+                          <img
+                            src={selectedProofImageUrl}
+                            alt=""
+                            className="h-full w-full object-cover"
+                          />
                         </div>
-                      ) : (
-                        <div>
-                          <p className="text-sm text-gray-600">Click to select a file</p>
-                          <p className="text-xs text-gray-500 mt-1">or drag and drop</p>
-                        </div>
-                      )}
-                    </label>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedProofImageUrl(null)}
+                          className="text-xs text-red-600 hover:underline"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setShowProofImageGallery(true)}
+                        className="w-full flex flex-col items-center gap-2 py-4 text-sm text-gray-600 hover:text-indigo-600"
+                      >
+                        <Image className="w-8 h-8 text-gray-400" />
+                        <span className="font-medium">Select from image gallery</span>
+                        <span className="text-xs text-gray-500">Or upload a new file inside the gallery</span>
+                      </button>
+                    )}
                   </div>
                 </div>
 
-                {/* Notes */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Notes (Optional)
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Or attach PDF (optional)</label>
+                  <p className="text-xs text-gray-500 mb-2">Max 10MB. Choosing PDF clears the image selection.</p>
+                  <input
+                    type="file"
+                    accept="application/pdf"
+                    onChange={handleProofPdfSelect}
+                    className="block w-full text-sm text-gray-600 file:mr-3 file:rounded-md file:border-0 file:bg-gray-100 file:px-3 file:py-1.5"
+                    id="proof-pdf-input"
+                  />
+                  {selectedProofPdf && (
+                    <p className="mt-1 text-xs text-gray-600">{selectedProofPdf.name}</p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Notes (optional)</label>
                   <textarea
                     value={proofNotes}
                     onChange={(e) => setProofNotes(e.target.value)}
@@ -2656,24 +3294,46 @@ export function OrderDetailPage() {
                   />
                 </div>
               </div>
-              
+
               <div className="flex gap-3 mt-6">
-                <Button variant="outline" onClick={() => setShowProofModal(false)} className="flex-1">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setShowProofModal(false);
+                    setShowProofImageGallery(false);
+                  }}
+                  className="flex-1"
+                >
                   Cancel
                 </Button>
-                <Button 
-                  variant="primary" 
-                  onClick={handleUploadProof} 
-                  disabled={!selectedFile}
+                <Button
+                  variant="primary"
+                  onClick={handleUploadProof}
+                  disabled={!selectedProofImageUrl && !selectedProofPdf}
                   className="flex-1 gap-2"
                 >
                   <Upload className="w-4 h-4" />
-                  Upload Proof
+                  Add proof
                 </Button>
               </div>
             </div>
           </div>
         </div>
+      )}
+
+      {showProofImageGallery && id && (
+        <ImageGalleryModal
+          isOpen={showProofImageGallery}
+          onClose={() => setShowProofImageGallery(false)}
+          folder={`${ORDER_PROOF_GALLERY_FOLDER}/${id}/${proofType}`}
+          maxImages={1}
+          currentImageUrl={selectedProofImageUrl || undefined}
+          onSelectImage={(url) => {
+            setSelectedProofImageUrl(url);
+            setSelectedProofPdf(null);
+            setShowProofImageGallery(false);
+          }}
+        />
       )}
 
       {/* Payment Link Modal */}
@@ -2714,26 +3374,26 @@ export function OrderDetailPage() {
         />
       )}
 
-      {/* Cancel Order Modal */}
-      {showCancelModal && (
-        <CancelOrderModal
-          orderId={order.id}
-          orderNumber={order.id}
-          customerName={order.customer}
-          orderAmount={order.totalAmount}
-          onClose={() => setShowCancelModal(false)}
-          onConfirm={handleConfirmCancellation}
-        />
-      )}
-
       {/* Fulfill Order Modal */}
       {showFulfillModal && (
         <FulfillOrderModal
           isOpen={showFulfillModal}
           onClose={() => setShowFulfillModal(false)}
+          orderId={id ?? ''}
+          orderNumber={order.id}
+          items={order.items.filter((i) => fulfillmentRemaining(i) > 0)}
+          onFulfill={handleFulfillOrder}
+        />
+      )}
+
+      {showInTransitModal && order && (
+        <MarkInTransitModal
+          isOpen={showInTransitModal}
+          onClose={() => !inTransitSubmitting && setShowInTransitModal(false)}
           orderNumber={order.id}
           items={order.items}
-          onFulfill={handleFulfillOrder}
+          submitting={inTransitSubmitting}
+          onConfirm={handleConfirmInTransit}
         />
       )}
     </div>

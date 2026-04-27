@@ -501,7 +501,7 @@ export const MOCK_ORDERS_DETAILED: OrderDetail[] = [
     balanceDue: 189000,
   },
   
-  // Picking Status - Being Fulfilled
+  // Loading (warehouse) — being fulfilled
   {
     id: 'ORD-2026-1102',
     customer: 'Southern Islands Supply',
@@ -514,7 +514,7 @@ export const MOCK_ORDERS_DETAILED: OrderDetail[] = [
     deliveryType: 'Truck',
     paymentTerms: '30 Days',
     paymentMethod: 'Online',
-    status: 'Picking',
+    status: 'Loading',
     paymentStatus: 'Unbilled',
     
     items: [
@@ -974,9 +974,9 @@ export const MOCK_ORDER_LOGS: Record<string, OrderLog[]> = {
       action: 'status_changed',
       performedBy: 'Juan Cruz',
       performedByRole: 'Warehouse Staff',
-      description: 'Order moved to Picking status',
+      description: 'Order moved to Loading status',
       oldValue: 'Approved',
-      newValue: 'Picking',
+      newValue: 'Loading',
       metadata: {
         assignedTo: 'Juan Cruz',
         warehouse: 'Main Warehouse'
@@ -1003,7 +1003,7 @@ export const MOCK_ORDER_LOGS: Record<string, OrderLog[]> = {
       performedBy: 'Juan Cruz',
       performedByRole: 'Warehouse Staff',
       description: 'Order packed and ready for shipment',
-      oldValue: 'Picking',
+      oldValue: 'Loading',
       newValue: 'Packed'
     },
     {
