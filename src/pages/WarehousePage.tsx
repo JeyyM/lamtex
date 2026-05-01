@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
-import { Package, FileText, Truck, Calendar, History, Search, TrendingDown, AlertTriangle, CheckCircle, Plus, X, Factory, ShoppingCart, Clock, MapPin, TrendingUp, Activity, Brain, Target, RefreshCw, Edit3 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Package, FileText, Truck, Calendar, History, Search, TrendingDown, AlertTriangle, CheckCircle, Plus, X, Factory, ShoppingCart, Clock, MapPin, TrendingUp, Activity, Brain, Target, RefreshCw, Edit3, GitBranch } from 'lucide-react';
+import { Button } from '@/src/components/ui/Button';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine, Area, ComposedChart } from 'recharts';
 import CreateRequestModal from '../components/logistics/CreateRequestModal';
 import OrderDetailModal from '../components/logistics/OrderDetailModal';
@@ -1126,6 +1128,7 @@ const generateDemandData = (itemId: string): DemandDataPoint[] => {
 
 
 export default function WarehousePage() {
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<TabType>('inventory');
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
@@ -1266,8 +1269,44 @@ export default function WarehousePage() {
       {/* Header */}
       <div className="bg-white border-b border-gray-200 w-full max-w-full">
         <div className="px-4 md:px-6 py-4 w-full max-w-full">
-          <h1 className="text-xl md:text-2xl font-bold text-gray-900">Warehouse Management</h1>
-          <p className="text-sm text-gray-600 mt-1">Track inventory, manage requests, and coordinate logistics</p>
+          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div>
+              <h1 className="text-xl md:text-2xl font-bold text-gray-900">Warehouse Management</h1>
+              <p className="text-sm text-gray-600 mt-1">Track inventory, manage requests, and coordinate logistics</p>
+            </div>
+            <div className="flex flex-wrap gap-2 justify-end md:shrink-0">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-2"
+                onClick={() => navigate('/production-requests')}
+              >
+                <Factory className="h-4 w-4" />
+                Production requests
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-2"
+                onClick={() => navigate('/purchase-orders')}
+              >
+                <ShoppingCart className="h-4 w-4" />
+                Purchase orders
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-2"
+                onClick={() => navigate('/inter-branch-requests')}
+              >
+                <GitBranch className="h-4 w-4" />
+                Inter-Branch
+              </Button>
+            </div>
+          </div>
         </div>
 
         {/* Tabs */}

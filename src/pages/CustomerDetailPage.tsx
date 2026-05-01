@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { CreateOrderModal } from '@/src/components/orders/CreateOrderModal';
+import { clientCommissionFraction, clientCommissionPercentLabel } from '@/src/types/customers';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -182,9 +183,9 @@ export function CustomerDetailPage() {
               <Badge 
                 variant={customer.client_type === 'Personal' ? 'primary' : 'secondary'} 
                 className="hidden min-[601px]:inline-flex"
-                title={customer.client_type === 'Personal' ? '1.5% commission' : '0.5% commission'}
+                title={`${clientCommissionPercentLabel(customer.client_type)} commission`}
               >
-                {customer.client_type} Client • {customer.client_type === 'Personal' ? '1.5%' : '0.5%'} Commission
+                {customer.client_type} Client • {clientCommissionPercentLabel(customer.client_type)} Commission
               </Badge>
             </div>
             <p className="text-sm text-gray-500 mt-1">{customer.id} • {customer.type}</p>
@@ -198,9 +199,9 @@ export function CustomerDetailPage() {
               </Badge>
               <Badge 
                 variant={customer.client_type === 'Personal' ? 'primary' : 'secondary'}
-                title={customer.client_type === 'Personal' ? '1.5% commission' : '0.5% commission'}
+                title={`${clientCommissionPercentLabel(customer.client_type)} commission`}
               >
-                {customer.client_type} • {customer.client_type === 'Personal' ? '1.5%' : '0.5%'}
+                {customer.client_type} • {clientCommissionPercentLabel(customer.client_type)}
               </Badge>
             </div>
           </div>
@@ -343,13 +344,13 @@ export function CustomerDetailPage() {
                       Commission Rate ({customer.client_type} Client)
                     </div>
                     <Badge variant={customer.client_type === 'Personal' ? 'primary' : 'secondary'}>
-                      {customer.client_type === 'Personal' ? '1.5%' : '0.5%'}
+                      {clientCommissionPercentLabel(customer.client_type)}
                     </Badge>
                   </div>
                   <div className="mt-2 flex items-center justify-between">
                     <div className="text-xs text-gray-500">Estimated YTD Commission</div>
                     <div className="text-lg font-semibold text-blue-600">
-                      ₱{((customer.total_purchases_ytd * (customer.client_type === 'Personal' ? 0.015 : 0.005)) / 1000).toFixed(0)}K
+                      ₱{((customer.total_purchases_ytd * clientCommissionFraction(customer.client_type)) / 1000).toFixed(0)}K
                     </div>
                   </div>
                 </div>

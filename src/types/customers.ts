@@ -4,7 +4,16 @@ export type CustomerType = 'Hardware Store' | 'Construction Company' | 'Contract
 export type CustomerStatus = 'Active' | 'Inactive' | 'Suspended' | 'Dormant' | 'On Hold';
 export type RiskLevel = 'Low' | 'Medium' | 'High';
 export type PaymentBehavior = 'Good' | 'Watchlist' | 'Risk';
-export type ClientType = 'Office' | 'Personal'; // Office = 0.5% commission, Personal = 1.5% commission
+export type ClientType = 'Office' | 'Personal'; // Office = 0.5% commission, Personal = 1% commission
+
+/** Decimal fraction for commission on YTD (e.g. 0.005 = 0.5%). */
+export function clientCommissionFraction(clientType: string): number {
+  return clientType === 'Personal' ? 0.01 : 0.005;
+}
+
+export function clientCommissionPercentLabel(clientType: string): string {
+  return clientType === 'Personal' ? '1%' : '0.5%';
+}
 
 export interface CustomerDetail {
   id: string;

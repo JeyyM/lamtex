@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { X, ChevronRight, ArrowLeft, Search, Package, Loader2, Building2 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { getMaterialIdsWithStockAtBothBranches } from '../../lib/interBranchRequest';
@@ -21,6 +21,7 @@ interface RawMaterial {
   status: string;
   category_id: string;
   image_url: string | null;
+  brand: string | null;
 }
 
 interface MaterialCategory {
@@ -33,7 +34,15 @@ interface MaterialCategory {
 interface Props {
   isOpen: boolean;
   onClose: () => void;
-  onSelect: (material: { materialId: string; name: string; sku: string; unit: string; cost: number; imageUrl: string | null }) => void;
+  onSelect: (material: {
+    materialId: string;
+    name: string;
+    sku: string;
+    unit: string;
+    cost: number;
+    imageUrl: string | null;
+    brand?: string | null;
+  }) => void;
   branch: string;
   alreadyAdded: string[];
   supplierId?: string | null;
@@ -92,6 +101,11 @@ export default function RawMaterialPickerModal({
       interBranchFulfillingBranchId &&
       interBranchRequestingBranchId !== interBranchFulfillingBranchId,
   );
+  const materialSelectLockRef = useRef(false);
+
+  useEffect(() => {
+    if (!isOpen) materialSelectLockRef.current = false;
+  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -319,7 +333,7 @@ export default function RawMaterialPickerModal({
     }
     let q = supabase
       .from('raw_materials')
-      .select('id, name, sku, unit_of_measure, cost_per_unit, total_stock, status, category_id, image_url')
+      .select('id, name, sku, unit_of_measure, cost_per_unit, total_stock, status, category_id, image_url, brand')
       .eq('category_id', cat.id);
     // If supplier filter is active, only fetch materials this supplier carries
     if (supplierMatIds && supplierMatIds.size > 0) {
@@ -339,7 +353,17 @@ export default function RawMaterialPickerModal({
   };
 
   const handleSelect = (mat: RawMaterial) => {
-    onSelect({ materialId: mat.id, name: mat.name, sku: mat.sku, unit: mat.unit_of_measure, cost: mat.cost_per_unit, imageUrl: mat.image_url });
+    if (materialSelectLockRef.current) return;
+    materialSelectLockRef.current = true;
+    onSelect({
+      materialId: mat.id,
+      name: mat.name,
+      sku: mat.sku,
+      unit: mat.unit_of_measure,
+      cost: mat.cost_per_unit,
+      imageUrl: mat.image_url,
+      brand: mat.brand,
+    });
     onClose();
   };
 

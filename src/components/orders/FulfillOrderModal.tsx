@@ -409,6 +409,7 @@ export function FulfillOrderModal({
       maxImages={20}
       currentImages={proofImageUrls}
       onSelectImages={handleProofGallerySelect}
+      stackOnTopOfModal
     />
     </>
   );

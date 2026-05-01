@@ -317,6 +317,81 @@ export interface InterBranchItemRow {
   product_id: string | null;
   product_variant_id: string | null;
   quantity: number;
+  /** Cumulative quantity sent from fulfilling branch (stock deducted). */
+  quantity_shipped: number;
+  /** Cumulative quantity received at requesting branch. */
+  quantity_delivered: number;
+}
+
+/** PostgREST/Postgres error when `inter_branch_item_shipment_quantities.sql` has not been applied. */
+export function isMissingIbrShipmentColumnsError(error: {
+  message?: string;
+  code?: string;
+  details?: string;
+} | null | undefined): boolean {
+  if (!error) return false;
+  const msg = `${String(error.message ?? '')} ${String(error.details ?? '')}`.toLowerCase();
+  if (msg.includes('quantity_shipped') || msg.includes('quantity_delivered')) return true;
+  const code = String(error.code ?? '');
+  if (code === '42703' && msg.includes('does not exist')) return true;
+  return false;
+}
+
+const IBR_ITEMS_SELECT_FULL =
+  'id, line_kind, raw_material_id, product_id, product_variant_id, quantity, quantity_shipped, quantity_delivered';
+const IBR_ITEMS_SELECT_LEGACY = 'id, line_kind, raw_material_id, product_id, product_variant_id, quantity';
+
+export type InterBranchRequestItemDbRow = {
+  id: string;
+  line_kind: 'raw_material' | 'product';
+  raw_material_id: string | null;
+  product_id: string | null;
+  product_variant_id: string | null;
+  quantity: number;
+  quantity_shipped: number;
+  quantity_delivered: number;
+};
+
+/**
+ * Loads IBR lines; retries without shipment columns if the migration has not been applied yet.
+ */
+export async function fetchInterBranchRequestItemRows(
+  supabase: SupabaseClient,
+  requestId: string,
+): Promise<{ rows: InterBranchRequestItemDbRow[]; supportsShipmentTracking: boolean }> {
+  const attempt = await supabase
+    .from('inter_branch_request_items')
+    .select(IBR_ITEMS_SELECT_FULL)
+    .eq('request_id', requestId);
+  if (!attempt.error) {
+    const rows = (attempt.data ?? []) as InterBranchRequestItemDbRow[];
+    return {
+      rows: rows.map((r) => ({
+        ...r,
+        quantity: Number(r.quantity) || 0,
+        quantity_shipped: Number(r.quantity_shipped) || 0,
+        quantity_delivered: Number(r.quantity_delivered) || 0,
+      })),
+      supportsShipmentTracking: true,
+    };
+  }
+  if (!isMissingIbrShipmentColumnsError(attempt.error)) throw attempt.error;
+
+  const legacy = await supabase
+    .from('inter_branch_request_items')
+    .select(IBR_ITEMS_SELECT_LEGACY)
+    .eq('request_id', requestId);
+  if (legacy.error) throw legacy.error;
+  const rows = (legacy.data ?? []) as Omit<InterBranchRequestItemDbRow, 'quantity_shipped' | 'quantity_delivered'>[];
+  return {
+    rows: rows.map((r) => ({
+      ...r,
+      quantity: Number(r.quantity) || 0,
+      quantity_shipped: 0,
+      quantity_delivered: 0,
+    })),
+    supportsShipmentTracking: false,
+  };
 }
 
 type IbrLinkRow = {
@@ -351,12 +426,18 @@ export async function ensureInterBranchLinkedDocuments(
   const reqBranch = row.requesting_branch_id;
   const fulBranch = row.fulfilling_branch_id;
 
-  const { data: itemRows, error: e2 } = await supabase
-    .from('inter_branch_request_items')
-    .select('id, line_kind, raw_material_id, product_id, product_variant_id, quantity')
-    .eq('request_id', params.requestId);
-  if (e2) throw e2;
-  const items = (itemRows ?? []) as InterBranchItemRow[];
+  const { rows: dbRows } = await fetchInterBranchRequestItemRows(supabase, params.requestId);
+  const items: InterBranchItemRow[] = dbRows.map((r) => ({
+    id: r.id,
+    request_id: params.requestId,
+    line_kind: r.line_kind,
+    raw_material_id: r.raw_material_id,
+    product_id: r.product_id,
+    product_variant_id: r.product_variant_id,
+    quantity: r.quantity,
+    quantity_shipped: r.quantity_shipped,
+    quantity_delivered: r.quantity_delivered,
+  }));
   if (items.length > 0) {
     await assertAllInterBranchItemsInBothBranches(supabase, items, reqBranch, fulBranch);
   }

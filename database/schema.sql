@@ -877,7 +877,7 @@ CREATE TABLE IF NOT EXISTS customers (
   id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   name                  VARCHAR(300) NOT NULL,
   type                  customer_type,
-  client_type           client_type DEFAULT 'Office',  -- Office=0.5% comm, Personal=1.5%
+  client_type           client_type DEFAULT 'Office',  -- Office=0.5% comm, Personal=1%
   status                customer_status NOT NULL DEFAULT 'Active',
   risk_level            risk_level DEFAULT 'Low',
   payment_behavior      payment_behavior DEFAULT 'Good',
@@ -1693,6 +1693,8 @@ CREATE TABLE IF NOT EXISTS inter_branch_request_items (
   product_id         UUID REFERENCES products(id) ON DELETE RESTRICT,
   product_variant_id UUID REFERENCES product_variants(id) ON DELETE RESTRICT,
   quantity           NUMERIC(14,2) NOT NULL CHECK (quantity > 0),
+  quantity_shipped   NUMERIC(14,2) NOT NULL DEFAULT 0 CHECK (quantity_shipped >= 0),
+  quantity_delivered NUMERIC(14,2) NOT NULL DEFAULT 0 CHECK (quantity_delivered >= 0),
   created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT ibr_item_raw CHECK (
     line_kind <> 'raw_material' OR
@@ -1701,13 +1703,45 @@ CREATE TABLE IF NOT EXISTS inter_branch_request_items (
   CONSTRAINT ibr_item_product CHECK (
     line_kind <> 'product' OR
     (raw_material_id IS NULL AND product_id IS NOT NULL AND product_variant_id IS NOT NULL)
-  )
+  ),
+  CONSTRAINT ibr_item_shipped_lte_ordered CHECK (quantity_shipped <= quantity),
+  CONSTRAINT ibr_item_delivered_lte_shipped CHECK (quantity_delivered <= quantity_shipped)
 );
 
 CREATE INDEX IF NOT EXISTS idx_ibr_status ON inter_branch_requests(status);
 CREATE INDEX IF NOT EXISTS idx_ibr_requesting ON inter_branch_requests(requesting_branch_id);
 CREATE INDEX IF NOT EXISTS idx_ibr_fulfilling ON inter_branch_requests(fulfilling_branch_id);
 CREATE INDEX IF NOT EXISTS idx_ibr_items_request ON inter_branch_request_items(request_id);
+
+-- IBR activity log (mirrors purchase_order_logs)
+CREATE TABLE IF NOT EXISTS inter_branch_request_logs (
+  id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  inter_branch_request_id  UUID NOT NULL REFERENCES inter_branch_requests(id) ON DELETE CASCADE,
+  action                   TEXT NOT NULL,
+  performed_by             TEXT,
+  performed_by_role        TEXT,
+  description              TEXT,
+  old_value                JSONB,
+  new_value                JSONB,
+  metadata                 JSONB,
+  created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ibr_logs_request ON inter_branch_request_logs(inter_branch_request_id);
+
+-- Proof-of-delivery images when the requesting branch records receipt
+CREATE TABLE IF NOT EXISTS inter_branch_delivery_proofs (
+  id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  inter_branch_request_id  UUID NOT NULL REFERENCES inter_branch_requests(id) ON DELETE CASCADE,
+  file_url                 TEXT NOT NULL,
+  file_name                TEXT NOT NULL,
+  file_size                INTEGER,
+  note                     TEXT,
+  uploaded_by              TEXT,
+  created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ibr_delivery_proofs_request ON inter_branch_delivery_proofs(inter_branch_request_id);
 
 -- FKs: IBR → PO/PR and back-references
 DO $$ BEGIN

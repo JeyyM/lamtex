@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '@/src/lib/supabase';
 import { useAppContext } from '@/src/store/AppContext';
+import type { ClientType } from '@/src/types/customers';
 
 interface Agent {
   id: string;
@@ -30,6 +31,8 @@ interface Agent {
 interface CustomerFormData {
   name: string;
   type: 'Hardware Store' | 'Construction Company' | 'Contractor' | 'Distributor';
+  /** Drives agent commission: Office 0.5%, Personal 1% */
+  clientType: ClientType;
   contactPerson: string;
   phone: string;
   email: string;
@@ -58,6 +61,7 @@ export function CustomerFormPage() {
   const [formData, setFormData] = useState<CustomerFormData>({
     name: '',
     type: 'Hardware Store',
+    clientType: 'Office',
     contactPerson: '',
     phone: '',
     email: '',
@@ -114,6 +118,7 @@ export function CustomerFormPage() {
         setFormData({
           name: data.name ?? '',
           type: data.type ?? 'Hardware Store',
+          clientType: data.client_type === 'Personal' ? 'Personal' : 'Office',
           contactPerson: data.contact_person ?? '',
           phone: data.phone ?? '',
           email: data.email ?? '',
@@ -252,6 +257,7 @@ export function CustomerFormPage() {
       const payload = {
         name: formData.name.trim(),
         type: formData.type,
+        client_type: formData.clientType,
         contact_person: formData.contactPerson.trim(),
         phone: formData.phone.trim(),
         email: formData.email.trim(),
@@ -417,6 +423,35 @@ export function CustomerFormPage() {
               </div>
 
               <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Commission type</label>
+                <select
+                  name="clientType"
+                  value={formData.clientType}
+                  onChange={handleInputChange}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
+                >
+                  <option value="Office">Office client — 0.5%</option>
+                  <option value="Personal">Personal client — 1%</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Status <span className="text-red-500">*</span>
+                </label>
+                <select
+                  name="status"
+                  value={formData.status}
+                  onChange={handleInputChange}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
+                >
+                  <option value="Active">Active</option>
+                  <option value="Inactive">Inactive</option>
+                  <option value="Suspended">Suspended</option>
+                </select>
+              </div>
+
+              <div className="md:col-span-2">
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   Contact Person <span className="text-red-500">*</span>
                 </label>
@@ -436,22 +471,6 @@ export function CustomerFormPage() {
                     {errors.contactPerson}
                   </p>
                 )}
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Status <span className="text-red-500">*</span>
-                </label>
-                <select
-                  name="status"
-                  value={formData.status}
-                  onChange={handleInputChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
-                >
-                  <option value="Active">Active</option>
-                  <option value="Inactive">Inactive</option>
-                  <option value="Suspended">Suspended</option>
-                </select>
               </div>
             </div>
           </CardContent>

@@ -15,9 +15,11 @@ import {
   fulfillmentRemaining,
 } from '@/src/components/orders/FulfillOrderModal';
 import { MarkInTransitModal } from '@/src/components/orders/MarkInTransitModal';
+import {
+  orderLogCardHeadline,
+  OrderActivityLogHumanDetails,
+} from '@/src/components/orders/OrderActivityLogHuman';
 import ImageGalleryModal from '@/src/components/ImageGalleryModal';
-
-const ORDER_PROOF_GALLERY_FOLDER = 'order-proofs';
 import {
   ArrowLeft,
   Edit,
@@ -50,7 +52,19 @@ import {
   Link as LinkIcon,
   Copy,
   Loader2,
+  ThumbsUp,
+  PackageCheck,
 } from 'lucide-react';
+
+const ORDER_PROOF_GALLERY_FOLDER = 'order-proofs';
+
+/** Local proof uploads: images + common business documents (allowlist). */
+const ORDER_PROOF_UPLOAD_EXT =
+  /\.(pdf|jpe?g|png|webp|gif|avif|bmp|jfif|doc|docx|xls|xlsx|ppt|pptx|txt|csv|rtf|odt|ods|odp)$/i;
+
+function orderProofFileIsImageName(fileName: string): boolean {
+  return /\.(jpe?g|png|webp|gif|avif|bmp|jfif)$/i.test(fileName);
+}
 
 // ── DB Types (same as CreateOrderModal) ──────────────────────────────────────
 interface DBBulkDiscount { min_qty: number; max_qty: number | null; discount_percent: number; }
@@ -95,10 +109,10 @@ export function OrderDetailPage() {
   const [showProofModal, setShowProofModal] = useState(false);
   const [showProofImageGallery, setShowProofImageGallery] = useState(false);
   const [proofType, setProofType] = useState<'delivery' | 'payment' | 'receipt'>('delivery');
-  /** Public URL from Image Gallery (compressed upload). */
-  const [selectedProofImageUrl, setSelectedProofImageUrl] = useState<string | null>(null);
-  /** Optional PDF when image gallery is not used. */
-  const [selectedProofPdf, setSelectedProofPdf] = useState<File | null>(null);
+  /** Public URLs from Image Gallery (compressed upload); multi-select in gallery. */
+  const [selectedProofGalleryUrls, setSelectedProofGalleryUrls] = useState<string[]>([]);
+  /** Local PDFs and/or images (multi-select). */
+  const [selectedProofLocalFiles, setSelectedProofLocalFiles] = useState<File[]>([]);
   const [proofNotes, setProofNotes] = useState('');
   const [proofs, setProofs] = useState<ProofDocument[]>([]);
   
@@ -627,12 +641,22 @@ export function OrderDetailPage() {
       if (ordErr) throw ordErr;
 
       const prev = order.status;
+      const shipment_lines = rows
+        .filter((r) => r.shippedQuantity > 0)
+        .map((r) => {
+          const li = order.items.find((i) => i.id === r.itemId);
+          const label = li
+            ? `${li.productName}${li.variantDescription ? ` (${li.variantDescription})` : ''}`
+            : 'Line item';
+          return { label, quantity: r.shippedQuantity, unit: 'units' as const };
+        });
+
       await insertOrderLog(
         'shipped',
         `Logistics: ${prev} → In Transit (stock deducted)`,
         { status: prev },
-        { status: 'In Transit', lines: rows },
-        { inTransit: rows },
+        { status: 'In Transit' },
+        { inTransit: rows, shipment_lines },
       );
       setOrder((o) => {
         if (!o) return o;
@@ -778,12 +802,25 @@ export function OrderDetailPage() {
       })
       .join(', ');
 
+    const actorLabel = employeeName || session?.user?.email || role;
+    const received_lines = fulfillmentData
+      .filter((f) => f.deliveredQuantity > 0)
+      .map((fd) => {
+        const line = order.items.find((i) => i.id === fd.itemId);
+        return {
+          label: line?.productName ?? 'Item',
+          variant: line?.variantDescription || undefined,
+          quantity: fd.deliveredQuantity,
+          unit: 'units' as const,
+        };
+      });
+
     await insertOrderLog(
       'delivered',
-      `Order marked as ${newStatus} by ${employeeName || session?.user?.email || role}. Items: ${itemSummary}`,
+      `Order marked as ${newStatus} by ${actorLabel}.`,
       { status: order.status },
       { status: newStatus },
-      { fulfillmentData },
+      { fulfillmentData, received_lines, item_summary: itemSummary },
     );
 
     addAuditLog('Fulfilled Order', 'Order', `Order ${order.id} marked as ${newStatus}. Items: ${itemSummary}`);
@@ -1337,56 +1374,172 @@ export function OrderDetailPage() {
     alert(`Downloading invoice ${order.invoiceId}...\n\n(PDF download would happen here)`);
   };
 
-  // Proof: images via Image Gallery (optimizer); optional PDF upload
-  const handleProofPdfSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) {
-      if (file.size > 10 * 1024 * 1024) { alert('File size must be less than 10MB'); return; }
-      if (file.type !== 'application/pdf') { alert('Only PDF is allowed in this field'); return; }
-      setSelectedProofPdf(file);
-      setSelectedProofImageUrl(null);
+  const MAX_PROOF_FILE_BYTES = 25 * 1024 * 1024;
+  const MAX_PROOF_BATCH = 30;
+  /** Browsers pick filters; validation below is the source of truth. */
+  const PROOF_UPLOAD_ACCEPT = [
+    'image/*',
+    'application/pdf',
+    '.pdf',
+    '.doc',
+    '.docx',
+    '.xls',
+    '.xlsx',
+    '.ppt',
+    '.pptx',
+    '.txt',
+    '.csv',
+    '.rtf',
+    '.odt',
+    '.ods',
+    '.odp',
+  ].join(',');
+
+  const isAllowedProofFile = (file: File): boolean => {
+    const m = file.type.toLowerCase();
+    if (m.startsWith('image/')) return true;
+    const docMimes = new Set([
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-powerpoint',
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      'text/plain',
+      'text/csv',
+      'text/rtf',
+      'application/rtf',
+      'application/csv',
+      'text/comma-separated-values',
+      'application/vnd.oasis.opendocument.text',
+      'application/vnd.oasis.opendocument.spreadsheet',
+      'application/vnd.oasis.opendocument.presentation',
+    ]);
+    if (docMimes.has(m)) return true;
+    return ORDER_PROOF_UPLOAD_EXT.test(file.name);
+  };
+
+  const handleProofFilesSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const list = event.target.files;
+    if (!list?.length) return;
+    const next: File[] = [];
+    for (let i = 0; i < list.length; i++) {
+      const file = list.item(i);
+      if (!file) continue;
+      if (file.size > MAX_PROOF_FILE_BYTES) {
+        alert(`${file.name} is larger than 25MB — skipped.`);
+        continue;
+      }
+      if (!isAllowedProofFile(file)) {
+        alert(
+          `${file.name} is not a supported document type (e.g. PDF, Word, Excel, PowerPoint, text/CSV, OpenDocument, or images) — skipped.`,
+        );
+        continue;
+      }
+      next.push(file);
     }
+    if (next.length) {
+      setSelectedProofLocalFiles((prev) => {
+        const merged = [...prev, ...next];
+        if (merged.length > MAX_PROOF_BATCH) {
+          alert(`You can add at most ${MAX_PROOF_BATCH} files per batch. Extra files were not added.`);
+          return merged.slice(0, MAX_PROOF_BATCH);
+        }
+        return merged;
+      });
+    }
+    event.target.value = '';
+  };
+
+  const removeProofGalleryUrl = (url: string) => {
+    setSelectedProofGalleryUrls((prev) => prev.filter((u) => u !== url));
+  };
+
+  const removeProofLocalFile = (idx: number) => {
+    setSelectedProofLocalFiles((prev) => prev.filter((_, i) => i !== idx));
   };
 
   const openProofDocumentModal = () => {
-    setSelectedProofImageUrl(null);
-    setSelectedProofPdf(null);
+    setSelectedProofGalleryUrls([]);
+    setSelectedProofLocalFiles([]);
     setProofNotes('');
     setShowProofModal(true);
   };
 
-  const handleUploadProof = () => {
-    if (!order) return;
-    if (!selectedProofImageUrl && !selectedProofPdf) return;
-    const fileName = selectedProofPdf
-      ? selectedProofPdf.name
-      : (() => {
-          try {
-            const u = new URL(selectedProofImageUrl!);
-            return decodeURIComponent(u.pathname.split('/').pop() || 'image');
-          } catch {
-            return 'image';
-          }
-        })();
-    const newProof: ProofDocument = {
-      id: `proof-${Date.now()}`,
-      orderId: order.id,
-      type: proofType,
-      fileName,
-      fileUrl: selectedProofImageUrl || URL.createObjectURL(selectedProofPdf!),
-      fileSize: selectedProofPdf?.size ?? 0,
-      uploadedBy: order.agent,
-      uploadedByRole: 'Agent',
-      uploadedAt: new Date().toISOString(),
-      status: 'verified',
-      notes: proofNotes.trim() || undefined,
-    };
-    setProofs([...proofs, newProof]);
-    alert(
-      `${proofType === 'delivery' ? 'Proof of Delivery' : proofType === 'payment' ? 'Proof of Payment' : 'Receipt'} added.\n\nFile: ${fileName}`,
+  const handleUploadProof = async () => {
+    if (!order || !id) return;
+    const nGallery = selectedProofGalleryUrls.length;
+    const nFiles = selectedProofLocalFiles.length;
+    if (nGallery === 0 && nFiles === 0) return;
+    if (nGallery + nFiles > MAX_PROOF_BATCH) {
+      alert(`You can add at most ${MAX_PROOF_BATCH} files per upload. Remove some attachments first.`);
+      return;
+    }
+
+    const base = Date.now();
+    const notesTrim = proofNotes.trim() || undefined;
+    const uploaderRole: ProofDocument['uploadedByRole'] =
+      role === 'Logistics' || role === 'Driver' ? 'Logistics' : 'Agent';
+    const uploadedBy = employeeName || session?.user?.email || order.agent;
+
+    const newProofs: ProofDocument[] = [];
+
+    selectedProofGalleryUrls.forEach((url, i) => {
+      const raw = url.split('/').pop()?.split('?')[0] ?? 'image';
+      let fileName = raw;
+      try {
+        fileName = decodeURIComponent(raw);
+      } catch {
+        fileName = raw;
+      }
+      newProofs.push({
+        id: `proof-${base}-g-${i}`,
+        orderId: order.id,
+        type: proofType,
+        fileName,
+        fileUrl: url,
+        fileSize: 0,
+        uploadedBy,
+        uploadedByRole: uploaderRole,
+        uploadedAt: new Date().toISOString(),
+        status: 'verified',
+        notes: notesTrim,
+      });
+    });
+
+    selectedProofLocalFiles.forEach((file, i) => {
+      newProofs.push({
+        id: `proof-${base}-f-${i}`,
+        orderId: order.id,
+        type: proofType,
+        fileName: file.name,
+        fileUrl: URL.createObjectURL(file),
+        fileSize: file.size,
+        uploadedBy,
+        uploadedByRole: uploaderRole,
+        uploadedAt: new Date().toISOString(),
+        status: 'verified',
+        notes: notesTrim,
+      });
+    });
+
+    setProofs((prev) => [...prev, ...newProofs]);
+    const names = newProofs.map((p) => p.fileName).join(', ');
+    const typeLabel =
+      proofType === 'delivery' ? 'Proof of Delivery' : proofType === 'payment' ? 'Proof of Payment' : 'Receipt';
+    await insertOrderLog(
+      'proof_uploaded',
+      `${typeLabel}: ${newProofs.length} file(s) — ${names}`,
+      null,
+      null,
+      { count: newProofs.length, fileNames: names, source: 'order_proof_modal' },
     );
-    setSelectedProofImageUrl(null);
-    setSelectedProofPdf(null);
+    addAuditLog(typeLabel, 'Order', `Attached ${newProofs.length} file(s) to order ${order.id}`);
+    alert(`${typeLabel} added.\n\n${newProofs.length} file(s): ${names}`);
+
+    setSelectedProofGalleryUrls([]);
+    setSelectedProofLocalFiles([]);
     setProofNotes('');
     setShowProofModal(false);
   };
@@ -2438,12 +2591,12 @@ export function OrderDetailPage() {
                     <div className={`w-10 h-10 flex-shrink-0 rounded-lg flex items-center justify-center ${
                       proof.type === 'delivery' ? 'bg-blue-100' : proof.type === 'payment' ? 'bg-green-100' : 'bg-purple-100'
                     }`}>
-                      {proof.fileName.toLowerCase().endsWith('.pdf') ? (
-                        <FileText className={`w-5 h-5 ${
+                      {orderProofFileIsImageName(proof.fileName) ? (
+                        <Image className={`w-5 h-5 ${
                           proof.type === 'delivery' ? 'text-blue-600' : proof.type === 'payment' ? 'text-green-600' : 'text-purple-600'
                         }`} />
                       ) : (
-                        <Image className={`w-5 h-5 ${
+                        <FileText className={`w-5 h-5 ${
                           proof.type === 'delivery' ? 'text-blue-600' : proof.type === 'payment' ? 'text-green-600' : 'text-purple-600'
                         }`} />
                       )}
@@ -2484,246 +2637,140 @@ export function OrderDetailPage() {
         </CardContent>
       </Card>
 
-      {/* Order Audit Log */}
+      {/* Order Activity Log — IBR-style timeline */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Clock className="w-5 h-5" />
-            Order Activity Log
+            Activity log
           </CardTitle>
         </CardHeader>
         <CardContent>
           <div className="space-y-3">
             {orderLogs.length === 0 ? (
-              <p className="text-sm text-gray-500 text-center py-8">No activity logs available</p>
+              <p className="text-sm text-gray-500 text-center py-8">
+                No activity recorded yet. Edits, approvals, logistics steps, delivery, proofs, and payments will appear
+                here.
+              </p>
             ) : (
               orderLogs.map((log, index) => {
                 const isLast = index === orderLogs.length - 1;
-                
-                // Determine icon and color based on action
+
                 const getActionIcon = () => {
                   switch (log.action) {
-                    case 'created': return <FileText className="w-4 h-4" />;
-                    case 'status_changed': return <Clock className="w-4 h-4" />;
-                    case 'payment_status_changed': return <CreditCard className="w-4 h-4" />;
-                    case 'item_added': return <Plus className="w-4 h-4" />;
-                    case 'item_removed': return <Minus className="w-4 h-4" />;
-                    case 'item_quantity_changed': return <Package className="w-4 h-4" />;
-                    case 'item_price_changed': return <CreditCard className="w-4 h-4" />;
-                    case 'discount_applied': return <Badge className="w-4 h-4" />;
-                    case 'approved': return <CheckCircle className="w-4 h-4" />;
-                    case 'rejected': return <X className="w-4 h-4" />;
-                    case 'shipped': return <Truck className="w-4 h-4" />;
-                    case 'delivered': return <CheckCircle className="w-4 h-4" />;
-                    case 'cancelled': return <X className="w-4 h-4" />;
-                    case 'payment_received': return <CreditCard className="w-4 h-4" />;
-                    case 'invoice_generated': return <FileText className="w-4 h-4" />;
-                    case 'note_added': return <FileText className="w-4 h-4" />;
-                    case 'proof_uploaded': return <Upload className="w-4 h-4" />;
-                    case 'proof_verified': return <CheckCircle2 className="w-4 h-4" />;
-                    case 'proof_rejected': return <XCircle className="w-4 h-4" />;
-                    default: return <Clock className="w-4 h-4" />;
+                    case 'created':
+                      return <Plus className="w-4 h-4" />;
+                    case 'approved':
+                      return <ThumbsUp className="w-4 h-4" />;
+                    case 'rejected':
+                    case 'cancelled':
+                    case 'proof_rejected':
+                      return <XCircle className="w-4 h-4" />;
+                    case 'shipped':
+                      return <Truck className="w-4 h-4" />;
+                    case 'delivered':
+                      return <PackageCheck className="w-4 h-4" />;
+                    case 'proof_uploaded':
+                      return <Upload className="w-4 h-4" />;
+                    case 'proof_verified':
+                      return <CheckCircle2 className="w-4 h-4" />;
+                    case 'status_changed':
+                      return <Truck className="w-4 h-4" />;
+                    case 'payment_received':
+                    case 'payment_status_changed':
+                      return <CreditCard className="w-4 h-4" />;
+                    case 'item_added':
+                      return <Plus className="w-4 h-4" />;
+                    case 'item_removed':
+                      return <Minus className="w-4 h-4" />;
+                    default:
+                      return <Clock className="w-4 h-4" />;
                   }
                 };
 
                 const getActionColor = () => {
                   switch (log.action) {
-                    case 'created': return 'text-blue-600 bg-blue-50';
-                    case 'approved': return 'text-green-600 bg-green-50';
-                    case 'rejected': 
-                    case 'cancelled': 
-                    case 'proof_rejected': return 'text-red-600 bg-red-50';
-                    case 'item_removed': return 'text-orange-600 bg-orange-50';
-                    case 'shipped':
+                    case 'approved':
+                    case 'proof_verified':
+                      return 'text-green-600 bg-green-50';
                     case 'delivered':
-                    case 'proof_verified': return 'text-green-600 bg-green-50';
+                      return 'text-emerald-600 bg-emerald-50';
+                    case 'rejected':
+                    case 'cancelled':
+                    case 'proof_rejected':
+                      return 'text-red-600 bg-red-50';
+                    case 'proof_uploaded':
+                      return 'text-blue-600 bg-blue-50';
+                    case 'shipped':
+                      return 'text-amber-600 bg-amber-50';
+                    case 'created':
+                      return 'text-sky-600 bg-sky-50';
                     case 'payment_received':
-                    case 'invoice_generated': return 'text-purple-600 bg-purple-50';
-                    case 'proof_uploaded': return 'text-blue-600 bg-blue-50';
-                    default: return 'text-gray-600 bg-gray-50';
+                    case 'payment_status_changed':
+                    case 'invoice_generated':
+                      return 'text-purple-600 bg-purple-50';
+                    default:
+                      return 'text-gray-600 bg-gray-50';
                   }
                 };
 
                 const getRoleBadgeColor = () => {
                   switch (log.performedByRole) {
-                    case 'Agent': return 'bg-blue-100 text-blue-700';
-                    case 'Manager': return 'bg-purple-100 text-purple-700';
-                    case 'Warehouse Staff': return 'bg-orange-100 text-orange-700';
-                    case 'Logistics': return 'bg-green-100 text-green-700';
-                    case 'Admin': return 'bg-red-100 text-red-700';
-                    case 'Executive': return 'bg-red-100 text-red-700';
-                    case 'System': return 'bg-gray-100 text-gray-700';
-                    default: return 'bg-gray-100 text-gray-700';
+                    case 'Agent':
+                      return 'bg-blue-100 text-blue-800';
+                    case 'Manager':
+                      return 'bg-purple-100 text-purple-800';
+                    case 'Warehouse Staff':
+                      return 'bg-orange-100 text-orange-800';
+                    case 'Logistics':
+                      return 'bg-green-100 text-green-800';
+                    case 'Admin':
+                      return 'bg-red-100 text-red-800';
+                    case 'Executive':
+                      return 'bg-red-100 text-red-800';
+                    case 'System':
+                      return 'bg-gray-100 text-gray-800';
+                    default:
+                      return 'bg-gray-100 text-gray-800';
                   }
                 };
 
+                const timeStr = new Date(log.timestamp).toLocaleString('en-PH', {
+                  year: 'numeric',
+                  month: 'short',
+                  day: 'numeric',
+                  hour: 'numeric',
+                  minute: '2-digit',
+                });
+
+                const roleLabel =
+                  log.performedByRole === 'Admin' ? 'Executive' : log.performedByRole;
+
                 return (
                   <div key={log.id} className="relative pl-8 pb-3">
-                    {/* Timeline line */}
-                    {!isLast && (
-                      <div className="absolute left-3 top-8 bottom-0 w-0.5 bg-gray-200"></div>
-                    )}
-                    
-                    {/* Timeline dot with icon */}
-                    <div className={`absolute left-0 top-1 w-6 h-6 rounded-full flex items-center justify-center ${getActionColor()}`}>
+                    {!isLast && <div className="absolute left-3 top-8 bottom-0 w-0.5 bg-gray-200" aria-hidden />}
+                    <div
+                      className={`absolute left-0 top-1 w-6 h-6 rounded-full flex items-center justify-center ${getActionColor()}`}
+                    >
                       {getActionIcon()}
                     </div>
-
-                    {/* Log content */}
                     <div className="bg-gray-50 rounded-lg p-3 hover:bg-gray-100 transition-colors">
-                      <div className="flex items-start justify-between gap-3 mb-1">
-                        <div className="flex-1">
-                          {(() => {
-                            // Strip legacy "— Reason: ..." suffix from description if present
-                            const reasonSepIdx = log.description.indexOf(' — Reason: ');
-                            const cleanDesc = reasonSepIdx !== -1
-                              ? log.description.slice(0, reasonSepIdx)
-                              : log.description;
-                            const legacyReason = reasonSepIdx !== -1
-                              ? log.description.slice(reasonSepIdx + ' — Reason: '.length)
-                              : null;
-                            // Use metadata.reason if present, otherwise fall back to legacy
-                            const displayReason = (log.metadata as any)?.reason ?? legacyReason;
-                            return (
-                              <>
-                                <p className="text-sm font-medium text-gray-900">{cleanDesc}</p>
-                                {displayReason && (
-                                  <div className="mt-1.5 text-xs text-gray-500">
-                                    <span className="font-semibold text-gray-700">Reason:</span>
-                                    <p className="mt-0.5 text-gray-800 whitespace-pre-wrap">{displayReason}</p>
-                                  </div>
-                                )}
-                              </>
-                            );
-                          })()}
-                          <div className="flex items-center gap-2 mt-1 flex-wrap">
-                            <span className="text-xs text-gray-500">
-                              {new Date(log.timestamp).toLocaleString('en-US', {
-                                month: 'short',
-                                day: 'numeric',
-                                year: 'numeric',
-                                hour: '2-digit',
-                                minute: '2-digit'
-                              })}
-                            </span>
-                            <span className="text-xs text-gray-400">•</span>
-                            <span className="text-xs text-gray-700 font-medium">{log.performedBy}</span>
-                            <Badge className={`text-xs px-2 py-0.5 ${getRoleBadgeColor()}`}>
-                              {log.performedByRole === 'Admin' ? 'Executive' : log.performedByRole}
-                            </Badge>
-                          </div>
-                        </div>
+                      <div className="flex items-start justify-between gap-2 mb-1">
+                        <p className="text-sm font-medium text-gray-900 flex-1">{orderLogCardHeadline(log)}</p>
+                        {log.performedByRole && (
+                          <span
+                            className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${getRoleBadgeColor()}`}
+                          >
+                            {roleLabel}
+                          </span>
+                        )}
                       </div>
-
-                      {/* Show old vs new values if available */}
-                      {(log.oldValue || log.newValue) && (() => {
-                        // Render a single key's value in a human-friendly way
-                        const fmt = (obj: any, key: string): string => {
-                          const v = obj?.[key];
-                          if (v === undefined || v === null) return '—';
-                          if (key === 'unitPrice' || key === 'lineTotal' || key === 'discountAmount') return `₱${Number(v).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-                          if (key === 'discountPercent') return `${Number(v).toFixed(2)}%`;
-                          return String(v);
-                        };
-
-                        // Detect which field changed and produce a clean pill-style diff
-                        const keys = Array.from(new Set([
-                          ...Object.keys(log.oldValue ?? {}),
-                          ...Object.keys(log.newValue ?? {}),
-                        ])).filter(k => {
-                          // Skip decorative/redundant keys
-                          if (['approved_by', 'rejected_by', 'rejection_reason'].includes(k)) return false;
-                          // Skip keys whose value is a nested object (not renderable as a pill)
-                          const oldV = (log.oldValue as any)?.[k];
-                          const newV = (log.newValue as any)?.[k];
-                          if (oldV !== undefined && typeof oldV === 'object') return false;
-                          if (newV !== undefined && typeof newV === 'object') return false;
-                          return true;
-                        });
-
-                        if (keys.length === 0) return null;
-
-                        return (
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            {keys.map(key => {
-                              const oldDisplay = fmt(log.oldValue, key);
-                              const newDisplay = fmt(log.newValue, key);
-                              const hasOld = log.oldValue && log.oldValue[key] !== undefined;
-                              const hasNew = log.newValue && log.newValue[key] !== undefined;
-                              return (
-                                <div key={key} className="flex items-center gap-1.5 text-xs">
-                                  {hasOld && (
-                                    <span className="px-2 py-0.5 rounded-full bg-red-50 text-red-700 font-medium border border-red-200 line-through decoration-red-400">
-                                      {oldDisplay}
-                                    </span>
-                                  )}
-                                  {hasOld && hasNew && (
-                                    <span className="text-gray-400 font-bold">→</span>
-                                  )}
-                                  {hasNew && (
-                                    <span className="px-2 py-0.5 rounded-full bg-green-50 text-green-700 font-medium border border-green-200">
-                                      {newDisplay}
-                                    </span>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        );
-                      })()}
-
-                      {/* Show metadata if available — only fields that add context beyond the description */}
-                      {log.metadata && (() => {
-                        const meta = log.metadata as Record<string, any>;
-                        // Keys to suppress: productName/variantDescription are already in the description text
-                        const SKIP_KEYS = new Set(['productName', 'variantDescription', 'reason']);
-                        const entries = Object.entries(meta).filter(([k]) => !SKIP_KEYS.has(k));
-
-                        const fmtMetaValue = (key: string, val: any): string => {
-                          if (typeof val === 'boolean') return val ? 'Yes' : 'No';
-                          if (typeof val === 'number') {
-                            if (['addedAmount', 'savedAmount', 'reducedAmount', 'unitPrice', 'lineTotal'].includes(key))
-                              return `₱${val.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-                            if (key === 'discountPercent') return `${val.toFixed(2)}%`;
-                            return val.toLocaleString();
-                          }
-                          if (key === 'dueDate') return new Date(val).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-                          return String(val);
-                        };
-
-                        const fmtMetaKey = (k: string): string => {
-                          const labels: Record<string, string> = {
-                            addedAmount: 'Added to order',
-                            savedAmount: 'Saved',
-                            reducedAmount: 'Reduced by',
-                            dueDate: 'Due date',
-                          };
-                          return labels[k] ?? k.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase()).trim();
-                        };
-
-                        return (
-                          <>
-                            {/* Reason — rendered as its own distinct block */}
-                            {meta.reason && (
-                              <div className="mt-2 text-xs text-gray-500">
-                                <span className="font-semibold text-gray-700">Reason:</span>
-                                <p className="mt-0.5 text-gray-800 whitespace-pre-wrap">{meta.reason}</p>
-                              </div>
-                            )}
-                            {/* Remaining metadata fields */}
-                            {entries.length > 0 && (
-                              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
-                                {entries.map(([key, value]) => (
-                                  <span key={key} className="text-xs text-gray-500">
-                                    <span className="font-medium text-gray-700">{fmtMetaKey(key)}:</span>{' '}
-                                    {fmtMetaValue(key, value)}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-                          </>
-                        );
-                      })()}
+                      <div className="flex items-center gap-2 text-xs text-gray-500 mt-1 mb-1">
+                        <User className="w-3.5 h-3.5 shrink-0" />
+                        <span className="font-medium text-gray-700">{log.performedBy}</span>
+                        <span>· {timeStr}</span>
+                      </div>
+                      <OrderActivityLogHumanDetails log={log} />
                     </div>
                   </div>
                 );
@@ -3158,7 +3205,7 @@ export function OrderDetailPage() {
       {/* Proof Upload Modal — image gallery (optimizer) + optional PDF */}
       {showProofModal && id && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-lg shadow-xl max-w-xl w-full max-h-[90vh] overflow-y-auto">
             <div className="border-b border-gray-200 px-6 py-4 flex items-center justify-between">
               <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
                 <Upload className="w-6 h-6 text-red-600" />
@@ -3184,8 +3231,8 @@ export function OrderDetailPage() {
                       type="button"
                       onClick={() => {
                         setProofType('delivery');
-                        setSelectedProofImageUrl(null);
-                        setSelectedProofPdf(null);
+                        setSelectedProofGalleryUrls([]);
+                        setSelectedProofLocalFiles([]);
                       }}
                       className={`p-2 md:p-3 border-2 rounded-lg text-center transition-colors ${
                         proofType === 'delivery'
@@ -3200,8 +3247,8 @@ export function OrderDetailPage() {
                       type="button"
                       onClick={() => {
                         setProofType('payment');
-                        setSelectedProofImageUrl(null);
-                        setSelectedProofPdf(null);
+                        setSelectedProofGalleryUrls([]);
+                        setSelectedProofLocalFiles([]);
                       }}
                       className={`p-2 md:p-3 border-2 rounded-lg text-center transition-colors ${
                         proofType === 'payment'
@@ -3216,8 +3263,8 @@ export function OrderDetailPage() {
                       type="button"
                       onClick={() => {
                         setProofType('receipt');
-                        setSelectedProofImageUrl(null);
-                        setSelectedProofPdf(null);
+                        setSelectedProofGalleryUrls([]);
+                        setSelectedProofLocalFiles([]);
                       }}
                       className={`p-2 md:p-3 border-2 rounded-lg text-center transition-colors ${
                         proofType === 'receipt'
@@ -3232,54 +3279,101 @@ export function OrderDetailPage() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Image (recommended)</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Images (gallery)</label>
                   <p className="text-xs text-gray-500 mb-2">
-                    Uses the image gallery and upload pipeline (client compression before storage), same as other screens.
+                    Select one or many from the gallery (compressed uploads to storage). You can open the gallery again to
+                    extend the selection (up to {MAX_PROOF_BATCH} files total with uploads below).
                   </p>
-                  <div className="rounded-xl border-2 border-dashed border-gray-300 bg-gray-50/80 p-4 text-center">
-                    {selectedProofImageUrl ? (
-                      <div className="space-y-2">
-                        <div className="mx-auto h-32 w-full max-w-[12rem] overflow-hidden rounded-lg border border-gray-200">
-                          <img
-                            src={selectedProofImageUrl}
-                            alt=""
-                            className="h-full w-full object-cover"
-                          />
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setSelectedProofImageUrl(null)}
-                          className="text-xs text-red-600 hover:underline"
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => setShowProofImageGallery(true)}
-                        className="w-full flex flex-col items-center gap-2 py-4 text-sm text-gray-600 hover:text-indigo-600"
-                      >
-                        <Image className="w-8 h-8 text-gray-400" />
-                        <span className="font-medium">Select from image gallery</span>
-                        <span className="text-xs text-gray-500">Or upload a new file inside the gallery</span>
-                      </button>
-                    )}
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowProofImageGallery(true)}
+                    className="w-full rounded-xl border-2 border-dashed border-gray-300 bg-gray-50/80 px-4 py-4 text-sm text-gray-600 hover:border-indigo-400 hover:text-indigo-600 transition-colors"
+                  >
+                    <span className="font-medium">
+                      {selectedProofGalleryUrls.length > 0
+                        ? `${selectedProofGalleryUrls.length} image(s) from gallery — click to change`
+                        : 'Select from image gallery'}
+                    </span>
+                    <span className="mt-1 block text-xs text-gray-500">
+                      Or upload new images inside the gallery
+                    </span>
+                  </button>
+                  {selectedProofGalleryUrls.length > 0 && (
+                    <ul className="mt-3 space-y-2 max-h-40 overflow-y-auto">
+                      {selectedProofGalleryUrls.map((url) => {
+                        const raw = url.split('/').pop()?.split('?')[0] ?? 'image';
+                        let label = raw;
+                        try {
+                          label = decodeURIComponent(raw);
+                        } catch {
+                          label = raw;
+                        }
+                        return (
+                          <li
+                            key={url}
+                            className="flex items-center gap-3 rounded-lg border border-gray-200 bg-white p-2 text-left"
+                          >
+                            <div className="h-12 w-12 shrink-0 overflow-hidden rounded-md border border-gray-100">
+                              <img src={url} alt="" className="h-full w-full object-cover" />
+                            </div>
+                            <p className="min-w-0 flex-1 truncate text-xs text-gray-800" title={label}>
+                              {label}
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => removeProofGalleryUrl(url)}
+                              className="shrink-0 text-xs text-red-600 hover:underline"
+                            >
+                              Remove
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Or attach PDF (optional)</label>
-                  <p className="text-xs text-gray-500 mb-2">Max 10MB. Choosing PDF clears the image selection.</p>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Upload documents (optional)</label>
+                  <p className="text-xs text-gray-500 mb-2">
+                    PDF, Word, Excel, PowerPoint, plain text, CSV, RTF, OpenDocument (odt/ods/odp), and images. Max 25MB per
+                    file. Hold Ctrl/Cmd to choose multiple.
+                  </p>
                   <input
                     type="file"
-                    accept="application/pdf"
-                    onChange={handleProofPdfSelect}
+                    multiple
+                    accept={PROOF_UPLOAD_ACCEPT}
+                    onChange={handleProofFilesSelect}
                     className="block w-full text-sm text-gray-600 file:mr-3 file:rounded-md file:border-0 file:bg-gray-100 file:px-3 file:py-1.5"
-                    id="proof-pdf-input"
+                    id="proof-files-input"
                   />
-                  {selectedProofPdf && (
-                    <p className="mt-1 text-xs text-gray-600">{selectedProofPdf.name}</p>
+                  {selectedProofLocalFiles.length > 0 && (
+                    <ul className="mt-2 space-y-1.5 max-h-36 overflow-y-auto">
+                      {selectedProofLocalFiles.map((file, idx) => (
+                        <li
+                          key={`${file.name}-${file.size}-${idx}`}
+                          className="flex items-center justify-between gap-2 rounded-md border border-gray-100 bg-gray-50 px-2 py-1.5 text-xs"
+                        >
+                          <span className="flex min-w-0 items-center gap-2">
+                            {file.type.startsWith('image/') || orderProofFileIsImageName(file.name) ? (
+                              <Image className="h-4 w-4 shrink-0 text-indigo-600" />
+                            ) : (
+                              <FileText className="h-4 w-4 shrink-0 text-gray-700" />
+                            )}
+                            <span className="truncate font-medium text-gray-800" title={file.name}>
+                              {file.name}
+                            </span>
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => removeProofLocalFile(idx)}
+                            className="shrink-0 text-red-600 hover:underline"
+                          >
+                            Remove
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
                   )}
                 </div>
 
@@ -3308,12 +3402,17 @@ export function OrderDetailPage() {
                 </Button>
                 <Button
                   variant="primary"
-                  onClick={handleUploadProof}
-                  disabled={!selectedProofImageUrl && !selectedProofPdf}
+                  onClick={() => void handleUploadProof()}
+                  disabled={
+                    selectedProofGalleryUrls.length === 0 && selectedProofLocalFiles.length === 0
+                  }
                   className="flex-1 gap-2"
                 >
                   <Upload className="w-4 h-4" />
-                  Add proof
+                  Add{' '}
+                  {selectedProofGalleryUrls.length + selectedProofLocalFiles.length > 1
+                    ? `${selectedProofGalleryUrls.length + selectedProofLocalFiles.length} proofs`
+                    : 'proof'}
                 </Button>
               </div>
             </div>
@@ -3326,11 +3425,17 @@ export function OrderDetailPage() {
           isOpen={showProofImageGallery}
           onClose={() => setShowProofImageGallery(false)}
           folder={`${ORDER_PROOF_GALLERY_FOLDER}/${id}/${proofType}`}
-          maxImages={1}
-          currentImageUrl={selectedProofImageUrl || undefined}
-          onSelectImage={(url) => {
-            setSelectedProofImageUrl(url);
-            setSelectedProofPdf(null);
+          maxImages={MAX_PROOF_BATCH}
+          currentImages={selectedProofGalleryUrls}
+          onSelectImages={(urls) => {
+            const room = MAX_PROOF_BATCH - selectedProofLocalFiles.length;
+            const capped = urls.slice(0, Math.max(0, room));
+            if (capped.length < urls.length) {
+              alert(
+                `Only ${room} more attachment(s) allowed in this batch (max ${MAX_PROOF_BATCH} including uploads).`,
+              );
+            }
+            setSelectedProofGalleryUrls(capped);
             setShowProofImageGallery(false);
           }}
         />

@@ -6,6 +6,7 @@ import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagination';
 import { supabase } from '@/src/lib/supabase';
+import { createDraftProductionRequest, prLogRoleMap } from '@/src/lib/productionRequestDraft';
 import { isPrExpectedOverdue } from '@/src/lib/prOverdue';
 import {
   Search,
@@ -74,18 +75,6 @@ const getPRStatusIcon = (status: PRStatus) => {
   if (status === 'Rejected') return <XCircle className="w-3.5 h-3.5" />;
   if (status === 'Accepted') return <ThumbsUp className="w-3.5 h-3.5" />;
   return <FileText className="w-3.5 h-3.5" />;
-};
-
-const prLogRoleMap: Record<string, string> = {
-  Executive: 'Admin',
-  Agent: 'Agent',
-  Warehouse: 'Warehouse Staff',
-  Logistics: 'Logistics',
-  Driver: 'Logistics',
-  Production: 'Production',
-  Manager: 'Manager',
-  Procurement: 'Procurement',
-  Finance: 'Finance',
 };
 
 export function ProductionRequestsPage() {
@@ -250,31 +239,10 @@ export function ProductionRequestsPage() {
         const { data: bd } = await supabase.from('branches').select('id').eq('name', branch).single();
         branchId = bd?.id ?? null;
       }
-      const prNumber = `PR-${Date.now()}`;
       const actor = employeeName || session?.user?.email || 'User';
-      const { data, error: insErr } = await supabase
-        .from('production_requests')
-        .insert({
-          pr_number: prNumber,
-          branch_id: branchId,
-          status: 'Draft',
-          request_date: new Date().toISOString().split('T')[0],
-          created_by: actor,
-        })
-        .select('id')
-        .single();
-      if (insErr) throw insErr;
       const logRole = prLogRoleMap[role] ?? 'System';
-      const { error: logErr } = await supabase.from('production_request_logs').insert({
-        request_id: data.id,
-        action: 'drafted',
-        performed_by: actor,
-        performed_by_role: logRole,
-        description: 'Created as draft — add product lines, then submit for approval',
-        metadata: { pr_number: prNumber },
-      });
-      if (logErr && import.meta.env.DEV) console.warn('[PR log]', logErr.message);
-      navigate(`/production-requests/${data.id}`);
+      const { id } = await createDraftProductionRequest({ branchId, actor, logRole });
+      navigate(`/production-requests/${id}`);
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : 'Failed to create request');
     } finally {

@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import RawMaterialPickerModal from '@/src/components/products/RawMaterialPickerModal';
 import ImageGalleryModal from '@/src/components/ImageGalleryModal';
+import { poLogCardHeadline, PoActivityLogHumanDetails } from '@/src/components/purchaseOrders/PoActivityLogHuman';
 import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
@@ -84,7 +85,14 @@ interface POItemRow {
   unit_price: number;
   unit_of_measure: string | null;
   sync_price_on_receive: boolean;
-  raw_materials: { id: string; name: string; sku: string; unit_of_measure: string; image_url: string | null } | null;
+  raw_materials: {
+    id: string;
+    name: string;
+    sku: string;
+    unit_of_measure: string;
+    image_url: string | null;
+    brand: string | null;
+  } | null;
 }
 
 interface PORow {
@@ -130,6 +138,13 @@ const fmtDateTime = (iso: string | null | undefined) => {
   } catch {
     return '—';
   }
+};
+
+/** Raw material title: "Name · Brand" when brand is set. */
+const materialDisplayLine = (mat: { name: string; brand?: string | null } | null | undefined): string => {
+  if (!mat?.name) return '—';
+  const b = mat.brand?.trim();
+  return b ? `${mat.name} · ${b}` : mat.name;
 };
 
 const getStatusVariant = (status: POStatus): 'success' | 'warning' | 'danger' | 'neutral' | 'default' => {
@@ -188,6 +203,7 @@ export function PurchaseOrderDetailPage() {
   const [originalItems, setOriginalItems] = useState<POItemRow[]>([]);
 
   const [showPicker, setShowPicker]                   = useState(false);
+  const poMaterialSelectLock = useRef(false);
   const [editingItemId, setEditingItemId]             = useState<string | null>(null);
   const [editItemQtyOrdered, setEditItemQtyOrdered]   = useState('');
   const [editItemQtyReceived, setEditItemQtyReceived] = useState('');
@@ -241,6 +257,10 @@ export function PurchaseOrderDetailPage() {
     setPoLogs((data ?? []) as unknown as POLogRow[]);
   }, []);
 
+  useEffect(() => {
+    if (!showPicker) poMaterialSelectLock.current = false;
+  }, [showPicker]);
+
   // ── Fetch ────────────────────────────────────────────────
   const fetchPO = useCallback(async () => {
     if (!id) return;
@@ -255,7 +275,7 @@ export function PurchaseOrderDetailPage() {
           .single(),
         supabase
           .from('purchase_order_items')
-          .select('*, sync_price_on_receive, raw_materials(id, name, sku, unit_of_measure, image_url)')
+          .select('*, sync_price_on_receive, raw_materials(id, name, sku, unit_of_measure, image_url, brand)')
           .eq('order_id', id)
           .order('created_at'),
         supabase
@@ -511,13 +531,31 @@ export function PurchaseOrderDetailPage() {
   };
 
   // ── Item handlers (local-only until Save) ────────────────
-  const handlePickerSelect = ({ materialId, name, sku, unit, cost, imageUrl }: { materialId: string; name: string; sku: string; unit: string; cost: number; imageUrl: string | null }) => {
+  const handlePickerSelect = ({
+    materialId,
+    name,
+    sku,
+    unit,
+    cost,
+    imageUrl,
+    brand,
+  }: {
+    materialId: string;
+    name: string;
+    sku: string;
+    unit: string;
+    cost: number;
+    imageUrl: string | null;
+    brand?: string | null;
+  }) => {
+    if (poMaterialSelectLock.current) return;
+    poMaterialSelectLock.current = true;
     const tempId = `temp_${Date.now()}`;
     const newItem: POItemRow = {
       id: tempId, order_id: po?.id ?? '', material_id: materialId,
       quantity_ordered: 0, quantity_received: 0, unit_price: cost, unit_of_measure: unit,
       sync_price_on_receive: false,
-      raw_materials: { id: materialId, name, sku, unit_of_measure: unit, image_url: imageUrl },
+      raw_materials: { id: materialId, name, sku, unit_of_measure: unit, image_url: imageUrl, brand: brand ?? null },
     };
     setStagedItems(prev => [...prev, newItem]);
     setEditingItemId(tempId);
@@ -635,12 +673,27 @@ export function PurchaseOrderDetailPage() {
         (s, it) => s + (parseFloat(receiveQtys[it.id] ?? '0') || 0),
         0,
       );
+      const receipt_lines = items
+        .map((it) => {
+          const addQty = parseFloat(receiveQtys[it.id] ?? '0') || 0;
+          if (addQty <= 0) return null;
+          return {
+            label: materialDisplayLine(it.raw_materials),
+            quantity: addQty,
+            unit: (it.unit_of_measure && String(it.unit_of_measure).trim()) || 'units',
+          };
+        })
+        .filter((x): x is { label: string; quantity: number; unit: string } => x != null);
       await insertPoLog(
         'receipt_posted',
         'Recorded delivery receipt (partial or full) and updated quantities received.',
         { status: po.status },
         { status: allFulfilled ? 'Completed' : anyReceived ? 'Partially Received' : po.status, po_number: po.po_number },
-        { quantity_received_on_event: totalReceived, receipt_image_count: stagedReceiptUrls.length },
+        {
+          quantity_received_on_event: totalReceived,
+          receipt_image_count: stagedReceiptUrls.length,
+          receipt_lines,
+        },
       );
 
       await fetchPO();
@@ -1405,7 +1458,7 @@ export function PurchaseOrderDetailPage() {
                         >
                           {/* Image */}
                           {mat?.image_url ? (
-                            <img src={mat.image_url} alt={mat.name}
+                            <img src={mat.image_url} alt={materialDisplayLine(mat)}
                               className="w-12 h-12 rounded-lg object-cover flex-shrink-0 border border-gray-200"
                               onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
                             />
@@ -1415,7 +1468,7 @@ export function PurchaseOrderDetailPage() {
                             </div>
                           )}
                           <div className="flex-1 min-w-0">
-                            <div className="text-sm font-semibold text-gray-900 truncate">{mat?.name ?? '—'}</div>
+                            <div className="text-sm font-semibold text-gray-900 truncate">{materialDisplayLine(mat)}</div>
                             <div className="text-xs text-gray-400 font-mono">{mat?.sku}</div>
                             <div className="text-xs text-gray-500 mt-0.5">
                               Ordered: <span className="font-medium text-gray-700">{item.quantity_ordered.toLocaleString()} {item.unit_of_measure}</span>
@@ -1477,7 +1530,7 @@ export function PurchaseOrderDetailPage() {
                               <div>
                                 <p className="text-xs font-semibold text-amber-800">Update material price on receive</p>
                                 <p className="text-xs text-amber-600 mt-0.5">
-                                  Sets <strong>{item.raw_materials?.name ?? 'material'}</strong>'s catalog price to{' '}
+                                  Sets <strong>{materialDisplayLine(item.raw_materials)}</strong>&apos;s catalog price to{' '}
                                   <strong>₱{parseFloat(editItemPrice) > 0 ? parseFloat(editItemPrice).toLocaleString() : '—'}</strong> on save.
                                 </p>
                               </div>
@@ -1625,55 +1678,85 @@ export function PurchaseOrderDetailPage() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <Clock className="w-5 h-5" />
-            Purchase order activity
+            Activity log
           </CardTitle>
         </CardHeader>
         <CardContent>
           <div className="space-y-3">
             {poLogs.length === 0 ? (
-              <p className="text-sm text-gray-500 text-center py-8">No activity recorded yet. Actions (save, approval, receive, payment) will appear here.</p>
+              <p className="text-sm text-gray-500 text-center py-8">
+                No activity recorded yet. Saves, approvals, supplier confirmation, receipts, proof photos, and payments will
+                appear here.
+              </p>
             ) : (
               poLogs.map((log, index) => {
                 const isLast = index === poLogs.length - 1;
                 const getActionIcon = () => {
                   switch (log.action) {
-                    case 'requested':         return <ClipboardList className="w-4 h-4" />;
-                    case 'submitted':         return <Send className="w-4 h-4" />;
-                    case 'updated':         return <FileText className="w-4 h-4" />;
-                    case 'approved':         return <CheckCircle className="w-4 h-4" />;
-                    case 'rejected':         return <XCircle className="w-4 h-4" />;
-                    case 'order_confirmed':  return <ShieldCheck className="w-4 h-4" />;
-                    case 'receipt_posted':   return <PackageCheck className="w-4 h-4" />;
-                    case 'payment_recorded': return <CreditCard className="w-4 h-4" />;
-                    case 'proof_uploaded':   return <ImageIcon className="w-4 h-4" />;
-                    case 'proof_removed':    return <Trash2 className="w-4 h-4" />;
-                    case 'status_changed':   return <Clock className="w-4 h-4" />;
-                    default:                 return <Clock className="w-4 h-4" />;
+                    case 'requested':
+                      return <ClipboardList className="w-4 h-4" />;
+                    case 'submitted':
+                      return <Send className="w-4 h-4" />;
+                    case 'updated':
+                      return <FileText className="w-4 h-4" />;
+                    case 'approved':
+                      return <ThumbsUp className="w-4 h-4" />;
+                    case 'rejected':
+                      return <XCircle className="w-4 h-4" />;
+                    case 'order_confirmed':
+                      return <ShieldCheck className="w-4 h-4" />;
+                    case 'receipt_posted':
+                      return <PackageCheck className="w-4 h-4" />;
+                    case 'payment_recorded':
+                      return <CreditCard className="w-4 h-4" />;
+                    case 'proof_uploaded':
+                      return <ImageIcon className="w-4 h-4" />;
+                    case 'proof_removed':
+                      return <Trash2 className="w-4 h-4" />;
+                    case 'status_changed':
+                      return <Truck className="w-4 h-4" />;
+                    default:
+                      return <Clock className="w-4 h-4" />;
                   }
                 };
                 const getActionColor = () => {
                   switch (log.action) {
                     case 'approved':
-                    case 'order_confirmed':   return 'text-green-600 bg-green-50';
-                    case 'rejected':          return 'text-red-600 bg-red-50';
-                    case 'payment_recorded':  return 'text-violet-600 bg-violet-50';
-                    case 'receipt_posted':    return 'text-emerald-600 bg-emerald-50';
-                    case 'proof_uploaded':    return 'text-blue-600 bg-blue-50';
-                    case 'proof_removed':     return 'text-orange-600 bg-orange-50';
-                    case 'requested':         return 'text-amber-600 bg-amber-50';
-                    case 'submitted':         return 'text-amber-600 bg-amber-50';
-                    default:                 return 'text-gray-600 bg-gray-50';
+                    case 'order_confirmed':
+                      return 'text-green-600 bg-green-50';
+                    case 'rejected':
+                      return 'text-red-600 bg-red-50';
+                    case 'payment_recorded':
+                      return 'text-violet-600 bg-violet-50';
+                    case 'receipt_posted':
+                      return 'text-emerald-600 bg-emerald-50';
+                    case 'proof_uploaded':
+                      return 'text-blue-600 bg-blue-50';
+                    case 'proof_removed':
+                      return 'text-orange-600 bg-orange-50';
+                    case 'requested':
+                    case 'submitted':
+                      return 'text-amber-600 bg-amber-50';
+                    default:
+                      return 'text-gray-600 bg-gray-50';
                   }
                 };
                 const getRoleBadgeColor = () => {
                   switch (log.performed_by_role) {
-                    case 'Agent':            return 'bg-blue-100 text-blue-800';
-                    case 'Manager':         return 'bg-purple-100 text-purple-800';
-                    case 'Warehouse Staff': return 'bg-orange-100 text-orange-800';
-                    case 'Logistics':       return 'bg-green-100 text-green-800';
-                    case 'Admin':            return 'bg-red-100 text-red-800';
-                    case 'System':          return 'bg-gray-100 text-gray-800';
-                    default:                return 'bg-gray-100 text-gray-800';
+                    case 'Agent':
+                      return 'bg-blue-100 text-blue-800';
+                    case 'Manager':
+                      return 'bg-purple-100 text-purple-800';
+                    case 'Warehouse Staff':
+                      return 'bg-orange-100 text-orange-800';
+                    case 'Logistics':
+                      return 'bg-green-100 text-green-800';
+                    case 'Admin':
+                      return 'bg-red-100 text-red-800';
+                    case 'System':
+                      return 'bg-gray-100 text-gray-800';
+                    default:
+                      return 'bg-gray-100 text-gray-800';
                   }
                 };
                 const t = new Date(log.created_at);
@@ -1684,26 +1767,31 @@ export function PurchaseOrderDetailPage() {
                   hour:    'numeric',
                   minute:  '2-digit',
                 });
+                const roleLabel =
+                  log.performed_by_role === 'Admin' ? 'Executive' : log.performed_by_role ?? '';
                 return (
                   <div key={log.id} className="relative pl-8 pb-3">
                     {!isLast && <div className="absolute left-3 top-8 bottom-0 w-0.5 bg-gray-200" aria-hidden />}
-                    <div className={`absolute left-0 top-1 w-6 h-6 rounded-full flex items-center justify-center ${getActionColor()}`}>
+                    <div
+                      className={`absolute left-0 top-1 w-6 h-6 rounded-full flex items-center justify-center ${getActionColor()}`}
+                    >
                       {getActionIcon()}
                     </div>
                     <div className="bg-gray-50 rounded-lg p-3 hover:bg-gray-100 transition-colors">
                       <div className="flex items-start justify-between gap-2 mb-1">
-                        <p className="text-sm font-medium text-gray-900 flex-1">{log.description || log.action}</p>
-                        {log.performed_by_role && (
-                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${getRoleBadgeColor()}`}>
-                            {log.performed_by_role}
+                        <p className="text-sm font-medium text-gray-900 flex-1">{poLogCardHeadline(log)}</p>
+                        {roleLabel && (
+                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${getRoleBadgeColor()}`}>
+                            {roleLabel}
                           </span>
                         )}
                       </div>
-                      <div className="flex items-center gap-2 text-xs text-gray-500">
-                        <User className="w-3.5 h-3.5 flex-shrink-0" />
+                      <div className="flex items-center gap-2 text-xs text-gray-500 mt-1 mb-1">
+                        <User className="w-3.5 h-3.5 shrink-0" />
                         <span className="font-medium text-gray-700">{log.performed_by ?? '—'}</span>
                         <span>· {timeStr}</span>
                       </div>
+                      <PoActivityLogHumanDetails log={log} />
                     </div>
                   </div>
                 );
@@ -1772,6 +1860,7 @@ export function PurchaseOrderDetailPage() {
           })));
           setShowReceiveGallery(false);
         }}
+        stackOnTopOfModal
       />
 
       {/* ── Receive Delivery Modal ── */}
@@ -1815,7 +1904,7 @@ export function PurchaseOrderDetailPage() {
                     {/* Item row */}
                     <div className={`flex items-center gap-3 p-3 ${isFull ? 'bg-green-50' : isPartial ? 'bg-amber-50' : 'bg-gray-50'}`}>
                       {mat?.image_url ? (
-                        <img src={mat.image_url} alt={mat.name}
+                        <img src={mat.image_url} alt={materialDisplayLine(mat)}
                           className="w-10 h-10 rounded-lg object-cover flex-shrink-0 border border-gray-200"
                           onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
                         />
@@ -1826,7 +1915,7 @@ export function PurchaseOrderDetailPage() {
                       )}
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
-                          <span className="text-sm font-semibold text-gray-900 truncate">{mat?.name ?? '—'}</span>
+                          <span className="text-sm font-semibold text-gray-900 truncate">{materialDisplayLine(mat)}</span>
                           {isFull    && <span className="text-xs font-medium px-1.5 py-0.5 rounded-full bg-green-100 text-green-700">Fully received</span>}
                           {isPartial && <span className="text-xs font-medium px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">Partial</span>}
                           {isNone    && remaining > 0 && <span className="text-xs font-medium px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">Not receiving</span>}
@@ -1874,7 +1963,7 @@ export function PurchaseOrderDetailPage() {
                         <div>
                           <p className="text-xs font-semibold text-amber-800">Update material price on receive</p>
                           <p className="text-xs text-amber-600 mt-0.5">
-                            Sets <strong>{mat?.name ?? 'material'}</strong>'s catalog price to{' '}
+                            Sets <strong>{mat ? materialDisplayLine(mat) : 'material'}</strong>&apos;s catalog price to{' '}
                             <strong>₱{item.unit_price.toLocaleString()}</strong> on confirm.
                           </p>
                         </div>

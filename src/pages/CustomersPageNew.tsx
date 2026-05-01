@@ -499,7 +499,6 @@ export function CustomersPage() {
                     >
                       <div>
                         <div className="font-medium text-gray-900">{customer.name}</div>
-                        <div className="text-xs text-gray-500">{customer.id.slice(0, 8)}…</div>
                         {customer.employees && (
                           <div className="text-xs text-gray-400 mt-0.5">{customer.employees.employee_name}</div>
                         )}
@@ -606,7 +605,6 @@ export function CustomersPage() {
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
                     <p className="font-medium text-gray-900 break-words">{customer.name}</p>
-                    <p className="text-xs text-gray-500 mt-1">{customer.id.slice(0, 8)}…</p>
                     {customer.employees && (
                       <p className="text-xs text-gray-400 mt-0.5">{customer.employees.employee_name}</p>
                     )}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Ca
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { supabase } from '@/src/lib/supabase';
+import { consumeBomForProductionLines } from '@/src/lib/bomConsumption';
 import { isPrExpectedOverdue } from '@/src/lib/prOverdue';
 import type { PRStatus } from '@/src/pages/ProductionRequestsPage';
 import {
@@ -401,6 +402,8 @@ export function ProductionRequestDetailPage() {
   const [editedStatus, setEditedStatus] = useState<PRStatus | null>(null);
   const [showRecordProduction, setShowRecordProduction] = useState(false);
 
+  const prProductPickLock = useRef(false);
+
   const actor = employeeName || session?.user?.email || 'User';
   const canApprove = ['Executive', 'Manager'].includes(role);
   const canRunProduction = ['Executive', 'Manager', 'Production', 'Warehouse'].includes(role);
@@ -672,8 +675,23 @@ export function ProductionRequestDetailPage() {
 
   const handleStartProduction = async () => {
     if (!id || !pr) return;
+    if (!pr.branch_id) {
+      alert('This production request has no branch. Assign a branch before starting production.');
+      return;
+    }
+    const bomLines = items
+      .map((it) => ({
+        variantId: it.product_variant_id,
+        units: Math.max(0, (Number(it.quantity) || 0) - (Number(it.quantity_completed) || 0)),
+      }))
+      .filter((l) => l.units > 0);
+
     setSaving(true);
     try {
+      if (bomLines.length > 0) {
+        await consumeBomForProductionLines(pr.branch_id, bomLines);
+      }
+
       const { error: u } = await supabase
         .from('production_requests')
         .update({
@@ -684,7 +702,10 @@ export function ProductionRequestDetailPage() {
         })
         .eq('id', id);
       if (u) throw u;
-      await insertLog('in_progress', 'Production started');
+      await insertLog(
+        'in_progress',
+        bomLines.length > 0 ? 'Production started; raw materials consumed per BOM (remaining planned units).' : 'Production started',
+      );
       addAuditLog('PR In progress', 'Production', pr.pr_number);
       void fetchPR({ silent: true });
     } catch (e: unknown) {
@@ -832,16 +853,18 @@ export function ProductionRequestDetailPage() {
 
   const handleProductLinePicked = async (p: OrderProductSelectionConfirm) => {
     if (!id || !pr) return;
-    const duplicateOther = items.some(
-      (i) => i.product_variant_id === p.variantId && i.id !== editingPrLineId,
-    );
-    if (duplicateOther) {
-      alert('This variant is already on the request. Remove the existing line first if you need to change it.');
-      return;
-    }
-    const label = `${p.productName} — ${p.variantSizeLabel} (${p.sku || '—'})`;
+    if (prProductPickLock.current) return;
+    prProductPickLock.current = true;
     setSaving(true);
     try {
+      const duplicateOther = items.some(
+        (i) => i.product_variant_id === p.variantId && i.id !== editingPrLineId,
+      );
+      if (duplicateOther) {
+        alert('This variant is already on the request. Remove the existing line first if you need to change it.');
+        return;
+      }
+      const label = `${p.productName} — ${p.variantSizeLabel} (${p.sku || '—'})`;
       if (editingPrLineId) {
         const { error: u } = await supabase
           .from('production_request_items')
@@ -872,6 +895,7 @@ export function ProductionRequestDetailPage() {
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : 'Failed to save line');
     } finally {
+      prProductPickLock.current = false;
       setSaving(false);
     }
   };
@@ -1220,8 +1244,8 @@ export function ProductionRequestDetailPage() {
             <div>
               <p className="text-sm font-medium text-amber-900">Edit mode</p>
               <p className="text-xs text-amber-800 mt-1">
-                Change status, expected completion, or notes, then save. Use workflow buttons (e.g. Accept) when not
-                editing.
+                Change status, expected completion, notes, product lines, and linked orders, then save. Use workflow
+                buttons (e.g. Accept) when not editing.
               </p>
             </div>
           </div>
@@ -1463,14 +1487,8 @@ export function ProductionRequestDetailPage() {
                       Total Qty: <span className="tabular-nums">{totalLineQty.toLocaleString()}</span>
                     </span>
                   )}
-                  {['Draft', 'Requested'].includes(pr.status) && (
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      className="gap-1"
-                      onClick={openAddLine}
-                      disabled={saving || isEditing}
-                    >
+                  {isEditing && ['Draft', 'Requested'].includes(pr.status) && (
+                    <Button variant="primary" size="sm" className="gap-1" onClick={openAddLine} disabled={saving}>
                       <Plus className="w-4 h-4" />
                       Add line
                     </Button>
@@ -1480,6 +1498,9 @@ export function ProductionRequestDetailPage() {
               {items.length === 0 ? (
                 <div className="text-center py-8 text-sm text-gray-500 max-w-md mx-auto">
                   <p>No lines yet.</p>
+                  {['Draft', 'Requested'].includes(pr.status) && !isEditing && (
+                    <p className="mt-2 text-xs">Click Edit request to add product lines.</p>
+                  )}
                 </div>
               ) : (
                 <div className="space-y-2">
@@ -1487,7 +1508,7 @@ export function ProductionRequestDetailPage() {
                     const pv = asOne(row.product_variants);
                     const prod = pv ? asOne(pv.products) : null;
                     const name = prod?.name ?? '—';
-                    const canEditLine = ['Draft', 'Requested'].includes(pr.status) && !saving && !isEditing;
+                    const canEditLine = ['Draft', 'Requested'].includes(pr.status) && !saving && isEditing;
                     return (
                       <div
                         key={row.id}
@@ -1537,14 +1558,14 @@ export function ProductionRequestDetailPage() {
                                 {Number(row.quantity_completed).toLocaleString()}
                               </p>
                             </div>
-                            {['Draft', 'Requested'].includes(pr.status) && (
+                            {isEditing && ['Draft', 'Requested'].includes(pr.status) && (
                               <button
                                 type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   void removeLine(row.id);
                                 }}
-                                disabled={saving || isEditing}
+                                disabled={saving}
                                 className="p-2 text-red-600 hover:bg-red-50 rounded-lg disabled:opacity-40"
                                 title="Remove line"
                               >
@@ -1571,22 +1592,21 @@ export function ProductionRequestDetailPage() {
                     ({involvedOrders.length} order{involvedOrders.length !== 1 ? 's' : ''})
                   </span>
                 </h2>
-                {pr && ['Draft', 'Requested', 'Accepted', 'In Progress'].includes(pr.status) && (
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    className="gap-1"
-                    onClick={openOrderPicker}
-                    disabled={saving || isEditing}
-                  >
-                    <Plus className="w-4 h-4" />
-                    Add order
-                  </Button>
-                )}
+                {isEditing &&
+                  pr &&
+                  ['Draft', 'Requested', 'Accepted', 'In Progress'].includes(pr.status) && (
+                    <Button variant="primary" size="sm" className="gap-1" onClick={openOrderPicker} disabled={saving}>
+                      <Plus className="w-4 h-4" />
+                      Add order
+                    </Button>
+                  )}
               </div>
               {involvedOrders.length === 0 ? (
                 <p className="text-sm text-gray-500 text-center py-6">
                   Link customer orders to show status, line items, and due dates.
+                  {['Draft', 'Requested', 'Accepted', 'In Progress'].includes(pr.status) && !isEditing && (
+                    <span className="block mt-2 text-xs">Click Edit request to add orders.</span>
+                  )}
                 </p>
               ) : (
                 <div className="space-y-3">
@@ -1626,17 +1646,19 @@ export function ProductionRequestDetailPage() {
                           )}
                           {!row.requiredDate && !row.estimatedDelivery && <span className="text-gray-400">—</span>}
                         </div>
-                        {pr && ['Draft', 'Requested', 'Accepted', 'In Progress'].includes(pr.status) && (
-                          <button
-                            type="button"
-                            onClick={() => void unlinkInvolvedOrder(row.linkId, row.orderNumber)}
-                            disabled={saving || isEditing}
-                            className="p-2 text-red-600 hover:bg-red-50 rounded-lg self-start sm:self-center disabled:opacity-40"
-                            title="Remove link"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        )}
+                        {isEditing &&
+                          pr &&
+                          ['Draft', 'Requested', 'Accepted', 'In Progress'].includes(pr.status) && (
+                            <button
+                              type="button"
+                              onClick={() => void unlinkInvolvedOrder(row.linkId, row.orderNumber)}
+                              disabled={saving}
+                              className="p-2 text-red-600 hover:bg-red-50 rounded-lg self-start sm:self-center disabled:opacity-40"
+                              title="Remove link"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
                       </div>
                       <div className="border-t border-gray-100 bg-gray-50/90">
                         <p className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-500">
@@ -1955,11 +1977,13 @@ export function ProductionRequestDetailPage() {
           if (saving) return;
           setShowAddLine(false);
           setEditingPrLineId(null);
+          void fetchPR({ silent: true });
         }}
         purpose="production"
         excludeVariantIds={existingVariantIds}
         initialEdit={editingPrLineId ? prProductModalInitial : null}
         onConfirm={(p) => void handleProductLinePicked(p)}
+        confirmBusy={saving}
       />
     </div>
   );

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
@@ -23,6 +23,7 @@ import {
 } from 'recharts';
 import { supabase } from '../lib/supabase';
 import { computeStockStatus } from '../lib/stockStatus';
+import { createDraftProductionRequestWithInitialLine } from '../lib/productionRequestDraft';
 
 // â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const stringToColor = (str: string) => {
@@ -30,6 +31,17 @@ const stringToColor = (str: string) => {
   for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
   return `hsl(${hash % 360}, 70%, 50%)`;
 };
+
+const pesoFmt2 = (n: number) =>
+  n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/** BOM line cost: qty × cost per unit of measure (e.g. 0.01 kg × ₱100/kg = ₱1). */
+function bomLineMaterialCost(quantity: number, costPerUnit: number): number {
+  const q = Number(quantity);
+  const u = Number(costPerUnit);
+  if (!Number.isFinite(q) || !Number.isFinite(u)) return 0;
+  return q * u;
+}
 
 /** Order line rows tied to these are omitted from the variant comparison sales chart. */
 const CHART_EXCLUDED_ORDER_STATUSES = new Set<string>(['Cancelled', 'Rejected', 'Draft']);
@@ -58,6 +70,7 @@ interface DisplayVariant {
   leadTimeDays: number;
   minOrderQty: number;
   specs: { label: string; value: string }[];
+  /** `cost` = material master `cost_per_unit` (e.g. ₱ per kg). Line cost = quantity × cost. */
   rawMaterials: { materialId: string; name: string; quantity: number; unit: string; cost: number }[];
   bulkDiscounts: { minQty: number; discount: number; pricePerUnit: number }[];
 }
@@ -81,7 +94,7 @@ interface VariantRow {
   min_order_qty: number | null;
   specs: { label: string; value: string }[] | null;
   product_variant_stock: { quantity: number; branches: { code: string; name: string } | null }[];
-  product_bulk_discounts: { min_qty: number; max_qty: number | null; discount_percent: number }[];
+  product_bulk_discounts?: { min_qty: number; max_qty: number | null; discount_percent: number }[];
   product_variant_raw_materials: { raw_material_id: string; quantity_needed: number; raw_materials: { name: string; unit_of_measure: string; cost_per_unit: number } | null }[];
 }
 
@@ -96,14 +109,52 @@ interface ProductRow {
   product_categories: { name: string } | null;
 }
 
+function normalizeBranchKey(label: string): string {
+  const m = label.trim().toLowerCase().match(/[a-z]{2,}/);
+  return m ? m[0] : '';
+}
+
+/** Stock from `product_variant_stock` only — never `total_stock` (avoids wrong branch aggregate). */
+function resolveBranchStockQuantity(
+  stockRows: { quantity: number; branches: { code?: string; name: string } | null }[],
+  branchLabel: string,
+): number {
+  const rows = Array.isArray(stockRows) ? stockRows : [];
+  if (!branchLabel.trim()) {
+    return rows.reduce((s, r) => s + (Number(r.quantity) || 0), 0);
+  }
+
+  const b = branchLabel.trim().toLowerCase();
+  const exact = rows.find(s => (s.branches?.name ?? '').toLowerCase() === b);
+  if (exact) return Number(exact.quantity);
+
+  const key = normalizeBranchKey(branchLabel);
+  if (!key) return 0;
+
+  const loose = rows.find(s => {
+    const n = (s.branches?.name ?? '').toLowerCase();
+    if (!n) return false;
+    if (n === b || n.startsWith(b + ' ') || n.startsWith(b + '(') || n.startsWith(b + '-')) return true;
+    const nk = normalizeBranchKey(s.branches?.name ?? '');
+    if (!nk) return false;
+    return (
+      nk === key ||
+      (key.length >= 3 && nk.startsWith(key)) ||
+      (nk.length >= 3 && key.startsWith(nk))
+    );
+  });
+  if (loose) return Number(loose.quantity);
+
+  return 0;
+}
+
 function toDisplayVariant(v: VariantRow, selectedBranch: string): DisplayVariant {
-  const branchStock = selectedBranch
-    ? (v.product_variant_stock.find(s => s.branches?.name === selectedBranch)?.quantity ?? v.total_stock)
-    : v.total_stock;
+  const stockRows = Array.isArray(v.product_variant_stock) ? v.product_variant_stock : [];
+  const branchStock = resolveBranchStockQuantity(stockRows, selectedBranch);
   const cost         = v.cost_price ?? v.unit_price * 0.7;
-  const monthlyUsage = Math.max(Math.round((v.units_sold_ytd || 0) / 12), 1);
+  const monthlyUsage = Math.max(0, Math.round((v.units_sold_ytd || 0) / 12));
   const status       = v.status === 'Active' ? 'In Stock' : v.status;
-  const discounts    = v.product_bulk_discounts.map(d => ({
+  const discounts    = (v.product_bulk_discounts ?? []).map(d => ({
     minQty: d.min_qty,
     discount: d.discount_percent,
     pricePerUnit: Math.round(v.unit_price * (1 - d.discount_percent / 100) * 100) / 100,
@@ -147,9 +198,9 @@ function toDisplayVariant(v: VariantRow, selectedBranch: string): DisplayVariant
     revenueYtd: Number(v.revenue_ytd) || 0,
     status,
     monthlyProductionQuota: Math.round(monthlyUsage * 1.5),
-    currentMonthProduced:   Math.round(monthlyUsage * 1.1),
-    leadTimeDays: v.lead_time_days ?? 7,
-    minOrderQty:  v.min_order_qty ?? 100,
+    currentMonthProduced: Math.round(monthlyUsage * 1.1),
+    leadTimeDays: v.lead_time_days ?? 0,
+    minOrderQty: v.min_order_qty ?? 0,
     specs,
     rawMaterials,
     bulkDiscounts: discounts,
@@ -175,7 +226,8 @@ const availablePVCMaterials = [
 export default function ProductFamilyPage() {
   const navigate = useNavigate();
   const { categoryName, familyId } = useParams<{ categoryName: string; familyId: string }>();
-  const { selectedBranch: globalBranch, setHideBranchSelector } = useAppContext();
+  const { selectedBranch: globalBranch, setHideBranchSelector, branch, employeeName, role, session, addAuditLog } =
+    useAppContext();
 
   // Hide branch selector while on this page; the product's own branch drives data
   useEffect(() => {
@@ -186,12 +238,15 @@ export default function ProductFamilyPage() {
   // The effective branch: prefer the product's own branch once loaded, else fall back to global
   const [productBranch, setProductBranch] = useState<string>('');
   const selectedBranch = productBranch || globalBranch || '';
+  const branchKeyForStockRef = useRef(selectedBranch);
+  branchKeyForStockRef.current = selectedBranch;
 
   // â”€â”€ Data state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const [product, setProduct]       = useState<ProductRow | null>(null);
   const [variants, setVariants]     = useState<DisplayVariant[]>([]);
   const [loading, setLoading]       = useState(true);
   const [saving, setSaving]         = useState(false);
+  const [requestingProduction, setRequestingProduction] = useState(false);
 
   // â”€â”€ UI state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const [selectedVariant, setSelectedVariant]     = useState<DisplayVariant | null>(null);
@@ -240,7 +295,9 @@ export default function ProductFamilyPage() {
         .order('size');
 
       if (vars && vars.length > 0) {
-        const display = (vars as unknown as VariantRow[]).map(v => toDisplayVariant(v, selectedBranch ?? ''));
+        const p = prod as unknown as ProductRow | null;
+        const branchKeyForStock = (p?.branch?.trim() || globalBranch || '').trim();
+        const display = (vars as unknown as VariantRow[]).map(v => toDisplayVariant(v, branchKeyForStock));
         setVariants(display);
         setSelectedVariant(display[0]);
       }
@@ -453,7 +510,7 @@ export default function ProductFamilyPage() {
       .eq('product_id', familyId)
       .order('size');
     if (vars) {
-      const display = (vars as unknown as VariantRow[]).map(v => toDisplayVariant(v, selectedBranch ?? ''));
+      const display = (vars as unknown as VariantRow[]).map(v => toDisplayVariant(v, branchKeyForStockRef.current));
       setVariants(display);
       const updated = display.find(d => d.sku === editedVariant.sku) ?? display[0];
       setSelectedVariant(updated);
@@ -526,33 +583,83 @@ export default function ProductFamilyPage() {
     setShowStockAdjustmentModal(true);
   };
 
-  const handleStockAdjustmentSuccess = () => {
-    // Re-fetch so the page shows the updated stock from DB
+  const handleStockAdjustmentSuccess = (result?: { variantId: string; newDisplayedStock: number }) => {
+    if (result) {
+      setVariants(prev =>
+        prev.map(v => (v.id === result.variantId ? { ...v, stock: result.newDisplayedStock } : v)),
+      );
+      setSelectedVariant(prev =>
+        prev && prev.id === result.variantId ? { ...prev, stock: result.newDisplayedStock } : prev,
+      );
+    }
+    setShowStockAdjustmentModal(false);
+    // Re-fetch so totals / branch rows stay in sync with DB
     if (!familyId) return;
-    (async () => {
-      const { data } = await supabase
+    void (async () => {
+      const { data, error } = await supabase
         .from('product_variants')
-        .select(`id, sku, size, unit_price, cost_price, total_stock, reorder_point,
-          safety_stock, status, units_sold_ytd, revenue_ytd, branch,
-          outer_diameter_mm, wall_thickness_mm, weight_kg, length_m,
+        .select(`
+          id, sku, size, unit_price, cost_price, total_stock, reorder_point,
+          status, units_sold_ytd, revenue_ytd, weight_kg, length_m, wall_thickness_mm,
           lead_time_days, min_order_qty, specs,
           product_variant_stock(quantity, branches(code, name)),
           product_bulk_discounts(min_qty, max_qty, discount_percent),
-          product_variant_raw_materials(raw_material_id, quantity_needed, raw_materials(name, unit_of_measure, cost_per_unit))`)
+          product_variant_raw_materials(raw_material_id, quantity_needed, raw_materials(name, unit_of_measure, cost_per_unit))
+        `)
         .eq('product_id', familyId)
         .order('size');
+      if (error) {
+        if (import.meta.env.DEV) console.warn('[ProductFamily] refetch after stock adjust:', error.message);
+        return;
+      }
       if (data) {
-        const mapped = (data as any[]).map(v => toDisplayVariant(v, selectedBranch));
+        const branchKey = branchKeyForStockRef.current;
+        const mapped = (data as unknown as VariantRow[]).map(v => toDisplayVariant(v, branchKey));
         setVariants(mapped);
-        const current = mapped.find(v => v.id === (selectedVariant?.id ?? mapped[0]?.id));
-        setSelectedVariant(current ?? mapped[0] ?? null);
+        setSelectedVariant(prev => {
+          const keepId = result?.variantId ?? prev?.id ?? mapped[0]?.id;
+          return mapped.find(v => v.id === keepId) ?? mapped[0] ?? null;
+        });
       }
     })();
-    setShowStockAdjustmentModal(false);
   };
 
   // â”€â”€ Derived â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const displayVariant = isEditingVariant ? editedVariant : selectedVariant;
+
+  const handleRequestProduction = async () => {
+    if (!familyId || !displayVariant) return;
+    if (displayVariant.id.startsWith('NEW-')) {
+      alert('Save the new variant first before requesting production.');
+      return;
+    }
+    setRequestingProduction(true);
+    try {
+      let branchId: string | null = null;
+      if (branch) {
+        const { data: bd } = await supabase.from('branches').select('id').eq('name', branch).single();
+        branchId = bd?.id ?? null;
+      }
+      const actor = employeeName || session?.user?.email || 'User';
+      const qty = Math.max(Number(displayVariant.minOrderQty) || 0, 1);
+      const lineLabel = `${product?.name ?? 'Product'} — ${displayVariant.variantName} (${displayVariant.sku || '—'})`;
+      const { id, prNumber } = await createDraftProductionRequestWithInitialLine({
+        branchId,
+        actor,
+        roleKey: role,
+        productId: familyId,
+        variantId: displayVariant.id,
+        quantity: qty,
+        lineLabel,
+      });
+      addAuditLog('PR draft from product', 'Production', `${prNumber} ${lineLabel} ×${qty}`);
+      navigate(`/production-requests/${id}`);
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : 'Failed to create production request');
+    } finally {
+      setRequestingProduction(false);
+    }
+  };
 
   const variantsPurchaseSummary = useMemo(() => {
     if (variants.length === 0) {
@@ -630,8 +737,8 @@ export default function ProductFamilyPage() {
                 status: 'In Stock',
                 monthlyProductionQuota: 0,
                 currentMonthProduced: 0,
-                leadTimeDays: 7,
-                minOrderQty: 100,
+                leadTimeDays: 0,
+                minOrderQty: 0,
                 specs: [],
                 rawMaterials: [],
                 bulkDiscounts: [{ minQty: 1, discount: 0, pricePerUnit: 0 }],
@@ -714,10 +821,25 @@ export default function ProductFamilyPage() {
                 <span className="hidden sm:inline">Edit {displayVariant.variantName}</span>
                 <span className="sm:hidden">Edit</span>
               </Button>
-              <Button variant="primary" className="flex-1 sm:flex-none">
-                <Package className="w-4 h-4 mr-2" />
-                <span className="hidden sm:inline">Request Production</span>
-                <span className="sm:hidden">Request</span>
+              <Button
+                variant="primary"
+                className="flex-1 sm:flex-none"
+                disabled={requestingProduction}
+                onClick={() => void handleRequestProduction()}
+              >
+                {requestingProduction ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    <span className="hidden sm:inline">Creating request…</span>
+                    <span className="sm:hidden">…</span>
+                  </>
+                ) : (
+                  <>
+                    <Factory className="w-4 h-4 mr-2" />
+                    <span className="hidden sm:inline">Request Production</span>
+                    <span className="sm:hidden">Request</span>
+                  </>
+                )}
               </Button>
             </>
           )}
@@ -820,7 +942,7 @@ export default function ProductFamilyPage() {
                   thickness: '', pressure: '', stock: 0, reorderPoint: 0,
                   price: 0, cost: 0, monthlyUsage: 0, unitsSold: 0, revenueYtd: 0,
                   status: 'In Stock', monthlyProductionQuota: 0, currentMonthProduced: 0,
-                  leadTimeDays: 7, minOrderQty: 100,
+                  leadTimeDays: 0, minOrderQty: 0,
                   specs: [], rawMaterials: [], bulkDiscounts: [],
                 };
                 setIsEditingVariant(true);
@@ -1014,15 +1136,13 @@ export default function ProductFamilyPage() {
                         )}
                       </div>
                     </div>
-                    <div className="text-right">
-                      {isEditingVariant ? (
-                        <input type="number" value={editedVariant!.rawMaterials[index].cost} onChange={e => handleRawMaterialChange(index, 'cost', parseFloat(e.target.value))} onWheel={e => (e.target as HTMLInputElement).blur()} className="border rounded px-2 py-1 text-sm font-bold w-24 text-right" />
-                      ) : (
-                        <>
-                          <p className="text-sm font-bold text-gray-900">₱{material.cost.toLocaleString()}</p>
-                          <p className="text-xs text-gray-500">cost/unit</p>
-                        </>
-                      )}
+                    <div className="text-right min-w-[6.5rem]">
+                      <p className="text-sm font-bold text-gray-900 tabular-nums">
+                        ₱{pesoFmt2(bomLineMaterialCost(material.quantity, material.cost))}
+                      </p>
+                      <p className="text-xs text-gray-500 tabular-nums">
+                        ₱{pesoFmt2(material.cost)}/{material.unit} × {material.quantity}
+                      </p>
                     </div>
                     {isEditingVariant && (
                       <button onClick={() => handleRemoveMaterial(index)} className="text-red-600 hover:bg-red-50 p-1.5 rounded">
@@ -1034,8 +1154,8 @@ export default function ProductFamilyPage() {
                 <div className="pt-3 border-t">
                   <div className="flex items-center justify-between">
                     <span className="text-sm font-medium text-gray-700">Total Material Cost per Unit:</span>
-                    <span className="text-lg font-bold text-blue-600">
-                      ₱{displayVariant.rawMaterials.reduce((s, m) => s + (m.cost * m.quantity), 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    <span className="text-lg font-bold text-blue-600 tabular-nums">
+                      ₱{pesoFmt2(displayVariant.rawMaterials.reduce((s, m) => s + bomLineMaterialCost(m.quantity, m.cost), 0))}
                     </span>
                   </div>
                 </div>

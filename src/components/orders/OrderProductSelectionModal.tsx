@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { Button } from '@/src/components/ui/Button';
 import { supabase } from '@/src/lib/supabase';
@@ -209,7 +210,7 @@ function ProductionStockBar({
   );
 }
 
-export type OrderProductSelectionPurpose = 'order' | 'production';
+export type OrderProductSelectionPurpose = 'order' | 'production' | 'interBranch';
 
 export interface OrderProductSelectionConfirm {
   productId: string;
@@ -243,7 +244,7 @@ export type OrderProductInitialEdit = {
 interface OrderProductSelectionModalProps {
   open: boolean;
   onClose: () => void;
-  /** 'production' = quantity to produce, no custom price. 'order' = full order line semantics. */
+  /** 'production' = quantity to produce. 'interBranch' = same qty rules as production, IBR wording. 'order' = full order line. */
   purpose: OrderProductSelectionPurpose;
   /** Variants that are already on the request/order and cannot be added again. */
   excludeVariantIds: Set<string>;
@@ -256,11 +257,13 @@ interface OrderProductSelectionModalProps {
    * quantity and variant pre-filled. Parent should omit the line’s `variantId` from `excludeVariantIds`.
    */
   initialEdit?: OrderProductInitialEdit | null;
+  /** When true, disables the main confirm control (parent should set during async onConfirm). */
+  confirmBusy?: boolean;
 }
 
 /**
  * Reusable e-commerce style product + variant picker (categories, search, detail overlay)
- * used by order editing and production request lines.
+ * used by order editing, production request lines, and inter-branch product lines.
  */
 export function OrderProductSelectionModal({
   open,
@@ -271,6 +274,7 @@ export function OrderProductSelectionModal({
   interBranchRequestingBranchId = null,
   interBranchFulfillingBranchId = null,
   initialEdit = null,
+  confirmBusy = false,
 }: OrderProductSelectionModalProps) {
   const { branch } = useAppContext();
 
@@ -294,16 +298,16 @@ export function OrderProductSelectionModal({
 
   const [selectedProduct, setSelectedProduct] = useState<DBProduct | null>(null);
   const [selectedVariant, setSelectedVariant] = useState<DBVariant | null>(null);
-  /** String so the field can be cleared; parsed on confirm / ±. */
-  const [variantQtyInput, setVariantQtyInput] = useState('1');
+  /** String so the field can be cleared; parsed on confirm / ±. Production starts at 0 until user sets a run size. */
+  const [variantQtyInput, setVariantQtyInput] = useState(() =>
+    purpose === 'production' || purpose === 'interBranch' ? '0' : '1',
+  );
   /** Free text while typing; empty allowed (order mode only). */
   const [variantPriceInput, setVariantPriceInput] = useState('0');
   const [variantDiscounts, setVariantDiscounts] = useState<Array<{ name: string; percentage: number }>>([]);
 
-  const isProduction = purpose === 'production';
+  const isProductionLike = purpose === 'production' || purpose === 'interBranch';
   const [initializingEdit, setInitializingEdit] = useState(false);
-  /** Bumps when user hits “back” on the detail overlay while `initialEdit` is set, so the line re-opens. */
-  const [initialEditReopen, setInitialEditReopen] = useState(0);
 
   const resetBrowser = useCallback(() => {
     setSearchQuery('');
@@ -315,22 +319,19 @@ export function OrderProductSelectionModal({
   const resetDetail = useCallback(() => {
     setSelectedProduct(null);
     setSelectedVariant(null);
-    setVariantQtyInput('1');
+    setVariantQtyInput(isProductionLike ? '0' : '1');
     setVariantPriceInput('0');
     setVariantDiscounts([]);
-  }, []);
+  }, [isProductionLike]);
 
-  /** Back from product detail: if editing an existing line, re-bootstrap that line’s product. */
+  /** Back from product detail to browse/search (do not re-run initialEdit bootstrap — that trapped users on the same product). */
   const backFromProductDetail = useCallback(() => {
     setSelectedProduct(null);
     setSelectedVariant(null);
-    setVariantQtyInput('1');
+    setVariantQtyInput(isProductionLike ? '0' : '1');
     setVariantPriceInput('0');
     setVariantDiscounts([]);
-    if (initialEdit) {
-      setInitialEditReopen((n) => n + 1);
-    }
-  }, [initialEdit]);
+  }, [isProductionLike]);
 
   const resetAll = useCallback(() => {
     resetBrowser();
@@ -493,7 +494,6 @@ export function OrderProductSelectionModal({
   }, [
     open,
     initialEdit,
-    initialEditReopen,
     useDualBranchFilter,
     loadingDualBranch,
     dualVariantIds,
@@ -664,7 +664,7 @@ export function OrderProductSelectionModal({
     setSelectedProduct({ ...p, variants: p.variants });
     const first = available[0]!;
     setSelectedVariant(first);
-    setVariantQtyInput('1');
+    setVariantQtyInput(isProductionLike ? '0' : '1');
     setVariantPriceInput(String(first.unit_price));
     setVariantDiscounts([]);
   };
@@ -688,11 +688,12 @@ export function OrderProductSelectionModal({
   /** Whole units only (no decimals) for both production and order quantity. */
   const parseStepQty = useCallback((): number => {
     const raw = variantQtyInput.trim();
-    if (raw === '') return 1;
+    if (raw === '') return isProductionLike ? 0 : 1;
     const n = parseInt(raw, 10);
-    if (!Number.isFinite(n) || n < 1) return 1;
-    return n;
-  }, [variantQtyInput]);
+    if (!Number.isFinite(n)) return isProductionLike ? 0 : 1;
+    if (isProductionLike) return Math.max(0, n);
+    return Math.max(1, n);
+  }, [variantQtyInput, isProductionLike]);
 
   const handleConfirm = () => {
     if (!selectedProduct || !selectedVariant) return;
@@ -700,7 +701,13 @@ export function OrderProductSelectionModal({
 
     const raw = variantQtyInput.trim();
     if (raw === '') {
-      alert(isProduction ? 'Enter a quantity to produce.' : 'Enter a quantity.');
+      alert(
+        purpose === 'interBranch'
+          ? 'Enter a quantity to send (at least 1).'
+          : purpose === 'production'
+            ? 'Enter a quantity to produce (at least 1).'
+            : 'Enter a quantity.',
+      );
       return;
     }
     const parsed = parseInt(raw, 10);
@@ -753,31 +760,37 @@ export function OrderProductSelectionModal({
 
   if (!open) return null;
 
-  return (
+  const overlay = (
     <>
-      <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-0 lg:p-4">
+      <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[200] p-0 lg:p-4">
         <div className="bg-white w-full h-full max-h-screen overflow-hidden flex flex-col lg:rounded-lg lg:h-auto lg:max-w-5xl lg:max-h-[90vh]">
           <div className="px-4 md:px-6 py-4 border-b border-gray-200 flex items-center justify-between">
             <div className="flex items-center gap-3">
-              {isProduction ? (
-                <Factory className="w-6 h-6 text-red-600" />
-              ) : (
+              {purpose === 'order' ? (
                 <ShoppingCart className="w-6 h-6 text-red-600" />
+              ) : purpose === 'interBranch' ? (
+                <Package className="w-6 h-6 text-red-600" />
+              ) : (
+                <Factory className="w-6 h-6 text-red-600" />
               )}
               <div>
                 <h2 className="text-lg sm:text-xl font-bold text-gray-900">
                   {initialEdit
                     ? 'Edit product line'
-                    : isProduction
-                      ? 'Add product to produce'
-                      : 'Add products to order'}
+                    : purpose === 'interBranch'
+                      ? 'Add product to request'
+                      : purpose === 'production'
+                        ? 'Add product to produce'
+                        : 'Add products to order'}
                 </h2>
                 <p className="text-sm text-gray-500 mt-0.5">
                   {initialEdit
                     ? 'Update quantity or variant, then apply.'
-                    : isProduction
-                      ? 'Category or search, then a size'
-                      : 'Browse categories and select a product'}
+                    : purpose === 'interBranch'
+                      ? 'Category or search, then pick a variant and quantity to send.'
+                      : purpose === 'production'
+                        ? 'Category or search, then a size'
+                        : 'Browse categories and select a product'}
                 </p>
               </div>
             </div>
@@ -891,7 +904,7 @@ export function OrderProductSelectionModal({
                         <div className="text-xs text-gray-400 mt-1">
                           {product.variants.length} variant{product.variants.length !== 1 ? 's' : ''}
                         </div>
-                        {isProduction && hasAvailableVariant(product) && (
+                        {isProductionLike && hasAvailableVariant(product) && (
                           <ProductionProductCardBadges product={product} excludeVariantIds={excludeVariantIds} />
                         )}
                         {!hasAvailableVariant(product) && (
@@ -935,7 +948,7 @@ export function OrderProductSelectionModal({
                           </div>
                         )}
                         <div className="text-xs font-medium text-gray-900 text-center line-clamp-2">{product.name}</div>
-                        {isProduction && hasAvailableVariant(product) && (
+                        {isProductionLike && hasAvailableVariant(product) && (
                           <ProductionProductCardBadges product={product} excludeVariantIds={excludeVariantIds} />
                         )}
                         {!hasAvailableVariant(product) && (
@@ -960,7 +973,7 @@ export function OrderProductSelectionModal({
       </div>
 
       {selectedProduct && selectedVariant && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[60] p-0 lg:p-4">
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[210] p-0 lg:p-4">
           <div className="bg-white rounded-none lg:rounded-lg shadow-2xl w-full h-full lg:h-auto lg:max-w-4xl lg:max-h-[85vh] overflow-hidden flex flex-col">
             <button
               type="button"
@@ -981,7 +994,7 @@ export function OrderProductSelectionModal({
                       <Package className="w-32 h-32 text-gray-300" />
                     )}
                   </div>
-                  {!isProduction && (
+                  {!isProductionLike && (
                     <div className="bg-gray-50 rounded-lg p-4">
                       <div className="text-sm text-gray-600 mb-2">Price per unit</div>
                       <div className="flex items-center gap-2 min-w-0">
@@ -1014,7 +1027,7 @@ export function OrderProductSelectionModal({
                       <p className="text-xs text-gray-500 mt-2">Base price: ₱{selectedVariant.unit_price.toLocaleString()}</p>
                     </div>
                   )}
-                  {isProduction && (
+                  {isProductionLike && (
                     <div className="bg-gray-50 rounded-lg p-4 text-sm text-gray-600">
                       List: <span className="font-bold text-gray-900">₱{selectedVariant.unit_price.toLocaleString()}</span>/unit
                     </div>
@@ -1024,12 +1037,12 @@ export function OrderProductSelectionModal({
                 <div className="space-y-6">
                   <div>
                     <h2 className="text-2xl md:text-3xl font-bold text-gray-900 mb-2">{selectedProduct.name}</h2>
-                    {!isProduction && (
+                    {(purpose === 'order' || purpose === 'interBranch') && (
                       <p className="text-sm text-gray-500 font-mono">SKU: {selectedVariant.sku || '—'}</p>
                     )}
                     {selectedVariant.description && <p className="text-gray-600 mt-2">{selectedVariant.description}</p>}
                   </div>
-                  {isProduction
+                  {isProductionLike
                     ? (() => {
                         const s = selectedVariant.stock;
                         const ro = selectedVariant.reorderPoint;
@@ -1099,7 +1112,7 @@ export function OrderProductSelectionModal({
                           type="button"
                           onClick={() => {
                             setSelectedVariant(v);
-                            setVariantQtyInput('1');
+                            setVariantQtyInput(isProductionLike ? '0' : '1');
                             setVariantPriceInput(String(v.unit_price));
                           }}
                           className={`px-4 py-3 border-2 rounded-lg font-medium transition-all text-left ${
@@ -1109,11 +1122,11 @@ export function OrderProductSelectionModal({
                           }`}
                         >
                           <div className="font-semibold leading-tight">{v.size}</div>
-                          {!isProduction && (
+                          {(purpose === 'order' || purpose === 'interBranch') && (
                             <div className="text-xs text-gray-500 font-mono mt-0.5">{v.sku}</div>
                           )}
                           <div className="text-sm font-bold mt-1">₱{v.unit_price.toLocaleString()}</div>
-                          {isProduction
+                          {isProductionLike
                             ? (() => {
                                 const vst = getStockLevelInfo(v.stock);
                                 const vro = v.reorderPoint;
@@ -1146,14 +1159,19 @@ export function OrderProductSelectionModal({
 
                   <div>
                     <label className="block text-sm font-semibold text-gray-900 mb-3">
-                      {isProduction ? 'Quantity to produce' : 'Quantity requested'}
+                      {purpose === 'interBranch'
+                        ? 'Quantity to send'
+                        : purpose === 'production'
+                          ? 'Quantity to produce'
+                          : 'Quantity requested'}
                     </label>
                     <div className="flex items-center gap-2 sm:gap-4">
                       <button
                         type="button"
                         onClick={() => {
                           const q = parseStepQty();
-                          setVariantQtyInput(String(Math.max(1, q - 1)));
+                          const floor = isProductionLike ? 0 : 1;
+                          setVariantQtyInput(String(Math.max(floor, q - 1)));
                         }}
                         className="w-12 h-12 flex shrink-0 items-center justify-center border-2 border-gray-300 rounded-lg hover:bg-gray-50"
                       >
@@ -1174,7 +1192,7 @@ export function OrderProductSelectionModal({
                             if (/^\d*$/.test(v)) setVariantQtyInput(v);
                           }}
                           onWheel={(e) => e.preventDefault()}
-                          placeholder="1"
+                          placeholder={isProductionLike ? '0' : '1'}
                           className="w-full text-center text-2xl font-bold pl-3 pr-10 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
                         />
                         {variantQtyInput !== '' && (
@@ -1199,7 +1217,7 @@ export function OrderProductSelectionModal({
                         <Plus className="w-5 h-5" />
                       </button>
                     </div>
-                    {!isProduction &&
+                    {(purpose === 'order' || purpose === 'interBranch') &&
                       variantQtyInput.trim() !== '' &&
                       (parseInt(variantQtyInput, 10) || 0) > selectedVariant.stock && (
                         <p className="text-sm text-amber-700 mt-2">Quantity exceeds current branch stock (allowed for order entry).</p>
@@ -1262,11 +1280,25 @@ export function OrderProductSelectionModal({
                   <button
                     type="button"
                     onClick={handleConfirm}
-                    disabled={visibleVariants.length === 0}
-                    className="w-full py-4 bg-red-600 text-white text-lg font-semibold rounded-lg hover:bg-red-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+                    disabled={confirmBusy || visibleVariants.length === 0}
+                    className="w-full py-4 bg-red-600 text-white text-lg font-semibold rounded-lg hover:bg-red-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:pointer-events-none"
                   >
-                    {isProduction ? <Factory className="w-5 h-5" /> : <ShoppingCart className="w-5 h-5" />}
-                    {isProduction ? 'Add to production request' : 'Add to order'}
+                    {confirmBusy ? (
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : purpose === 'order' ? (
+                      <ShoppingCart className="w-5 h-5" />
+                    ) : purpose === 'interBranch' ? (
+                      <Package className="w-5 h-5" />
+                    ) : (
+                      <Factory className="w-5 h-5" />
+                    )}
+                    {confirmBusy
+                      ? 'Please wait…'
+                      : purpose === 'order'
+                        ? 'Add to order'
+                        : purpose === 'interBranch'
+                          ? 'Add to request'
+                          : 'Add to production request'}
                   </button>
                 </div>
               </div>
@@ -1276,4 +1308,6 @@ export function OrderProductSelectionModal({
       )}
     </>
   );
+
+  return typeof document !== 'undefined' ? createPortal(overlay, document.body) : null;
 }

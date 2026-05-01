@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { X, Upload, Search, Loader2, AlertTriangle, RefreshCw, Zap } from 'lucide-react';
 import { supabase } from '@/src/lib/supabase';
 import { optimizeImage, formatBytes } from '@/src/lib/imageOptimizer';
@@ -13,6 +14,8 @@ interface ImageGalleryModalProps {
   maxImages?: number;
   currentImages?: string[];
   folder?: string; // Supabase Storage folder inside the "images" bucket
+  /** Opened from another modal: higher z-index + near full-viewport panel */
+  stackOnTopOfModal?: boolean;
 }
 
 interface StorageImage {
@@ -34,6 +37,7 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
   maxImages = 1,
   currentImages = [],
   folder = '',
+  stackOnTopOfModal = false,
 }) => {
   const [images, setImages] = useState<StorageImage[]>([]);
   const [loading, setLoading] = useState(false);
@@ -61,13 +65,13 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
         throw listError;
       }
 
-      // Filter out folder placeholders and Supabase's .emptyFolderPlaceholder — only real image files
+      // Only list real image files by name. Do not require `id`: some storage responses omit it and would hide every file.
       const imageExtensions = ['.jpg', '.jpeg', '.png', '.webp', '.avif', '.gif', '.jfif', '.bmp'];
-      const files = (data ?? []).filter(f =>
-        f.id &&
-        f.name &&
-        !f.name.startsWith('.') &&
-        imageExtensions.some(ext => f.name.toLowerCase().endsWith(ext))
+      const files = (data ?? []).filter(
+        (f) =>
+          f.name &&
+          !f.name.startsWith('.') &&
+          imageExtensions.some((ext) => f.name.toLowerCase().endsWith(ext)),
       );
 
       const mapped: StorageImage[] = files.map(f => {
@@ -90,17 +94,15 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
     }
   }, [folder]);
 
-  // Load images when modal opens
+  // Load images when the modal opens or when the storage folder changes (different order / proof type / etc.).
   useEffect(() => {
-    if (isOpen) {
-      fetchImages();
-      setSelectedImagesOrder(currentImages);
-      setSelectedImage(currentImageUrl || null);
-      setSearchQuery('');
-      setUploadStatus(null);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen]);
+    if (!isOpen) return;
+    void fetchImages();
+    setSelectedImagesOrder(currentImages);
+    setSelectedImage(currentImageUrl || null);
+    setSearchQuery('');
+    setUploadStatus(null);
+  }, [isOpen, folder, fetchImages]);
 
   // Upload handler with client-side optimization
   const handleFileSelect = async () => {
@@ -195,9 +197,17 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
 
   if (!isOpen) return null;
 
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-0 sm:p-4">
-      <div className="bg-white w-full h-full sm:h-auto rounded-none sm:rounded-xl max-h-screen sm:max-h-[90vh] sm:max-w-5xl flex flex-col shadow-xl">
+  const overlayZ = stackOnTopOfModal ? 'z-[110]' : 'z-[100]';
+  const overlayPad = stackOnTopOfModal ? 'p-0 sm:p-3' : 'p-0 sm:p-4';
+  const panelClass = stackOnTopOfModal
+    ? 'bg-white w-full flex flex-col shadow-xl h-[100dvh] max-h-[100dvh] sm:h-[calc(100dvh-1.5rem)] sm:max-h-[calc(100dvh-1.5rem)] max-w-none sm:max-w-[min(1280px,calc(100vw-1.5rem))] rounded-none sm:rounded-xl min-h-0'
+    : 'bg-white w-full h-full sm:h-auto rounded-none sm:rounded-xl max-h-screen sm:max-h-[90vh] sm:max-w-5xl flex flex-col shadow-xl';
+
+  return createPortal(
+    <div
+      className={`fixed inset-0 flex items-center justify-center ${stackOnTopOfModal ? 'bg-black/60' : 'bg-black/50'} ${overlayZ} ${overlayPad} overflow-y-auto`}
+    >
+      <div className={panelClass}>
         {/* Header */}
         <div className="p-4 sm:p-6 border-b border-gray-200">
           <div className="flex items-center justify-between mb-4">
@@ -389,7 +399,8 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 };
 
