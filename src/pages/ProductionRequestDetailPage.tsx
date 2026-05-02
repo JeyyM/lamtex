@@ -8,6 +8,7 @@ import { Button } from '@/src/components/ui/Button';
 import { supabase } from '@/src/lib/supabase';
 import { consumeBomForProductionLines } from '@/src/lib/bomConsumption';
 import { isPrExpectedOverdue } from '@/src/lib/prOverdue';
+import { addFinishedVariantUnitsAtBranch } from '@/src/lib/finishedGoodsInbound';
 import type { PRStatus } from '@/src/pages/ProductionRequestsPage';
 import {
   OrderProductSelectionModal,
@@ -59,6 +60,7 @@ interface PRItemRow {
   product_variants: {
     sku: string;
     size: string;
+    reorder_point?: number;
     products: { name: string } | { name: string }[] | null;
   } | null;
 }
@@ -489,7 +491,7 @@ export function ProductionRequestDetailPage() {
       const { data, error: qErr } = await supabase
         .from('production_requests')
         .select(
-          'id, pr_number, branch_id, status, request_date, expected_completion_date, notes, created_by, accepted_by, accepted_at, rejected_by, rejection_reason, created_at, is_transfer_request, transfer_requesting_branch_id, inter_branch_request_id, branches:branches!branch_id(name), tr_branch:branches!transfer_requesting_branch_id(name), inter_branch:inter_branch_requests!inter_branch_request_id(id, ibr_number, status), production_request_items(id, product_id, product_variant_id, quantity, quantity_completed, product_variants(sku, size, products(name)))',
+          'id, pr_number, branch_id, status, request_date, expected_completion_date, notes, created_by, accepted_by, accepted_at, rejected_by, rejection_reason, created_at, is_transfer_request, transfer_requesting_branch_id, inter_branch_request_id, branches:branches!branch_id(name), tr_branch:branches!transfer_requesting_branch_id(name), inter_branch:inter_branch_requests!inter_branch_request_id(id, ibr_number, status), production_request_items(id, product_id, product_variant_id, quantity, quantity_completed, product_variants(sku, size, reorder_point, products(name)))',
         )
         .eq('id', id)
         .single();
@@ -746,6 +748,27 @@ export function ProductionRequestDetailPage() {
           .eq('id', row.itemId);
         if (iu) throw iu;
       }
+
+      const branchId = pr.branch_id;
+      if (branchId) {
+        for (const row of data) {
+          const line = items.find((i) => i.id === row.itemId);
+          if (!line?.product_variant_id) continue;
+          const prev = Number(line.quantity_completed) || 0;
+          const delta = row.producedQuantity - prev;
+          if (delta <= 0) continue;
+          const pv = asOne(line.product_variants);
+          const reorderPoint = Number(pv?.reorder_point) || 0;
+          await addFinishedVariantUnitsAtBranch(supabase, {
+            variantId: line.product_variant_id,
+            productId: line.product_id,
+            branchId,
+            units: delta,
+            reorderPoint,
+          });
+        }
+      }
+
       const allComplete = data.every(
         (r) => r.producedQuantity + 1e-9 >= r.targetQuantity,
       );

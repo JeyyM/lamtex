@@ -3,6 +3,7 @@ import { X, Plus, Minus, Package, AlertCircle, CheckCircle, User, Factory } from
 import { supabase } from '@/src/lib/supabase';
 import { computeStockStatus } from '@/src/lib/stockStatus';
 import { applyBomConsumptionDeductions, validateBomConsumption } from '@/src/lib/bomConsumption';
+import { refreshParentProductStatus } from '@/src/lib/productAggregateStatus';
 
 type AdjustmentType = 'add' | 'subtract';
 
@@ -24,24 +25,6 @@ interface ProductStockAdjustmentModalProps {
   };
   productId: string;
   branch: string;
-}
-
-const STATUS_PRIORITY: Record<string, number> = {
-  'Out of Stock': 4,
-  'Critical': 3,
-  'Low Stock': 2,
-  'Active': 1,
-};
-
-async function refreshParentProductStatus(productId: string) {
-  const { data: allVariants } = await supabase.from('product_variants').select('status').eq('product_id', productId);
-  if (allVariants && allVariants.length > 0) {
-    const worstStatus = allVariants.reduce<string>((worst, v) => {
-      const vStatus = v.status ?? 'Active';
-      return (STATUS_PRIORITY[vStatus] ?? 0) > (STATUS_PRIORITY[worst] ?? 0) ? vStatus : worst;
-    }, 'Active');
-    await supabase.from('products').update({ status: worstStatus }).eq('id', productId);
-  }
 }
 
 export default function ProductStockAdjustmentModal({
@@ -152,10 +135,11 @@ export default function ProductStockAdjustmentModal({
         const sumTotal = (sumRows ?? []).reduce((s, r) => s + (Number(r.quantity) || 0), 0);
         const newStatus = computeStockStatus(sumTotal, variant.reorderPoint);
 
-        const { error: varErr } = await supabase
-          .from('product_variants')
-          .update({ total_stock: sumTotal, status: newStatus })
-          .eq('id', variant.id);
+        const varPayload: Record<string, unknown> = { total_stock: sumTotal, status: newStatus };
+        if (adjustmentType === 'add') {
+          varPayload.last_restocked = new Date().toISOString();
+        }
+        const { error: varErr } = await supabase.from('product_variants').update(varPayload).eq('id', variant.id);
         if (varErr) throw varErr;
 
         if (adjustmentType === 'add' && consumeRawMaterials) {
@@ -164,10 +148,11 @@ export default function ProductStockAdjustmentModal({
       } else {
         const newTotal = Math.max(0, Math.round(newStock));
         const st = computeStockStatus(newTotal, variant.reorderPoint);
-        const { error: varErr } = await supabase
-          .from('product_variants')
-          .update({ total_stock: newTotal, status: st })
-          .eq('id', variant.id);
+        const varPayloadGlobal: Record<string, unknown> = { total_stock: newTotal, status: st };
+        if (adjustmentType === 'add') {
+          varPayloadGlobal.last_restocked = new Date().toISOString();
+        }
+        const { error: varErr } = await supabase.from('product_variants').update(varPayloadGlobal).eq('id', variant.id);
         if (varErr) throw varErr;
         newDisplayedStock = newTotal;
       }

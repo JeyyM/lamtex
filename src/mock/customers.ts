@@ -1,6 +1,6 @@
 // Mock data for customers - Agent functionality
 
-import { CustomerDetail, CustomerNote, CustomerTask, CustomerActivity, TopProduct, BuyingPattern } from '../types/customers';
+import { CustomerDetail, TopProduct, BuyingPattern } from '../types/customers';
 
 export const MOCK_CUSTOMERS_DETAILED: CustomerDetail[] = [
   {
@@ -268,132 +268,6 @@ export const MOCK_CUSTOMERS_DETAILED: CustomerDetail[] = [
   },
 ];
 
-export const MOCK_CUSTOMER_NOTES: CustomerNote[] = [
-  {
-    id: 'NOTE-001',
-    customerId: 'CUS-001',
-    type: 'Call',
-    content: 'Discussed upcoming Q2 orders. Customer planning major store expansion. Expects to increase monthly orders by 30%.',
-    createdBy: 'Pedro Reyes',
-    createdAt: '2026-02-23T14:30:00Z',
-    isImportant: true,
-  },
-  {
-    id: 'NOTE-002',
-    customerId: 'CUS-001',
-    type: 'Visit',
-    content: 'Store visit completed. Inventory levels healthy. Recommended stocking up on 4" PVC pipes for upcoming construction season.',
-    createdBy: 'Pedro Reyes',
-    createdAt: '2026-02-20T10:15:00Z',
-    isImportant: false,
-  },
-  {
-    id: 'NOTE-003',
-    customerId: 'CUS-002',
-    type: 'Negotiation',
-    content: 'Negotiated payment plan for overdue amount. Customer agreed to pay ₱500K by end of week, balance in 2 weeks.',
-    createdBy: 'Juan Dela Cruz',
-    createdAt: '2026-02-24T11:00:00Z',
-    isImportant: true,
-  },
-  {
-    id: 'NOTE-004',
-    customerId: 'CUS-002',
-    type: 'Email',
-    content: 'Sent quotation for new project - 500 units rebar, 300 bags cement. Awaiting response.',
-    createdBy: 'Juan Dela Cruz',
-    createdAt: '2026-02-22T09:30:00Z',
-    isImportant: false,
-  },
-  {
-    id: 'NOTE-005',
-    customerId: 'CUS-006',
-    type: 'Call',
-    content: 'Called regarding overdue payment of ₱980K. Owner promises payment by Friday. Will follow up on Thursday.',
-    createdBy: 'Pedro Reyes',
-    createdAt: '2026-02-24T15:45:00Z',
-    isImportant: true,
-  },
-];
-
-export const MOCK_CUSTOMER_TASKS: CustomerTask[] = [
-  {
-    id: 'TASK-001',
-    customerId: 'CUS-001',
-    customerName: 'Mega Hardware Center',
-    type: 'Visit',
-    title: 'Quarterly Business Review',
-    description: 'Schedule and conduct QBR to discuss performance, upcoming needs, and new products.',
-    priority: 'High',
-    status: 'Pending',
-    dueDate: '2026-02-28',
-    assignedTo: 'Pedro Reyes',
-    createdBy: 'Pedro Reyes',
-    createdAt: '2026-02-24T09:00:00Z',
-    updatedAt: '2026-02-24T09:00:00Z',
-  },
-  {
-    id: 'TASK-002',
-    customerId: 'CUS-002',
-    customerName: 'BuildMaster Construction Corp',
-    type: 'Collection',
-    title: 'Follow up on overdue payment',
-    description: 'Contact accounting dept regarding ₱850K overdue amount. Get commitment date.',
-    priority: 'Urgent',
-    status: 'In Progress',
-    dueDate: '2026-02-26',
-    assignedTo: 'Juan Dela Cruz',
-    createdBy: 'Juan Dela Cruz',
-    createdAt: '2026-02-23T10:30:00Z',
-    updatedAt: '2026-02-24T11:00:00Z',
-  },
-  {
-    id: 'TASK-003',
-    customerId: 'CUS-003',
-    customerName: 'City Builders Supply',
-    type: 'Call',
-    title: 'Check on partial payment status',
-    description: 'Verify if check for ₱50K has been deposited. Follow up on remaining balance.',
-    priority: 'Medium',
-    status: 'Pending',
-    dueDate: '2026-02-27',
-    assignedTo: 'Pedro Reyes',
-    createdBy: 'Pedro Reyes',
-    createdAt: '2026-02-24T13:00:00Z',
-    updatedAt: '2026-02-24T13:00:00Z',
-  },
-  {
-    id: 'TASK-004',
-    customerId: 'CUS-004',
-    customerName: 'Skyline Developers Inc',
-    type: 'Quote',
-    title: 'Prepare quotation for new condo project',
-    description: 'Customer requested quote for Phase 2 materials: HDPE pipes, fittings, and cement.',
-    priority: 'High',
-    status: 'Pending',
-    dueDate: '2026-02-26',
-    assignedTo: 'Maria Santos',
-    createdBy: 'Maria Santos',
-    createdAt: '2026-02-24T08:15:00Z',
-    updatedAt: '2026-02-24T08:15:00Z',
-  },
-  {
-    id: 'TASK-005',
-    customerId: 'CUS-006',
-    customerName: 'Golden Gate Hardware',
-    type: 'Follow-up',
-    title: 'Verify payment promise',
-    description: 'Owner promised ₱500K payment by Friday. Call Thursday to confirm.',
-    priority: 'Urgent',
-    status: 'Pending',
-    dueDate: '2026-02-27',
-    assignedTo: 'Pedro Reyes',
-    createdBy: 'Pedro Reyes',
-    createdAt: '2026-02-24T15:45:00Z',
-    updatedAt: '2026-02-24T15:45:00Z',
-  },
-];
-
 export const MOCK_CUSTOMER_TOP_PRODUCTS: Record<string, TopProduct[]> = {
   'CUS-001': [
     {
@@ -499,22 +373,10 @@ export function getCustomerById(customerId: string): CustomerDetail | undefined 
   return MOCK_CUSTOMERS_DETAILED.find(customer => customer.id === customerId);
 }
 
-export function getCustomerNotes(customerId: string): CustomerNote[] {
-  return MOCK_CUSTOMER_NOTES.filter(note => note.customerId === customerId);
-}
-
-export function getCustomerTasks(customerId: string): CustomerTask[] {
-  return MOCK_CUSTOMER_TASKS.filter(task => task.customerId === customerId);
-}
-
 export function getCustomerTopProducts(customerId: string): TopProduct[] {
   return MOCK_CUSTOMER_TOP_PRODUCTS[customerId] || [];
 }
 
 export function getBuyingPatterns(customerId: string): BuyingPattern[] {
   return MOCK_BUYING_PATTERNS[customerId] || [];
-}
-
-export function getAllTasksByAgent(): CustomerTask[] {
-  return MOCK_CUSTOMER_TASKS;
 }

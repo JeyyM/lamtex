@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
@@ -20,7 +20,6 @@ import {
   Filter,
   Download,
   Upload,
-  Edit,
   Trash2,
   Map,
   FileText,
@@ -50,14 +49,15 @@ import {
 import { RoutePlanningView } from '@/src/components/logistics/RoutePlanningView';
 import { TripDetailsModal } from '@/src/components/logistics/TripDetailsModal';
 import { EditTripModal } from '@/src/components/logistics/EditTripModal';
-import { Trip } from '@/src/types/logistics';
+import { Vehicle, Trip } from '@/src/types/logistics';
+import { fetchFleetTrucksForBranch } from '@/src/lib/fleetTrucks';
+import { TruckFormModal } from '@/src/components/logistics/TruckFormModal';
 
 type ViewMode = 'dispatch' | 'fleet' | 'routes' | 'shipments';
 type TransportType = 'truck' | 'interisland';
 
 export function LogisticsPage() {
   const { branch } = useAppContext();
-  const navigate = useNavigate();
   const [viewMode, setViewMode] = useState<ViewMode>('dispatch');
   const [transportType, setTransportType] = useState<TransportType>('truck');
   const [selectedTrip, setSelectedTrip] = useState<Trip | null>(null);
@@ -66,6 +66,34 @@ export function LogisticsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('All');
   const [selectedCalendarTrip, setSelectedCalendarTrip] = useState<Trip | null>(null);
+  const [fleetTrucks, setFleetTrucks] = useState<Vehicle[]>([]);
+  const [fleetLoading, setFleetLoading] = useState(false);
+  const [fleetError, setFleetError] = useState<string | null>(null);
+  const [truckFormOpen, setTruckFormOpen] = useState(false);
+  const [truckFormMode, setTruckFormMode] = useState<'create' | 'edit'>('create');
+  const [truckFormEditId, setTruckFormEditId] = useState<string | null>(null);
+
+  const loadFleet = useCallback(async () => {
+    if (!branch?.trim()) {
+      setFleetTrucks([]);
+      setFleetError(null);
+      return;
+    }
+    setFleetLoading(true);
+    setFleetError(null);
+    const { vehicles, error } = await fetchFleetTrucksForBranch(branch);
+    setFleetLoading(false);
+    if (error) {
+      setFleetError(error);
+      setFleetTrucks([]);
+      return;
+    }
+    setFleetTrucks(vehicles);
+  }, [branch]);
+
+  useEffect(() => {
+    loadFleet();
+  }, [loadFleet]);
 
   // Get data
   const trips = getTripsByBranch(branch);
@@ -86,15 +114,18 @@ export function LogisticsPage() {
   const getStatusColor = (status: string) => {
     if (status === 'Completed' || status === 'Delivered' || status === 'Available') return 'success';
     if (status === 'In Transit' || status === 'Loading' || status === 'Planned' || status === 'On Trip') return 'warning';
-    if (status === 'Delayed' || status === 'Failed' || status === 'Blocked' || status === 'Maintenance') return 'danger';
+    if (status === 'Delayed' || status === 'Failed' || status === 'Blocked' || status === 'Maintenance' || status === 'Out of Service') return 'danger';
     return 'default';
   };
+
+  const fleetList = fleetTrucks;
+  const fleetStatsCount = fleetList.length || 1;
 
   const getVehicleStatusIcon = (status: string) => {
     if (status === 'On Trip') return <Truck className="w-4 h-4" />;
     if (status === 'Available') return <CheckCircle className="w-4 h-4" />;
     if (status === 'Loading') return <Package className="w-4 h-4" />;
-    if (status === 'Maintenance') return <Settings className="w-4 h-4" />;
+    if (status === 'Maintenance' || status === 'Out of Service') return <Settings className="w-4 h-4" />;
     return <Clock className="w-4 h-4" />;
   };
 
@@ -790,17 +821,42 @@ export function LogisticsPage() {
       {/* FLEET MANAGEMENT VIEW */}
       {viewMode === 'fleet' && transportType === 'truck' && (
         <div className="space-y-6">
+          {fleetError && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              Could not load fleet from the database ({fleetError}). Check migrations and that you are signed in.
+            </div>
+          )}
+          {fleetLoading && (
+            <p className="text-sm text-gray-500">Loading fleet for this branch…</p>
+          )}
+          {!fleetLoading && !fleetError && fleetList.length === 0 && (
+            <Card>
+              <CardContent className="py-8 text-center text-gray-600 text-sm">
+                No trucks found for this branch. Apply{' '}
+                <code className="text-xs bg-gray-100 px-1 rounded">database/fleet_trucks_extension.sql</code> and{' '}
+                <code className="text-xs bg-gray-100 px-1 rounded">database/seed_fleet_trucks.sql</code>.
+              </CardContent>
+            </Card>
+          )}
+          {fleetList.length > 0 && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Fleet Overview */}
             <div className="lg:col-span-2 space-y-4">
               <Card>
                 <CardHeader>
-                  <CardTitle>Fleet Overview</CardTitle>
+                  <CardTitle>Truck fleet</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    {vehicles.map((vehicle) => (
-                      <div key={vehicle.id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow w-full max-w-full">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {fleetList.map((vehicle) => (
+                      <Link
+                        key={vehicle.id}
+                        to={`/logistics/${vehicle.id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow w-full max-w-full block no-underline text-inherit focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2"
+                        title="Open truck details in new tab"
+                      >
                         <div className="flex items-start justify-between mb-3">
                           <div className="flex items-center gap-2 min-w-0 flex-1">
                             <div className={`p-2 rounded-lg ${
@@ -856,26 +912,16 @@ export function LogisticsPage() {
 
                         {vehicle.alerts && vehicle.alerts.length > 0 && (
                           <div className="mt-3 pt-3 border-t border-gray-200">
-                            {vehicle.alerts.map((alert, idx) => (
+                            <p className="text-xs font-medium text-gray-500 mb-2">Notes</p>
+                            {vehicle.alerts.map((line, idx) => (
                               <div key={idx} className="flex items-center gap-2 text-xs text-orange-600">
                                 <AlertTriangle className="w-3 h-3" />
-                                <span className="break-words">{alert}</span>
+                                <span className="break-words">{line}</span>
                               </div>
                             ))}
                           </div>
                         )}
-
-                        <div className="mt-4 flex items-center gap-2">
-                          <Button 
-                            variant="primary" 
-                            size="sm" 
-                            className="flex-1"
-                            onClick={() => navigate(`/logistics/${vehicle.id}`)}
-                          >
-                            View Details
-                          </Button>
-                        </div>
-                      </div>
+                      </Link>
                     ))}
                   </div>
                 </CardContent>
@@ -892,7 +938,7 @@ export function LogisticsPage() {
                   <div>
                     <div className="flex items-center justify-between text-sm mb-2">
                       <span className="text-gray-500">Total Vehicles</span>
-                      <span className="text-gray-900 font-bold">{vehicles.length}</span>
+                      <span className="text-gray-900 font-bold">{fleetList.length}</span>
                     </div>
                     <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
                       <div className="h-full bg-blue-600" style={{ width: '100%' }}></div>
@@ -903,13 +949,13 @@ export function LogisticsPage() {
                     <div className="flex items-center justify-between text-sm mb-2">
                       <span className="text-gray-500">Available</span>
                       <span className="text-green-600 font-bold">
-                        {vehicles.filter(v => v.status === 'Available').length}
+                        {fleetList.filter(v => v.status === 'Available').length}
                       </span>
                     </div>
                     <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
                       <div
                         className="h-full bg-green-600"
-                        style={{ width: `${(vehicles.filter(v => v.status === 'Available').length / vehicles.length) * 100}%` }}
+                        style={{ width: `${(fleetList.filter(v => v.status === 'Available').length / fleetStatsCount) * 100}%` }}
                       ></div>
                     </div>
                   </div>
@@ -918,13 +964,13 @@ export function LogisticsPage() {
                     <div className="flex items-center justify-between text-sm mb-2">
                       <span className="text-gray-500">On Trip</span>
                       <span className="text-blue-600 font-bold">
-                        {vehicles.filter(v => v.status === 'On Trip').length}
+                        {fleetList.filter(v => v.status === 'On Trip').length}
                       </span>
                     </div>
                     <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
                       <div
                         className="h-full bg-blue-600"
-                        style={{ width: `${(vehicles.filter(v => v.status === 'On Trip').length / vehicles.length) * 100}%` }}
+                        style={{ width: `${(fleetList.filter(v => v.status === 'On Trip').length / fleetStatsCount) * 100}%` }}
                       ></div>
                     </div>
                   </div>
@@ -933,13 +979,13 @@ export function LogisticsPage() {
                     <div className="flex items-center justify-between text-sm mb-2">
                       <span className="text-gray-500">Maintenance</span>
                       <span className="text-red-600 font-bold">
-                        {vehicles.filter(v => v.status === 'Maintenance' || v.status === 'Out of Service').length}
+                        {fleetList.filter(v => v.status === 'Maintenance' || v.status === 'Out of Service').length}
                       </span>
                     </div>
                     <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
                       <div
                         className="h-full bg-red-600"
-                        style={{ width: `${(vehicles.filter(v => v.status === 'Maintenance' || v.status === 'Out of Service').length / vehicles.length) * 100}%` }}
+                        style={{ width: `${(fleetList.filter(v => v.status === 'Maintenance' || v.status === 'Out of Service').length / fleetStatsCount) * 100}%` }}
                       ></div>
                     </div>
                   </div>
@@ -948,13 +994,13 @@ export function LogisticsPage() {
                     <div className="flex items-center justify-between text-sm mb-2">
                       <span className="text-gray-500">Avg. Utilization</span>
                       <span className="text-gray-900 font-bold">
-                        {Math.round(vehicles.reduce((sum, v) => sum + v.utilizationPercent, 0) / vehicles.length)}%
+                        {Math.round(fleetList.reduce((sum, v) => sum + v.utilizationPercent, 0) / fleetStatsCount)}%
                       </span>
                     </div>
                     <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
                       <div
                         className="h-full bg-orange-600"
-                        style={{ width: `${Math.round(vehicles.reduce((sum, v) => sum + v.utilizationPercent, 0) / vehicles.length)}%` }}
+                        style={{ width: `${Math.round(fleetList.reduce((sum, v) => sum + v.utilizationPercent, 0) / fleetStatsCount)}%` }}
                       ></div>
                     </div>
                   </div>
@@ -966,7 +1012,19 @@ export function LogisticsPage() {
                   <CardTitle className="text-base">Quick Actions</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-2">
-                  <Button variant="outline" className="w-full justify-start">
+                  <Button
+                    variant="outline"
+                    className="w-full justify-start"
+                    onClick={() => {
+                      if (!branch?.trim()) {
+                        window.alert('Select a branch in the header first.');
+                        return;
+                      }
+                      setTruckFormMode('create');
+                      setTruckFormEditId(null);
+                      setTruckFormOpen(true);
+                    }}
+                  >
                     <Plus className="w-4 h-4 mr-2" />
                     Add New Vehicle
                   </Button>
@@ -982,6 +1040,7 @@ export function LogisticsPage() {
               </Card>
             </div>
           </div>
+          )}
         </div>
       )}
 
@@ -1326,6 +1385,15 @@ export function LogisticsPage() {
           </div>
         </div>
       )}
+      <TruckFormModal
+        key={`${truckFormMode}-${truckFormEditId ?? 'new'}`}
+        isOpen={truckFormOpen}
+        onClose={() => setTruckFormOpen(false)}
+        mode={truckFormMode}
+        branchName={branch}
+        vehicleUuid={truckFormEditId}
+        onSaved={() => loadFleet()}
+      />
     </div>
   );
 }

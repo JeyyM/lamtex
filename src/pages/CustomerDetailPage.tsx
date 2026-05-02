@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
@@ -13,22 +13,16 @@ import {
   DollarSign,
   CreditCard,
   Package,
-  Calendar,
   ShoppingCart,
-  MessageSquare,
-  Clipboard,
   ArrowLeft,
   Edit,
   FileText,
   ChevronDown,
-  ChevronUp,
-  TrendingUp,
-  X,
   Loader2,
 } from 'lucide-react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { CreateOrderModal } from '@/src/components/orders/CreateOrderModal';
 import { clientCommissionFraction, clientCommissionPercentLabel } from '@/src/types/customers';
+import { openGoogleMapsSearch } from '@/src/lib/maps';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -44,17 +38,50 @@ interface CustomerDetail {
   order_count: number; last_order_date: string | null; account_since: string | null;
   assigned_agent_id: string | null;
   employees: { employee_name: string; employee_id: string } | null;
-}
-interface CustomerNote {
-  id: string; type: string; content: string; created_by: string | null;
-  is_important: boolean; created_at: string;
-}
-interface CustomerTask {
-  id: string; type: string; title: string; description: string | null;
-  priority: string; status: string; due_date: string; assigned_to: string | null;
+  map_lat: number | null;
+  map_lng: number | null;
 }
 interface OrderRow {
-  id: string; order_number: string; order_date: string; status: string; total_amount: number;
+  id: string;
+  order_number: string;
+  order_date: string | null;
+  required_date: string | null;
+  status: string;
+  payment_status: string;
+  subtotal: number;
+  discount_percent: number;
+  discount_amount: number;
+  total_amount: number;
+}
+
+function formatPhp(amount: number) {
+  return `₱${amount.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function orderHistoryStatusBadgeVariant(status: string): 'default' | 'success' | 'warning' | 'danger' | 'neutral' {
+  const s = status.toLowerCase();
+  if (s === 'delivered' || s === 'completed') return 'success';
+  if (s === 'cancelled' || s === 'rejected') return 'danger';
+  if (
+    s === 'pending' ||
+    s === 'scheduled' ||
+    s === 'loading' ||
+    s === 'packed' ||
+    s === 'ready' ||
+    s === 'in transit' ||
+    s === 'partially fulfilled'
+  )
+    return 'warning';
+  return 'default';
+}
+
+function orderHistoryPaymentBadgeVariant(payment: string): 'default' | 'success' | 'warning' | 'danger' | 'neutral' | 'info' {
+  const p = payment.toLowerCase();
+  if (p === 'paid') return 'success';
+  if (p === 'overdue') return 'danger';
+  if (p === 'partially paid') return 'warning';
+  if (p === 'invoiced') return 'info';
+  return 'neutral';
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -65,30 +92,27 @@ export function CustomerDetailPage() {
   const { addAuditLog } = useAppContext();
 
   const [customer, setCustomer] = useState<CustomerDetail | null>(null);
-  const [notes, setNotes] = useState<CustomerNote[]>([]);
-  const [tasks, setTasks] = useState<CustomerTask[]>([]);
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'orders' | 'notes' | 'tasks'>('overview');
-  const [expandedProduct, setExpandedProduct] = useState<number | null>(null);
+  const [activeTab, setActiveTab] = useState<'overview' | 'orders'>('overview');
   const [showCreateOrder, setShowCreateOrder] = useState(false);
-  const [showDatePicker, setShowDatePicker] = useState(false);
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
-  const [dateError, setDateError] = useState('');
 
   useEffect(() => {
     if (!id) return;
     const fetchAll = async () => {
       setLoading(true);
       try {
-        const [custRes, notesRes, tasksRes, ordersRes] = await Promise.all([
+        const [custRes, ordersRes] = await Promise.all([
           supabase.from('customers').select('*, employees!assigned_agent_id(employee_name, employee_id)').eq('id', id).single(),
-          supabase.from('customer_notes').select('id, type, content, created_by, is_important, created_at').eq('customer_id', id).order('created_at', { ascending: false }),
-          supabase.from('customer_tasks').select('id, type, title, description, priority, status, due_date, assigned_to').eq('customer_id', id).order('due_date', { ascending: true }),
-          supabase.from('orders').select('id, order_number, order_date, status, total_amount').eq('customer_id', id).order('order_date', { ascending: false }),
+          supabase
+            .from('orders')
+            .select(
+              'id, order_number, order_date, required_date, status, payment_status, subtotal, discount_percent, discount_amount, total_amount',
+            )
+            .eq('customer_id', id)
+            .order('order_date', { ascending: false }),
         ]);
         if (custRes.error || !custRes.data) { setNotFound(true); return; }
         const c = custRes.data as any;
@@ -106,13 +130,23 @@ export function CustomerDetailPage() {
           total_purchases_lifetime: Number(c.total_purchases_lifetime ?? 0), order_count: c.order_count ?? 0,
           last_order_date: c.last_order_date ?? null, account_since: c.account_since ?? null,
           assigned_agent_id: c.assigned_agent_id ?? null, employees: c.employees ?? null,
+          map_lat: c.map_lat != null ? Number(c.map_lat) : null,
+          map_lng: c.map_lng != null ? Number(c.map_lng) : null,
         });
-        setNotes(notesRes.data ?? []);
-        setTasks(tasksRes.data ?? []);
-        setOrders((ordersRes.data ?? []).map((o: any) => ({
-          id: o.id, order_number: o.order_number, order_date: o.order_date,
-          status: o.status, total_amount: Number(o.total_amount ?? 0),
-        })));
+        setOrders(
+          (ordersRes.data ?? []).map((o: any) => ({
+            id: o.id,
+            order_number: o.order_number,
+            order_date: o.order_date ?? null,
+            required_date: o.required_date ?? null,
+            status: o.status ?? '',
+            payment_status: o.payment_status ?? 'Unbilled',
+            subtotal: Number(o.subtotal ?? 0),
+            discount_percent: Number(o.discount_percent ?? 0),
+            discount_amount: Number(o.discount_amount ?? 0),
+            total_amount: Number(o.total_amount ?? 0),
+          })),
+        );
       } catch (err) {
         console.error('Error loading customer:', err);
         setNotFound(true);
@@ -128,14 +162,20 @@ export function CustomerDetailPage() {
     addAuditLog('Initiated Order Creation', 'Order', `Started creating order for ${customer?.name}`);
   };
 
-  const handleAddNote = () => {
-    alert('Add note functionality coming soon');
-    addAuditLog('Add Note', 'Customer', `Adding note for ${customer?.name}`);
-  };
-
-  const handleAddTask = () => {
-    alert('Add task functionality coming soon');
-    addAuditLog('Add Task', 'Customer', `Adding task for ${customer?.name}`);
+  const handleViewCustomerOnMap = () => {
+    if (!customer) return;
+    let q = '';
+    if (customer.map_lat != null && customer.map_lng != null && Number.isFinite(customer.map_lat) && Number.isFinite(customer.map_lng)) {
+      q = `${customer.map_lat},${customer.map_lng}`;
+    } else {
+      q = [customer.address, customer.city, customer.province].filter(Boolean).join(', ');
+    }
+    if (!q.trim()) {
+      window.alert('No address or map coordinates on file for this customer.');
+      return;
+    }
+    openGoogleMapsSearch(q);
+    addAuditLog('View on Map', 'Customer', `Opened map for ${customer.name}`);
   };
 
   // ── Loading / Not Found guards ────────────────────────────────────────────
@@ -220,18 +260,10 @@ export function CustomerDetailPage() {
 
       {/* Quick Actions */}
       <div className="flex flex-col sm:flex-row gap-3">
-        <Button variant="outline" size="sm" onClick={handleAddNote} className="w-full sm:w-auto">
-          <MessageSquare className="w-4 h-4 mr-2" />
-          Add Note
+        <Button type="button" variant="outline" size="sm" className="w-full sm:w-auto" onClick={handleViewCustomerOnMap}>
+          <MapPin className="w-4 h-4 mr-2" />
+          View on Map
         </Button>
-        <Button variant="outline" size="sm" onClick={handleAddTask} className="w-full sm:w-auto">
-          <Clipboard className="w-4 h-4 mr-2" />
-          Create Task
-        </Button>
-        <Button variant="outline" size="sm" className="w-full sm:w-auto">
-            <MapPin className="w-4 h-4 mr-2" />
-            View on Map
-          </Button>
       </div>
 
       {/* Tabs - Desktop (>420px) */}
@@ -240,8 +272,6 @@ export function CustomerDetailPage() {
           {[
             { key: 'overview', label: 'Overview', icon: FileText },
             { key: 'orders', label: `Orders (${orders.length})`, icon: ShoppingCart },
-            { key: 'notes', label: `Notes (${notes.length})`, icon: MessageSquare },
-            { key: 'tasks', label: `Tasks (${tasks.filter(t => t.status !== 'Completed').length})`, icon: Clipboard },
           ].map(({ key, label, icon: Icon }) => (
             <button
               key={key}
@@ -269,8 +299,6 @@ export function CustomerDetailPage() {
           >
             <option value="overview">Overview</option>
             <option value="orders">Orders ({orders.length})</option>
-            <option value="notes">Notes ({notes.length})</option>
-            <option value="tasks">Tasks ({tasks.filter(t => t.status !== 'Completed').length})</option>
           </select>
           <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
             <ChevronDown className="w-4 h-4 text-gray-400" />
@@ -415,20 +443,71 @@ export function CustomerDetailPage() {
             </CardHeader>
             <CardContent>
               <div className="space-y-3">
-                {orders.map((order) => (
-                  <div key={order.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg hover:bg-gray-100 cursor-pointer">
-                    <div>
-                      <div className="font-medium text-gray-900">{order.order_number}</div>
-                      <div className="text-sm text-gray-500">{order.order_date}</div>
-                    </div>
-                    <div className="text-right">
-                      <div className="font-medium text-gray-900">₱{order.total_amount.toLocaleString()}</div>
-                      <Badge variant={order.status === 'Delivered' ? 'success' : 'default'} className="mt-1">
-                        {order.status}
-                      </Badge>
-                    </div>
-                  </div>
-                ))}
+                {orders.map((order) => {
+                  const orderDateLabel = order.order_date
+                    ? String(order.order_date).slice(0, 10)
+                    : '—';
+                  const requiredLabel = order.required_date
+                    ? String(order.required_date).slice(0, 10)
+                    : null;
+                  let discountDisplay: string;
+                  if (order.discount_amount > 0) {
+                    discountDisplay = `−${formatPhp(order.discount_amount)}`;
+                    if (order.discount_percent > 0) {
+                      discountDisplay += ` (${order.discount_percent.toFixed(1)}%)`;
+                    }
+                  } else if (order.discount_percent > 0) {
+                    discountDisplay = `${order.discount_percent.toFixed(1)}%`;
+                  } else {
+                    discountDisplay = '—';
+                  }
+                  const discountIsRed = order.discount_amount > 0 || order.discount_percent > 0;
+                  return (
+                    <Link
+                      key={order.id}
+                      to={`/orders/${order.id}`}
+                      className="block rounded-lg border border-gray-100 bg-gray-50 p-4 transition-colors hover:border-gray-200 hover:bg-gray-100"
+                    >
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="min-w-0">
+                          <div className="font-semibold text-blue-700 hover:underline">{order.order_number}</div>
+                          <div className="mt-1 text-sm text-gray-600">
+                            Order date:{' '}
+                            <span className="text-gray-900">{orderDateLabel}</span>
+                            {requiredLabel && (
+                              <>
+                                {' '}
+                                · Required: <span className="text-gray-900">{requiredLabel}</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                        <div className="text-left sm:text-right">
+                          <div className="text-base font-semibold text-gray-900">{formatPhp(order.total_amount)}</div>
+                          <div className="text-xs text-gray-500">Total</div>
+                        </div>
+                      </div>
+                      <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2 border-t border-gray-200/80 pt-3 text-sm">
+                        <div>
+                          <div className="text-xs font-medium uppercase tracking-wide text-gray-500">Subtotal</div>
+                          <div className="font-medium text-gray-900">{formatPhp(order.subtotal)}</div>
+                        </div>
+                        <div>
+                          <div className="text-xs font-medium uppercase tracking-wide text-gray-500">Net discount</div>
+                          <div
+                            className={`font-medium ${discountIsRed ? 'text-red-700' : 'text-gray-900'}`}
+                          >
+                            {discountDisplay}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Badge variant={orderHistoryStatusBadgeVariant(order.status)}>{order.status}</Badge>
+                        <Badge variant={orderHistoryPaymentBadgeVariant(order.payment_status)}>{order.payment_status}</Badge>
+                      </div>
+                    </Link>
+                  );
+                })}
                 {orders.length === 0 && (
                   <div className="text-center py-12 text-gray-500">
                     <Package className="w-12 h-12 mx-auto mb-2 text-gray-400" />
@@ -444,79 +523,6 @@ export function CustomerDetailPage() {
           </Card>
         )}
 
-        {activeTab === 'notes' && (
-          <div className="space-y-4">
-            {notes.map((note) => (
-              <Card key={note.id} className={note.is_important ? 'border-red-300 bg-red-50' : ''}>
-                <CardContent className="p-4">
-                  <div className="flex items-start justify-between mb-2">
-                    <Badge variant="default">{note.type}</Badge>
-                    <span className="text-xs text-gray-500">{new Date(note.created_at).toLocaleDateString()}</span>
-                  </div>
-                  <p className="text-sm text-gray-900 mt-2">{note.content}</p>
-                  <div className="text-xs text-gray-500 mt-2">By {note.created_by}</div>
-                </CardContent>
-              </Card>
-            ))}
-            {notes.length === 0 && (
-              <Card>
-                <CardContent className="text-center py-12 text-gray-500">
-                  <MessageSquare className="w-12 h-12 mx-auto mb-2 text-gray-400" />
-                  <p className="font-medium">No notes yet</p>
-                  <Button variant="outline" size="sm" className="mt-4" onClick={handleAddNote}>
-                    <MessageSquare className="w-4 h-4 mr-2" />
-                    Add First Note
-                  </Button>
-                </CardContent>
-              </Card>
-            )}
-          </div>
-        )}
-
-        {activeTab === 'tasks' && (
-          <div className="space-y-4">
-            {tasks.map((task) => (
-              <Card key={task.id}>
-                <CardContent className="p-4">
-                  <div className="flex items-start justify-between mb-2">
-                    <div className="flex items-center gap-2">
-                      <Badge variant={task.priority === 'Urgent' ? 'danger' : task.priority === 'High' ? 'warning' : 'default'}>
-                        {task.priority}
-                      </Badge>
-                      <Badge variant="default">{task.type}</Badge>
-                    </div>
-                    <Badge variant={task.status === 'Completed' ? 'success' : task.status === 'In Progress' ? 'warning' : 'default'}>
-                      {task.status}
-                    </Badge>
-                  </div>
-                  <h4 className="font-medium text-gray-900 mt-2">{task.title}</h4>
-                  {task.description && (
-                    <p className="text-sm text-gray-600 mt-1">{task.description}</p>
-                  )}
-                  <div className="flex items-center gap-4 mt-3 text-xs text-gray-500">
-                    <span className="flex items-center gap-1">
-                      <Calendar className="w-3 h-3" />
-                      Due: {task.due_date}
-                    </span>
-                    <span>Assigned to: {task.assigned_to}</span>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-            {tasks.length === 0 && (
-              <Card>
-                <CardContent className="text-center py-12 text-gray-500">
-                  <Clipboard className="w-12 h-12 mx-auto mb-2 text-gray-400" />
-                  <p className="font-medium">No tasks yet</p>
-                  <Button variant="outline" size="sm" className="mt-4" onClick={handleAddTask}>
-                    <Clipboard className="w-4 h-4 mr-2" />
-                    Create First Task
-                  </Button>
-                </CardContent>
-              </Card>
-            )}
-          </div>
-        )}
       </div>
 
       {/* Create Order Modal */}

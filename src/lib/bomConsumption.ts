@@ -43,9 +43,7 @@ export async function computeAggregatedBomNeeds(
 
     if (bomErr) throw bomErr;
     if (!bom?.length) {
-      throw new Error(
-        'One or more variants have no bill of materials — add BOM lines before consuming materials.',
-      );
+      continue;
     }
 
     for (const row of bom) {

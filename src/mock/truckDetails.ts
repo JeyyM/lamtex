@@ -7,7 +7,7 @@ export interface TruckDetails {
   vehicleName: string;
   plateNumber: string;
   type: 'Truck' | 'Container Van' | 'Motorcycle';
-  status: 'Available' | 'On Trip' | 'Loading' | 'Maintenance';
+  status: 'Available' | 'On Trip' | 'Loading' | 'Maintenance' | 'Out of Service';
   
   // Specifications
   make: string;
@@ -17,8 +17,8 @@ export interface TruckDetails {
   engineType: string;
   maxWeight: number;
   maxVolume: number;
-  dimensions: { length: number; width: number; height: number };
-  
+  dimensions: { length: number | null; width: number | null; height: number | null };
+
   // Registration
   registrationDate: string;
   registrationExpiry: string;
@@ -28,13 +28,11 @@ export interface TruckDetails {
   acquisitionDate: string;
   purchasePrice: number;
   currentBookValue: number;
-  financingStatus: 'Owned' | 'Financed' | 'Leased';
   branch: string;
   
   // Maintenance
   lastMaintenanceDate: string;
   nextMaintenanceDue: string;
-  currentMileage: number;
   mileageAtLastMaintenance: number;
   
   // Stats
@@ -59,6 +57,8 @@ export interface TripHistoryRecord {
   fuelUsed: number;
   fuelCost: number;
   revenue: number;
+  /** From `trip_history.delivery_success_rate` when loaded from DB */
+  deliverySuccessRate?: number;
 }
 
 export interface MaintenanceRecord {
@@ -122,11 +122,9 @@ const TRUCK_DETAILS: Record<string, TruckDetails> = {
     acquisitionDate: '2022-03-10',
     purchasePrice: 2800000,
     currentBookValue: 2240000,
-    financingStatus: 'Owned',
     branch: 'Branch A',
     lastMaintenanceDate: '2026-01-15',
     nextMaintenanceDue: '2026-03-15',
-    currentMileage: 45230,
     mileageAtLastMaintenance: 43500,
     totalTrips: 284,
     totalDistance: 45230,
@@ -155,11 +153,9 @@ const TRUCK_DETAILS: Record<string, TruckDetails> = {
     acquisitionDate: '2021-06-15',
     purchasePrice: 3200000,
     currentBookValue: 2240000,
-    financingStatus: 'Financed',
     branch: 'Branch A',
     lastMaintenanceDate: '2026-02-10',
     nextMaintenanceDue: '2026-04-10',
-    currentMileage: 62450,
     mileageAtLastMaintenance: 61200,
     totalTrips: 412,
     totalDistance: 62450,
@@ -186,11 +182,9 @@ const TRUCK_DETAILS: Record<string, TruckDetails> = {
     acquisitionDate: '2023-01-05',
     purchasePrice: 3500000,
     currentBookValue: 3150000,
-    financingStatus: 'Owned',
     branch: 'Branch A',
     lastMaintenanceDate: '2026-02-01',
     nextMaintenanceDue: '2026-04-01',
-    currentMileage: 28940,
     mileageAtLastMaintenance: 27800,
     totalTrips: 198,
     totalDistance: 28940,

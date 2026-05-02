@@ -49,14 +49,13 @@ interface CustomerFormData {
   assignedAgentId: string;
   assignedAgent: string;
   status: 'Active' | 'Inactive' | 'Suspended';
-  notes: string;
 }
 
 export function CustomerFormPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
   const isEditMode = !!id;
-  const { branch: contextBranch, session } = useAppContext();
+  const { branch: contextBranch } = useAppContext();
 
   const [formData, setFormData] = useState<CustomerFormData>({
     name: '',
@@ -78,7 +77,6 @@ export function CustomerFormPage() {
     assignedAgentId: '',
     assignedAgent: '',
     status: 'Active',
-    notes: '',
   });
 
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -106,15 +104,6 @@ export function CustomerFormPage() {
           return;
         }
 
-        // Load the most recent note for this customer
-        const { data: noteData } = await supabase
-          .from('customer_notes')
-          .select('content')
-          .eq('customer_id', id)
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle();
-
         setFormData({
           name: data.name ?? '',
           type: data.type ?? 'Hardware Store',
@@ -135,7 +124,6 @@ export function CustomerFormPage() {
           assignedAgentId: data.assigned_agent_id ?? '',
           assignedAgent: data.employees?.employee_name ?? '',
           status: (data.status as CustomerFormData['status']) ?? 'Active',
-          notes: noteData?.content ?? '',
         });
       } catch (err) {
         console.error('Error loading customer:', err);
@@ -282,39 +270,9 @@ export function CustomerFormPage() {
           .update({ ...payload, updated_at: new Date().toISOString() })
           .eq('id', id);
         if (error) throw error;
-
-        // Insert new note if provided
-        if (formData.notes.trim()) {
-          const { error: noteError } = await supabase
-            .from('customer_notes')
-            .insert({
-              customer_id: id,
-              type: 'Other',
-              content: formData.notes.trim(),
-              created_by: session?.user?.email ?? null,
-            });
-          if (noteError) throw noteError;
-        }
       } else {
-        const { data: inserted, error } = await supabase
-          .from('customers')
-          .insert(payload)
-          .select('id')
-          .single();
+        const { error } = await supabase.from('customers').insert(payload);
         if (error) throw error;
-
-        // Insert note for new customer if provided
-        if (formData.notes.trim() && inserted) {
-          const { error: noteError } = await supabase
-            .from('customer_notes')
-            .insert({
-              customer_id: inserted.id,
-              type: 'Other',
-              content: formData.notes.trim(),
-              created_by: session?.user?.email ?? null,
-            });
-          if (noteError) throw noteError;
-        }
       }
 
       navigate('/customers');
@@ -749,12 +707,12 @@ export function CustomerFormPage() {
           </CardContent>
         </Card>
 
-        {/* Assignment & Notes */}
+        {/* Assignment */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <FileText className="w-5 h-5" />
-              Assignment & Notes
+              Assignment
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -793,20 +751,6 @@ export function CustomerFormPage() {
                   ))}
                 </select>
               )}
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Notes
-              </label>
-              <textarea
-                name="notes"
-                value={formData.notes}
-                onChange={handleInputChange}
-                rows={4}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
-                placeholder="Add any additional notes about this customer..."
-              />
             </div>
           </CardContent>
         </Card>

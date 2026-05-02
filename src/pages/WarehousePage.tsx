@@ -1,37 +1,33 @@
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Package, FileText, Truck, Calendar, History, Search, TrendingDown, AlertTriangle, CheckCircle, Plus, X, Factory, ShoppingCart, Clock, MapPin, TrendingUp, Activity, Brain, Target, RefreshCw, Edit3, GitBranch } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useNavigate, Link } from 'react-router-dom';
+import { Package, FileText, Truck, Calendar, History, Search, AlertTriangle, CheckCircle, X, Factory, ShoppingCart, Clock, MapPin, TrendingUp, Activity, Brain, Target, RefreshCw, GitBranch, Loader2, ArrowUp, ArrowDown, ArrowUpDown, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Button } from '@/src/components/ui/Button';
+import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagination';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine, Area, ComposedChart } from 'recharts';
-import CreateRequestModal from '../components/logistics/CreateRequestModal';
 import OrderDetailModal from '../components/logistics/OrderDetailModal';
-import StockAdjustmentModal from '../components/warehouse/StockAdjustmentModal';
+import { supabase } from '@/src/lib/supabase';
+import { useAppContext } from '@/src/store/AppContext';
+import { computeStockStatus } from '@/src/lib/stockStatus';
 
 type TabType = 'inventory' | 'requests' | 'orders' | 'movements';
 type StockStatus = 'healthy' | 'warning' | 'critical';
 type RequestType = 'production' | 'purchase';
-type RequestStatus = 'pending' | 'approved' | 'in-progress' | 'completed' | 'cancelled';
-
-const PIPE_CATEGORIES = [
-  'Sanitary Pipes',
-  'Pressure Pipes',
-  'Electrical Conduits',
-  'Drainage Pipes'
-];
-
-const FITTINGS_CATEGORIES = [
-  'Sanitary Fittings',
-  'Electrical Fittings',
-  'Drainage Fittings',
-  'Valves & Accessories',
-  'Couplings & Adapters'
-];
 
 interface FinishedGood {
+  /** Variant id (unique per inventory row). */
   id: string;
+  /** Product / family id for links to ProductFamilyPage. */
+  productId: string;
   sku: string;
+  /** Variant size label (e.g. 20mm). */
+  variantSize: string;
+  /** Product family display name. */
+  productName: string;
+  /** Full row label for search and modals: product — size. */
   name: string;
   category: string;
+  /** `product_categories.slug` for routing to ProductFamilyPage */
+  categorySlug: string;
   currentStock: number;
   unit: string;
   reorderPoint: number;
@@ -43,909 +39,311 @@ interface FinishedGood {
 
 interface RawMaterial {
   id: string;
+  /** SKU — used for search only */
   code: string;
   name: string;
   category: string;
   currentStock: number;
   unit: string;
-  reorderPoint: number;
-  dailyConsumption: number;
-  daysRemaining: number;
-  supplier: string;
-  lastPurchased: string;
+  maxCapacity: number;
+  lastRestocked: string;
   status: StockStatus;
 }
 
-interface ProductionRequest {
-  id: string;
-  requestNumber: string;
+/** One table row = one production_request_items line (with parent PR context). */
+interface WarehouseProductionLineRow {
+  rowKey: string;
+  prId: string;
+  prNumber: string;
   productSku: string;
   productName: string;
   quantity: number;
   unit: string;
-  scheduledDate: string;
-  estimatedCompletion: string;
-  status: RequestStatus;
+  requestDateFmt: string;
+  expectedCompletionFmt: string;
+  status: string;
   requestedBy: string;
-  requestDate: string;
-  priority: 'low' | 'medium' | 'high';
-  notes?: string;
+  requestDateIso: string;
+  expectedCompletionIso: string | null;
+  /** For calendar cell key */
+  calendarAnchorIso: string | null;
 }
 
-interface PurchaseRequest {
-  id: string;
-  requestNumber: string;
+/** One table row = one purchase_order_items line (with parent PO context). */
+interface WarehousePurchaseLineRow {
+  rowKey: string;
+  poId: string;
+  poNumber: string;
   materialCode: string;
   materialName: string;
   quantity: number;
   unit: string;
   supplier: string;
-  requestedDelivery: string;
-  estimatedArrival: string;
-  status: RequestStatus;
+  requestedDeliveryFmt: string;
+  estimatedArrivalFmt: string;
+  status: string;
   requestedBy: string;
-  requestDate: string;
-  priority: 'low' | 'medium' | 'high';
-  notes?: string;
+  orderDateIso: string;
+  calendarAnchorIso: string | null;
 }
 
-const mockFinishedGoods: FinishedGood[] = [
-  {
-    id: 'FG001',
-    sku: 'PVC-SAN-001',
-    name: 'PVC Sanitary Pipe 4" x 10ft',
-    category: 'Sanitary Pipes',
-    currentStock: 145,
-    unit: 'pcs',
-    reorderPoint: 50,
-    maxCapacity: 300,
-    location: 'A1-R2-S3',
-    lastRestocked: '2026-02-25',
-    status: 'healthy'
-  },
-  {
-    id: 'FG002',
-    sku: 'PVC-SAN-002',
-    name: 'PVC Sanitary Pipe 3" x 10ft',
-    category: 'Sanitary Pipes',
-    currentStock: 89,
-    unit: 'pcs',
-    reorderPoint: 40,
-    maxCapacity: 250,
-    location: 'A1-R2-S4',
-    lastRestocked: '2026-02-24',
-    status: 'healthy'
-  },
-  {
-    id: 'FG003',
-    sku: 'PVC-SAN-003',
-    name: 'PVC Sanitary Pipe 2" x 10ft',
-    category: 'Sanitary Pipes',
-    currentStock: 38,
-    unit: 'pcs',
-    reorderPoint: 45,
-    maxCapacity: 200,
-    location: 'A1-R3-S1',
-    lastRestocked: '2026-02-20',
-    status: 'warning'
-  },
-  {
-    id: 'FG004',
-    sku: 'PVC-SAN-004',
-    name: 'PVC Sanitary Elbow 4" - 90°',
-    category: 'Sanitary Fittings',
-    currentStock: 22,
-    unit: 'pcs',
-    reorderPoint: 30,
-    maxCapacity: 180,
-    location: 'A1-R3-S2',
-    lastRestocked: '2026-02-18',
-    status: 'critical'
-  },
-  {
-    id: 'FG005',
-    sku: 'PVC-SAN-005',
-    name: 'PVC Sanitary Tee 4"',
-    category: 'Sanitary Fittings',
-    currentStock: 340,
-    unit: 'pcs',
-    reorderPoint: 150,
-    maxCapacity: 500,
-    location: 'B2-R1-S1',
-    lastRestocked: '2026-02-26',
-    status: 'healthy'
-  },
-  {
-    id: 'FG006',
-    sku: 'PVC-SAN-006',
-    name: 'PVC Sanitary Tee 3"',
-    category: 'Sanitary Fittings',
-    currentStock: 178,
-    unit: 'pcs',
-    reorderPoint: 120,
-    maxCapacity: 400,
-    location: 'B2-R1-S2',
-    lastRestocked: '2026-02-25',
-    status: 'healthy'
-  },
-  {
-    id: 'FG007',
-    sku: 'PVC-PRES-001',
-    name: 'PVC Pressure Pipe 1" x 20ft - Class A',
-    category: 'Pressure Pipes',
-    currentStock: 95,
-    unit: 'pcs',
-    reorderPoint: 100,
-    maxCapacity: 350,
-    location: 'B2-R1-S3',
-    lastRestocked: '2026-02-22',
-    status: 'warning'
-  },
-  {
-    id: 'FG008',
-    sku: 'PVC-PRES-002',
-    name: 'PVC Pressure Pipe 1.5" x 20ft - Class A',
-    category: 'Pressure Pipes',
-    currentStock: 256,
-    unit: 'pcs',
-    reorderPoint: 100,
-    maxCapacity: 400,
-    location: 'B3-R2-S1',
-    lastRestocked: '2026-02-27',
-    status: 'healthy'
-  },
-  {
-    id: 'FG009',
-    sku: 'PVC-PRES-003',
-    name: 'PVC Pressure Pipe 2" x 20ft - Class B',
-    category: 'Pressure Pipes',
-    currentStock: 412,
-    unit: 'pcs',
-    reorderPoint: 150,
-    maxCapacity: 500,
-    location: 'B3-R2-S2',
-    lastRestocked: '2026-02-27',
-    status: 'healthy'
-  },
-  {
-    id: 'FG010',
-    sku: 'PVC-ELEC-001',
-    name: 'PVC Electrical Conduit 1/2" x 10ft',
-    category: 'Electrical Conduits',
-    currentStock: 67,
-    unit: 'pcs',
-    reorderPoint: 60,
-    maxCapacity: 200,
-    location: 'B3-R2-S3',
-    lastRestocked: '2026-02-23',
-    status: 'healthy'
-  },
-  {
-    id: 'FG011',
-    sku: 'PVC-ELEC-002',
-    name: 'PVC Electrical Conduit 3/4" x 10ft',
-    category: 'Electrical Conduits',
-    currentStock: 43,
-    unit: 'pcs',
-    reorderPoint: 35,
-    maxCapacity: 150,
-    location: 'C1-R1-S1',
-    lastRestocked: '2026-02-21',
-    status: 'healthy'
-  },
-  {
-    id: 'FG012',
-    sku: 'PVC-ELEC-003',
-    name: 'PVC Conduit Junction Box - 4"x4"',
-    category: 'Electrical Fittings',
-    currentStock: 18,
-    unit: 'pcs',
-    reorderPoint: 25,
-    maxCapacity: 120,
-    location: 'C1-R1-S2',
-    lastRestocked: '2026-02-19',
-    status: 'critical'
-  },
-  {
-    id: 'FG013',
-    sku: 'PVC-ELEC-004',
-    name: 'PVC Conduit Elbow 1/2" - 90°',
-    category: 'Electrical Fittings',
-    currentStock: 189,
-    unit: 'pcs',
-    reorderPoint: 80,
-    maxCapacity: 300,
-    location: 'C2-R3-S1',
-    lastRestocked: '2026-02-26',
-    status: 'healthy'
-  },
-  {
-    id: 'FG014',
-    sku: 'PVC-DRAIN-001',
-    name: 'PVC Drainage Pipe 6" x 20ft',
-    category: 'Drainage Pipes',
-    currentStock: 134,
-    unit: 'pcs',
-    reorderPoint: 70,
-    maxCapacity: 250,
-    location: 'C2-R3-S2',
-    lastRestocked: '2026-02-25',
-    status: 'healthy'
-  },
-  {
-    id: 'FG015',
-    sku: 'PVC-DRAIN-002',
-    name: 'PVC Drainage Pipe 8" x 20ft',
-    category: 'Drainage Pipes',
-    currentStock: 87,
-    unit: 'pcs',
-    reorderPoint: 50,
-    maxCapacity: 200,
-    location: 'D1-R1-S1',
-    lastRestocked: '2026-02-24',
-    status: 'healthy'
-  },
-  {
-    id: 'FG016',
-    sku: 'PVC-DRAIN-003',
-    name: 'PVC Drainage Elbow 6" - 90°',
-    category: 'Drainage Fittings',
-    currentStock: 28,
-    unit: 'pcs',
-    reorderPoint: 40,
-    maxCapacity: 180,
-    location: 'D1-R1-S2',
-    lastRestocked: '2026-02-20',
-    status: 'critical'
-  },
-  {
-    id: 'FG017',
-    sku: 'PVC-DRAIN-004',
-    name: 'PVC Drainage Tee 6"',
-    category: 'Drainage Fittings',
-    currentStock: 52,
-    unit: 'pcs',
-    reorderPoint: 40,
-    maxCapacity: 150,
-    location: 'D2-R2-S1',
-    lastRestocked: '2026-02-22',
-    status: 'healthy'
-  },
-  {
-    id: 'FG018',
-    sku: 'PVC-VALVE-001',
-    name: 'PVC Ball Valve 1"',
-    category: 'Valves & Accessories',
-    currentStock: 76,
-    unit: 'pcs',
-    reorderPoint: 50,
-    maxCapacity: 200,
-    location: 'D2-R2-S2',
-    lastRestocked: '2026-02-23',
-    status: 'healthy'
-  },
-  {
-    id: 'FG019',
-    sku: 'PVC-VALVE-002',
-    name: 'PVC Ball Valve 1.5"',
-    category: 'Valves & Accessories',
-    currentStock: 890,
-    unit: 'pcs',
-    reorderPoint: 300,
-    maxCapacity: 1500,
-    location: 'E1-R1-S1',
-    lastRestocked: '2026-02-27',
-    status: 'healthy'
-  },
-  {
-    id: 'FG020',
-    sku: 'PVC-CAP-001',
-    name: 'PVC End Cap - Assorted Sizes',
-    category: 'Valves & Accessories',
-    currentStock: 234,
-    unit: 'pcs',
-    reorderPoint: 200,
-    maxCapacity: 800,
-    location: 'E1-R1-S2',
-    lastRestocked: '2026-02-26',
-    status: 'healthy'
-  },
-  {
-    id: 'FG021',
-    sku: 'PVC-PRES-004',
-    name: 'PVC Pressure Pipe 3" x 20ft - Class A',
-    category: 'Pressure Pipes',
-    currentStock: 31,
-    unit: 'pcs',
-    reorderPoint: 35,
-    maxCapacity: 200,
-    location: 'A1-R3-S3',
-    lastRestocked: '2026-02-19',
-    status: 'warning'
-  },
-  {
-    id: 'FG022',
-    sku: 'PVC-SAN-007',
-    name: 'PVC Sanitary Wye 4" - 45°',
-    category: 'Sanitary Fittings',
-    currentStock: 15,
-    unit: 'pcs',
-    reorderPoint: 25,
-    maxCapacity: 150,
-    location: 'A1-R3-S4',
-    lastRestocked: '2026-02-17',
-    status: 'critical'
-  },
-  {
-    id: 'FG023',
-    sku: 'PVC-COUP-001',
-    name: 'PVC Coupling 2" - Standard',
-    category: 'Couplings & Adapters',
-    currentStock: 56,
-    unit: 'pcs',
-    reorderPoint: 30,
-    maxCapacity: 180,
-    location: 'C1-R1-S3',
-    lastRestocked: '2026-02-24',
-    status: 'healthy'
-  },
-  {
-    id: 'FG024',
-    sku: 'PVC-COUP-002',
-    name: 'PVC Coupling 3" - Standard',
-    category: 'Couplings & Adapters',
-    currentStock: 44,
-    unit: 'pcs',
-    reorderPoint: 50,
-    maxCapacity: 180,
-    location: 'B3-R2-S4',
-    lastRestocked: '2026-02-21',
-    status: 'warning'
-  },
-  {
-    id: 'FG025',
-    sku: 'PVC-ADAPT-001',
-    name: 'PVC Reducer 4" to 3"',
-    category: 'Couplings & Adapters',
-    currentStock: 67,
-    unit: 'pcs',
-    reorderPoint: 50,
-    maxCapacity: 200,
-    location: 'C2-R3-S3',
-    lastRestocked: '2026-02-23',
-    status: 'healthy'
-  }
-];
+function scheduleAsOne<T>(v: T | T[] | null | undefined): T | null {
+  if (v == null) return null;
+  return Array.isArray(v) ? (v[0] ?? null) : v;
+}
 
-const mockRawMaterials: RawMaterial[] = [
-  {
-    id: 'RM001',
-    code: 'RESIN-001',
-    name: 'PVC Resin Powder - K67',
-    category: 'Base Materials',
-    currentStock: 2450,
-    unit: 'kg',
-    reorderPoint: 1000,
-    dailyConsumption: 125,
-    daysRemaining: 19,
-    supplier: 'ChemPlastics International',
-    lastPurchased: '2026-02-15',
-    status: 'healthy'
-  },
-  {
-    id: 'RM002',
-    code: 'RESIN-002',
-    name: 'PVC Resin Powder - K70',
-    category: 'Base Materials',
-    currentStock: 1890,
-    unit: 'kg',
-    reorderPoint: 1200,
-    dailyConsumption: 150,
-    daysRemaining: 12,
-    supplier: 'ChemPlastics International',
-    lastPurchased: '2026-02-18',
-    status: 'healthy'
-  },
-  {
-    id: 'RM003',
-    code: 'STAB-001',
-    name: 'Heat Stabilizer - Lead-Free',
-    category: 'Additives',
-    currentStock: 780,
-    unit: 'kg',
-    reorderPoint: 800,
-    dailyConsumption: 95,
-    daysRemaining: 8,
-    supplier: 'PolyStab Solutions',
-    lastPurchased: '2026-02-20',
-    status: 'warning'
-  },
-  {
-    id: 'RM004',
-    code: 'PLAST-001',
-    name: 'Plasticizer DOP',
-    category: 'Additives',
-    currentStock: 234,
-    unit: 'liters',
-    reorderPoint: 300,
-    dailyConsumption: 45,
-    daysRemaining: 5,
-    supplier: 'FlexiChem Industries',
-    lastPurchased: '2026-02-22',
-    status: 'critical'
-  },
-  {
-    id: 'RM005',
-    code: 'PIGM-001',
-    name: 'Titanium Dioxide Pigment (White)',
-    category: 'Colorants',
-    currentStock: 156,
-    unit: 'kg',
-    reorderPoint: 200,
-    dailyConsumption: 25,
-    daysRemaining: 6,
-    supplier: 'ColorTech Supply',
-    lastPurchased: '2026-02-21',
-    status: 'critical'
-  },
-  {
-    id: 'RM006',
-    code: 'PIGM-002',
-    name: 'Carbon Black Pigment',
-    category: 'Colorants',
-    currentStock: 189,
-    unit: 'kg',
-    reorderPoint: 180,
-    dailyConsumption: 22,
-    daysRemaining: 8,
-    supplier: 'ColorTech Supply',
-    lastPurchased: '2026-02-21',
-    status: 'healthy'
-  },
-  {
-    id: 'RM007',
-    code: 'LUBR-001',
-    name: 'Calcium Stearate Lubricant',
-    category: 'Processing Aids',
-    currentStock: 267,
-    unit: 'kg',
-    reorderPoint: 150,
-    dailyConsumption: 18,
-    daysRemaining: 14,
-    supplier: 'TechLube Materials',
-    lastPurchased: '2026-02-23',
-    status: 'healthy'
-  },
-  {
-    id: 'RM008',
-    code: 'FILLER-001',
-    name: 'Calcium Carbonate Filler',
-    category: 'Processing Aids',
-    currentStock: 890,
-    unit: 'kg',
-    reorderPoint: 500,
-    dailyConsumption: 65,
-    daysRemaining: 13,
-    supplier: 'MineralPro Supply',
-    lastPurchased: '2026-02-19',
-    status: 'healthy'
-  },
-  {
-    id: 'RM009',
-    code: 'SOLV-001',
-    name: 'PVC Solvent Cement',
-    category: 'Adhesives',
-    currentStock: 445,
-    unit: 'liters',
-    reorderPoint: 400,
-    dailyConsumption: 35,
-    daysRemaining: 12,
-    supplier: 'BondStrong Adhesives',
-    lastPurchased: '2026-02-20',
-    status: 'healthy'
-  },
-  {
-    id: 'RM010',
-    code: 'PACK-M01',
-    name: 'Plastic Wrap Roll - Industrial',
-    category: 'Packaging Materials',
-    currentStock: 67,
-    unit: 'rolls',
-    reorderPoint: 80,
-    dailyConsumption: 8,
-    daysRemaining: 8,
-    supplier: 'PackPro Solutions',
-    lastPurchased: '2026-02-24',
-    status: 'warning'
-  },
-  {
-    id: 'RM011',
-    code: 'PACK-M02',
-    name: 'Cardboard Boxes - Assorted Sizes',
-    category: 'Packaging Materials',
-    currentStock: 340,
-    unit: 'pcs',
-    reorderPoint: 250,
-    dailyConsumption: 28,
-    daysRemaining: 12,
-    supplier: 'PackPro Solutions',
-    lastPurchased: '2026-02-25',
-    status: 'healthy'
-  },
-  {
-    id: 'RM012',
-    code: 'LABEL-001',
-    name: 'Product Labels - PVC Pipe Specs',
-    category: 'Packaging Materials',
-    currentStock: 2340,
-    unit: 'pcs',
-    reorderPoint: 1500,
-    dailyConsumption: 180,
-    daysRemaining: 13,
-    supplier: 'PrintMark Labels',
-    lastPurchased: '2026-02-26',
-    status: 'healthy'
-  },
-  {
-    id: 'RM013',
-    code: 'IMPACT-001',
-    name: 'Impact Modifier - MBS',
-    category: 'Additives',
-    currentStock: 423,
-    unit: 'kg',
-    reorderPoint: 500,
-    dailyConsumption: 55,
-    daysRemaining: 7,
-    supplier: 'PolyTough Materials',
-    lastPurchased: '2026-02-19',
-    status: 'warning'
-  },
-  {
-    id: 'RM014',
-    code: 'UV-001',
-    name: 'UV Stabilizer Additive',
-    category: 'Additives',
-    currentStock: 89,
-    unit: 'kg',
-    reorderPoint: 100,
-    dailyConsumption: 12,
-    daysRemaining: 7,
-    supplier: 'SunGuard Chemicals',
-    lastPurchased: '2026-02-22',
-    status: 'warning'
-  },
-  {
-    id: 'RM015',
-    code: 'SEAL-001',
-    name: 'Rubber Gasket Material Roll',
-    category: 'Sealing Materials',
-    currentStock: 156,
-    unit: 'meters',
-    reorderPoint: 120,
-    dailyConsumption: 15,
-    daysRemaining: 10,
-    supplier: 'SealTech Supply',
-    lastPurchased: '2026-02-23',
-    status: 'healthy'
-  }
-];
+function fmtScheduleDate(date: string | null | undefined): string {
+  if (!date) return '—';
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' });
+}
 
-const mockProductionRequests: ProductionRequest[] = [
-  {
-    id: 'PR001',
-    requestNumber: 'PROD-2026-001',
-    productSku: 'PVC-SAN-001',
-    productName: 'PVC Sanitary Pipe 4" x 10ft',
-    quantity: 200,
-    unit: 'pcs',
-    scheduledDate: 'Mar 1',
-    estimatedCompletion: '2026-03-05',
-    status: 'approved',
-    requestedBy: 'John Smith',
-    requestDate: '2026-02-25',
-    priority: 'high',
-    notes: 'Urgent restocking needed'
-  },
-  {
-    id: 'PR002',
-    requestNumber: 'PROD-2026-002',
-    productSku: 'PVC-PRES-001',
-    productName: 'PVC Pressure Pipe 1" x 20ft - Class A',
-    quantity: 150,
-    unit: 'pcs',
-    scheduledDate: 'Mar 3',
-    estimatedCompletion: '2026-03-07',
-    status: 'pending',
-    requestedBy: 'Sarah Johnson',
-    requestDate: '2026-02-26',
-    priority: 'medium',
-    notes: 'Standard production batch'
-  },
-  {
-    id: 'PR003',
-    requestNumber: 'PROD-2026-003',
-    productSku: 'PVC-DRAIN-001',
-    productName: 'PVC Drainage Pipe 6" x 20ft',
-    quantity: 100,
-    unit: 'pcs',
-    scheduledDate: 'Mar 5',
-    estimatedCompletion: '2026-03-09',
-    status: 'in-progress',
-    requestedBy: 'Mike Chen',
-    requestDate: '2026-02-24',
-    priority: 'high',
-    notes: 'Production started'
-  },
-  {
-    id: 'PR004',
-    requestNumber: 'PROD-2026-004',
-    productSku: 'PVC-ELEC-001',
-    productName: 'PVC Electrical Conduit 1/2" x 10ft',
-    quantity: 300,
-    unit: 'pcs',
-    scheduledDate: 'Mar 10',
-    estimatedCompletion: '2026-03-14',
-    status: 'pending',
-    requestedBy: 'Anna Lee',
-    requestDate: '2026-02-27',
-    priority: 'low',
-    notes: 'Schedule after current batch'
-  },
-  {
-    id: 'PR005',
-    requestNumber: 'PROD-2026-005',
-    productSku: 'PVC-SAN-005',
-    productName: 'PVC Sanitary Tee 4"',
-    quantity: 250,
-    unit: 'pcs',
-    scheduledDate: 'Feb 28',
-    estimatedCompletion: '2026-03-04',
-    status: 'completed',
-    requestedBy: 'David Brown',
-    requestDate: '2026-02-20',
-    priority: 'medium',
-    notes: 'Completed on schedule'
-  },
-  {
-    id: 'PR006',
-    requestNumber: 'PROD-2026-006',
-    productSku: 'PVC-PRES-002',
-    productName: 'PVC Pressure Pipe 2" x 20ft - Class B',
-    quantity: 180,
-    unit: 'pcs',
-    scheduledDate: 'Mar 2',
-    estimatedCompletion: '2026-03-06',
-    status: 'approved',
-    requestedBy: 'Emma Wilson',
-    requestDate: '2026-02-26',
-    priority: 'high',
-    notes: 'Customer pre-order'
-  },
-  {
-    id: 'PR007',
-    requestNumber: 'PROD-2026-007',
-    productSku: 'PVC-FIT-001',
-    productName: 'PVC Elbow 4" - 90 degree',
-    quantity: 400,
-    unit: 'pcs',
-    scheduledDate: 'Mar 4',
-    estimatedCompletion: '2026-03-08',
-    status: 'pending',
-    requestedBy: 'Robert Garcia',
-    requestDate: '2026-02-27',
-    priority: 'medium',
-    notes: 'Standard fitting batch'
-  },
-  {
-    id: 'PR008',
-    requestNumber: 'PROD-2026-008',
-    productSku: 'PVC-SAN-002',
-    productName: 'PVC Sanitary Pipe 3" x 10ft',
-    quantity: 220,
-    unit: 'pcs',
-    scheduledDate: 'Mar 6',
-    estimatedCompletion: '2026-03-10',
-    status: 'approved',
-    requestedBy: 'Lisa Martinez',
-    requestDate: '2026-02-27',
-    priority: 'high',
-    notes: 'Branch restocking'
-  },
-  {
-    id: 'PR009',
-    requestNumber: 'PROD-2026-009',
-    productSku: 'PVC-DRAIN-002',
-    productName: 'PVC Drainage Pipe 8" x 20ft',
-    quantity: 80,
-    unit: 'pcs',
-    scheduledDate: 'Mar 8',
-    estimatedCompletion: '2026-03-12',
-    status: 'pending',
-    requestedBy: 'Tom Anderson',
-    requestDate: '2026-02-27',
-    priority: 'medium',
-    notes: 'Large diameter pipes'
-  },
-  {
-    id: 'PR010',
-    requestNumber: 'PROD-2026-010',
-    productSku: 'PVC-CAP-001',
-    productName: 'PVC End Cap 4"',
-    quantity: 350,
-    unit: 'pcs',
-    scheduledDate: 'Mar 9',
-    estimatedCompletion: '2026-03-11',
-    status: 'pending',
-    requestedBy: 'Sarah Johnson',
-    requestDate: '2026-02-27',
-    priority: 'low',
-    notes: 'Accessory production'
-  }
-];
+function calendarDayKeyFromIso(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
 
+function isIbrFlowProductionRequest(r: { inter_branch_request_id: string | null; pr_number: string }): boolean {
+  return r.inter_branch_request_id != null || r.pr_number.startsWith('PR-IBR-');
+}
 
-const mockPurchaseRequests: PurchaseRequest[] = [
-  {
-    id: 'PU001',
-    requestNumber: 'PURCH-2026-001',
-    materialCode: 'RESIN-001',
-    materialName: 'PVC Resin Powder - K67',
-    quantity: 5000,
-    unit: 'kg',
-    supplier: 'ChemPlastics International',
-    requestedDelivery: '2026-03-02',
-    estimatedArrival: 'Mar 2',
-    status: 'approved',
-    requestedBy: 'John Smith',
-    requestDate: '2026-02-26',
-    priority: 'high',
-    notes: 'Critical for production'
-  },
-  {
-    id: 'PU002',
-    requestNumber: 'PURCH-2026-002',
-    materialCode: 'PLAST-001',
-    materialName: 'Plasticizer DOP',
-    quantity: 800,
-    unit: 'liters',
-    supplier: 'FlexiChem Industries',
-    requestedDelivery: '2026-03-01',
-    estimatedArrival: 'Mar 1',
-    status: 'approved',
-    requestedBy: 'Sarah Johnson',
-    requestDate: '2026-02-25',
-    priority: 'high',
-    notes: 'Running low, urgent'
-  },
-  {
-    id: 'PU003',
-    requestNumber: 'PURCH-2026-003',
-    materialCode: 'PIGM-001',
-    materialName: 'Titanium Dioxide Pigment (White)',
-    quantity: 500,
-    unit: 'kg',
-    supplier: 'ColorTech Supply',
-    requestedDelivery: '2026-03-05',
-    estimatedArrival: 'Mar 6',
-    status: 'pending',
-    requestedBy: 'Mike Chen',
-    requestDate: '2026-02-27',
-    priority: 'medium',
-    notes: 'For white pipe production'
-  },
-  {
-    id: 'PU004',
-    requestNumber: 'PURCH-2026-004',
-    materialCode: 'STAB-001',
-    materialName: 'Heat Stabilizer - Lead-Free',
-    quantity: 1200,
-    unit: 'kg',
-    supplier: 'PolyStab Solutions',
-    requestedDelivery: '2026-03-08',
-    estimatedArrival: 'Mar 8',
-    status: 'pending',
-    requestedBy: 'Anna Lee',
-    requestDate: '2026-02-27',
-    priority: 'medium',
-    notes: 'Stock replenishment'
-  },
-  {
-    id: 'PU005',
-    requestNumber: 'PURCH-2026-005',
-    materialCode: 'PACK-M02',
-    materialName: 'Cardboard Boxes - Assorted Sizes',
-    quantity: 1000,
-    unit: 'pcs',
-    supplier: 'PackPro Solutions',
-    requestedDelivery: '2026-03-12',
-    estimatedArrival: 'Mar 12',
-    status: 'pending',
-    requestedBy: 'David Brown',
-    requestDate: '2026-02-26',
-    priority: 'low',
-    notes: 'Packaging materials'
-  },
-  {
-    id: 'PU006',
-    requestNumber: 'PURCH-2026-006',
-    materialCode: 'RESIN-002',
-    materialName: 'PVC Resin Powder - K70',
-    quantity: 3000,
-    unit: 'kg',
-    supplier: 'ChemPlastics International',
-    requestedDelivery: '2026-03-04',
-    estimatedArrival: 'Mar 4',
-    status: 'approved',
-    requestedBy: 'Emma Wilson',
-    requestDate: '2026-02-27',
-    priority: 'high',
-    notes: 'High-grade resin for premium pipes'
-  },
-  {
-    id: 'PU007',
-    requestNumber: 'PURCH-2026-007',
-    materialCode: 'UV-001',
-    materialName: 'UV Stabilizer Additive',
-    quantity: 150,
-    unit: 'kg',
-    supplier: 'SunGuard Chemicals',
-    requestedDelivery: '2026-02-29',
-    estimatedArrival: 'Feb 29',
-    status: 'approved',
-    requestedBy: 'Robert Garcia',
-    requestDate: '2026-02-26',
-    priority: 'high',
-    notes: 'Low stock - urgent delivery'
-  },
-  {
-    id: 'PU008',
-    requestNumber: 'PURCH-2026-008',
-    materialCode: 'LABEL-001',
-    materialName: 'Product Labels - PVC Pipe Specs',
-    quantity: 5000,
-    unit: 'pcs',
-    supplier: 'PrintMark Labels',
-    requestedDelivery: '2026-03-07',
-    estimatedArrival: 'Mar 7',
-    status: 'pending',
-    requestedBy: 'Lisa Martinez',
-    requestDate: '2026-02-27',
-    priority: 'medium',
-    notes: 'New label design batch'
-  },
-  {
-    id: 'PU009',
-    requestNumber: 'PURCH-2026-009',
-    materialCode: 'IMPACT-001',
-    materialName: 'Impact Modifier - MBS',
-    quantity: 800,
-    unit: 'kg',
-    supplier: 'PolyTough Materials',
-    requestedDelivery: '2026-03-10',
-    estimatedArrival: 'Mar 10',
-    status: 'pending',
-    requestedBy: 'Tom Anderson',
-    requestDate: '2026-02-27',
-    priority: 'medium',
-    notes: 'For impact-resistant pipes'
-  },
-  {
-    id: 'PU010',
-    requestNumber: 'PURCH-2026-010',
-    materialCode: 'PIGM-002',
-    materialName: 'Carbon Black Pigment',
-    quantity: 200,
-    unit: 'kg',
-    supplier: 'ColorTech Supply',
-    requestedDelivery: '2026-03-09',
-    estimatedArrival: 'Mar 9',
-    status: 'pending',
-    requestedBy: 'Sarah Johnson',
-    requestDate: '2026-02-27',
-    priority: 'low',
-    notes: 'For gray/black pipe variants'
+function hidePoFromSchedule(po: {
+  inter_branch_request_id: string | null;
+  po_number: string;
+  is_transfer_request: boolean;
+}): boolean {
+  return (
+    po.inter_branch_request_id != null || po.po_number.startsWith('PO-IBR-') || po.is_transfer_request === true
+  );
+}
+
+function prScheduleBadgeClass(status: string): string {
+  switch (status) {
+    case 'Completed':
+      return 'bg-green-100 text-green-800 border-green-300';
+    case 'In Progress':
+      return 'bg-purple-100 text-purple-800 border-purple-300';
+    case 'Accepted':
+      return 'bg-blue-100 text-blue-800 border-blue-300';
+    case 'Requested':
+      return 'bg-yellow-100 text-yellow-800 border-yellow-300';
+    case 'Draft':
+      return 'bg-gray-100 text-gray-800 border-gray-300';
+    case 'Rejected':
+    case 'Cancelled':
+      return 'bg-red-100 text-red-800 border-red-300';
+    default:
+      return 'bg-gray-100 text-gray-800 border-gray-300';
   }
-];
+}
+
+function poScheduleBadgeClass(status: string): string {
+  switch (status) {
+    case 'Completed':
+      return 'bg-green-100 text-green-800 border-green-300';
+    case 'Partially Received':
+      return 'bg-amber-100 text-amber-900 border-amber-300';
+    case 'Sent':
+    case 'Confirmed':
+      return 'bg-indigo-100 text-indigo-800 border-indigo-300';
+    case 'Accepted':
+      return 'bg-blue-100 text-blue-800 border-blue-300';
+    case 'Requested':
+      return 'bg-yellow-100 text-yellow-800 border-yellow-300';
+    case 'Draft':
+      return 'bg-gray-100 text-gray-800 border-gray-300';
+    case 'Rejected':
+    case 'Cancelled':
+      return 'bg-red-100 text-red-800 border-red-300';
+    default:
+      return 'bg-gray-100 text-gray-800 border-gray-300';
+  }
+}
+
+/** Local calendar day key YYYY-MM-DD (avoids UTC shift for date-only strings). */
+function dateKeyLocalFromDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function dateKeyLocalFromIso(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return dateKeyLocalFromDate(d);
+}
+
+/** DB `DATE` or ISO timestamp → anchor key. */
+function normalizeAnchorDateKey(isoOrYmd: string | null | undefined): string | null {
+  if (!isoOrYmd) return null;
+  const s = String(isoOrYmd).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  return dateKeyLocalFromIso(s);
+}
+
+interface WarehouseCalendarEvent {
+  id: string;
+  calendarKind: 'production' | 'purchase' | 'ibr';
+  anchorDateKey: string;
+  title: string;
+  detail?: string;
+  recordRoute: 'production' | 'purchase' | 'ibr';
+  recordId: string;
+  quantity?: number;
+  unit?: string;
+  supplier?: string;
+  status: string;
+  /** Set on standalone IBR rows for tab filter (product lines → PR tab, raw lines → PO tab). */
+  ibrHasProduct?: boolean;
+  ibrHasRawMaterial?: boolean;
+}
+
+function calendarKindChipClass(kind: WarehouseCalendarEvent['calendarKind']): string {
+  switch (kind) {
+    case 'production':
+      return 'bg-green-500 text-white';
+    case 'purchase':
+      return 'bg-blue-500 text-white';
+    case 'ibr':
+      return 'bg-amber-600 text-white';
+    default:
+      return 'bg-gray-500 text-white';
+  }
+}
+
+function calendarKindLabel(kind: WarehouseCalendarEvent['calendarKind']): string {
+  switch (kind) {
+    case 'production':
+      return 'Production';
+    case 'purchase':
+      return 'Purchase';
+    case 'ibr':
+      return 'Inter-branch';
+    default:
+      return 'Event';
+  }
+}
+
+/** Mirrors logistics status semantics from InterBranchRequestsPage. */
+function ibrScheduleBadgeClass(status: string): string {
+  switch (status) {
+    case 'Fulfilled':
+    case 'Completed':
+    case 'Delivered':
+      return 'bg-green-100 text-green-800 border-green-300';
+    case 'Cancelled':
+    case 'Rejected':
+      return 'bg-red-100 text-red-800 border-red-300';
+    case 'Pending':
+    case 'Loading':
+    case 'Packed':
+    case 'Ready':
+    case 'In Transit':
+    case 'Partially Fulfilled':
+      return 'bg-amber-100 text-amber-900 border-amber-300';
+    case 'Approved':
+    case 'Scheduled':
+      return 'bg-indigo-100 text-indigo-800 border-indigo-300';
+    case 'Draft':
+      return 'bg-gray-100 text-gray-800 border-gray-300';
+    default:
+      return 'bg-gray-100 text-gray-800 border-gray-300';
+  }
+}
+
+function calendarEventStatusBadgeClass(ev: WarehouseCalendarEvent): string {
+  switch (ev.recordRoute) {
+    case 'production':
+      return prScheduleBadgeClass(ev.status);
+    case 'purchase':
+      return poScheduleBadgeClass(ev.status);
+    case 'ibr':
+      return ibrScheduleBadgeClass(ev.status);
+    default:
+      return 'bg-gray-100 text-gray-800 border-gray-300';
+  }
+}
+
+/**
+ * PR tab: production rows + standalone IBR rows that include product lines.
+ * PO tab: purchase rows + standalone IBR rows that include raw-material lines.
+ */
+function warehouseCalendarEventMatchesRequestTab(ev: WarehouseCalendarEvent, tab: RequestType): boolean {
+  if (ev.recordRoute === 'production') return tab === 'production';
+  if (ev.recordRoute === 'purchase') return tab === 'purchase';
+  if (ev.recordRoute === 'ibr') {
+    if (tab === 'production') return ev.ibrHasProduct === true;
+    return ev.ibrHasRawMaterial === true;
+  }
+  return false;
+}
+
+function stripCalendarEventHeadline(ev: WarehouseCalendarEvent): string {
+  switch (ev.recordRoute) {
+    case 'production':
+      return 'Production request';
+    case 'purchase':
+      return 'Purchase order';
+    case 'ibr':
+      return 'Inter-branch';
+    default:
+      return 'Schedule';
+  }
+}
+
+function stripCalendarItemLabel(ev: WarehouseCalendarEvent): string {
+  switch (ev.recordRoute) {
+    case 'production':
+      return 'Product';
+    case 'purchase':
+      return 'Material';
+    case 'ibr':
+      return 'Details';
+    default:
+      return 'Item';
+  }
+}
+
+function stripCalendarIconWrapClass(ev: WarehouseCalendarEvent): string {
+  if (ev.calendarKind === 'ibr') return 'bg-amber-100';
+  if (ev.calendarKind === 'purchase') return 'bg-blue-100';
+  return 'bg-green-100';
+}
+
+function stripCalendarIconClass(ev: WarehouseCalendarEvent): string {
+  if (ev.calendarKind === 'ibr') return 'text-amber-700';
+  if (ev.calendarKind === 'purchase') return 'text-blue-600';
+  return 'text-green-600';
+}
+
+function stripCalendarPrimaryCtaLabel(ev: WarehouseCalendarEvent): string {
+  switch (ev.recordRoute) {
+    case 'production':
+      return 'View production request';
+    case 'purchase':
+      return 'View purchase order';
+    case 'ibr':
+      return 'View inter-branch request';
+    default:
+      return 'Open';
+  }
+}
+
+function buildMonthGrid(year: number, month: number): (Date | null)[] {
+  const first = new Date(year, month, 1);
+  const pad = first.getDay();
+  const dim = new Date(year, month + 1, 0).getDate();
+  const cells: (Date | null)[] = [];
+  for (let i = 0; i < pad; i++) cells.push(null);
+  for (let d = 1; d <= dim; d++) cells.push(new Date(year, month, d));
+  while (cells.length % 7 !== 0) cells.push(null);
+  return cells;
+}
 
 // Movements & Demand Forecast Types and Data
 interface DemandDataPoint {
@@ -1126,25 +524,57 @@ const generateDemandData = (itemId: string): DemandDataPoint[] => {
   return data;
 };
 
+function stockComputeToUi(computed: string): StockStatus {
+  if (computed === 'Critical' || computed === 'Out of Stock') return 'critical';
+  if (computed === 'Low Stock') return 'warning';
+  return 'healthy';
+}
+
+/** Matches ProductCategoryPage navigation: `family` id is the product row id. */
+function finishedGoodProductHref(productId: string, categorySlug: string): string {
+  const slug = categorySlug.trim();
+  if (!slug) return `/products/${productId}`;
+  return `/products/category/${encodeURIComponent(slug)}/family/${productId}`;
+}
+
 
 export default function WarehousePage() {
   const navigate = useNavigate();
+  const { branch } = useAppContext();
   const [activeTab, setActiveTab] = useState<TabType>('inventory');
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<StockStatus | 'all'>('all');
-  const [viewType, setViewType] = useState<'pipes' | 'fittings'>('pipes');
   const [viewMode, setViewMode] = useState<'finished' | 'raw'>('finished');
   const [requestType, setRequestType] = useState<RequestType>('production');
-  const [showCreateModal, setShowCreateModal] = useState(false);
   const [showOrderDetailModal, setShowOrderDetailModal] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
-  const [selectedCalendarEvent, setSelectedCalendarEvent] = useState<any>(null);
-  
-  // Stock Adjustment Modal State
-  const [showStockAdjustmentModal, setShowStockAdjustmentModal] = useState(false);
-  const [selectedItemForAdjustment, setSelectedItemForAdjustment] = useState<any>(null);
-  const [adjustmentItemType, setAdjustmentItemType] = useState<'finished-good' | 'raw-material'>('finished-good');
+  const [scheduleStripDetailDateKey, setScheduleStripDetailDateKey] = useState<string | null>(null);
+
+  const [schedulePrLines, setSchedulePrLines] = useState<WarehouseProductionLineRow[]>([]);
+  const [schedulePoLines, setSchedulePoLines] = useState<WarehousePurchaseLineRow[]>([]);
+  const [scheduleLoading, setScheduleLoading] = useState(false);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+  const [scheduleSearch, setScheduleSearch] = useState('');
+  const [scheduleStatusFilter, setScheduleStatusFilter] = useState('');
+  const [prScheduleSortKey, setPrScheduleSortKey] = useState('requestDateIso');
+  const [prScheduleSortDir, setPrScheduleSortDir] = useState<'asc' | 'desc'>('desc');
+  const [poScheduleSortKey, setPoScheduleSortKey] = useState('orderDateIso');
+  const [poScheduleSortDir, setPoScheduleSortDir] = useState<'asc' | 'desc'>('desc');
+  const [prSchedulePage, setPrSchedulePage] = useState(1);
+  const [poSchedulePage, setPoSchedulePage] = useState(1);
+
+  const [scheduleCalendarModalOpen, setScheduleCalendarModalOpen] = useState(false);
+  const [calendarModalYear, setCalendarModalYear] = useState(() => new Date().getFullYear());
+  const [calendarModalMonth, setCalendarModalMonth] = useState(() => new Date().getMonth());
+  const [calendarModalSelectedDateKey, setCalendarModalSelectedDateKey] = useState<string | null>(null);
+  const [warehouseCalendarEvents, setWarehouseCalendarEvents] = useState<WarehouseCalendarEvent[]>([]);
+  const [warehouseCalendarLoading, setWarehouseCalendarLoading] = useState(false);
+  const [warehouseCalendarError, setWarehouseCalendarError] = useState<string | null>(null);
+
+  const [finishedGoodsRows, setFinishedGoodsRows] = useState<FinishedGood[]>([]);
+  const [rawMaterialsRows, setRawMaterialsRows] = useState<RawMaterial[]>([]);
+  const [inventoryLoading, setInventoryLoading] = useState(true);
   
   // Movements tab state
   const [selectedForecastItem, setSelectedForecastItem] = useState<ForecastItem>(mockForecastItems[0]);
@@ -1174,80 +604,678 @@ export default function WarehousePage() {
     }
   };
 
-  const getRequestStatusColor = (status: RequestStatus) => {
-    switch (status) {
-      case 'pending': return 'bg-yellow-100 text-yellow-800 border-yellow-300';
-      case 'approved': return 'bg-blue-100 text-blue-800 border-blue-300';
-      case 'in-progress': return 'bg-purple-100 text-purple-800 border-purple-300';
-      case 'completed': return 'bg-green-100 text-green-800 border-green-300';
-      case 'cancelled': return 'bg-red-100 text-red-800 border-red-300';
+  const fetchWarehouseInventory = useCallback(async () => {
+    setInventoryLoading(true);
+    try {
+      let branchId: string | null = null;
+      if (branch) {
+        const { data: branchRow } = await supabase.from('branches').select('id').eq('name', branch).single();
+        branchId = branchRow?.id ?? null;
+      }
+
+      let pQuery = supabase
+        .from('products')
+        .select(`
+          id,
+          name,
+          status,
+          total_stock,
+          product_categories ( name, slug ),
+          product_variants (
+            id,
+            sku,
+            size,
+            reorder_point,
+            safety_stock,
+            last_restocked,
+            status,
+            total_stock
+          )
+        `)
+        .neq('status', 'Discontinued');
+      if (branch) pQuery = pQuery.eq('branch', branch);
+      const { data: prodRows, error: prodErr } = await pQuery;
+      if (prodErr) throw prodErr;
+
+      const allVariantIds: string[] = [];
+      for (const p of prodRows ?? []) {
+        const vars = ((p as Record<string, unknown>).product_variants as Record<string, unknown>[] | undefined) ?? [];
+        for (const v of vars) {
+          if ((v.status as string) !== 'Discontinued' && v.id) allVariantIds.push(String(v.id));
+        }
+      }
+
+      const stockByVariant: Record<string, number> = {};
+      if (branchId && allVariantIds.length > 0) {
+        const { data: stRows, error: stErr } = await supabase
+          .from('product_variant_stock')
+          .select('variant_id, quantity')
+          .eq('branch_id', branchId)
+          .in('variant_id', allVariantIds);
+        if (stErr) throw stErr;
+        for (const r of stRows ?? []) {
+          stockByVariant[r.variant_id] = r.quantity ?? 0;
+        }
+      }
+
+      const finished: FinishedGood[] = [];
+      for (const p of prodRows ?? []) {
+        const row = p as Record<string, unknown>;
+        const productId = String(row.id);
+        const productName = String(row.name ?? '');
+        const variants = ((row.product_variants as Record<string, unknown>[] | undefined) ?? []).filter(
+          (v) => v.status !== 'Discontinued',
+        );
+
+        const cat = row.product_categories as { name?: string; slug?: string } | null;
+        const categoryName = cat?.name ?? 'Uncategorized';
+        const categorySlug = (cat?.slug?.trim() || categoryName
+          .toLowerCase()
+          .trim()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '')) || 'uncategorized';
+
+        for (const v of variants) {
+          const variantId = String(v.id ?? '');
+          if (!variantId) continue;
+
+          const branchStock = branchId
+            ? stockByVariant[variantId] ?? 0
+            : Number(v.total_stock) || 0;
+          const reorderPoint = Number(v.reorder_point) || 0;
+          const computed = computeStockStatus(branchStock, reorderPoint);
+          const uiStatus = stockComputeToUi(computed);
+
+          const sizeLabel = String(v.size ?? '').trim();
+          const sku = String(v.sku ?? '—');
+          const rowName = sizeLabel ? `${productName} — ${sizeLabel}` : productName;
+
+          const lr = v.last_restocked;
+          const lastRestocked = lr
+            ? new Date(String(lr)).toISOString().split('T')[0]
+            : '—';
+
+          const maxCapacity = Math.max(100, reorderPoint * 4, branchStock + 1);
+
+          finished.push({
+            id: variantId,
+            productId,
+            sku,
+            variantSize: sizeLabel || '—',
+            productName,
+            name: rowName,
+            category: categoryName,
+            categorySlug,
+            currentStock: branchStock,
+            unit: 'pcs',
+            reorderPoint,
+            maxCapacity,
+            location: '',
+            lastRestocked,
+            status: uiStatus,
+          });
+        }
+      }
+
+      setFinishedGoodsRows(
+        finished.sort((a, b) => {
+          const byProd = a.productName.localeCompare(b.productName);
+          if (byProd !== 0) return byProd;
+          return a.sku.localeCompare(b.sku);
+        }),
+      );
+
+      const { data: catRows } = await supabase
+        .from('material_categories')
+        .select('id, branches ( name )')
+        .eq('is_active', true);
+
+      const branchCategoryIds = branch
+        ? (catRows ?? []).filter((c) => {
+            const br = (c as { branches?: { name?: string } | { name?: string }[] | null }).branches;
+            const n = Array.isArray(br) ? br[0]?.name : br?.name;
+            return n === branch;
+          }).map((c: { id: string }) => c.id)
+        : (catRows ?? []).map((c: { id: string }) => c.id);
+
+      let rawList: RawMaterial[] = [];
+      if (branchCategoryIds.length > 0) {
+        const { data: matRows, error: matErr } = await supabase
+          .from('raw_materials')
+          .select(`
+            id,
+            name,
+            sku,
+            total_stock,
+            reorder_point,
+            last_restock_date,
+            status,
+            unit_of_measure,
+            material_categories ( name )
+          `)
+          .in('category_id', branchCategoryIds)
+          .neq('status', 'Discontinued');
+
+        if (!matErr && matRows) {
+          const matIds = matRows.map((m: { id: string }) => m.id);
+          const matQtyById: Record<string, number> = {};
+          if (branchId && matIds.length > 0) {
+            const { data: msRows } = await supabase
+              .from('material_stock')
+              .select('material_id, quantity')
+              .eq('branch_id', branchId)
+              .in('material_id', matIds);
+            for (const r of msRows ?? []) {
+              matQtyById[r.material_id] = Number(r.quantity) ?? 0;
+            }
+          }
+
+          rawList = matRows.map((m: Record<string, unknown>) => {
+            const id = String(m.id);
+            const totalAgg = Number(m.total_stock) || 0;
+            const stock =
+              branchId
+                ? (id in matQtyById ? matQtyById[id] : totalAgg)
+                : totalAgg;
+            const reorderPoint = Number(m.reorder_point) || 0;
+            const computed = computeStockStatus(stock, reorderPoint);
+            const uiStatus = stockComputeToUi(computed);
+            const uom = m.unit_of_measure ?? 'kg';
+            const maxCapacity = Math.max(100, reorderPoint * 4, stock + 1);
+            return {
+              id,
+              code: String(m.sku ?? ''),
+              name: String(m.name ?? ''),
+              category: (m.material_categories as { name?: string } | null)?.name ?? 'Uncategorized',
+              currentStock: stock,
+              unit: String(uom),
+              maxCapacity,
+              lastRestocked: m.last_restock_date ? String(m.last_restock_date) : '—',
+              status: uiStatus,
+            };
+          });
+        }
+      }
+
+      setRawMaterialsRows(rawList.sort((a, b) => a.name.localeCompare(b.name)));
+    } catch (e) {
+      console.error('[Warehouse inventory]', e);
+      setFinishedGoodsRows([]);
+      setRawMaterialsRows([]);
+    } finally {
+      setInventoryLoading(false);
     }
-  };
+  }, [branch]);
 
-  const getRequestStatusText = (status: RequestStatus) => {
-    switch (status) {
-      case 'pending': return 'Pending';
-      case 'approved': return 'Approved';
-      case 'in-progress': return 'In Progress';
-      case 'completed': return 'Completed';
-      case 'cancelled': return 'Cancelled';
+  const fetchSchedule = useCallback(async () => {
+    setScheduleLoading(true);
+    setScheduleError(null);
+    try {
+      const branchResult = branch
+        ? await supabase.from('branches').select('id').eq('name', branch).maybeSingle()
+        : { data: null as { id: string } | null };
+      const resolvedBranchId = branchResult.data?.id ?? null;
+
+      const [prRes, poRes] = await Promise.all([
+        supabase
+          .from('production_requests')
+          .select(
+            `id, pr_number, branch_id, status, request_date, expected_completion_date, created_by, created_at,
+            is_transfer_request, inter_branch_request_id,
+            branches:branches!branch_id(name),
+            production_request_items(
+              id, quantity,
+              product_variants(sku, size, products(name))
+            )`,
+          )
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('purchase_orders')
+          .select(
+            `id, po_number, branch_id, status, order_date, expected_delivery_date, actual_delivery_date, created_by, created_at,
+            is_transfer_request, inter_branch_request_id,
+            suppliers(name),
+            branches:branches!branch_id(name),
+            purchase_order_items(
+              id, quantity_ordered, unit_of_measure,
+              raw_materials(name, sku, unit_of_measure)
+            )`,
+          )
+          .order('created_at', { ascending: false }),
+      ]);
+
+      if (prRes.error) throw prRes.error;
+      if (poRes.error) throw poRes.error;
+
+      const prRows = (prRes.data ?? []) as Array<{
+        id: string;
+        pr_number: string;
+        branch_id: string | null;
+        status: string;
+        request_date: string;
+        expected_completion_date: string | null;
+        created_by: string | null;
+        inter_branch_request_id: string | null;
+        production_request_items: Array<{
+          id: string;
+          quantity: number | string;
+          product_variants: { sku?: string; size?: string; products?: { name?: string } | { name?: string }[] } | { sku?: string; size?: string; products?: { name?: string } | { name?: string }[] }[] | null;
+        }> | null;
+      }>;
+
+      const poRows = (poRes.data ?? []) as Array<{
+        id: string;
+        po_number: string;
+        branch_id: string | null;
+        status: string;
+        order_date: string;
+        expected_delivery_date: string | null;
+        actual_delivery_date: string | null;
+        created_by: string | null;
+        is_transfer_request: boolean;
+        inter_branch_request_id: string | null;
+        suppliers: { name?: string } | null;
+        purchase_order_items: Array<{
+          id: string;
+          quantity_ordered: number | string;
+          unit_of_measure?: string | null;
+          raw_materials: { name?: string; sku?: string; unit_of_measure?: string } | null;
+        }> | null;
+      }>;
+
+      const prLines: WarehouseProductionLineRow[] = [];
+      for (const pr of prRows) {
+        if (isIbrFlowProductionRequest(pr)) continue;
+        if (resolvedBranchId && pr.branch_id !== resolvedBranchId) continue;
+        const items = pr.production_request_items ?? [];
+        for (const it of items) {
+          const pv = scheduleAsOne(it.product_variants as Parameters<typeof scheduleAsOne>[0]);
+          const prod = pv ? scheduleAsOne(pv.products as Parameters<typeof scheduleAsOne>[0]) : null;
+          const productName = prod?.name ? String(prod.name) : '—';
+          const size = pv?.size ? String(pv.size) : '';
+          const sku = pv?.sku ? String(pv.sku) : '';
+          const displayName = size ? `${productName} — ${size}` : productName;
+          const requestDateIso = pr.request_date;
+          const exp = pr.expected_completion_date;
+          const calendarAnchorIso = exp || requestDateIso || null;
+          prLines.push({
+            rowKey: `${pr.id}-${it.id}`,
+            prId: pr.id,
+            prNumber: pr.pr_number,
+            productSku: sku,
+            productName: displayName,
+            quantity: Number(it.quantity) || 0,
+            unit: 'pcs',
+            requestDateFmt: fmtScheduleDate(requestDateIso),
+            expectedCompletionFmt: fmtScheduleDate(exp),
+            status: pr.status,
+            requestedBy: pr.created_by?.trim() || '—',
+            requestDateIso,
+            expectedCompletionIso: exp,
+            calendarAnchorIso,
+          });
+        }
+      }
+
+      const poLines: WarehousePurchaseLineRow[] = [];
+      for (const po of poRows) {
+        if (hidePoFromSchedule(po)) continue;
+        if (resolvedBranchId && po.branch_id !== resolvedBranchId) continue;
+        const supplier = po.suppliers?.name?.trim() || '—';
+        const items = po.purchase_order_items ?? [];
+        for (const it of items) {
+          const rm = it.raw_materials;
+          const uom =
+            (it.unit_of_measure && String(it.unit_of_measure).trim()) ||
+            rm?.unit_of_measure ||
+            'units';
+          const calendarAnchorIso = po.expected_delivery_date || po.order_date || null;
+          poLines.push({
+            rowKey: `${po.id}-${it.id}`,
+            poId: po.id,
+            poNumber: po.po_number,
+            materialCode: rm?.sku?.trim() || '—',
+            materialName: rm?.name?.trim() || '—',
+            quantity: Number(it.quantity_ordered) || 0,
+            unit: String(uom),
+            supplier,
+            requestedDeliveryFmt: fmtScheduleDate(po.expected_delivery_date),
+            estimatedArrivalFmt: fmtScheduleDate(po.expected_delivery_date || po.actual_delivery_date),
+            status: po.status,
+            requestedBy: po.created_by?.trim() || '—',
+            orderDateIso: po.order_date,
+            calendarAnchorIso,
+          });
+        }
+      }
+
+      setSchedulePrLines(prLines);
+      setSchedulePoLines(poLines);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Failed to load schedule';
+      setScheduleError(msg);
+      setSchedulePrLines([]);
+      setSchedulePoLines([]);
+    } finally {
+      setScheduleLoading(false);
     }
-  };
+  }, [branch]);
 
-  const getPriorityColor = (priority: 'low' | 'medium' | 'high') => {
-    switch (priority) {
-      case 'high': return 'bg-red-100 text-red-800 border-red-300';
-      case 'medium': return 'bg-yellow-100 text-yellow-800 border-yellow-300';
-      case 'low': return 'bg-gray-100 text-gray-800 border-gray-300';
+  const fetchWarehouseCalendarEvents = useCallback(async () => {
+    setWarehouseCalendarLoading(true);
+    setWarehouseCalendarError(null);
+    try {
+      const branchResult = branch
+        ? await supabase.from('branches').select('id').eq('name', branch).maybeSingle()
+        : { data: null as { id: string } | null };
+      const resolvedBranchId = branchResult.data?.id ?? null;
+
+      const [prRes, poRes, ibrRes] = await Promise.all([
+        supabase
+          .from('production_requests')
+          .select(
+            `id, pr_number, branch_id, status, request_date, expected_completion_date, created_by, created_at,
+            is_transfer_request, inter_branch_request_id,
+            branches:branches!branch_id(name),
+            production_request_items(
+              id, quantity,
+              product_variants(sku, size, products(name))
+            )`,
+          )
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('purchase_orders')
+          .select(
+            `id, po_number, branch_id, status, order_date, expected_delivery_date, actual_delivery_date, created_by, created_at,
+            is_transfer_request, inter_branch_request_id,
+            suppliers(name),
+            branches:branches!branch_id(name),
+            purchase_order_items(
+              id, quantity_ordered, unit_of_measure,
+              raw_materials(name, sku, unit_of_measure)
+            )`,
+          )
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('inter_branch_requests')
+          .select(
+            `id, ibr_number, status, scheduled_departure_date, created_at, submitted_at, approved_at, fulfilled_at,
+            requesting_branch_id, fulfilling_branch_id,
+            req_br:branches!requesting_branch_id(name),
+            ful_br:branches!fulfilling_branch_id(name),
+            inter_branch_request_items(line_kind)`,
+          )
+          .order('created_at', { ascending: false }),
+      ]);
+
+      if (prRes.error) throw prRes.error;
+      if (poRes.error) throw poRes.error;
+      if (ibrRes.error) throw ibrRes.error;
+
+      const prRows = (prRes.data ?? []) as Array<{
+        id: string;
+        pr_number: string;
+        branch_id: string | null;
+        status: string;
+        request_date: string;
+        expected_completion_date: string | null;
+        created_by: string | null;
+        inter_branch_request_id: string | null;
+        production_request_items: Array<{
+          id: string;
+          quantity: number | string;
+          product_variants: { sku?: string; size?: string; products?: { name?: string } | { name?: string }[] } | { sku?: string; size?: string; products?: { name?: string } | { name?: string }[] }[] | null;
+        }> | null;
+      }>;
+
+      const poRows = (poRes.data ?? []) as Array<{
+        id: string;
+        po_number: string;
+        branch_id: string | null;
+        status: string;
+        order_date: string;
+        expected_delivery_date: string | null;
+        actual_delivery_date: string | null;
+        created_by: string | null;
+        is_transfer_request: boolean;
+        inter_branch_request_id: string | null;
+        suppliers: { name?: string } | null;
+        purchase_order_items: Array<{
+          id: string;
+          quantity_ordered: number | string;
+          unit_of_measure?: string | null;
+          raw_materials: { name?: string; sku?: string; unit_of_measure?: string } | null;
+        }> | null;
+      }>;
+
+      const ibrRows = (ibrRes.data ?? []) as Array<{
+        id: string;
+        ibr_number: string;
+        status: string;
+        scheduled_departure_date: string | null;
+        created_at: string;
+        submitted_at: string | null;
+        approved_at: string | null;
+        fulfilled_at: string | null;
+        requesting_branch_id: string;
+        fulfilling_branch_id: string;
+        req_br: { name?: string } | null;
+        ful_br: { name?: string } | null;
+        inter_branch_request_items: Array<{ line_kind?: string }> | null;
+      }>;
+
+      const events: WarehouseCalendarEvent[] = [];
+
+      for (const pr of prRows) {
+        if (resolvedBranchId && pr.branch_id !== resolvedBranchId) continue;
+        const ibrFlow = isIbrFlowProductionRequest(pr);
+        const calKind = ibrFlow ? 'ibr' : 'production';
+        const items = pr.production_request_items ?? [];
+        for (const it of items) {
+          const pv = scheduleAsOne(it.product_variants as Parameters<typeof scheduleAsOne>[0]);
+          const prod = pv ? scheduleAsOne(pv.products as Parameters<typeof scheduleAsOne>[0]) : null;
+          const productName = prod?.name ? String(prod.name) : '—';
+          const size = pv?.size ? String(pv.size) : '';
+          const sku = pv?.sku ? String(pv.sku) : '';
+          const displayName = size ? `${productName} — ${size}` : productName;
+          const qty = Number(it.quantity) || 0;
+          const reqKey = normalizeAnchorDateKey(pr.request_date);
+          const expKey = normalizeAnchorDateKey(pr.expected_completion_date);
+          const base = {
+            calendarKind: calKind,
+            recordRoute: 'production' as const,
+            recordId: pr.id,
+            quantity: qty,
+            unit: 'pcs',
+            status: pr.status,
+          };
+          if (reqKey && expKey && reqKey === expKey) {
+            events.push({
+              id: `cal-pr-${pr.id}-${it.id}-both-${reqKey}`,
+              ...base,
+              anchorDateKey: reqKey,
+              title: `${pr.pr_number} · ${displayName}`,
+              detail: 'Request / expected completion',
+            });
+          } else {
+            if (reqKey) {
+              events.push({
+                id: `cal-pr-${pr.id}-${it.id}-req-${reqKey}`,
+                ...base,
+                anchorDateKey: reqKey,
+                title: `${pr.pr_number} · ${displayName}`,
+                detail: 'Request date',
+              });
+            }
+            if (expKey) {
+              events.push({
+                id: `cal-pr-${pr.id}-${it.id}-exp-${expKey}`,
+                ...base,
+                anchorDateKey: expKey,
+                title: `${pr.pr_number} · ${displayName}`,
+                detail: 'Expected completion',
+              });
+            }
+          }
+        }
+      }
+
+      for (const po of poRows) {
+        if (resolvedBranchId && po.branch_id !== resolvedBranchId) continue;
+        const ibrFlow = hidePoFromSchedule(po);
+        const calKind = ibrFlow ? 'ibr' : 'purchase';
+        const supplier = po.suppliers?.name?.trim() || '—';
+        const items = po.purchase_order_items ?? [];
+        for (const it of items) {
+          const rm = it.raw_materials;
+          const uom =
+            (it.unit_of_measure && String(it.unit_of_measure).trim()) ||
+            rm?.unit_of_measure ||
+            'units';
+          const materialName = rm?.name?.trim() || '—';
+          const ordKey = normalizeAnchorDateKey(po.order_date);
+          const delKey = normalizeAnchorDateKey(po.expected_delivery_date || po.actual_delivery_date);
+          const qty = Number(it.quantity_ordered) || 0;
+          const base = {
+            calendarKind: calKind,
+            recordRoute: 'purchase' as const,
+            recordId: po.id,
+            quantity: qty,
+            unit: String(uom),
+            supplier,
+            status: po.status,
+          };
+          if (ordKey && delKey && ordKey === delKey) {
+            events.push({
+              id: `cal-po-${po.id}-${it.id}-both-${ordKey}`,
+              ...base,
+              anchorDateKey: ordKey,
+              title: `${po.po_number} · ${materialName}`,
+              detail: 'Order / delivery',
+            });
+          } else {
+            if (ordKey) {
+              events.push({
+                id: `cal-po-${po.id}-${it.id}-ord-${ordKey}`,
+                ...base,
+                anchorDateKey: ordKey,
+                title: `${po.po_number} · ${materialName}`,
+                detail: 'Order date',
+              });
+            }
+            if (delKey) {
+              events.push({
+                id: `cal-po-${po.id}-${it.id}-del-${delKey}`,
+                ...base,
+                anchorDateKey: delKey,
+                title: `${po.po_number} · ${materialName}`,
+                detail: po.actual_delivery_date ? 'Actual delivery' : 'Expected delivery',
+              });
+            }
+          }
+        }
+      }
+
+      for (const ib of ibrRows) {
+        if (
+          resolvedBranchId &&
+          ib.requesting_branch_id !== resolvedBranchId &&
+          ib.fulfilling_branch_id !== resolvedBranchId
+        ) {
+          continue;
+        }
+        const routeLabel =
+          resolvedBranchId && ib.fulfilling_branch_id === resolvedBranchId ? 'Shipping branch' : 'Receiving branch';
+        const partner =
+          resolvedBranchId && ib.fulfilling_branch_id === resolvedBranchId
+            ? ib.req_br?.name ?? 'Requesting branch'
+            : ib.ful_br?.name ?? 'Fulfilling branch';
+
+        const lineItems = ib.inter_branch_request_items ?? [];
+        const ibrHasProduct = lineItems.some((i) => i.line_kind === 'product');
+        const ibrHasRawMaterial = lineItems.some((i) => i.line_kind === 'raw_material');
+
+        if (ib.scheduled_departure_date) {
+          const dk = normalizeAnchorDateKey(ib.scheduled_departure_date);
+          if (dk) {
+            events.push({
+              id: `cal-ibr-${ib.id}-dep-${dk}`,
+              calendarKind: 'ibr',
+              anchorDateKey: dk,
+              title: `${ib.ibr_number} · Scheduled departure`,
+              detail: `${routeLabel} · ${partner}`,
+              recordRoute: 'ibr',
+              recordId: ib.id,
+              status: ib.status,
+              ibrHasProduct,
+              ibrHasRawMaterial,
+            });
+          }
+        }
+        const fulfilledKey = normalizeAnchorDateKey(ib.fulfilled_at);
+        if (fulfilledKey) {
+          events.push({
+            id: `cal-ibr-${ib.id}-ful-${fulfilledKey}`,
+            calendarKind: 'ibr',
+            anchorDateKey: fulfilledKey,
+            title: `${ib.ibr_number} · Fulfilled`,
+            detail: partner,
+            recordRoute: 'ibr',
+            recordId: ib.id,
+            status: ib.status,
+            ibrHasProduct,
+            ibrHasRawMaterial,
+          });
+        }
+      }
+
+      setWarehouseCalendarEvents(events);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Failed to load calendar';
+      setWarehouseCalendarError(msg);
+      setWarehouseCalendarEvents([]);
+    } finally {
+      setWarehouseCalendarLoading(false);
     }
-  };
+  }, [branch]);
 
-  // Handler for opening stock adjustment modal
-  const handleOpenAdjustment = (item: any, type: 'finished-good' | 'raw-material') => {
-    setSelectedItemForAdjustment(item);
-    setAdjustmentItemType(type);
-    setShowStockAdjustmentModal(true);
-  };
+  useEffect(() => {
+    if (activeTab === 'requests') void fetchSchedule();
+  }, [activeTab, fetchSchedule]);
 
-  // Handler for stock adjustment submission
-  const handleStockAdjustment = (adjustment: any) => {
-    console.log('Stock Adjustment:', {
-      item: selectedItemForAdjustment,
-      itemType: adjustmentItemType,
-      adjustment,
-      timestamp: new Date().toISOString(),
-    });
+  useEffect(() => {
+    if (activeTab === 'requests') void fetchWarehouseCalendarEvents();
+  }, [activeTab, branch, fetchWarehouseCalendarEvents]);
 
-    // TODO: In production, this would:
-    // 1. Update the backend via API
-    // 2. Refresh the inventory data
-    // 3. Create an audit log entry
-    // 4. Update stock movement history
-    // 5. Trigger notifications if needed (e.g., low stock alerts)
+  useEffect(() => {
+    setScheduleSearch('');
+    setScheduleStatusFilter('');
+    setPrSchedulePage(1);
+    setPoSchedulePage(1);
+  }, [branch, requestType]);
 
-    // Build success message
-    const notesMessage = adjustment.notes ? `\nNotes: ${adjustment.notes}` : '';
-    const message = `Stock adjusted successfully!\n\n${adjustment.type === 'add' ? '+' : '-'}${adjustment.quantity} ${selectedItemForAdjustment.unit}${notesMessage}\n\nThis would update the database in production.`;
-    
-    alert(message);
-  };
+  useEffect(() => {
+    void fetchWarehouseInventory();
+  }, [fetchWarehouseInventory]);
 
-  const selectedProductCategories = viewType === 'pipes' ? PIPE_CATEGORIES : FITTINGS_CATEGORIES;
-  const scopedFinishedGoods = mockFinishedGoods.filter(item => selectedProductCategories.includes(item.category));
-  const finishedGoodsCategories = ['all', ...Array.from(new Set(scopedFinishedGoods.map(item => item.category)))];
+  const finishedGoodsCategories = ['all', ...Array.from(new Set(finishedGoodsRows.map((item) => item.category)))];
   const safeCategoryFilter = categoryFilter !== 'all' && !finishedGoodsCategories.includes(categoryFilter)
     ? 'all'
     : categoryFilter;
 
-  const filteredFinishedGoods = scopedFinishedGoods.filter(item => {
-    const matchesSearch = item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         item.sku.toLowerCase().includes(searchQuery.toLowerCase());
+  const filteredFinishedGoods = finishedGoodsRows.filter((item) => {
+    const q = searchQuery.toLowerCase();
+    const matchesSearch =
+      item.name.toLowerCase().includes(q) ||
+      item.productName.toLowerCase().includes(q) ||
+      item.sku.toLowerCase().includes(q) ||
+      item.variantSize.toLowerCase().includes(q);
     const matchesCategory = safeCategoryFilter === 'all' || item.category === safeCategoryFilter;
     const matchesStatus = statusFilter === 'all' || item.status === statusFilter;
     return matchesSearch && matchesCategory && matchesStatus;
   });
 
-  const filteredRawMaterials = mockRawMaterials.filter(item => {
+  const filteredRawMaterials = rawMaterialsRows.filter((item) => {
     const matchesSearch = item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
                          item.code.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesCategory = categoryFilter === 'all' || item.category === categoryFilter;
@@ -1255,7 +1283,433 @@ export default function WarehousePage() {
     return matchesSearch && matchesCategory && matchesStatus;
   });
 
-  const rawMaterialsCategories = ['all', ...Array.from(new Set(mockRawMaterials.map(item => item.category)))];
+  const rawMaterialsCategories = ['all', ...Array.from(new Set(rawMaterialsRows.map((item) => item.category)))];
+
+  const [finishedSortKey, setFinishedSortKey] = useState('productName');
+  const [finishedSortDir, setFinishedSortDir] = useState<'asc' | 'desc'>('asc');
+  const [finishedTablePage, setFinishedTablePage] = useState(1);
+  const [rawSortKey, setRawSortKey] = useState('name');
+  const [rawSortDir, setRawSortDir] = useState<'asc' | 'desc'>('asc');
+  const [rawTablePage, setRawTablePage] = useState(1);
+
+  const handleFinishedSort = (key: string) => {
+    if (finishedSortKey === key) setFinishedSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else {
+      setFinishedSortKey(key);
+      setFinishedSortDir('asc');
+    }
+  };
+  const finishedSortIcon = (col: string) => {
+    if (finishedSortKey !== col) return <ArrowUpDown className="w-3 h-3 ml-1 inline opacity-40" />;
+    return finishedSortDir === 'asc'
+      ? <ArrowUp className="w-3 h-3 ml-1 text-red-600" />
+      : <ArrowDown className="w-3 h-3 ml-1 text-red-600" />;
+  };
+
+  const handleRawSort = (key: string) => {
+    if (rawSortKey === key) setRawSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else {
+      setRawSortKey(key);
+      setRawSortDir('asc');
+    }
+  };
+  const rawSortIcon = (col: string) => {
+    if (rawSortKey !== col) return <ArrowUpDown className="w-3 h-3 ml-1 inline opacity-40" />;
+    return rawSortDir === 'asc'
+      ? <ArrowUp className="w-3 h-3 ml-1 text-red-600" />
+      : <ArrowDown className="w-3 h-3 ml-1 text-red-600" />;
+  };
+
+  const stockStatusRank: Record<StockStatus, number> = { healthy: 0, warning: 1, critical: 2 };
+
+  const sortedFinishedGoods = useMemo(() => {
+    return [...filteredFinishedGoods].sort((a, b) => {
+      let av: string | number;
+      let bv: string | number;
+      switch (finishedSortKey) {
+        case 'productName':
+          av = a.productName.toLowerCase();
+          bv = b.productName.toLowerCase();
+          break;
+        case 'variantSize':
+          av = a.variantSize.toLowerCase();
+          bv = b.variantSize.toLowerCase();
+          break;
+        case 'category':
+          av = a.category.toLowerCase();
+          bv = b.category.toLowerCase();
+          break;
+        case 'currentStock':
+          av = a.currentStock;
+          bv = b.currentStock;
+          break;
+        case 'capacity': {
+          const da = Math.max(a.maxCapacity, 1);
+          const db = Math.max(b.maxCapacity, 1);
+          av = a.currentStock / da;
+          bv = b.currentStock / db;
+          break;
+        }
+        case 'status':
+          av = stockStatusRank[a.status];
+          bv = stockStatusRank[b.status];
+          break;
+        case 'lastRestocked':
+          av = a.lastRestocked === '—' ? '' : a.lastRestocked;
+          bv = b.lastRestocked === '—' ? '' : b.lastRestocked;
+          break;
+        default:
+          av = a.productName.toLowerCase();
+          bv = b.productName.toLowerCase();
+      }
+      if (typeof av === 'number' && typeof bv === 'number') {
+        if (av < bv) return finishedSortDir === 'asc' ? -1 : 1;
+        if (av > bv) return finishedSortDir === 'asc' ? 1 : -1;
+        return 0;
+      }
+      const as = String(av);
+      const bs = String(bv);
+      if (as < bs) return finishedSortDir === 'asc' ? -1 : 1;
+      if (as > bs) return finishedSortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [filteredFinishedGoods, finishedSortKey, finishedSortDir]);
+
+  const sortedRawMaterials = useMemo(() => {
+    return [...filteredRawMaterials].sort((a, b) => {
+      let av: string | number;
+      let bv: string | number;
+      switch (rawSortKey) {
+        case 'name':
+          av = a.name.toLowerCase();
+          bv = b.name.toLowerCase();
+          break;
+        case 'category':
+          av = a.category.toLowerCase();
+          bv = b.category.toLowerCase();
+          break;
+        case 'currentStock':
+          av = a.currentStock;
+          bv = b.currentStock;
+          break;
+        case 'capacity': {
+          const da = Math.max(a.maxCapacity, 1);
+          const db = Math.max(b.maxCapacity, 1);
+          av = a.currentStock / da;
+          bv = b.currentStock / db;
+          break;
+        }
+        case 'status':
+          av = stockStatusRank[a.status];
+          bv = stockStatusRank[b.status];
+          break;
+        case 'lastRestocked':
+          av = a.lastRestocked === '—' ? '' : a.lastRestocked;
+          bv = b.lastRestocked === '—' ? '' : b.lastRestocked;
+          break;
+        default:
+          av = a.name.toLowerCase();
+          bv = b.name.toLowerCase();
+      }
+      if (typeof av === 'number' && typeof bv === 'number') {
+        if (av < bv) return rawSortDir === 'asc' ? -1 : 1;
+        if (av > bv) return rawSortDir === 'asc' ? 1 : -1;
+        return 0;
+      }
+      const as = String(av);
+      const bs = String(bv);
+      if (as < bs) return rawSortDir === 'asc' ? -1 : 1;
+      if (as > bs) return rawSortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [filteredRawMaterials, rawSortKey, rawSortDir]);
+
+  const finishedTotalListPages = Math.max(1, Math.ceil(sortedFinishedGoods.length / TABLE_PAGE_SIZE) || 1);
+  const pagedFinishedGoods = useMemo(() => {
+    const p = Math.min(finishedTablePage, finishedTotalListPages);
+    const start = (p - 1) * TABLE_PAGE_SIZE;
+    return sortedFinishedGoods.slice(start, start + TABLE_PAGE_SIZE);
+  }, [sortedFinishedGoods, finishedTablePage, finishedTotalListPages]);
+
+  const rawTotalListPages = Math.max(1, Math.ceil(sortedRawMaterials.length / TABLE_PAGE_SIZE) || 1);
+  const pagedRawMaterials = useMemo(() => {
+    const p = Math.min(rawTablePage, rawTotalListPages);
+    const start = (p - 1) * TABLE_PAGE_SIZE;
+    return sortedRawMaterials.slice(start, start + TABLE_PAGE_SIZE);
+  }, [sortedRawMaterials, rawTablePage, rawTotalListPages]);
+
+  useEffect(() => {
+    if (finishedTablePage > finishedTotalListPages) setFinishedTablePage(finishedTotalListPages);
+  }, [finishedTablePage, finishedTotalListPages]);
+
+  useEffect(() => {
+    if (rawTablePage > rawTotalListPages) setRawTablePage(rawTotalListPages);
+  }, [rawTablePage, rawTotalListPages]);
+
+  useEffect(() => {
+    setFinishedTablePage(1);
+    setRawTablePage(1);
+  }, [searchQuery, categoryFilter, statusFilter, branch, viewMode]);
+
+  useEffect(() => {
+    setPrSchedulePage(1);
+    setPoSchedulePage(1);
+  }, [scheduleSearch, scheduleStatusFilter]);
+
+  const filteredSchedulePr = useMemo(() => {
+    const q = scheduleSearch.trim().toLowerCase();
+    return schedulePrLines.filter((r) => {
+      const matchesSearch =
+        !q ||
+        r.productName.toLowerCase().includes(q) ||
+        r.productSku.toLowerCase().includes(q) ||
+        r.prNumber.toLowerCase().includes(q) ||
+        r.requestedBy.toLowerCase().includes(q);
+      const matchesStatus = scheduleStatusFilter === '' || r.status === scheduleStatusFilter;
+      return matchesSearch && matchesStatus;
+    });
+  }, [schedulePrLines, scheduleSearch, scheduleStatusFilter]);
+
+  const filteredSchedulePo = useMemo(() => {
+    const q = scheduleSearch.trim().toLowerCase();
+    return schedulePoLines.filter((r) => {
+      const matchesSearch =
+        !q ||
+        r.materialName.toLowerCase().includes(q) ||
+        r.materialCode.toLowerCase().includes(q) ||
+        r.poNumber.toLowerCase().includes(q) ||
+        r.supplier.toLowerCase().includes(q) ||
+        r.requestedBy.toLowerCase().includes(q);
+      const matchesStatus = scheduleStatusFilter === '' || r.status === scheduleStatusFilter;
+      return matchesSearch && matchesStatus;
+    });
+  }, [schedulePoLines, scheduleSearch, scheduleStatusFilter]);
+
+  const schedulePrStatusOptions = useMemo(() => {
+    const s = new Set(schedulePrLines.map((r) => r.status).filter(Boolean));
+    return Array.from(s).sort((a, b) => a.localeCompare(b));
+  }, [schedulePrLines]);
+
+  const schedulePoStatusOptions = useMemo(() => {
+    const s = new Set(schedulePoLines.map((r) => r.status).filter(Boolean));
+    return Array.from(s).sort((a, b) => a.localeCompare(b));
+  }, [schedulePoLines]);
+
+  const prScheduleStats = useMemo(() => {
+    const rows = filteredSchedulePr;
+    return {
+      total: rows.length,
+      pending: rows.filter((r) => r.status === 'Draft' || r.status === 'Requested').length,
+      approved: rows.filter((r) => r.status === 'Accepted').length,
+      inProgress: rows.filter((r) => r.status === 'In Progress').length,
+      completed: rows.filter((r) => r.status === 'Completed').length,
+    };
+  }, [filteredSchedulePr]);
+
+  const poScheduleStats = useMemo(() => {
+    const rows = filteredSchedulePo;
+    return {
+      total: rows.length,
+      pending: rows.filter((r) => r.status === 'Draft' || r.status === 'Requested').length,
+      approved: rows.filter((r) =>
+        ['Accepted', 'Sent', 'Confirmed'].includes(r.status),
+      ).length,
+      inProgress: rows.filter((r) => r.status === 'Partially Received').length,
+      completed: rows.filter((r) => r.status === 'Completed').length,
+    };
+  }, [filteredSchedulePo]);
+
+  const handlePrScheduleSort = (key: string) => {
+    if (prScheduleSortKey === key) setPrScheduleSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else {
+      setPrScheduleSortKey(key);
+      setPrScheduleSortDir('asc');
+    }
+  };
+
+  const handlePoScheduleSort = (key: string) => {
+    if (poScheduleSortKey === key) setPoScheduleSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else {
+      setPoScheduleSortKey(key);
+      setPoScheduleSortDir('asc');
+    }
+  };
+
+  const prScheduleSortIcon = (col: string) => {
+    if (prScheduleSortKey !== col) return <ArrowUpDown className="w-3 h-3 ml-1 inline opacity-40" />;
+    return prScheduleSortDir === 'asc'
+      ? <ArrowUp className="w-3 h-3 ml-1 text-red-600" />
+      : <ArrowDown className="w-3 h-3 ml-1 text-red-600" />;
+  };
+
+  const poScheduleSortIcon = (col: string) => {
+    if (poScheduleSortKey !== col) return <ArrowUpDown className="w-3 h-3 ml-1 inline opacity-40" />;
+    return poScheduleSortDir === 'asc'
+      ? <ArrowUp className="w-3 h-3 ml-1 text-red-600" />
+      : <ArrowDown className="w-3 h-3 ml-1 text-red-600" />;
+  };
+
+  const sortedSchedulePr = useMemo(() => {
+    return [...filteredSchedulePr].sort((a, b) => {
+      let av: string | number;
+      let bv: string | number;
+      switch (prScheduleSortKey) {
+        case 'productName':
+          av = a.productName.toLowerCase();
+          bv = b.productName.toLowerCase();
+          break;
+        case 'productSku':
+          av = a.productSku.toLowerCase();
+          bv = b.productSku.toLowerCase();
+          break;
+        case 'quantity':
+          av = a.quantity;
+          bv = b.quantity;
+          break;
+        case 'requestDateIso':
+          av = a.requestDateIso;
+          bv = b.requestDateIso;
+          break;
+        case 'expectedCompletionIso':
+          av = a.expectedCompletionIso ?? '';
+          bv = b.expectedCompletionIso ?? '';
+          break;
+        case 'status':
+          av = a.status;
+          bv = b.status;
+          break;
+        case 'requestedBy':
+          av = a.requestedBy.toLowerCase();
+          bv = b.requestedBy.toLowerCase();
+          break;
+        default:
+          av = a.requestDateIso;
+          bv = b.requestDateIso;
+      }
+      if (typeof av === 'number' && typeof bv === 'number') {
+        if (av < bv) return prScheduleSortDir === 'asc' ? -1 : 1;
+        if (av > bv) return prScheduleSortDir === 'asc' ? 1 : -1;
+        return 0;
+      }
+      const as = String(av);
+      const bs = String(bv);
+      if (as < bs) return prScheduleSortDir === 'asc' ? -1 : 1;
+      if (as > bs) return prScheduleSortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [filteredSchedulePr, prScheduleSortKey, prScheduleSortDir]);
+
+  const sortedSchedulePo = useMemo(() => {
+    return [...filteredSchedulePo].sort((a, b) => {
+      let av: string | number;
+      let bv: string | number;
+      switch (poScheduleSortKey) {
+        case 'materialName':
+          av = a.materialName.toLowerCase();
+          bv = b.materialName.toLowerCase();
+          break;
+        case 'materialCode':
+          av = a.materialCode.toLowerCase();
+          bv = b.materialCode.toLowerCase();
+          break;
+        case 'quantity':
+          av = a.quantity;
+          bv = b.quantity;
+          break;
+        case 'supplier':
+          av = a.supplier.toLowerCase();
+          bv = b.supplier.toLowerCase();
+          break;
+        case 'requestedDeliveryFmt':
+          av = a.requestedDeliveryFmt === '—' ? '' : a.requestedDeliveryFmt;
+          bv = b.requestedDeliveryFmt === '—' ? '' : b.requestedDeliveryFmt;
+          break;
+        case 'estimatedArrivalFmt':
+          av = a.estimatedArrivalFmt === '—' ? '' : a.estimatedArrivalFmt;
+          bv = b.estimatedArrivalFmt === '—' ? '' : b.estimatedArrivalFmt;
+          break;
+        case 'status':
+          av = a.status;
+          bv = b.status;
+          break;
+        case 'requestedBy':
+          av = a.requestedBy.toLowerCase();
+          bv = b.requestedBy.toLowerCase();
+          break;
+        case 'orderDateIso':
+          av = a.orderDateIso;
+          bv = b.orderDateIso;
+          break;
+        default:
+          av = a.orderDateIso;
+          bv = b.orderDateIso;
+      }
+      if (typeof av === 'number' && typeof bv === 'number') {
+        if (av < bv) return poScheduleSortDir === 'asc' ? -1 : 1;
+        if (av > bv) return poScheduleSortDir === 'asc' ? 1 : -1;
+        return 0;
+      }
+      const as = String(av);
+      const bs = String(bv);
+      if (as < bs) return poScheduleSortDir === 'asc' ? -1 : 1;
+      if (as > bs) return poScheduleSortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [filteredSchedulePo, poScheduleSortKey, poScheduleSortDir]);
+
+  const prScheduleTotalPages = Math.max(1, Math.ceil(sortedSchedulePr.length / TABLE_PAGE_SIZE) || 1);
+  const pagedSchedulePr = useMemo(() => {
+    const p = Math.min(prSchedulePage, prScheduleTotalPages);
+    const start = (p - 1) * TABLE_PAGE_SIZE;
+    return sortedSchedulePr.slice(start, start + TABLE_PAGE_SIZE);
+  }, [sortedSchedulePr, prSchedulePage, prScheduleTotalPages]);
+
+  const poScheduleTotalPages = Math.max(1, Math.ceil(sortedSchedulePo.length / TABLE_PAGE_SIZE) || 1);
+  const pagedSchedulePo = useMemo(() => {
+    const p = Math.min(poSchedulePage, poScheduleTotalPages);
+    const start = (p - 1) * TABLE_PAGE_SIZE;
+    return sortedSchedulePo.slice(start, start + TABLE_PAGE_SIZE);
+  }, [sortedSchedulePo, poSchedulePage, poScheduleTotalPages]);
+
+  useEffect(() => {
+    if (prSchedulePage > prScheduleTotalPages) setPrSchedulePage(prScheduleTotalPages);
+  }, [prSchedulePage, prScheduleTotalPages]);
+
+  useEffect(() => {
+    if (poSchedulePage > poScheduleTotalPages) setPoSchedulePage(poScheduleTotalPages);
+  }, [poSchedulePage, poScheduleTotalPages]);
+
+  const warehouseEventsByDateKey = useMemo(() => {
+    const filtered = warehouseCalendarEvents.filter((e) => warehouseCalendarEventMatchesRequestTab(e, requestType));
+    const m: Record<string, WarehouseCalendarEvent[]> = {};
+    for (const e of filtered) {
+      if (!m[e.anchorDateKey]) m[e.anchorDateKey] = [];
+      m[e.anchorDateKey].push(e);
+    }
+    for (const k of Object.keys(m)) {
+      m[k].sort((a, b) => {
+        const byKind = a.calendarKind.localeCompare(b.calendarKind);
+        if (byKind !== 0) return byKind;
+        return a.title.localeCompare(b.title);
+      });
+    }
+    return m;
+  }, [warehouseCalendarEvents, requestType]);
+
+  const openScheduleCalendarModal = () => {
+    const t = new Date();
+    setCalendarModalYear(t.getFullYear());
+    setCalendarModalMonth(t.getMonth());
+    setCalendarModalSelectedDateKey(dateKeyLocalFromDate(t));
+    setScheduleCalendarModalOpen(true);
+    void fetchWarehouseCalendarEvents();
+  };
+
+  const shiftCalendarModalMonth = (delta: number) => {
+    const d = new Date(calendarModalYear, calendarModalMonth + delta, 1);
+    setCalendarModalYear(d.getFullYear());
+    setCalendarModalMonth(d.getMonth());
+  };
 
   const tabs = [
     { id: 'inventory' as TabType, label: 'Inventory', icon: Package },
@@ -1350,18 +1804,6 @@ export default function WarehousePage() {
           <div className="space-y-4">
             {/* Controls */}
             <div className="bg-white rounded-lg border border-gray-200 p-4">
-              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-4 pb-4 border-b border-gray-200">
-                <div className="text-sm text-gray-600">Product Group View</div>
-                <select
-                  value={viewType}
-                  onChange={(e) => setViewType(e.target.value as 'pipes' | 'fittings')}
-                  className="w-full md:w-auto border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="pipes">Pipes</option>
-                  <option value="fittings">Fittings</option>
-                </select>
-              </div>
-
               <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 mb-4">
                 <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 md:gap-4 w-full lg:w-auto">
                   {/* View Mode Toggle */}
@@ -1478,46 +1920,103 @@ export default function WarehousePage() {
                   <table className="w-full">
                     <thead className="bg-gray-50 border-b border-gray-200">
                       <tr>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">SKU</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Product Name</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Category</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Current Stock</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Reorder Point</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Capacity</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Location</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Restocked</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                        <th
+                          onClick={() => handleFinishedSort('productName')}
+                          className="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                        >
+                          <span className="inline-flex items-center justify-center">Product{finishedSortIcon('productName')}</span>
+                        </th>
+                        <th
+                          onClick={() => handleFinishedSort('variantSize')}
+                          className="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                        >
+                          <span className="inline-flex items-center justify-center">Size{finishedSortIcon('variantSize')}</span>
+                        </th>
+                        <th
+                          onClick={() => handleFinishedSort('category')}
+                          className="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                        >
+                          <span className="inline-flex items-center justify-center">Category{finishedSortIcon('category')}</span>
+                        </th>
+                        <th
+                          onClick={() => handleFinishedSort('currentStock')}
+                          className="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                        >
+                          <span className="inline-flex items-center justify-center">Current Stock{finishedSortIcon('currentStock')}</span>
+                        </th>
+                        <th
+                          onClick={() => handleFinishedSort('capacity')}
+                          className="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                        >
+                          <span className="inline-flex items-center justify-center">Capacity{finishedSortIcon('capacity')}</span>
+                        </th>
+                        <th
+                          onClick={() => handleFinishedSort('status')}
+                          className="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                        >
+                          <span className="inline-flex items-center justify-center">Status{finishedSortIcon('status')}</span>
+                        </th>
+                        <th
+                          onClick={() => handleFinishedSort('lastRestocked')}
+                          className="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                        >
+                          <span className="inline-flex items-center justify-center">Last Restocked{finishedSortIcon('lastRestocked')}</span>
+                        </th>
                       </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
-                      {filteredFinishedGoods.map(item => (
+                      {inventoryLoading ? (
+                        <tr>
+                          <td colSpan={7} className="px-3 py-12 text-center text-gray-500">
+                            <Loader2 className="w-8 h-8 animate-spin mx-auto text-red-500" />
+                            <p className="mt-2 text-sm">Loading inventory…</p>
+                          </td>
+                        </tr>
+                      ) : sortedFinishedGoods.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="px-3 py-12 text-center text-sm text-gray-500">
+                            No finished goods to show. Try another branch or filters.
+                          </td>
+                        </tr>
+                      ) : (
+                        pagedFinishedGoods.map((item) => {
+                          const capDenom = Math.max(item.maxCapacity, 1);
+                          const pct = Math.min(100, Math.round((item.currentStock / capDenom) * 100));
+                          return (
                         <tr key={item.id} className="hover:bg-gray-50">
-                          <td className="px-3 py-3 whitespace-nowrap text-sm font-medium text-gray-900">{item.sku}</td>
-                          <td className="px-3 py-3 text-sm text-gray-900">{item.name}</td>
+                          <td className="px-3 py-3 text-sm">
+                            <Link
+                              to={finishedGoodProductHref(item.productId, item.categorySlug)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title="Open product family in new tab"
+                              className="text-blue-600 hover:text-blue-800 hover:underline"
+                            >
+                              {item.productName}
+                            </Link>
+                          </td>
+                          <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">{item.variantSize}</td>
                           <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">{item.category}</td>
                           <td className="px-3 py-3 whitespace-nowrap text-sm">
                             <span className="font-semibold text-gray-900">{item.currentStock}</span>
                             <span className="text-gray-500"> {item.unit}</span>
                           </td>
-                          <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">{item.reorderPoint} {item.unit}</td>
                           <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">
                             <div className="flex items-center gap-2">
                               <div className="w-20 bg-gray-200 rounded-full h-2">
                                 <div 
                                   className={`h-2 rounded-full ${
-                                    (item.currentStock / item.maxCapacity) * 100 > 60 ? 'bg-green-500' :
-                                    (item.currentStock / item.maxCapacity) * 100 > 30 ? 'bg-yellow-500' : 'bg-red-500'
+                                    pct > 60 ? 'bg-green-500' :
+                                    pct > 30 ? 'bg-yellow-500' : 'bg-red-500'
                                   }`}
-                                  style={{ width: `${(item.currentStock / item.maxCapacity) * 100}%` }}
+                                  style={{ width: `${pct}%` }}
                                 />
                               </div>
                               <span className="text-xs text-gray-500">
-                                {Math.round((item.currentStock / item.maxCapacity) * 100)}%
+                                {pct}%
                               </span>
                             </div>
                           </td>
-                          <td className="px-3 py-3 whitespace-nowrap text-sm font-mono text-gray-600">{item.location}</td>
                           <td className="px-3 py-3 whitespace-nowrap">
                             <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border ${getStatusColor(item.status)}`}>
                               {getStatusIcon(item.status)}
@@ -1525,29 +2024,43 @@ export default function WarehousePage() {
                             </span>
                           </td>
                           <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">{item.lastRestocked}</td>
-                          <td className="px-3 py-3 whitespace-nowrap">
-                            <button
-                              onClick={() => handleOpenAdjustment(item, 'finished-good')}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-700 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 transition-colors"
-                            >
-                              <Edit3 className="w-3.5 h-3.5" />
-                              Adjust Stock
-                            </button>
-                          </td>
                         </tr>
-                      ))}
+                          );
+                        })
+                      )}
                     </tbody>
                   </table>
                 </div>
 
                 {/* Mobile Card View */}
                 <div className="md:hidden divide-y divide-gray-200">
-                  {filteredFinishedGoods.map(item => (
+                  {inventoryLoading ? (
+                    <div className="p-8 flex flex-col items-center text-gray-500">
+                      <Loader2 className="w-8 h-8 animate-spin text-red-500" />
+                      <p className="mt-2 text-sm">Loading…</p>
+                    </div>
+                  ) : sortedFinishedGoods.length === 0 ? (
+                    <div className="p-8 text-center text-sm text-gray-500">No finished goods to show.</div>
+                  ) : (
+                    pagedFinishedGoods.map((item) => {
+                      const capDenom = Math.max(item.maxCapacity, 1);
+                      const pct = Math.min(100, Math.round((item.currentStock / capDenom) * 100));
+                      return (
                     <div key={item.id} className="p-4 space-y-3">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
-                          <p className="font-medium text-gray-900 break-words">{item.name}</p>
-                          <p className="text-xs text-gray-600 mt-1">{item.sku} • {item.category}</p>
+                          <Link
+                            to={finishedGoodProductHref(item.productId, item.categorySlug)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="Open product family in new tab"
+                            className="font-medium text-gray-900 break-words hover:text-blue-700 hover:underline block"
+                          >
+                            {item.productName}
+                          </Link>
+                          <p className="text-xs text-gray-600 mt-1">
+                            {item.variantSize && item.variantSize !== '—' ? `${item.variantSize} · ` : ''}{item.category}
+                          </p>
                         </div>
                         <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium border flex-shrink-0 ${getStatusColor(item.status)}`}>
                           {getStatusIcon(item.status)}
@@ -1556,19 +2069,11 @@ export default function WarehousePage() {
                       </div>
                       
                       <div className="grid grid-cols-2 gap-3 text-sm">
-                        <div>
+                        <div className="col-span-2">
                           <p className="text-xs text-gray-500">Current Stock</p>
                           <p className="font-semibold text-gray-900">{item.currentStock} {item.unit}</p>
                         </div>
-                        <div>
-                          <p className="text-xs text-gray-500">Reorder Point</p>
-                          <p className="text-gray-900">{item.reorderPoint} {item.unit}</p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-gray-500">Location</p>
-                          <p className="font-mono text-xs text-gray-900">{item.location}</p>
-                        </div>
-                        <div>
+                        <div className="col-span-2">
                           <p className="text-xs text-gray-500">Last Restocked</p>
                           <p className="text-gray-900">{item.lastRestocked}</p>
                         </div>
@@ -1580,28 +2085,38 @@ export default function WarehousePage() {
                           <div className="flex-1 bg-gray-200 rounded-full h-2">
                             <div 
                               className={`h-2 rounded-full ${
-                                (item.currentStock / item.maxCapacity) * 100 > 60 ? 'bg-green-500' :
-                                (item.currentStock / item.maxCapacity) * 100 > 30 ? 'bg-yellow-500' : 'bg-red-500'
+                                pct > 60 ? 'bg-green-500' :
+                                pct > 30 ? 'bg-yellow-500' : 'bg-red-500'
                               }`}
-                              style={{ width: `${(item.currentStock / item.maxCapacity) * 100}%` }}
+                              style={{ width: `${pct}%` }}
                             />
                           </div>
                           <span className="text-xs text-gray-600">
-                            {Math.round((item.currentStock / item.maxCapacity) * 100)}%
+                            {pct}%
                           </span>
                         </div>
                       </div>
 
-                      <button
-                        onClick={() => handleOpenAdjustment(item, 'finished-good')}
-                        className="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 transition-colors"
+                      <Link
+                        to={finishedGoodProductHref(item.productId, item.categorySlug)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 transition-colors"
                       >
-                        <Edit3 className="w-4 h-4" />
-                        Adjust Stock
-                      </button>
+                        View product family
+                      </Link>
                     </div>
-                  ))}
+                      );
+                    })
+                  )}
                 </div>
+                {!inventoryLoading && sortedFinishedGoods.length > 0 && (
+                  <TablePagination
+                    page={finishedTablePage}
+                    total={sortedFinishedGoods.length}
+                    onPageChange={setFinishedTablePage}
+                  />
+                )}
               </div>
             ) : (
               /* Raw Materials Table */
@@ -1611,75 +2126,132 @@ export default function WarehousePage() {
                   <table className="w-full">
                     <thead className="bg-gray-50 border-b border-gray-200">
                       <tr>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Code</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Material Name</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Category</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Current Stock</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Reorder Point</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Daily Usage</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Days Remaining</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Supplier</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Purchased</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                        <th
+                          onClick={() => handleRawSort('name')}
+                          className="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                        >
+                          <span className="inline-flex items-center justify-center">Material Name{rawSortIcon('name')}</span>
+                        </th>
+                        <th
+                          onClick={() => handleRawSort('category')}
+                          className="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                        >
+                          <span className="inline-flex items-center justify-center">Category{rawSortIcon('category')}</span>
+                        </th>
+                        <th
+                          onClick={() => handleRawSort('currentStock')}
+                          className="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                        >
+                          <span className="inline-flex items-center justify-center">Current Stock{rawSortIcon('currentStock')}</span>
+                        </th>
+                        <th
+                          onClick={() => handleRawSort('capacity')}
+                          className="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                        >
+                          <span className="inline-flex items-center justify-center">Capacity{rawSortIcon('capacity')}</span>
+                        </th>
+                        <th
+                          onClick={() => handleRawSort('status')}
+                          className="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                        >
+                          <span className="inline-flex items-center justify-center">Status{rawSortIcon('status')}</span>
+                        </th>
+                        <th
+                          onClick={() => handleRawSort('lastRestocked')}
+                          className="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                        >
+                          <span className="inline-flex items-center justify-center">Last Restocked{rawSortIcon('lastRestocked')}</span>
+                        </th>
                       </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
-                      {filteredRawMaterials.map(item => (
+                      {inventoryLoading ? (
+                        <tr>
+                          <td colSpan={6} className="px-3 py-12 text-center text-gray-500">
+                            <Loader2 className="w-8 h-8 animate-spin mx-auto text-red-500" />
+                            <p className="mt-2 text-sm">Loading inventory…</p>
+                          </td>
+                        </tr>
+                      ) : sortedRawMaterials.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="px-3 py-12 text-center text-sm text-gray-500">
+                            No raw materials to show. Try another branch or filters.
+                          </td>
+                        </tr>
+                      ) : (
+                      pagedRawMaterials.map(item => {
+                        const capDenom = Math.max(item.maxCapacity, 1);
+                        const pct = Math.min(100, Math.round((item.currentStock / capDenom) * 100));
+                        return (
                         <tr key={item.id} className="hover:bg-gray-50">
-                          <td className="px-3 py-3 whitespace-nowrap text-sm font-medium text-gray-900">{item.code}</td>
-                          <td className="px-3 py-3 text-sm text-gray-900">{item.name}</td>
+                          <td className="px-3 py-3 text-sm text-gray-900">
+                            <Link
+                              to={`/materials/${item.id}`}
+                              className="text-blue-600 hover:text-blue-800 hover:underline font-medium"
+                            >
+                              {item.name}
+                            </Link>
+                          </td>
                           <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">{item.category}</td>
                           <td className="px-3 py-3 whitespace-nowrap text-sm">
                             <span className="font-semibold text-gray-900">{item.currentStock}</span>
                             <span className="text-gray-500"> {item.unit}</span>
                           </td>
-                          <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">{item.reorderPoint} {item.unit}</td>
-                          <td className="px-3 py-3 whitespace-nowrap text-sm">
-                            <div className="flex items-center gap-1 text-gray-600">
-                              <TrendingDown className="w-4 h-4 text-gray-400" />
-                              {item.dailyConsumption} {item.unit}/day
+                          <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">
+                            <div className="flex items-center gap-2">
+                              <div className="w-20 bg-gray-200 rounded-full h-2">
+                                <div 
+                                  className={`h-2 rounded-full ${
+                                    pct > 60 ? 'bg-green-500' :
+                                    pct > 30 ? 'bg-yellow-500' : 'bg-red-500'
+                                  }`}
+                                  style={{ width: `${pct}%` }}
+                                />
+                            </div>
+                              <span className="text-xs text-gray-500">
+                                {pct}%
+                            </span>
                             </div>
                           </td>
-                          <td className="px-3 py-3 whitespace-nowrap text-sm">
-                            <span className={`font-semibold ${
-                              item.daysRemaining > 10 ? 'text-green-600' :
-                              item.daysRemaining > 5 ? 'text-yellow-600' : 'text-red-600'
-                            }`}>
-                              {item.daysRemaining} days
-                            </span>
-                          </td>
-                          <td className="px-3 py-3 text-sm text-gray-600">{item.supplier}</td>
                           <td className="px-3 py-3 whitespace-nowrap">
                             <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border ${getStatusColor(item.status)}`}>
                               {getStatusIcon(item.status)}
                               {getStatusText(item.status)}
                             </span>
                           </td>
-                          <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">{item.lastPurchased}</td>
-                          <td className="px-3 py-3 whitespace-nowrap">
-                            <button
-                              onClick={() => handleOpenAdjustment(item, 'raw-material')}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-700 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 transition-colors"
-                            >
-                              <Edit3 className="w-3.5 h-3.5" />
-                              Adjust Stock
-                            </button>
-                          </td>
+                          <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">{item.lastRestocked}</td>
                         </tr>
-                      ))}
+                        );
+                      })
+                      )}
                     </tbody>
                   </table>
                 </div>
 
                 {/* Mobile Card View */}
                 <div className="md:hidden divide-y divide-gray-200">
-                  {filteredRawMaterials.map(item => (
+                  {inventoryLoading ? (
+                    <div className="p-8 flex flex-col items-center text-gray-500">
+                      <Loader2 className="w-8 h-8 animate-spin text-red-500" />
+                      <p className="mt-2 text-sm">Loading…</p>
+                    </div>
+                  ) : sortedRawMaterials.length === 0 ? (
+                    <div className="p-8 text-center text-sm text-gray-500">No raw materials to show.</div>
+                  ) : (
+                  pagedRawMaterials.map(item => {
+                    const capDenom = Math.max(item.maxCapacity, 1);
+                    const pct = Math.min(100, Math.round((item.currentStock / capDenom) * 100));
+                    return (
                     <div key={item.id} className="p-4 space-y-3">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
-                          <p className="font-medium text-gray-900 break-words">{item.name}</p>
-                          <p className="text-xs text-gray-600 mt-1">{item.code} • {item.category}</p>
+                          <Link
+                            to={`/materials/${item.id}`}
+                            className="font-medium text-gray-900 break-words hover:text-blue-700 hover:underline block"
+                          >
+                            {item.name}
+                          </Link>
+                          <p className="text-xs text-gray-600 mt-1">{item.category}</p>
                         </div>
                         <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium border flex-shrink-0 ${getStatusColor(item.status)}`}>
                           {getStatusIcon(item.status)}
@@ -1688,47 +2260,52 @@ export default function WarehousePage() {
                       </div>
                       
                       <div className="grid grid-cols-2 gap-3 text-sm">
-                        <div>
+                        <div className="col-span-2">
                           <p className="text-xs text-gray-500">Current Stock</p>
                           <p className="font-semibold text-gray-900">{item.currentStock} {item.unit}</p>
                         </div>
-                        <div>
-                          <p className="text-xs text-gray-500">Reorder Point</p>
-                          <p className="text-gray-900">{item.reorderPoint} {item.unit}</p>
+                        <div className="col-span-2">
+                          <p className="text-xs text-gray-500">Last Restocked</p>
+                          <p className="text-gray-900">{item.lastRestocked}</p>
                         </div>
-                        <div>
-                          <p className="text-xs text-gray-500">Daily Usage</p>
-                          <p className="text-gray-900">{item.dailyConsumption} {item.unit}/day</p>
                         </div>
+
                         <div>
-                          <p className="text-xs text-gray-500">Days Remaining</p>
-                          <p className={`font-semibold ${
-                            item.daysRemaining > 10 ? 'text-green-600' :
-                            item.daysRemaining > 5 ? 'text-yellow-600' : 'text-red-600'
-                          }`}>
-                            {item.daysRemaining} days
-                          </p>
+                        <p className="text-xs text-gray-500 mb-2">Capacity Usage</p>
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 bg-gray-200 rounded-full h-2">
+                            <div 
+                              className={`h-2 rounded-full ${
+                                pct > 60 ? 'bg-green-500' :
+                                pct > 30 ? 'bg-yellow-500' : 'bg-red-500'
+                              }`}
+                              style={{ width: `${pct}%` }}
+                            />
                         </div>
-                        <div>
-                          <p className="text-xs text-gray-500">Supplier</p>
-                          <p className="text-gray-900 text-xs">{item.supplier}</p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-gray-500">Last Purchased</p>
-                          <p className="text-gray-900">{item.lastPurchased}</p>
+                          <span className="text-xs text-gray-600">
+                            {pct}%
+                          </span>
                         </div>
                       </div>
 
-                      <button
-                        onClick={() => handleOpenAdjustment(item, 'raw-material')}
-                        className="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 transition-colors"
+                      <Link
+                        to={`/materials/${item.id}`}
+                        className="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 transition-colors"
                       >
-                        <Edit3 className="w-4 h-4" />
-                        Adjust Stock
-                      </button>
+                        View material
+                      </Link>
                     </div>
-                  ))}
+                    );
+                  })
+                  )}
                 </div>
+                {!inventoryLoading && sortedRawMaterials.length > 0 && (
+                  <TablePagination
+                    page={rawTablePage}
+                    total={sortedRawMaterials.length}
+                    onPageChange={setRawTablePage}
+                  />
+                )}
               </div>
             )}
           </div>
@@ -1736,15 +2313,13 @@ export default function WarehousePage() {
 
         {activeTab === 'requests' && (
           <div className="space-y-4">
-            {/* Controls Header */}
             <div className="bg-white rounded-lg border border-gray-200 p-4">
-              <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
-                <div className="w-full lg:w-auto">
-                  {/* Request Type Toggle */}
-                  <div className="flex bg-gray-100 rounded-lg p-1 w-full lg:w-auto">
+              <div className="flex flex-wrap items-center gap-4">
+                <div className="flex bg-gray-100 rounded-lg p-1 w-full sm:w-auto">
                     <button
+                    type="button"
                       onClick={() => setRequestType('production')}
-                      className={`flex-1 lg:flex-initial flex items-center justify-center gap-2 px-3 md:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-colors ${
+                    className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-3 md:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-colors ${
                         requestType === 'production'
                           ? 'bg-white text-gray-900 shadow-sm'
                           : 'text-gray-600 hover:text-gray-900'
@@ -1754,116 +2329,120 @@ export default function WarehousePage() {
                       Production Requests
                     </button>
                     <button
+                    type="button"
                       onClick={() => setRequestType('purchase')}
-                      className={`flex-1 lg:flex-initial flex items-center justify-center gap-2 px-3 md:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-colors ${
+                    className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-3 md:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-colors ${
                         requestType === 'purchase'
                           ? 'bg-white text-gray-900 shadow-sm'
                           : 'text-gray-600 hover:text-gray-900'
                       }`}
                     >
                       <ShoppingCart className="w-4 h-4" />
-                      Purchase Requests
+                    Purchase Orders
                     </button>
                   </div>
                 </div>
 
-                <button
-                  onClick={() => setShowCreateModal(true)}
-                  className="w-full lg:w-auto flex items-center justify-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+              {scheduleError && (
+                <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+                  {scheduleError}
+                </div>
+              )}
+
+              <div className="mt-4 flex flex-col sm:flex-row flex-wrap gap-3 items-stretch sm:items-center">
+                <div className="relative flex-1 min-w-[200px]">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <input
+                    type="search"
+                    placeholder="Search SKU, name, document #, requester, supplier…"
+                    value={scheduleSearch}
+                    onChange={(e) => setScheduleSearch(e.target.value)}
+                    className="w-full pl-10 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-red-500/20 focus:border-red-500"
+                  />
+                </div>
+                <select
+                  value={scheduleStatusFilter}
+                  onChange={(e) => setScheduleStatusFilter(e.target.value)}
+                  className="border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white min-w-[160px]"
                 >
-                  <Plus className="w-4 h-4" />
-                  New Request
+                  <option value="">All statuses</option>
+                  {(requestType === 'production' ? schedulePrStatusOptions : schedulePoStatusOptions).map((st) => (
+                    <option key={st} value={st}>
+                      {st}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={openScheduleCalendarModal}
+                  className="inline-flex items-center justify-center gap-2 px-3 py-2 border border-gray-200 rounded-lg text-sm hover:bg-gray-50"
+                >
+                  <Calendar className="w-4 h-4 text-gray-600" />
+                  View calendar
                 </button>
               </div>
 
-              {/* Schedule Calendar */}
               <div className="mt-6 pt-6 border-t border-gray-200">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
                   <h3 className="flex items-center gap-2 font-semibold text-gray-900">
                     <Calendar className="w-5 h-5 text-gray-500" />
-                    Schedule Calendar (14 Days)
+                    Arrival Calendar (14 Days)
+                    {scheduleLoading && (
+                      <Loader2 className="w-4 h-4 text-gray-400 animate-spin" aria-hidden />
+                    )}
                   </h3>
-                  <div className="flex flex-wrap items-center gap-3 text-xs">
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
                     {requestType === 'production' && (
+                      <>
                       <div className="flex items-center gap-1">
-                        <div className="w-3 h-3 rounded-full bg-green-500"></div>
-                        <span className="text-gray-600">Production</span>
+                          <div className="w-3 h-3 rounded-full bg-green-500" />
+                          <span className="text-gray-600">Production request</span>
                       </div>
+                        <div className="flex items-center gap-1">
+                          <div className="w-3 h-3 rounded-full bg-amber-600" />
+                          <span className="text-gray-600">Inter-branch</span>
+                        </div>
+                      </>
                     )}
                     {requestType === 'purchase' && (
+                      <>
                       <div className="flex items-center gap-1">
-                        <div className="w-3 h-3 rounded-full bg-blue-500"></div>
-                        <span className="text-gray-600">Material Arrival</span>
+                          <div className="w-3 h-3 rounded-full bg-blue-500" />
+                          <span className="text-gray-600">Purchase order</span>
                       </div>
+                        <div className="flex items-center gap-1">
+                          <div className="w-3 h-3 rounded-full bg-amber-600" />
+                          <span className="text-gray-600">Inter-branch</span>
+                        </div>
+                      </>
                     )}
                   </div>
                 </div>
 
-                {/* Calendar Grid */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2">
                   {(() => {
-                    const today = new Date('2026-02-27');
+                    const today = new Date();
+                    const ymd = (d: Date) =>
+                      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                    const isToday = (d: Date) => ymd(d) === ymd(today);
                     const days: Date[] = [];
                     for (let i = 0; i < 14; i++) {
                       const date = new Date(today);
                       date.setDate(today.getDate() + i);
                       days.push(date);
                     }
-
-                    // Map requests to calendar events
-                    const eventsByDate: Record<string, any[]> = {};
-                    
-                    // Add production requests (only if production tab is active)
-                    if (requestType === 'production') {
-                      mockProductionRequests.forEach(req => {
-                        const dateKey = req.scheduledDate;
-                        if (!eventsByDate[dateKey]) eventsByDate[dateKey] = [];
-                        eventsByDate[dateKey].push({
-                          type: 'production',
-                          title: req.productName,
-                          requestNumber: req.requestNumber,
-                          quantity: req.quantity,
-                          unit: req.unit,
-                          priority: req.priority,
-                          status: req.status
-                        });
-                      });
-                    }
-
-                    // Add purchase requests (only if purchase tab is active)
-                    if (requestType === 'purchase') {
-                      mockPurchaseRequests.forEach(req => {
-                        const dateKey = req.estimatedArrival;
-                        if (!eventsByDate[dateKey]) eventsByDate[dateKey] = [];
-                        eventsByDate[dateKey].push({
-                          type: 'purchase',
-                          title: req.materialName,
-                          requestNumber: req.requestNumber,
-                          quantity: req.quantity,
-                          unit: req.unit,
-                          supplier: req.supplier,
-                          priority: req.priority,
-                          status: req.status
-                        });
-                      });
-                    }
-
-                    const formatDate = (date: Date) => date.toISOString().split('T')[0];
-                    const isToday = (date: Date) => formatDate(date) === formatDate(today);
-
-                    return days.map((day, idx) => {
-                      const dateKey = day.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).replace(' ', ' ');
-                      const dayEvents = eventsByDate[dateKey] || [];
-
+                    return days.map((day) => {
+                      const dayKey = dateKeyLocalFromDate(day);
+                      const dayEvents = warehouseEventsByDateKey[dayKey] ?? [];
                       return (
                         <div
-                          key={idx}
+                          key={dayKey}
                           className={`min-h-24 p-2 rounded-lg border transition-all ${
                             isToday(day)
                               ? 'bg-red-50 border-red-300 ring-2 ring-red-200'
                               : 'bg-white border-gray-200'
                           } ${dayEvents.length > 0 ? 'hover:shadow-md cursor-pointer' : 'opacity-60'}`}
-                          onClick={() => dayEvents.length > 0 && setSelectedCalendarEvent(dayEvents[0])}
+                          onClick={() => dayEvents.length > 0 && setScheduleStripDetailDateKey(dayKey)}
                         >
                           <div className="flex flex-col h-full">
                             <div className="flex items-center justify-between mb-2">
@@ -1874,24 +2453,21 @@ export default function WarehousePage() {
                                 {day.getDate()}
                               </span>
                             </div>
-                            
                             <div className="flex-1 space-y-1">
-                              {dayEvents.slice(0, 2).map((event, eventIdx) => (
+                              {dayEvents.slice(0, 2).map((ev) => (
                                 <div
-                                  key={eventIdx}
-                                  className={`text-xs p-1 rounded flex items-center gap-1 ${
-                                    event.type === 'production'
-                                      ? 'bg-green-500 text-white'
-                                      : 'bg-blue-500 text-white'
-                                  }`}
-                                  title={event.title}
+                                  key={ev.id}
+                                  className={`text-xs p-1 rounded flex items-center gap-1 ${calendarKindChipClass(ev.calendarKind)}`}
+                                  title={ev.title}
                                 >
-                                  {event.type === 'production' ? (
-                                    <Factory className="w-3 h-3 flex-shrink-0" />
-                                  ) : (
+                                  {ev.calendarKind === 'purchase' ? (
                                     <ShoppingCart className="w-3 h-3 flex-shrink-0" />
+                                  ) : ev.calendarKind === 'ibr' ? (
+                                    <GitBranch className="w-3 h-3 flex-shrink-0" />
+                                  ) : (
+                                    <Factory className="w-3 h-3 flex-shrink-0" />
                                   )}
-                                  <span className="truncate flex-1">{event.title}</span>
+                                  <span className="truncate flex-1">{ev.title}</span>
                                 </div>
                               ))}
                               {dayEvents.length > 2 && (
@@ -1908,268 +2484,407 @@ export default function WarehousePage() {
                 </div>
               </div>
 
-              {/* Summary Stats */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 md:gap-4 mt-4 pt-4 border-t border-gray-200">
                 <div>
-                  <p className="text-sm text-gray-600">Total</p>
+                  <p className="text-sm text-gray-600">Total (lines)</p>
                   <p className="text-2xl font-bold text-gray-900">
-                    {requestType === 'production' ? mockProductionRequests.length : mockPurchaseRequests.length}
+                    {requestType === 'production' ? prScheduleStats.total : poScheduleStats.total}
                   </p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-600">Pending</p>
                   <p className="text-2xl font-bold text-yellow-600">
-                    {requestType === 'production' 
-                      ? mockProductionRequests.filter(r => r.status === 'pending').length
-                      : mockPurchaseRequests.filter(r => r.status === 'pending').length
-                    }
+                    {requestType === 'production' ? prScheduleStats.pending : poScheduleStats.pending}
                   </p>
                 </div>
                 <div>
-                  <p className="text-sm text-gray-600">Approved</p>
+                  <p className="text-sm text-gray-600">Approved / sent</p>
                   <p className="text-2xl font-bold text-blue-600">
-                    {requestType === 'production' 
-                      ? mockProductionRequests.filter(r => r.status === 'approved').length
-                      : mockPurchaseRequests.filter(r => r.status === 'approved').length
-                    }
+                    {requestType === 'production' ? prScheduleStats.approved : poScheduleStats.approved}
                   </p>
                 </div>
                 <div>
-                  <p className="text-sm text-gray-600">In Progress</p>
+                  <p className="text-sm text-gray-600">In progress</p>
                   <p className="text-2xl font-bold text-purple-600">
-                    {requestType === 'production' 
-                      ? mockProductionRequests.filter(r => r.status === 'in-progress').length
-                      : mockPurchaseRequests.filter(r => r.status === 'in-progress').length
-                    }
+                    {requestType === 'production' ? prScheduleStats.inProgress : poScheduleStats.inProgress}
                   </p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-600">Completed</p>
                   <p className="text-2xl font-bold text-green-600">
-                    {requestType === 'production' 
-                      ? mockProductionRequests.filter(r => r.status === 'completed').length
-                      : mockPurchaseRequests.filter(r => r.status === 'completed').length
-                    }
+                    {requestType === 'production' ? prScheduleStats.completed : poScheduleStats.completed}
                   </p>
                 </div>
               </div>
             </div>
 
-            {/* Production Requests Table */}
             {requestType === 'production' && (
               <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-                {/* Desktop Table */}
                 <div className="hidden md:block overflow-x-auto">
                   <table className="w-full">
                     <thead className="bg-gray-50 border-b border-gray-200">
                       <tr>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Request #</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Product</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Quantity</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Scheduled Date</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Est. Completion</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Priority</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Requested By</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Request Date</th>
+                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          <button
+                            type="button"
+                            onClick={() => handlePrScheduleSort('productName')}
+                            className="inline-flex items-center text-gray-500 hover:text-gray-800"
+                          >
+                            Product {prScheduleSortIcon('productName')}
+                          </button>
+                        </th>
+                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          <button
+                            type="button"
+                            onClick={() => handlePrScheduleSort('quantity')}
+                            className="inline-flex items-center text-gray-500 hover:text-gray-800"
+                          >
+                            Qty {prScheduleSortIcon('quantity')}
+                          </button>
+                        </th>
+                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          <button
+                            type="button"
+                            onClick={() => handlePrScheduleSort('requestDateIso')}
+                            className="inline-flex items-center text-gray-500 hover:text-gray-800"
+                          >
+                            Request date {prScheduleSortIcon('requestDateIso')}
+                          </button>
+                        </th>
+                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          <button
+                            type="button"
+                            onClick={() => handlePrScheduleSort('expectedCompletionIso')}
+                            className="inline-flex items-center text-gray-500 hover:text-gray-800"
+                          >
+                            Est. completion {prScheduleSortIcon('expectedCompletionIso')}
+                          </button>
+                        </th>
+                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          <button
+                            type="button"
+                            onClick={() => handlePrScheduleSort('status')}
+                            className="inline-flex items-center text-gray-500 hover:text-gray-800"
+                          >
+                            Status {prScheduleSortIcon('status')}
+                          </button>
+                        </th>
+                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          <button
+                            type="button"
+                            onClick={() => handlePrScheduleSort('requestedBy')}
+                            className="inline-flex items-center text-gray-500 hover:text-gray-800"
+                          >
+                            Requested by {prScheduleSortIcon('requestedBy')}
+                          </button>
+                        </th>
                       </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
-                      {mockProductionRequests.map(request => (
-                        <tr key={request.id} className="hover:bg-gray-50">
-                          <td className="px-3 py-3 whitespace-nowrap text-sm font-medium text-gray-900">{request.requestNumber}</td>
+                      {scheduleLoading && sortedSchedulePr.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="px-3 py-12 text-center text-sm text-gray-500">
+                            <Loader2 className="w-6 h-6 animate-spin inline-block text-gray-400" />
+                            <span className="ml-2">Loading production schedule…</span>
+                          </td>
+                        </tr>
+                      ) : sortedSchedulePr.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="px-3 py-12 text-center text-sm text-gray-500">
+                            No production lines match your filters.
+                          </td>
+                        </tr>
+                      ) : (
+                        pagedSchedulePr.map((row) => (
+                          <tr key={row.rowKey} className="hover:bg-gray-50">
                           <td className="px-3 py-3 text-sm text-gray-900">
                             <div>
-                              <div className="font-medium">{request.productName}</div>
-                              <div className="text-xs text-gray-500">{request.productSku}</div>
+                                <Link
+                                  to={`/production-requests/${row.prId}`}
+                                  className="font-medium text-blue-700 hover:text-blue-900 hover:underline"
+                                >
+                                  {row.productName}
+                                </Link>
+                                <div className="text-xs text-gray-500">{row.productSku || '—'}</div>
                             </div>
                           </td>
                           <td className="px-3 py-3 whitespace-nowrap text-sm">
-                            <span className="font-semibold text-gray-900">{request.quantity}</span>
-                            <span className="text-gray-500"> {request.unit}</span>
+                              <span className="font-semibold text-gray-900">{row.quantity}</span>
+                              <span className="text-gray-500"> {row.unit}</span>
                           </td>
                           <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">
                             <div className="flex items-center gap-1">
                               <Clock className="w-4 h-4 text-gray-400" />
-                              {request.scheduledDate}
+                                {row.requestDateFmt}
                             </div>
                           </td>
-                          <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">{request.estimatedCompletion}</td>
+                            <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">{row.expectedCompletionFmt}</td>
                           <td className="px-3 py-3 whitespace-nowrap">
-                            <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${getRequestStatusColor(request.status)}`}>
-                              {getRequestStatusText(request.status)}
+                              <span
+                                className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${prScheduleBadgeClass(row.status)}`}
+                              >
+                                {row.status}
                             </span>
                           </td>
-                          <td className="px-3 py-3 whitespace-nowrap">
-                            <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${getPriorityColor(request.priority)}`}>
-                              {request.priority.toUpperCase()}
-                            </span>
-                          </td>
-                          <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">{request.requestedBy}</td>
-                          <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">{request.requestDate}</td>
+                            <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">{row.requestedBy}</td>
                         </tr>
-                      ))}
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>
 
-                {/* Mobile Card View */}
                 <div className="md:hidden divide-y divide-gray-200">
-                  {mockProductionRequests.map(request => (
-                    <div key={request.id} className="p-4 space-y-3">
+                  {sortedSchedulePr.length === 0 && !scheduleLoading ? (
+                    <div className="p-8 text-center text-sm text-gray-500">No production lines match your filters.</div>
+                  ) : (
+                    pagedSchedulePr.map((row) => (
+                      <div key={row.rowKey} className="p-4 space-y-3">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
-                          <p className="font-medium text-gray-900 break-words">{request.productName}</p>
-                          <p className="text-xs text-gray-600 mt-1">{request.requestNumber} • {request.productSku}</p>
+                            <Link
+                              to={`/production-requests/${row.prId}`}
+                              className="font-medium text-gray-900 break-words hover:text-blue-700"
+                            >
+                              {row.productName}
+                            </Link>
+                            <p className="text-xs text-gray-600 mt-1">{row.productSku || '—'}</p>
                         </div>
-                        <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border flex-shrink-0 ${getPriorityColor(request.priority)}`}>
-                          {request.priority.toUpperCase()}
+                          <span
+                            className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border flex-shrink-0 ${prScheduleBadgeClass(row.status)}`}
+                          >
+                            {row.status}
                         </span>
                       </div>
-                      
                       <div className="flex items-center gap-2">
-                        <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${getRequestStatusColor(request.status)}`}>
-                          {getRequestStatusText(request.status)}
+                          <span className="font-semibold text-gray-900">
+                            {row.quantity} {row.unit}
                         </span>
-                        <span className="font-semibold text-gray-900">{request.quantity} {request.unit}</span>
                       </div>
-                      
                       <div className="grid grid-cols-2 gap-3 text-sm">
                         <div>
-                          <p className="text-xs text-gray-500">Scheduled Date</p>
+                            <p className="text-xs text-gray-500">Request date</p>
                           <p className="text-gray-900 flex items-center gap-1">
                             <Clock className="w-3 h-3 text-gray-400" />
-                            {request.scheduledDate}
+                              {row.requestDateFmt}
                           </p>
                         </div>
                         <div>
-                          <p className="text-xs text-gray-500">Est. Completion</p>
-                          <p className="text-gray-900">{request.estimatedCompletion}</p>
+                            <p className="text-xs text-gray-500">Est. completion</p>
+                            <p className="text-gray-900">{row.expectedCompletionFmt}</p>
                         </div>
-                        <div>
-                          <p className="text-xs text-gray-500">Requested By</p>
-                          <p className="text-gray-900">{request.requestedBy}</p>
+                          <div className="col-span-2">
+                            <p className="text-xs text-gray-500">Requested by</p>
+                            <p className="text-gray-900">{row.requestedBy}</p>
                         </div>
-                        <div>
-                          <p className="text-xs text-gray-500">Request Date</p>
-                          <p className="text-gray-900">{request.requestDate}</p>
                         </div>
                       </div>
+                    ))
+                  )}
                     </div>
-                  ))}
-                </div>
+                {!scheduleLoading && sortedSchedulePr.length > 0 && (
+                  <TablePagination page={prSchedulePage} total={sortedSchedulePr.length} onPageChange={setPrSchedulePage} />
+                )}
               </div>
             )}
 
-            {/* Purchase Requests Table */}
             {requestType === 'purchase' && (
               <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-                {/* Desktop Table */}
                 <div className="hidden md:block overflow-x-auto">
                   <table className="w-full">
                     <thead className="bg-gray-50 border-b border-gray-200">
                       <tr>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Request #</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Material</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Quantity</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Supplier</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Requested Delivery</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Est. Arrival</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Priority</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Requested By</th>
-                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Request Date</th>
+                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          <button
+                            type="button"
+                            onClick={() => handlePoScheduleSort('materialName')}
+                            className="inline-flex items-center text-gray-500 hover:text-gray-800"
+                          >
+                            Material {poScheduleSortIcon('materialName')}
+                          </button>
+                        </th>
+                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          <button
+                            type="button"
+                            onClick={() => handlePoScheduleSort('quantity')}
+                            className="inline-flex items-center text-gray-500 hover:text-gray-800"
+                          >
+                            Qty {poScheduleSortIcon('quantity')}
+                          </button>
+                        </th>
+                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          <button
+                            type="button"
+                            onClick={() => handlePoScheduleSort('supplier')}
+                            className="inline-flex items-center text-gray-500 hover:text-gray-800"
+                          >
+                            Supplier {poScheduleSortIcon('supplier')}
+                          </button>
+                        </th>
+                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          <button
+                            type="button"
+                            onClick={() => handlePoScheduleSort('requestedDeliveryFmt')}
+                            className="inline-flex items-center text-gray-500 hover:text-gray-800"
+                          >
+                            Req. delivery {poScheduleSortIcon('requestedDeliveryFmt')}
+                          </button>
+                        </th>
+                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          <button
+                            type="button"
+                            onClick={() => handlePoScheduleSort('estimatedArrivalFmt')}
+                            className="inline-flex items-center text-gray-500 hover:text-gray-800"
+                          >
+                            Est. arrival {poScheduleSortIcon('estimatedArrivalFmt')}
+                          </button>
+                        </th>
+                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          <button
+                            type="button"
+                            onClick={() => handlePoScheduleSort('status')}
+                            className="inline-flex items-center text-gray-500 hover:text-gray-800"
+                          >
+                            Status {poScheduleSortIcon('status')}
+                          </button>
+                        </th>
+                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          <button
+                            type="button"
+                            onClick={() => handlePoScheduleSort('requestedBy')}
+                            className="inline-flex items-center text-gray-500 hover:text-gray-800"
+                          >
+                            Requested by {poScheduleSortIcon('requestedBy')}
+                          </button>
+                        </th>
+                        <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          <button
+                            type="button"
+                            onClick={() => handlePoScheduleSort('orderDateIso')}
+                            className="inline-flex items-center text-gray-500 hover:text-gray-800"
+                          >
+                            Order date {poScheduleSortIcon('orderDateIso')}
+                          </button>
+                        </th>
                       </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
-                      {mockPurchaseRequests.map(request => (
-                        <tr key={request.id} className="hover:bg-gray-50">
-                          <td className="px-3 py-3 whitespace-nowrap text-sm font-medium text-gray-900">{request.requestNumber}</td>
+                      {scheduleLoading && sortedSchedulePo.length === 0 ? (
+                        <tr>
+                          <td colSpan={8} className="px-3 py-12 text-center text-sm text-gray-500">
+                            <Loader2 className="w-6 h-6 animate-spin inline-block text-gray-400" />
+                            <span className="ml-2">Loading purchase schedule…</span>
+                          </td>
+                        </tr>
+                      ) : sortedSchedulePo.length === 0 ? (
+                        <tr>
+                          <td colSpan={8} className="px-3 py-12 text-center text-sm text-gray-500">
+                            No purchase lines match your filters.
+                          </td>
+                        </tr>
+                      ) : (
+                        pagedSchedulePo.map((row) => (
+                          <tr key={row.rowKey} className="hover:bg-gray-50">
                           <td className="px-3 py-3 text-sm text-gray-900">
                             <div>
-                              <div className="font-medium">{request.materialName}</div>
-                              <div className="text-xs text-gray-500">{request.materialCode}</div>
+                                <Link
+                                  to={`/purchase-orders/${row.poId}`}
+                                  className="font-medium text-blue-700 hover:text-blue-900 hover:underline"
+                                >
+                                  {row.materialName}
+                                </Link>
+                                <div className="text-xs text-gray-500">{row.materialCode}</div>
                             </div>
                           </td>
                           <td className="px-3 py-3 whitespace-nowrap text-sm">
-                            <span className="font-semibold text-gray-900">{request.quantity}</span>
-                            <span className="text-gray-500"> {request.unit}</span>
+                              <span className="font-semibold text-gray-900">{row.quantity}</span>
+                              <span className="text-gray-500"> {row.unit}</span>
                           </td>
-                          <td className="px-3 py-3 text-sm text-gray-600">{request.supplier}</td>
+                            <td className="px-3 py-3 text-sm text-gray-600">{row.supplier}</td>
                           <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">
                             <div className="flex items-center gap-1">
                               <Clock className="w-4 h-4 text-gray-400" />
-                              {request.requestedDelivery}
+                                {row.requestedDeliveryFmt}
                             </div>
                           </td>
-                          <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">{request.estimatedArrival}</td>
+                            <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">{row.estimatedArrivalFmt}</td>
                           <td className="px-3 py-3 whitespace-nowrap">
-                            <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${getRequestStatusColor(request.status)}`}>
-                              {getRequestStatusText(request.status)}
+                              <span
+                                className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${poScheduleBadgeClass(row.status)}`}
+                              >
+                                {row.status}
                             </span>
                           </td>
-                          <td className="px-3 py-3 whitespace-nowrap">
-                            <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${getPriorityColor(request.priority)}`}>
-                              {request.priority.toUpperCase()}
-                            </span>
+                            <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">{row.requestedBy}</td>
+                            <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">
+                              {fmtScheduleDate(row.orderDateIso)}
                           </td>
-                          <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">{request.requestedBy}</td>
-                          <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">{request.requestDate}</td>
                         </tr>
-                      ))}
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>
 
-                {/* Mobile Card View */}
                 <div className="md:hidden divide-y divide-gray-200">
-                  {mockPurchaseRequests.map(request => (
-                    <div key={request.id} className="p-4 space-y-3">
+                  {sortedSchedulePo.length === 0 && !scheduleLoading ? (
+                    <div className="p-8 text-center text-sm text-gray-500">No purchase lines match your filters.</div>
+                  ) : (
+                    pagedSchedulePo.map((row) => (
+                      <div key={row.rowKey} className="p-4 space-y-3">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
-                          <p className="font-medium text-gray-900 break-words">{request.materialName}</p>
-                          <p className="text-xs text-gray-600 mt-1">{request.requestNumber} • {request.materialCode}</p>
+                            <Link
+                              to={`/purchase-orders/${row.poId}`}
+                              className="font-medium text-gray-900 break-words hover:text-blue-700"
+                            >
+                              {row.materialName}
+                            </Link>
+                            <p className="text-xs text-gray-600 mt-1">{row.materialCode}</p>
                         </div>
-                        <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border flex-shrink-0 ${getPriorityColor(request.priority)}`}>
-                          {request.priority.toUpperCase()}
+                          <span
+                            className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border flex-shrink-0 ${poScheduleBadgeClass(row.status)}`}
+                          >
+                            {row.status}
                         </span>
                       </div>
-                      
                       <div className="flex items-center gap-2">
-                        <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${getRequestStatusColor(request.status)}`}>
-                          {getRequestStatusText(request.status)}
+                          <span className="font-semibold text-gray-900">
+                            {row.quantity} {row.unit}
                         </span>
-                        <span className="font-semibold text-gray-900">{request.quantity} {request.unit}</span>
                       </div>
-                      
                       <div className="grid grid-cols-2 gap-3 text-sm">
                         <div>
                           <p className="text-xs text-gray-500">Supplier</p>
-                          <p className="text-gray-900">{request.supplier}</p>
+                            <p className="text-gray-900">{row.supplier}</p>
                         </div>
                         <div>
-                          <p className="text-xs text-gray-500">Est. Arrival</p>
-                          <p className="text-gray-900">{request.estimatedArrival}</p>
+                            <p className="text-xs text-gray-500">Est. arrival</p>
+                            <p className="text-gray-900">{row.estimatedArrivalFmt}</p>
                         </div>
                         <div>
-                          <p className="text-xs text-gray-500">Requested Delivery</p>
+                            <p className="text-xs text-gray-500">Req. delivery</p>
                           <p className="text-gray-900 flex items-center gap-1">
                             <Clock className="w-3 h-3 text-gray-400" />
-                            {request.requestedDelivery}
+                              {row.requestedDeliveryFmt}
                           </p>
                         </div>
                         <div>
-                          <p className="text-xs text-gray-500">Requested By</p>
-                          <p className="text-gray-900">{request.requestedBy}</p>
+                            <p className="text-xs text-gray-500">Order date</p>
+                            <p className="text-gray-900">{fmtScheduleDate(row.orderDateIso)}</p>
                         </div>
                         <div className="col-span-2">
-                          <p className="text-xs text-gray-500">Request Date</p>
-                          <p className="text-gray-900">{request.requestDate}</p>
+                            <p className="text-xs text-gray-500">Requested by</p>
+                            <p className="text-gray-900">{row.requestedBy}</p>
                         </div>
                       </div>
                     </div>
-                  ))}
+                    ))
+                  )}
                 </div>
+                {!scheduleLoading && sortedSchedulePo.length > 0 && (
+                  <TablePagination page={poSchedulePage} total={sortedSchedulePo.length} onPageChange={setPoSchedulePage} />
+                )}
               </div>
             )}
           </div>
@@ -3327,15 +4042,254 @@ export default function WarehousePage() {
         )}
       </div>
 
-      {/* Create Request Modal */}
-      <CreateRequestModal
-        isOpen={showCreateModal}
-        onClose={() => setShowCreateModal(false)}
-        initialType={requestType}
-        finishedGoods={mockFinishedGoods}
-        rawMaterials={mockRawMaterials}
-      />
+      {/* Full warehouse schedule calendar (month view; includes IBR) */}
+      {scheduleCalendarModalOpen && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => setScheduleCalendarModalOpen(false)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="warehouse-calendar-title"
+            className="bg-white rounded-xl shadow-xl w-full max-w-4xl max-h-[92vh] overflow-hidden flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3 p-4 md:p-5 border-b border-gray-200">
+              <div>
+                <h2 id="warehouse-calendar-title" className="text-lg md:text-xl font-bold text-gray-900">
+                  Warehouse schedule
+                </h2>
+                <p className="text-sm text-gray-600 mt-1">
+                  {requestType === 'production'
+                    ? `Production requests and IBR milestones with product lines${branch ? ` · ${branch}` : ''}.`
+                    : `Purchase orders and IBR milestones with raw materials${branch ? ` · ${branch}` : ''}.`}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => void fetchWarehouseCalendarEvents()}
+                  disabled={warehouseCalendarLoading}
+                  className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-50"
+                  title="Reload events"
+                >
+                  <RefreshCw className={`w-4 h-4 ${warehouseCalendarLoading ? 'animate-spin' : ''}`} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setScheduleCalendarModalOpen(false)}
+                  className="p-2 rounded-lg text-gray-500 hover:bg-gray-100"
+                  aria-label="Close calendar"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
 
+            {warehouseCalendarError && (
+              <div className="mx-4 mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 md:mx-5">
+                {warehouseCalendarError}
+              </div>
+            )}
+
+            <div className="p-4 md:p-5 overflow-y-auto flex-1 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => shiftCalendarModalMonth(-1)}
+                    className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50"
+                    aria-label="Previous month"
+                  >
+                    <ChevronLeft className="w-5 h-5" />
+                  </button>
+                  <select
+                    value={calendarModalMonth}
+                    onChange={(e) => setCalendarModalMonth(Number(e.target.value))}
+                    className="border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white"
+                  >
+                    {Array.from({ length: 12 }, (_, i) => (
+                      <option key={i} value={i}>
+                        {new Date(2000, i, 1).toLocaleDateString('en-PH', { month: 'long' })}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    type="number"
+                    value={calendarModalYear}
+                    onChange={(e) => {
+                      const n = Number(e.target.value);
+                      if (e.target.value === '' || !Number.isFinite(n)) return;
+                      setCalendarModalYear(Math.trunc(n));
+                    }}
+                    className="min-w-[5.5rem] w-28 max-w-[8rem] border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                    aria-label="Year"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => shiftCalendarModalMonth(1)}
+                    className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50"
+                    aria-label="Next month"
+                  >
+                    <ChevronRight className="w-5 h-5" />
+                  </button>
+                </div>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-600">
+                  {requestType === 'production' ? (
+                    <>
+                      <span className="inline-flex items-center gap-1">
+                        <span className="w-2.5 h-2.5 rounded-full bg-green-500" />
+                        Production request
+                      </span>
+                      <span className="inline-flex items-center gap-1">
+                        <span className="w-2.5 h-2.5 rounded-full bg-amber-600" />
+                        Inter-branch
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="inline-flex items-center gap-1">
+                        <span className="w-2.5 h-2.5 rounded-full bg-blue-500" />
+                        Purchase order
+                      </span>
+                      <span className="inline-flex items-center gap-1">
+                        <span className="w-2.5 h-2.5 rounded-full bg-amber-600" />
+                        Inter-branch
+                      </span>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {warehouseCalendarLoading && warehouseCalendarEvents.length === 0 ? (
+                <div className="flex items-center justify-center py-16 text-gray-500 gap-2">
+                  <Loader2 className="w-6 h-6 animate-spin" />
+                  Loading calendar…
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-7 gap-1 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                    {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
+                      <div key={d} className="py-2">
+                        {d}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-7 gap-1">
+                    {buildMonthGrid(calendarModalYear, calendarModalMonth).map((cell, idx) => {
+                      if (!cell) {
+                        return <div key={`pad-${idx}`} className="min-h-[4.5rem] rounded-lg bg-gray-50/50" />;
+                      }
+                      const cellKey = dateKeyLocalFromDate(cell);
+                      const evs = warehouseEventsByDateKey[cellKey] ?? [];
+                      const todayKey = dateKeyLocalFromDate(new Date());
+                      const isToday = cellKey === todayKey;
+                      const isSel = calendarModalSelectedDateKey === cellKey;
+                      return (
+                        <button
+                          key={cellKey}
+                          type="button"
+                          onClick={() => setCalendarModalSelectedDateKey(cellKey)}
+                          className={`min-h-[4.5rem] rounded-lg border p-1 text-left transition-all ${
+                            isSel
+                              ? 'ring-2 ring-red-400 border-red-300 bg-red-50/80'
+                              : 'border-gray-200 bg-white hover:border-gray-300'
+                          } ${isToday && !isSel ? 'ring-1 ring-red-200' : ''}`}
+                        >
+                          <div className={`text-sm font-semibold ${isToday ? 'text-red-700' : 'text-gray-900'}`}>
+                            {cell.getDate()}
+                          </div>
+                          <div className="mt-0.5 space-y-0.5">
+                            {evs.slice(0, 2).map((ev) => (
+                              <div
+                                key={ev.id}
+                                className={`truncate rounded px-0.5 py-0.5 text-[10px] leading-tight ${calendarKindChipClass(ev.calendarKind)}`}
+                                title={ev.title}
+                              >
+                                {ev.title}
+                              </div>
+                            ))}
+                            {evs.length > 2 && (
+                              <div className="text-[10px] text-gray-500 font-medium text-center">+{evs.length - 2}</div>
+                            )}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+
+              {calendarModalSelectedDateKey && (
+                <div className="rounded-lg border border-gray-200 bg-gray-50/80 p-4">
+                  <h3 className="text-sm font-semibold text-gray-900 mb-3">
+                    {(() => {
+                      const parts = calendarModalSelectedDateKey.split('-').map(Number);
+                      const y = parts[0];
+                      const mo = parts[1];
+                      const d = parts[2];
+                      const label = new Date(y, mo - 1, d).toLocaleDateString('en-PH', {
+                        weekday: 'long',
+                        year: 'numeric',
+                        month: 'long',
+                        day: 'numeric',
+                      });
+                      return `Events on ${label}`;
+                    })()}
+                  </h3>
+                  {(warehouseEventsByDateKey[calendarModalSelectedDateKey] ?? []).length === 0 ? (
+                    <p className="text-sm text-gray-500">No scheduled activity on this date.</p>
+                  ) : (
+                    <ul className="space-y-2">
+                      {(warehouseEventsByDateKey[calendarModalSelectedDateKey] ?? []).map((ev) => (
+                        <li
+                          key={ev.id}
+                          className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-lg bg-white border border-gray-200 p-3"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span
+                                className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded ${calendarKindChipClass(ev.calendarKind)}`}
+                              >
+                                {calendarKindLabel(ev.calendarKind)}
+                              </span>
+                              <span className="text-sm font-medium text-gray-900">{ev.title}</span>
+                            </div>
+                            <span
+                              className={`inline-flex items-center mt-1 px-2 py-0.5 rounded-full text-xs font-medium border ${calendarEventStatusBadgeClass(ev)}`}
+                            >
+                              {ev.status}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            className="shrink-0 text-sm font-medium text-blue-700 hover:underline"
+                            onClick={() => {
+                              const path =
+                                ev.recordRoute === 'production'
+                                  ? `/production-requests/${ev.recordId}`
+                                  : ev.recordRoute === 'purchase'
+                                    ? `/purchase-orders/${ev.recordId}`
+                                    : `/inter-branch-requests/${ev.recordId}`;
+                              setScheduleCalendarModalOpen(false);
+                              navigate(path);
+                            }}
+                          >
+                            Open
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Create Request Modal */}
       {/* Order Detail Modal */}
       {selectedOrder && (
         <OrderDetailModal
@@ -3348,113 +4302,131 @@ export default function WarehousePage() {
         />
       )}
 
-      {/* Calendar Event Detail Modal */}
-      {selectedCalendarEvent && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto">
-            <div className="p-4 md:p-6">
-              {/* Header */}
-              <div className="flex items-center gap-3 mb-4">
-                <div className={`w-12 h-12 rounded-full flex items-center justify-center ${
-                  selectedCalendarEvent.type === 'production' ? 'bg-green-100' : 'bg-blue-100'
-                }`}>
-                  {selectedCalendarEvent.type === 'production' ? (
-                    <Factory className={`w-6 h-6 ${selectedCalendarEvent.type === 'production' ? 'text-green-600' : 'text-blue-600'}`} />
-                  ) : (
-                    <ShoppingCart className={`w-6 h-6 ${selectedCalendarEvent.type === 'production' ? 'text-green-600' : 'text-blue-600'}`} />
-                  )}
-                </div>
-                <div className="flex-1">
-                  <h3 className="text-lg font-bold text-gray-900">
-                    {selectedCalendarEvent.type === 'production' ? 'Production Batch' : 'Material Arrival'}
+      {/* 14-day strip: day detail (matches full-calendar data) */}
+      {scheduleStripDetailDateKey && (
+        <div
+          className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => setScheduleStripDetailDateKey(null)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="schedule-strip-day-title"
+          >
+            <div className="p-4 md:p-5 border-b border-gray-200 flex items-start justify-between gap-3">
+              <h3 id="schedule-strip-day-title" className="text-lg font-bold text-gray-900 pr-2">
+                {(() => {
+                  const parts = scheduleStripDetailDateKey.split('-').map(Number);
+                  const y = parts[0];
+                  const mo = parts[1];
+                  const d0 = parts[2];
+                  const label = new Date(y, mo - 1, d0).toLocaleDateString('en-PH', {
+                    weekday: 'long',
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric',
+                  });
+                  return `Events on ${label}`;
+                })()}
                   </h3>
-                  <p className="text-sm text-gray-500">{selectedCalendarEvent.requestNumber}</p>
-                </div>
                 <button
-                  onClick={() => setSelectedCalendarEvent(null)}
-                  className="text-gray-400 hover:text-gray-600"
+                type="button"
+                onClick={() => setScheduleStripDetailDateKey(null)}
+                className="text-gray-400 hover:text-gray-600 shrink-0 p-1 rounded-lg hover:bg-gray-100"
+                aria-label="Close"
                 >
                   <X className="w-5 h-5" />
                 </button>
               </div>
-
-              {/* Details */}
-              <div className="space-y-3 mb-6 text-sm bg-gray-50 p-4 rounded-lg">
-                <div className="flex justify-between">
-                  <span className="text-gray-600">
-                    {selectedCalendarEvent.type === 'production' ? 'Product:' : 'Material:'}
+            <div className="p-4 md:p-5 space-y-4">
+              {(warehouseEventsByDateKey[scheduleStripDetailDateKey] ?? []).length === 0 ? (
+                <p className="text-sm text-gray-500">No events on this date.</p>
+              ) : (
+                (warehouseEventsByDateKey[scheduleStripDetailDateKey] ?? []).map((ev) => (
+                  <div key={ev.id} className="rounded-lg border border-gray-200 bg-white overflow-hidden shadow-sm">
+                    <div className="flex items-center gap-3 p-4 border-b border-gray-100">
+                      <div
+                        className={`w-12 h-12 rounded-full flex items-center justify-center shrink-0 ${stripCalendarIconWrapClass(ev)}`}
+                      >
+                        {ev.calendarKind === 'purchase' ? (
+                          <ShoppingCart className={`w-6 h-6 ${stripCalendarIconClass(ev)}`} />
+                        ) : ev.calendarKind === 'ibr' ? (
+                          <GitBranch className={`w-6 h-6 ${stripCalendarIconClass(ev)}`} />
+                        ) : (
+                          <Factory className={`w-6 h-6 ${stripCalendarIconClass(ev)}`} />
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-lg font-bold text-gray-900 leading-tight">{stripCalendarEventHeadline(ev)}</p>
+                        <span
+                          className={`inline-block mt-1.5 text-[10px] font-semibold uppercase px-2 py-0.5 rounded ${calendarKindChipClass(ev.calendarKind)}`}
+                        >
+                          {calendarKindLabel(ev.calendarKind)}
                   </span>
-                  <span className="font-medium">{selectedCalendarEvent.title}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Quantity:</span>
-                  <span className="font-medium">{selectedCalendarEvent.quantity} {selectedCalendarEvent.unit}</span>
                 </div>
-                {selectedCalendarEvent.supplier && (
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Supplier:</span>
-                    <span className="font-medium">{selectedCalendarEvent.supplier}</span>
+                    <div className="p-4 space-y-3 text-sm bg-gray-50">
+                      <div className="flex justify-between gap-3">
+                        <span className="text-gray-600 shrink-0">{stripCalendarItemLabel(ev)}:</span>
+                        <span className="font-medium text-right text-gray-900">{ev.title}</span>
                   </div>
-                )}
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Priority:</span>
-                  <span className={`px-2 py-1 rounded text-xs font-medium ${
-                    selectedCalendarEvent.priority === 'high' ? 'bg-red-100 text-red-700' :
-                    selectedCalendarEvent.priority === 'medium' ? 'bg-yellow-100 text-yellow-700' :
-                    'bg-gray-100 text-gray-700'
-                  }`}>
-                    {selectedCalendarEvent.priority.toUpperCase()}
+                      {(ev.recordRoute === 'production' || ev.recordRoute === 'purchase') && (
+                        <div className="flex justify-between gap-3">
+                          <span className="text-gray-600">Quantity:</span>
+                          <span className="font-medium text-gray-900">
+                            {ev.quantity} {ev.unit}
                   </span>
                 </div>
-                <div className="flex justify-between">
+                      )}
+                      {ev.supplier && ev.recordRoute === 'purchase' ? (
+                        <div className="flex justify-between gap-3">
+                          <span className="text-gray-600">Supplier:</span>
+                          <span className="font-medium text-right text-gray-900">{ev.supplier}</span>
+                        </div>
+                      ) : null}
+                      <div className="flex justify-between items-center gap-3 pt-1">
                   <span className="text-gray-600">Status:</span>
-                  <span className={`px-2 py-1 rounded text-xs font-medium ${
-                    selectedCalendarEvent.status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
-                    selectedCalendarEvent.status === 'approved' ? 'bg-blue-100 text-blue-700' :
-                    selectedCalendarEvent.status === 'in-progress' ? 'bg-purple-100 text-purple-700' :
-                    selectedCalendarEvent.status === 'completed' ? 'bg-green-100 text-green-700' :
-                    'bg-gray-100 text-gray-700'
-                  }`}>
-                    {selectedCalendarEvent.status === 'in-progress' ? 'IN PROGRESS' : selectedCalendarEvent.status.toUpperCase()}
+                        <span
+                          className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${calendarEventStatusBadgeClass(ev)}`}
+                        >
+                          {ev.status}
                   </span>
                 </div>
               </div>
 
-              {/* Actions */}
-              <div className="flex flex-col-reverse sm:flex-row gap-3">
+                    <div className="p-4 flex flex-col-reverse sm:flex-row gap-3 border-t border-gray-100 bg-white">
                 <button
-                  onClick={() => setSelectedCalendarEvent(null)}
-                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                        type="button"
+                        className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors text-sm font-medium"
+                        onClick={() => setScheduleStripDetailDateKey(null)}
                 >
                   Close
                 </button>
                 <button
+                        type="button"
+                        className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
                   onClick={() => {
-                    console.log('View full request:', selectedCalendarEvent.requestNumber);
-                    setSelectedCalendarEvent(null);
-                  }}
-                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-                >
-                  View Request
+                          const path =
+                            ev.recordRoute === 'production'
+                              ? `/production-requests/${ev.recordId}`
+                              : ev.recordRoute === 'purchase'
+                                ? `/purchase-orders/${ev.recordId}`
+                                : `/inter-branch-requests/${ev.recordId}`;
+                          setScheduleStripDetailDateKey(null);
+                          navigate(path);
+                        }}
+                      >
+                        {stripCalendarPrimaryCtaLabel(ev)}
                 </button>
               </div>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         </div>
-      )}
-
-      {/* Stock Adjustment Modal */}
-      {selectedItemForAdjustment && (
-        <StockAdjustmentModal
-          isOpen={showStockAdjustmentModal}
-          onClose={() => {
-            setShowStockAdjustmentModal(false);
-            setSelectedItemForAdjustment(null);
-          }}
-          item={selectedItemForAdjustment}
-          itemType={adjustmentItemType}
-          onAdjust={handleStockAdjustment}
-        />
       )}
     </div>
   );

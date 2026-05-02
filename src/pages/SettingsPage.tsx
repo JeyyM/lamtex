@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Button } from '@/src/components/ui/Button';
@@ -30,8 +30,25 @@ import {
   Copy,
   ExternalLink,
 } from 'lucide-react';
-
-type ViewMode = 'company' | 'contacts' | 'addresses' | 'payment' | 'social' | 'notifications' | 'security';
+import {
+  emptyCompanyInfo,
+  loadCompanyInfoForBranch,
+  resolveBranchIdByName,
+  saveCompanyInfoForBranch,
+  type CompanyInfoFields,
+} from '@/src/lib/branchCompanySettings';
+import {
+  hydrateCompanyHqSettingsFromSupabase,
+  loadCompanyHqSettingsFromStorage,
+  saveCompanyHqSettingsToStorage,
+  saveCompanyHqLocationToSupabase,
+  emptyCompanyHqAddress,
+  buildCompanyHqMapsSearchQuery,
+  type CompanyHqMapPin,
+  type CompanyHqAddress,
+} from '@/src/lib/companyMapSettings';
+import { openGoogleMapsSearch } from '@/src/lib/maps';
+import { CompanyMapPicker } from '@/src/components/maps/CompanyMapPicker';
 
 interface Contact {
   id: string;
@@ -72,6 +89,15 @@ interface SocialMedia {
   followers?: number;
   isActive: boolean;
 }
+
+type ViewMode = 'company' | 'contacts' | 'addresses' | 'payment' | 'social' | 'notifications' | 'security';
+
+type CompanyTabSnapshot = {
+  company: CompanyInfoFields;
+  hqMapPin: CompanyHqMapPin | null;
+  hqLabel: string;
+  hqAddress: CompanyHqAddress;
+};
 
 // Mock Data
 const MOCK_CONTACTS: Contact[] = [
@@ -270,6 +296,15 @@ export default function SettingsPage() {
   const { selectedBranch } = useAppContext();
   const [viewMode, setViewMode] = useState<ViewMode>('company');
   const [showPassword, setShowPassword] = useState(false);
+  const [resolvedBranchId, setResolvedBranchId] = useState<string | null>(null);
+  const [branchSettingsLoading, setBranchSettingsLoading] = useState(true);
+  const [companyInfo, setCompanyInfo] = useState<CompanyInfoFields>(() => emptyCompanyInfo());
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [locationSaving, setLocationSaving] = useState(false);
+  const companyTabSnapshotRef = useRef<CompanyTabSnapshot | null>(null);
+  const [hqMapPin, setHqMapPin] = useState<CompanyHqMapPin | null>(null);
+  const [hqLabelStr, setHqLabelStr] = useState('');
+  const [hqAddress, setHqAddress] = useState<CompanyHqAddress>(() => emptyCompanyHqAddress());
   const [contacts] = useState<Contact[]>(MOCK_CONTACTS);
   const [addresses] = useState<Address[]>(MOCK_ADDRESSES);
   const [paymentProfiles] = useState<PaymentProfile[]>(MOCK_PAYMENT_PROFILES);
@@ -318,6 +353,152 @@ export default function SettingsPage() {
     }
   };
 
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      setBranchSettingsLoading(true);
+      const bid = selectedBranch.trim() ? await resolveBranchIdByName(selectedBranch) : null;
+      if (cancelled) return;
+      setResolvedBranchId(bid);
+
+      if (!bid) {
+        setCompanyInfo(emptyCompanyInfo());
+        setHqMapPin(null);
+        setHqLabelStr('');
+        setHqAddress(emptyCompanyHqAddress());
+        companyTabSnapshotRef.current = null;
+        setBranchSettingsLoading(false);
+        return;
+      }
+
+      const info = await loadCompanyInfoForBranch(bid);
+      if (cancelled) return;
+      const co = info ?? emptyCompanyInfo();
+      setCompanyInfo(co);
+
+      const hqRemote = await hydrateCompanyHqSettingsFromSupabase(bid);
+      if (cancelled) return;
+
+      let pin: CompanyHqMapPin | null = null;
+      let label = '';
+      let addr = emptyCompanyHqAddress();
+
+      if (hqRemote) {
+        pin = hqRemote.mapPin;
+        label = hqRemote.locationLabel;
+        addr = hqRemote.address;
+      } else {
+        const loc = loadCompanyHqSettingsFromStorage(bid);
+        if (loc) {
+          pin = loc.mapPin;
+          label = loc.locationLabel;
+          addr = loc.address;
+        }
+      }
+
+      setHqMapPin(pin);
+      setHqLabelStr(label);
+      setHqAddress(addr);
+
+      companyTabSnapshotRef.current = {
+        company: { ...co },
+        hqMapPin: pin,
+        hqLabel: label,
+        hqAddress: { ...addr },
+      };
+      setBranchSettingsLoading(false);
+    };
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedBranch]);
+
+  const previewLat = hqMapPin?.lat;
+  const previewLng = hqMapPin?.lng;
+  const previewOk =
+    hqMapPin != null && Number.isFinite(previewLat) && Number.isFinite(previewLng);
+
+  const companyTabSaving = profileSaving || locationSaving;
+
+  const handleSaveCompanyProfile = async () => {
+    if (!resolvedBranchId) {
+      window.alert('Could not resolve this branch. Check the branch name in the header.');
+      return;
+    }
+    setProfileSaving(true);
+    try {
+      const remoteInfo = await saveCompanyInfoForBranch(resolvedBranchId, companyInfo);
+      if (!remoteInfo.ok) {
+        window.alert(remoteInfo.error ?? 'Could not save company information.');
+        return;
+      }
+      if (companyTabSnapshotRef.current) {
+        companyTabSnapshotRef.current = {
+          ...companyTabSnapshotRef.current,
+          company: { ...companyInfo },
+        };
+      }
+      window.alert('Profile saved.');
+    } finally {
+      setProfileSaving(false);
+    }
+  };
+
+  const handleSaveCompanyLocation = async () => {
+    if (!resolvedBranchId) {
+      window.alert('Could not resolve this branch. Check the branch name in the header.');
+      return;
+    }
+    setLocationSaving(true);
+    try {
+      const fallbackName = companyInfo.companyName.trim() || selectedBranch.trim() || 'Branch';
+      const hqState = {
+        mapPin: hqMapPin,
+        locationLabel: hqLabelStr,
+        address: hqAddress,
+      };
+      saveCompanyHqSettingsToStorage(resolvedBranchId, hqState);
+      const remoteHq = await saveCompanyHqLocationToSupabase(resolvedBranchId, hqState, fallbackName);
+
+      if (remoteHq.ok) {
+        if (companyTabSnapshotRef.current) {
+          companyTabSnapshotRef.current = {
+            ...companyTabSnapshotRef.current,
+            hqMapPin: hqMapPin,
+            hqLabel: hqLabelStr,
+            hqAddress: { ...hqAddress },
+          };
+        }
+        window.alert('Location saved.');
+      } else {
+        window.alert(remoteHq.error ?? 'Could not save location to the database.');
+      }
+    } finally {
+      setLocationSaving(false);
+    }
+  };
+
+  const handleCancelCompanyInfo = () => {
+    const s = companyTabSnapshotRef.current;
+    if (s) {
+      setCompanyInfo({ ...s.company });
+      setHqMapPin(s.hqMapPin);
+      setHqLabelStr(s.hqLabel);
+      setHqAddress({ ...s.hqAddress });
+    }
+  };
+
+  const handleOpenCompanyMapExternal = () => {
+    const q = buildCompanyHqMapsSearchQuery({
+      mapPin: hqMapPin,
+      locationLabel: hqLabelStr,
+      address: hqAddress,
+    });
+    if (q) openGoogleMapsSearch(q);
+    else window.alert('Nothing to open in Maps yet.');
+  };
+
   return (
     <div className="p-3 sm:p-4 md:p-6 space-y-6">
       {/* Header */}
@@ -328,8 +509,14 @@ export default function SettingsPage() {
             Settings
           </h1>
           <p className="text-sm text-gray-500 mt-1">
-            Manage company information, contacts, payment methods, and preferences
+            Manage company information, contacts, payment methods, and preferences. Company Info and Company location are
+            stored per branch.
           </p>
+          {!branchSettingsLoading && selectedBranch && !resolvedBranchId && (
+            <p className="text-sm text-amber-700 mt-2">
+              This branch name is not in the database. Add it under Branches or pick another branch in the header.
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-2 self-start sm:self-auto">
           <Badge variant="outline" className="text-gray-600">
@@ -387,67 +574,218 @@ export default function SettingsPage() {
                   <label className="block text-sm font-medium text-gray-700 mb-2">Company Name</label>
                   <input
                     type="text"
-                    defaultValue="Lamtex PVC Manufacturing Inc."
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                    value={companyInfo.companyName}
+                    onChange={(e) => setCompanyInfo((c) => ({ ...c, companyName: e.target.value }))}
+                    disabled={branchSettingsLoading || !resolvedBranchId || companyTabSaving}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 disabled:bg-gray-100"
                   />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Business Registration Number</label>
                   <input
                     type="text"
-                    defaultValue="SEC-2010-123456"
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                    value={companyInfo.registrationNumber}
+                    onChange={(e) => setCompanyInfo((c) => ({ ...c, registrationNumber: e.target.value }))}
+                    disabled={branchSettingsLoading || !resolvedBranchId || companyTabSaving}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 disabled:bg-gray-100"
                   />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Tax Identification Number (TIN)</label>
                   <input
                     type="text"
-                    defaultValue="123-456-789-000"
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                    value={companyInfo.taxId}
+                    onChange={(e) => setCompanyInfo((c) => ({ ...c, taxId: e.target.value }))}
+                    disabled={branchSettingsLoading || !resolvedBranchId || companyTabSaving}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 disabled:bg-gray-100"
                   />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Industry</label>
                   <input
                     type="text"
-                    defaultValue="Manufacturing - PVC Pipes & Fittings"
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                    value={companyInfo.industry}
+                    onChange={(e) => setCompanyInfo((c) => ({ ...c, industry: e.target.value }))}
+                    disabled={branchSettingsLoading || !resolvedBranchId || companyTabSaving}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 disabled:bg-gray-100"
                   />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Year Established</label>
                   <input
                     type="text"
-                    defaultValue="2010"
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                    inputMode="numeric"
+                    value={companyInfo.foundedYear}
+                    onChange={(e) => setCompanyInfo((c) => ({ ...c, foundedYear: e.target.value }))}
+                    disabled={branchSettingsLoading || !resolvedBranchId || companyTabSaving}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 disabled:bg-gray-100"
                   />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Number of Employees</label>
                   <input
                     type="text"
-                    defaultValue="250-500"
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                    value={companyInfo.employeeCount}
+                    onChange={(e) => setCompanyInfo((c) => ({ ...c, employeeCount: e.target.value }))}
+                    disabled={branchSettingsLoading || !resolvedBranchId || companyTabSaving}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 disabled:bg-gray-100"
                   />
                 </div>
                 <div className="md:col-span-2">
                   <label className="block text-sm font-medium text-gray-700 mb-2">Company Description</label>
                   <textarea
                     rows={4}
-                    defaultValue="Lamtex is a leading manufacturer of high-quality PVC pipes and fittings in the Philippines. We specialize in producing durable, reliable piping solutions for residential, commercial, and industrial applications."
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                    value={companyInfo.companyDescription}
+                    onChange={(e) => setCompanyInfo((c) => ({ ...c, companyDescription: e.target.value }))}
+                    disabled={branchSettingsLoading || !resolvedBranchId || companyTabSaving}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 disabled:bg-gray-100"
                   />
                 </div>
               </div>
-              <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-4">
-                <Button variant="outline" className="w-full sm:w-auto">
+
+              <div className="flex justify-end pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full sm:w-auto border-red-200 text-red-700 hover:bg-red-50"
+                  disabled={branchSettingsLoading || !resolvedBranchId || companyTabSaving}
+                  onClick={handleSaveCompanyProfile}
+                >
+                  <Save className="w-4 h-4 mr-2" />
+                  {profileSaving ? 'Saving…' : 'Save profile'}
+                </Button>
+              </div>
+
+              <div
+                id="settings-company-location"
+                className="border-t border-gray-100 pt-8 mt-8 space-y-4 scroll-mt-4"
+              >
+                <div className="flex items-center gap-2">
+                  <MapPin className="w-5 h-5 text-red-600" />
+                  <h3 className="text-lg font-semibold text-gray-900">Company location</h3>
+                </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Location name</label>
+                  <input
+                    type="text"
+                    value={hqLabelStr}
+                    onChange={(e) => setHqLabelStr(e.target.value)}
+                    placeholder="Head office"
+                    disabled={branchSettingsLoading || !resolvedBranchId || companyTabSaving}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 disabled:bg-gray-100"
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Street</label>
+                  <input
+                    type="text"
+                    value={hqAddress.street}
+                    onChange={(e) => setHqAddress((a) => ({ ...a, street: e.target.value }))}
+                    disabled={branchSettingsLoading || !resolvedBranchId || companyTabSaving}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 disabled:bg-gray-100"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">City</label>
+                  <input
+                    type="text"
+                    value={hqAddress.city}
+                    onChange={(e) => setHqAddress((a) => ({ ...a, city: e.target.value }))}
+                    disabled={branchSettingsLoading || !resolvedBranchId || companyTabSaving}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 disabled:bg-gray-100"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Province</label>
+                  <input
+                    type="text"
+                    value={hqAddress.province}
+                    onChange={(e) => setHqAddress((a) => ({ ...a, province: e.target.value }))}
+                    disabled={branchSettingsLoading || !resolvedBranchId || companyTabSaving}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 disabled:bg-gray-100"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">ZIP</label>
+                  <input
+                    type="text"
+                    value={hqAddress.postal_code}
+                    onChange={(e) => setHqAddress((a) => ({ ...a, postal_code: e.target.value }))}
+                    disabled={branchSettingsLoading || !resolvedBranchId || companyTabSaving}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 disabled:bg-gray-100"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Country</label>
+                  <input
+                    type="text"
+                    value={hqAddress.country}
+                    onChange={(e) => setHqAddress((a) => ({ ...a, country: e.target.value }))}
+                    placeholder="Philippines"
+                    disabled={branchSettingsLoading || !resolvedBranchId || companyTabSaving}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 disabled:bg-gray-100"
+                  />
+                </div>
+              </div>
+              <div
+                className={
+                  branchSettingsLoading || !resolvedBranchId || companyTabSaving
+                    ? 'pointer-events-none opacity-50'
+                    : undefined
+                }
+              >
+                <CompanyMapPicker
+                  lat={previewOk && previewLat != null && previewLng != null ? previewLat : null}
+                  lng={previewOk && previewLat != null && previewLng != null ? previewLng : null}
+                  onPositionChange={(la, ln) => {
+                    setHqMapPin({ lat: la, lng: ln });
+                  }}
+                />
+              </div>
+              <div className="flex flex-col-reverse gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full sm:w-auto"
+                  disabled={!hqMapPin || companyTabSaving || branchSettingsLoading || !resolvedBranchId}
+                  onClick={() => setHqMapPin(null)}
+                >
+                  Clear pin
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full sm:w-auto"
+                  disabled={companyTabSaving || branchSettingsLoading || !resolvedBranchId}
+                  onClick={handleOpenCompanyMapExternal}
+                >
+                  <ExternalLink className="w-4 h-4 mr-2" />
+                  Google Maps
+                </Button>
+              </div>
+              </div>
+
+              <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-4 border-t border-gray-100 mt-8">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full sm:w-auto"
+                  disabled={branchSettingsLoading || !resolvedBranchId || companyTabSaving}
+                  onClick={handleCancelCompanyInfo}
+                >
                   <XCircle className="w-4 h-4 mr-2" />
                   Cancel
                 </Button>
-                <Button className="bg-red-600 hover:bg-red-700 w-full sm:w-auto">
+                <Button
+                  type="button"
+                  className="bg-red-600 hover:bg-red-700 w-full sm:w-auto"
+                  disabled={branchSettingsLoading || !resolvedBranchId || companyTabSaving}
+                  onClick={handleSaveCompanyLocation}
+                >
                   <Save className="w-4 h-4 mr-2" />
-                  Save Changes
+                  {locationSaving ? 'Saving…' : 'Save location'}
                 </Button>
               </div>
             </CardContent>

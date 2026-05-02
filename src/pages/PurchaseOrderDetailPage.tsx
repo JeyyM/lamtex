@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Ca
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { supabase } from '@/src/lib/supabase';
+import { addRawMaterialInboundAggregateOnly, addRawMaterialInboundAtBranch } from '@/src/lib/rawMaterialInbound';
 import {
   ArrowLeft,
   ShoppingCart,
@@ -495,6 +496,26 @@ export function PurchaseOrderDetailPage() {
         }
       }
 
+      // 2b. Stock + last_restock_date when quantity_received increases (form save, not only receive flow)
+      for (const item of stagedItems) {
+        if (!item.material_id) continue;
+        let delta = 0;
+        if (isTemp(item.id)) {
+          delta = Math.max(0, Number(item.quantity_received) || 0);
+        } else {
+          const orig = originalItems.find(o => o.id === item.id);
+          if (!orig) continue;
+          delta =
+            Math.max(0, Number(item.quantity_received) || 0) - Math.max(0, Number(orig.quantity_received) || 0);
+        }
+        if (delta <= 0) continue;
+        if (po.branch_id) {
+          await addRawMaterialInboundAtBranch(supabase, item.material_id, po.branch_id, delta);
+        } else {
+          await addRawMaterialInboundAggregateOnly(supabase, item.material_id, delta);
+        }
+      }
+
       // 3. Update raw_material prices for items that were received with the box ticked
       for (const item of stagedItems) {
         if (priceUpdateItems.has(item.id) && item.quantity_received > 0 && item.material_id) {
@@ -638,6 +659,17 @@ export function PurchaseOrderDetailPage() {
             })
             .eq('id', item.material_id);
           if (priceErr) throw priceErr;
+        }
+      }
+
+      // 1b. Inventory: received qty increases branch (or aggregate) stock and last_restock_date
+      for (const item of items) {
+        const addQty = parseFloat(receiveQtys[item.id] ?? '0') || 0;
+        if (addQty <= 0 || !item.material_id) continue;
+        if (po.branch_id) {
+          await addRawMaterialInboundAtBranch(supabase, item.material_id, po.branch_id, addQty);
+        } else {
+          await addRawMaterialInboundAggregateOnly(supabase, item.material_id, addQty);
         }
       }
 

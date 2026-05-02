@@ -67,35 +67,7 @@ export interface CustomerDetail {
   branch: string;
   
   // Metadata
-  notes?: CustomerNote[];
   tags?: string[];
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface CustomerNote {
-  id: string;
-  customerId: string;
-  type: 'Call' | 'Visit' | 'Email' | 'Meeting' | 'Negotiation' | 'Complaint' | 'Other';
-  content: string;
-  createdBy: string;
-  createdAt: string;
-  isImportant: boolean;
-}
-
-export interface CustomerTask {
-  id: string;
-  customerId: string;
-  customerName: string;
-  type: 'Follow-up' | 'Visit' | 'Call' | 'Delivery Check' | 'Collection' | 'Quote' | 'Other';
-  title: string;
-  description?: string;
-  priority: 'Low' | 'Medium' | 'High' | 'Urgent';
-  status: 'Pending' | 'In Progress' | 'Completed' | 'Cancelled';
-  dueDate: string;
-  completedDate?: string;
-  assignedTo: string;
-  createdBy: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -111,7 +83,7 @@ export interface BuyingPattern {
 export interface CustomerActivity {
   id: string;
   customerId: string;
-  type: 'Order Created' | 'Payment Received' | 'Note Added' | 'Task Created' | 'Call Made' | 'Visit Completed' | 'Status Changed';
+  type: 'Order Created' | 'Payment Received' | 'Call Made' | 'Visit Completed' | 'Status Changed';
   description: string;
   performedBy: string;
   timestamp: string;

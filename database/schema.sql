@@ -1846,6 +1846,22 @@ CREATE TABLE IF NOT EXISTS vehicles (
   -- Maintenance
   maintenance_due   DATE,
   alerts            TEXT[],
+
+  -- Truck profile (see `database/fleet_trucks_extension.sql` for idempotent ALTERs on existing DBs)
+  make              VARCHAR(100),
+  model             VARCHAR(100),
+  year_model        INT,
+  color             VARCHAR(50),
+  orcr_number       VARCHAR(80),
+  registration_expiry DATE,
+  current_odometer_km NUMERIC(12, 1) DEFAULT 0,
+  engine_type         VARCHAR(120),
+  vehicle_length_m    NUMERIC(10, 2),
+  vehicle_width_m     NUMERIC(10, 2),
+  vehicle_height_m    NUMERIC(10, 2),
+  fleet_cards         TEXT,
+  date_first_registered DATE,
+  date_acquired       DATE,
   
   branch_id         UUID REFERENCES branches(id) ON DELETE SET NULL,
   
@@ -1961,6 +1977,7 @@ CREATE TABLE IF NOT EXISTS trip_history (
   id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   trip_id         UUID REFERENCES trips(id) ON DELETE SET NULL,
   trip_number     VARCHAR(50),
+  vehicle_id      UUID REFERENCES vehicles(id) ON DELETE SET NULL,
   vehicle_name    VARCHAR(200),
   driver_name     VARCHAR(200),
   scheduled_date  DATE,
@@ -2329,15 +2346,19 @@ CREATE TABLE IF NOT EXISTS agent_alerts (
 -- SECTION 18: COMPANY SETTINGS
 -- ============================================================================
 
--- 18a: Company settings
+-- 18a: Company settings (one row per branch via branch_id)
 CREATE TABLE IF NOT EXISTS company_settings (
   id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  branch_id       UUID REFERENCES branches(id) ON DELETE CASCADE,
   company_name    VARCHAR(300) NOT NULL,
   logo_url        TEXT,
   industry        VARCHAR(200),
   website         VARCHAR(255),
   tax_id          VARCHAR(100),
   registration_number VARCHAR(100),
+  founded_year    INTEGER,
+  employee_count  VARCHAR(80),
+  company_description TEXT,
   
   -- Primary contact
   primary_email   VARCHAR(255),
@@ -2346,11 +2367,23 @@ CREATE TABLE IF NOT EXISTS company_settings (
   -- Financial
   currency        VARCHAR(10) DEFAULT 'PHP',
   fiscal_year_start VARCHAR(10) DEFAULT '01-01',
-  
+
+  -- Optional HQ map pin (WGS84); see also metadata.hq_map for app-computed mirror
+  hq_latitude           NUMERIC(10, 7),
+  hq_longitude          NUMERIC(10, 7),
+  hq_location_label     VARCHAR(300),
+
+  hq_street             TEXT,
+  hq_city               VARCHAR(200),
+  hq_province           VARCHAR(200),
+  hq_postal_code        VARCHAR(20),
+  hq_country            VARCHAR(100),
+
   metadata        JSONB DEFAULT '{}'::jsonb,
   
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT company_settings_branch_id_key UNIQUE (branch_id)
 );
 
 -- 18b: Company contacts
@@ -2696,6 +2729,7 @@ CREATE INDEX IF NOT EXISTS idx_delay_exceptions_trip ON delay_exceptions(trip_id
 CREATE INDEX IF NOT EXISTS idx_delay_exceptions_status ON delay_exceptions(status);
 CREATE INDEX IF NOT EXISTS idx_shipments_status ON shipments(status);
 CREATE INDEX IF NOT EXISTS idx_maintenance_vehicle ON maintenance_records(vehicle_id);
+CREATE INDEX IF NOT EXISTS idx_trip_history_vehicle_id ON trip_history(vehicle_id);
 CREATE INDEX IF NOT EXISTS idx_driver_assignments_driver ON driver_assignments(driver_id);
 CREATE INDEX IF NOT EXISTS idx_driver_assignments_vehicle ON driver_assignments(vehicle_id);
 

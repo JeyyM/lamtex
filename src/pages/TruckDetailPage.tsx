@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
@@ -14,58 +14,158 @@ import {
   CheckCircle,
   Clock,
   MapPin,
-  DollarSign,
   Package,
-  Fuel,
-  User,
-  Settings,
   Edit,
   Download,
-  Upload,
-  Star,
   Navigation,
   Weight,
   Box,
   Ruler,
-  CreditCard,
-  Building,
-  Phone,
-  Mail,
-  Award,
   XCircle,
   Plus,
+  Loader2,
 } from 'lucide-react';
-import {
-  getTruckDetails,
-  getTripHistory,
-  getMaintenanceHistory,
-  getCalendarBookings,
-  getTruckAlerts,
-  getDriverAssignments,
+import type {
+  TruckDetails,
+  TripHistoryRecord,
+  MaintenanceRecord,
+  CalendarBooking,
+  TruckAlert,
 } from '@/src/mock/truckDetails';
+import {
+  fetchTruckDetailBundle,
+  isFleetVehicleUuid,
+  updateTruck,
+  type TruckFormPayload,
+} from '@/src/lib/fleetTrucks';
+import type { Vehicle } from '@/src/types/logistics';
 
-type TabMode = 'overview' | 'trips' | 'schedule' | 'maintenance' | 'performance';
+const TRUCK_STATUS_OPTIONS: Vehicle['status'][] = [
+  'Available',
+  'On Trip',
+  'Loading',
+  'Maintenance',
+  'Out of Service',
+];
+
+const inlineInputClass =
+  'w-full max-w-[16rem] px-2 py-1.5 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-red-500';
+
+type TabMode = 'overview' | 'trips' | 'schedule' | 'maintenance';
 
 export function TruckDetailPage() {
   const { vehicleId } = useParams<{ vehicleId: string }>();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<TabMode>('overview');
   const [tripFilter, setTripFilter] = useState<string>('All');
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [truck, setTruck] = useState<TruckDetails | null>(null);
+  const [tripHistory, setTripHistory] = useState<TripHistoryRecord[]>([]);
+  const [maintenanceHistory, setMaintenanceHistory] = useState<MaintenanceRecord[]>([]);
+  const [calendarBookings, setCalendarBookings] = useState<CalendarBooking[]>([]);
+  const [alerts, setAlerts] = useState<TruckAlert[]>([]);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [detailForm, setDetailForm] = useState<TruckFormPayload | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const editSnapshotRef = useRef<string | null>(null);
+  const isEditingRef = useRef(false);
 
-  const truck = getTruckDetails(vehicleId || '');
-  const tripHistory = getTripHistory(vehicleId || '');
-  const maintenanceHistory = getMaintenanceHistory(vehicleId || '');
-  const calendarBookings = getCalendarBookings(vehicleId || '');
-  const alerts = getTruckAlerts(vehicleId || '');
-  const drivers = getDriverAssignments(vehicleId || '');
+  useEffect(() => {
+    isEditingRef.current = isEditing;
+  }, [isEditing]);
+
+  useEffect(() => {
+    if (!vehicleId) {
+      setLoading(false);
+      return;
+    }
+    if (!isFleetVehicleUuid(vehicleId)) {
+      setLoading(false);
+      setLoadError('This URL needs a database truck id. Open the truck from Logistics → Fleet.');
+      setTruck(null);
+      setTripHistory([]);
+      setMaintenanceHistory([]);
+      setCalendarBookings([]);
+      setAlerts([]);
+      setDetailForm(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    const load = async () => {
+      setLoading(true);
+      setLoadError(null);
+
+      const bundle = await fetchTruckDetailBundle(vehicleId);
+      if (cancelled) return;
+      setLoading(false);
+      if (bundle.error) setLoadError(bundle.error);
+      setTruck(bundle.truck);
+      setTripHistory(bundle.tripHistory);
+      setMaintenanceHistory(bundle.maintenanceHistory);
+      setCalendarBookings(bundle.calendarBookings);
+      setAlerts(bundle.alerts);
+      if (!isEditingRef.current) {
+        setDetailForm(bundle.editForm ?? null);
+      }
+    };
+
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [vehicleId, refreshKey]);
+
+  const avgCapacityUsePct = useMemo(() => {
+    const rates = tripHistory
+      .map((t) => t.deliverySuccessRate)
+      .filter((n): n is number => n != null && Number.isFinite(n) && n >= 0);
+    if (rates.length === 0) return null;
+    return Math.round(rates.reduce((a, b) => a + b, 0) / rates.length);
+  }, [tripHistory]);
+
+  const onTimeRatePct = useMemo(() => {
+    if (tripHistory.length === 0) return null;
+    const onTime = tripHistory.filter((t) => t.status === 'Completed').length;
+    return Math.round((onTime / tripHistory.length) * 100);
+  }, [tripHistory]);
+
+  /** Total distance (km): live value while editing form, else saved truck odometer. */
+  const displayTotalDistanceKm = useMemo(() => {
+    if (!truck) return 0;
+    if (isEditing && detailForm) {
+      const raw = detailForm.currentOdometerKm.trim();
+      if (raw === '') return truck.totalDistance;
+      const n = Number(raw);
+      return Number.isFinite(n) && n >= 0 ? n : truck.totalDistance;
+    }
+    return truck.totalDistance;
+  }, [truck, isEditing, detailForm]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <div className="text-center text-gray-600">
+          <Loader2 className="w-10 h-10 mx-auto animate-spin text-red-500 mb-3" />
+          <p className="text-sm">Loading truck…</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!truck) {
     return (
       <div className="flex items-center justify-center h-96">
-        <div className="text-center">
+        <div className="text-center max-w-md px-4">
           <Truck className="w-16 h-16 mx-auto text-gray-400 mb-4" />
           <p className="text-xl font-semibold text-gray-900">Truck Not Found</p>
-          <p className="text-gray-500 mt-2">The truck you're looking for doesn't exist.</p>
+          {loadError && (
+            <p className="text-sm text-red-600 mt-2">{loadError}</p>
+          )}
+          <p className="text-gray-500 mt-2">The truck you&apos;re looking for doesn&apos;t exist or is not a fleet truck.</p>
           <Button variant="primary" className="mt-4" onClick={() => navigate('/logistics')}>
             <ArrowLeft className="w-4 h-4 mr-2" />
             Back to Fleet
@@ -75,18 +175,14 @@ export function TruckDetailPage() {
     );
   }
 
+  const kmSinceLastMaintenance = Math.max(0, displayTotalDistanceKm - truck.mileageAtLastMaintenance);
+
   const getStatusColor = (status: string) => {
     if (status === 'Available') return 'success';
     if (status === 'On Trip' || status === 'Loading') return 'warning';
-    if (status === 'Maintenance') return 'danger';
+    if (status === 'Maintenance' || status === 'Out of Service') return 'danger';
     return 'default';
   };
-
-  // Calculate financial metrics
-  const totalRevenue = tripHistory.reduce((sum, trip) => sum + trip.revenue, 0);
-  const totalFuelCost = tripHistory.reduce((sum, trip) => sum + trip.fuelCost, 0);
-  const totalMaintenanceCost = maintenanceHistory.reduce((sum, m) => sum + m.cost, 0);
-  const profitability = totalRevenue - totalFuelCost - totalMaintenanceCost;
 
   // Filter trips
   const filteredTrips = tripHistory.filter(trip => {
@@ -142,12 +238,47 @@ export function TruckDetailPage() {
     return 'bg-white';
   };
 
+  const startEdit = () => {
+    if (!detailForm || !vehicleId || !isFleetVehicleUuid(vehicleId)) return;
+    editSnapshotRef.current = JSON.stringify(detailForm);
+    setIsEditing(true);
+  };
+
+  const cancelEdit = () => {
+    if (editSnapshotRef.current) {
+      try {
+        setDetailForm(JSON.parse(editSnapshotRef.current) as TruckFormPayload);
+      } catch {
+        /* ignore corrupt snapshot */
+      }
+    }
+    editSnapshotRef.current = null;
+    setIsEditing(false);
+  };
+
+  const saveEdit = async () => {
+    if (!vehicleId || !detailForm) return;
+    setSavingEdit(true);
+    const res = await updateTruck(vehicleId, detailForm);
+    setSavingEdit(false);
+    if (!res.ok) {
+      window.alert(res.error ?? 'Could not save truck.');
+      return;
+    }
+    editSnapshotRef.current = null;
+    setIsEditing(false);
+    setRefreshKey((k) => k + 1);
+  };
+
+  const titleVehicleId = isEditing && detailForm ? detailForm.vehicleId : truck.vehicleId;
+  const titleVehicleName = isEditing && detailForm ? detailForm.vehicleName : truck.vehicleName;
+  const subtitlePlate = isEditing && detailForm ? detailForm.plateNumber : truck.plateNumber;
+
   const tabs = [
     { id: 'overview' as TabMode, label: 'Overview', icon: <FileText className="w-4 h-4" /> },
     { id: 'trips' as TabMode, label: 'Trip History', icon: <MapPin className="w-4 h-4" /> },
     { id: 'schedule' as TabMode, label: 'Schedule', icon: <Calendar className="w-4 h-4" /> },
     { id: 'maintenance' as TabMode, label: 'Maintenance', icon: <Wrench className="w-4 h-4" /> },
-    { id: 'performance' as TabMode, label: 'Performance', icon: <TrendingUp className="w-4 h-4" /> },
   ];
 
   return (
@@ -162,18 +293,56 @@ export function TruckDetailPage() {
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2 sm:gap-3">
               <h1 className="text-xl md:text-2xl font-bold text-gray-900 break-words min-w-0">
-                {truck.vehicleId} - {truck.vehicleName}
+                {titleVehicleId} - {titleVehicleName}
               </h1>
-              <Badge variant={getStatusColor(truck.status)} className="flex-shrink-0">{truck.status}</Badge>
+              <Badge variant={getStatusColor(isEditing && detailForm ? detailForm.status : truck.status)} className="flex-shrink-0">
+                {isEditing && detailForm ? detailForm.status : truck.status}
+              </Badge>
             </div>
-            <p className="text-sm text-gray-500 mt-1 break-words">{truck.plateNumber} • {truck.make} {truck.model}</p>
+            <p className="text-sm text-gray-500 mt-1 break-words">
+              {subtitlePlate} • {(isEditing && detailForm ? `${detailForm.make} ${detailForm.model}` : `${truck.make} ${truck.model}`).trim() || '—'}
+            </p>
           </div>
         </div>
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full md:w-auto">
-          <Button variant="outline" size="sm" className="w-full sm:w-auto justify-center">
-            <Edit className="w-4 h-4 mr-2" />
-            Edit Details
-          </Button>
+          {vehicleId && isFleetVehicleUuid(vehicleId) && detailForm && (
+            <>
+              {isEditing ? (
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full sm:w-auto justify-center"
+                    onClick={cancelEdit}
+                    disabled={savingEdit}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    className="w-full sm:w-auto justify-center bg-red-600 hover:bg-red-700"
+                    onClick={saveEdit}
+                    disabled={savingEdit}
+                  >
+                    {savingEdit ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Saving…
+                      </>
+                    ) : (
+                      'Save changes'
+                    )}
+                  </Button>
+                </>
+              ) : (
+                <Button variant="outline" size="sm" className="w-full sm:w-auto justify-center" onClick={startEdit}>
+                  <Edit className="w-4 h-4 mr-2" />
+                  Edit Details
+                </Button>
+              )}
+            </>
+          )}
           <Button variant="outline" size="sm" className="w-full sm:w-auto justify-center">
             <Calendar className="w-4 h-4 mr-2" />
             Schedule Trip
@@ -182,7 +351,7 @@ export function TruckDetailPage() {
       </div>
 
       {/* Hero Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         <Card>
           <CardContent className="p-6">
             <div className="flex items-center justify-between">
@@ -197,17 +366,37 @@ export function TruckDetailPage() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="h-full">
           <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0 flex-1">
                 <p className="text-sm text-gray-500">Total Distance</p>
-                <p className="text-2xl font-bold text-gray-900 mt-1">{truck.totalDistance.toLocaleString()} km</p>
+                {isEditing && detailForm ? (
+                  <div className="mt-1 flex flex-wrap items-baseline gap-2">
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      className="w-full min-w-0 max-w-[12rem] text-2xl font-bold text-gray-900 px-2 py-1 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-red-500"
+                      value={detailForm.currentOdometerKm}
+                      onChange={(e) =>
+                        setDetailForm((f) => (f ? { ...f, currentOdometerKm: e.target.value } : f))
+                      }
+                      aria-label="Total distance in kilometers"
+                    />
+                    <span className="text-lg font-medium text-gray-500">km</span>
+                  </div>
+                ) : (
+                  <p className="text-2xl font-bold text-gray-900 mt-1">{truck.totalDistance.toLocaleString()} km</p>
+                )}
               </div>
-              <div className="p-3 bg-green-100 rounded-lg">
+              <div className="p-3 bg-green-100 rounded-lg shrink-0 self-start">
                 <Navigation className="w-6 h-6 text-green-600" />
               </div>
             </div>
+            <p className="text-sm text-gray-600 mt-4">
+              {kmSinceLastMaintenance.toLocaleString()} km since last maintenance
+            </p>
           </CardContent>
         </Card>
 
@@ -220,20 +409,6 @@ export function TruckDetailPage() {
               </div>
               <div className="p-3 bg-purple-100 rounded-lg">
                 <TrendingUp className="w-6 h-6 text-purple-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-500">Current Mileage</p>
-                <p className="text-2xl font-bold text-gray-900 mt-1">{truck.currentMileage.toLocaleString()} km</p>
-              </div>
-              <div className="p-3 bg-yellow-100 rounded-lg">
-                <Truck className="w-6 h-6 text-yellow-600" />
               </div>
             </div>
           </CardContent>
@@ -318,12 +493,225 @@ export function TruckDetailPage() {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Left Column - Specifications */}
             <div className="lg:col-span-2 space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Card>
+                  <CardContent className="p-6">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm text-gray-500">Avg Capacity Use</p>
+                        <p className="text-2xl font-bold text-gray-900 mt-1">
+                          {avgCapacityUsePct != null ? `${avgCapacityUsePct}%` : '—'}
+                        </p>
+                      </div>
+                      <Package className="w-8 h-8 text-blue-600 shrink-0" />
+                    </div>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="p-6">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm text-gray-500">On-Time Rate</p>
+                        <p className="text-2xl font-bold text-gray-900 mt-1">
+                          {onTimeRatePct != null ? `${onTimeRatePct}%` : '—'}
+                        </p>
+                      </div>
+                      <CheckCircle className="w-8 h-8 text-green-600 shrink-0" />
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
               {/* Vehicle Specifications */}
               <Card>
                 <CardHeader>
                   <CardTitle>Vehicle Specifications</CardTitle>
                 </CardHeader>
                 <CardContent>
+                  {isEditing && detailForm ? (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-medium text-gray-600 mb-1">Vehicle code</label>
+                          <input
+                            className={inlineInputClass}
+                            value={detailForm.vehicleId}
+                            onChange={(e) => setDetailForm((f) => (f ? { ...f, vehicleId: e.target.value } : f))}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-600 mb-1">Display name</label>
+                          <input
+                            className={inlineInputClass}
+                            value={detailForm.vehicleName}
+                            onChange={(e) => setDetailForm((f) => (f ? { ...f, vehicleName: e.target.value } : f))}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-600 mb-1">Status</label>
+                          <select
+                            className={inlineInputClass}
+                            value={detailForm.status}
+                            onChange={(e) =>
+                              setDetailForm((f) =>
+                                f ? { ...f, status: e.target.value as Vehicle['status'] } : f,
+                              )
+                            }
+                          >
+                            {TRUCK_STATUS_OPTIONS.map((s) => (
+                              <option key={s} value={s}>
+                                {s}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-600 mb-1">Maintenance due</label>
+                          <input
+                            type="date"
+                            className={inlineInputClass}
+                            value={detailForm.maintenanceDue}
+                            onChange={(e) => setDetailForm((f) => (f ? { ...f, maintenanceDue: e.target.value } : f))}
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-500 mb-4">Basic Information</p>
+                        <div className="space-y-3">
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 mb-1">Type</label>
+                            <input
+                              type="text"
+                              className={`${inlineInputClass} bg-gray-50 text-gray-700 cursor-not-allowed`}
+                              value={truck.type}
+                              readOnly
+                              disabled
+                              aria-readonly="true"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 mb-1">Make</label>
+                            <input
+                              className={inlineInputClass}
+                              value={detailForm.make}
+                              onChange={(e) => setDetailForm((f) => (f ? { ...f, make: e.target.value } : f))}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 mb-1">Model</label>
+                            <input
+                              className={inlineInputClass}
+                              value={detailForm.model}
+                              onChange={(e) => setDetailForm((f) => (f ? { ...f, model: e.target.value } : f))}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 mb-1">Year</label>
+                            <input
+                              className={inlineInputClass}
+                              inputMode="numeric"
+                              value={detailForm.yearModel}
+                              onChange={(e) => setDetailForm((f) => (f ? { ...f, yearModel: e.target.value } : f))}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 mb-1">Color</label>
+                            <input
+                              className={inlineInputClass}
+                              value={detailForm.color}
+                              onChange={(e) => setDetailForm((f) => (f ? { ...f, color: e.target.value } : f))}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 mb-1">Engine</label>
+                            <input
+                              className={inlineInputClass}
+                              value={detailForm.engine}
+                              onChange={(e) => setDetailForm((f) => (f ? { ...f, engine: e.target.value } : f))}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-500 mb-4">Capacity & Dimensions</p>
+                        <div className="space-y-3">
+                          <div>
+                            <label className="flex items-center gap-2 text-xs font-medium text-gray-600 mb-1">
+                              <Weight className="w-3 h-3" />
+                              Max weight (kg)
+                            </label>
+                            <input
+                              type="number"
+                              min={0}
+                              className={inlineInputClass}
+                              value={detailForm.maxWeightKg}
+                              onChange={(e) =>
+                                setDetailForm((f) => (f ? { ...f, maxWeightKg: e.target.value } : f))
+                              }
+                            />
+                          </div>
+                          <div>
+                            <label className="flex items-center gap-2 text-xs font-medium text-gray-600 mb-1">
+                              <Box className="w-3 h-3" />
+                              Max volume (m³)
+                            </label>
+                            <input
+                              type="number"
+                              min={0}
+                              step={0.1}
+                              className={inlineInputClass}
+                              value={detailForm.maxVolumeCbm}
+                              onChange={(e) =>
+                                setDetailForm((f) => (f ? { ...f, maxVolumeCbm: e.target.value } : f))
+                              }
+                            />
+                          </div>
+                          <div>
+                            <label className="flex items-center gap-2 text-xs font-medium text-gray-600 mb-1">
+                              <Ruler className="w-3 h-3" />
+                              Length (m)
+                            </label>
+                            <input
+                              type="number"
+                              min={0}
+                              step={0.01}
+                              className={inlineInputClass}
+                              value={detailForm.lengthM}
+                              onChange={(e) => setDetailForm((f) => (f ? { ...f, lengthM: e.target.value } : f))}
+                            />
+                          </div>
+                          <div>
+                            <label className="flex items-center gap-2 text-xs font-medium text-gray-600 mb-1">
+                              <Ruler className="w-3 h-3" />
+                              Width (m)
+                            </label>
+                            <input
+                              type="number"
+                              min={0}
+                              step={0.01}
+                              className={inlineInputClass}
+                              value={detailForm.widthM}
+                              onChange={(e) => setDetailForm((f) => (f ? { ...f, widthM: e.target.value } : f))}
+                            />
+                          </div>
+                          <div>
+                            <label className="flex items-center gap-2 text-xs font-medium text-gray-600 mb-1">
+                              <Ruler className="w-3 h-3" />
+                              Height (m)
+                            </label>
+                            <input
+                              type="number"
+                              min={0}
+                              step={0.01}
+                              className={inlineInputClass}
+                              value={detailForm.heightM}
+                              onChange={(e) => setDetailForm((f) => (f ? { ...f, heightM: e.target.value } : f))}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div>
                       <p className="text-sm text-gray-500 mb-4">Basic Information</p>
@@ -377,25 +765,32 @@ export function TruckDetailPage() {
                             <Ruler className="w-3 h-3" />
                             Length
                           </span>
-                          <span className="text-sm font-medium text-gray-900">{truck.dimensions.length} m</span>
+                          <span className="text-sm font-medium text-gray-900">
+                            {truck.dimensions.length != null ? `${truck.dimensions.length} m` : '—'}
+                          </span>
                         </div>
                         <div className="flex justify-between items-center">
                           <span className="text-sm text-gray-600 flex items-center gap-2">
                             <Ruler className="w-3 h-3" />
                             Width
                           </span>
-                          <span className="text-sm font-medium text-gray-900">{truck.dimensions.width} m</span>
+                          <span className="text-sm font-medium text-gray-900">
+                            {truck.dimensions.width != null ? `${truck.dimensions.width} m` : '—'}
+                          </span>
                         </div>
                         <div className="flex justify-between items-center">
                           <span className="text-sm text-gray-600 flex items-center gap-2">
                             <Ruler className="w-3 h-3" />
                             Height
                           </span>
-                          <span className="text-sm font-medium text-gray-900">{truck.dimensions.height} m</span>
+                          <span className="text-sm font-medium text-gray-900">
+                            {truck.dimensions.height != null ? `${truck.dimensions.height} m` : '—'}
+                          </span>
                         </div>
                       </div>
                     </div>
                   </div>
+                  )}
                 </CardContent>
               </Card>
 
@@ -408,6 +803,50 @@ export function TruckDetailPage() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div>
                       <p className="text-sm text-gray-500 mb-4">Registration Details</p>
+                      {isEditing && detailForm ? (
+                        <div className="space-y-3">
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 mb-1">Plate number</label>
+                            <input
+                              className={inlineInputClass}
+                              value={detailForm.plateNumber}
+                              onChange={(e) => setDetailForm((f) => (f ? { ...f, plateNumber: e.target.value } : f))}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 mb-1">OR/CR number</label>
+                            <input
+                              className={inlineInputClass}
+                              value={detailForm.orcrNumber}
+                              onChange={(e) => setDetailForm((f) => (f ? { ...f, orcrNumber: e.target.value } : f))}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 mb-1">Registered</label>
+                            <input
+                              type="date"
+                              className={inlineInputClass}
+                              value={detailForm.registrationRecordedDate}
+                              onChange={(e) =>
+                                setDetailForm((f) =>
+                                  f ? { ...f, registrationRecordedDate: e.target.value } : f,
+                                )
+                              }
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 mb-1">Registration expiry</label>
+                            <input
+                              type="date"
+                              className={inlineInputClass}
+                              value={detailForm.registrationExpiry}
+                              onChange={(e) =>
+                                setDetailForm((f) => (f ? { ...f, registrationExpiry: e.target.value } : f))
+                              }
+                            />
+                          </div>
+                        </div>
+                      ) : (
                       <div className="space-y-3">
                         <div className="flex justify-between">
                           <span className="text-sm text-gray-600">Plate Number</span>
@@ -426,63 +865,77 @@ export function TruckDetailPage() {
                           <span className="text-sm font-medium text-gray-900">{truck.registrationExpiry}</span>
                         </div>
                       </div>
+                      )}
                     </div>
 
                     <div>
-                      <p className="text-sm text-gray-500 mb-4">Acquisition & Value</p>
+                      <p className="text-sm text-gray-500 mb-4">Acquisition</p>
+                      {isEditing && detailForm ? (
+                        <div className="space-y-3">
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 mb-1">Acquired</label>
+                            <input
+                              type="date"
+                              className={inlineInputClass}
+                              value={detailForm.acquisitionDate}
+                              onChange={(e) =>
+                                setDetailForm((f) => (f ? { ...f, acquisitionDate: e.target.value } : f))
+                              }
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 mb-1">Branch</label>
+                            <input
+                              type="text"
+                              className={inlineInputClass}
+                              value={detailForm.branchName}
+                              onChange={(e) =>
+                                setDetailForm((f) => (f ? { ...f, branchName: e.target.value } : f))
+                              }
+                              placeholder="e.g. Batangas"
+                            />
+                            <p className="text-xs text-gray-500 mt-1">
+                              Must match a branch name exactly (as in your branch directory).
+                            </p>
+                          </div>
+                        </div>
+                      ) : (
                       <div className="space-y-3">
                         <div className="flex justify-between">
                           <span className="text-sm text-gray-600">Acquired</span>
                           <span className="text-sm font-medium text-gray-900">{truck.acquisitionDate}</span>
                         </div>
                         <div className="flex justify-between">
-                          <span className="text-sm text-gray-600">Purchase Price</span>
-                          <span className="text-sm font-medium text-gray-900">₱{truck.purchasePrice.toLocaleString()}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-sm text-gray-600">Current Value</span>
-                          <span className="text-sm font-medium text-gray-900">₱{truck.currentBookValue.toLocaleString()}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-sm text-gray-600">Status</span>
-                          <span className="text-sm font-medium text-gray-900">{truck.financingStatus}</span>
-                        </div>
-                        <div className="flex justify-between">
                           <span className="text-sm text-gray-600">Branch</span>
                           <span className="text-sm font-medium text-gray-900">{truck.branch}</span>
                         </div>
                       </div>
+                      )}
                     </div>
                   </div>
                 </CardContent>
               </Card>
 
-              {/* Financial Summary */}
               <Card>
                 <CardHeader>
-                  <CardTitle>Financial Summary (Recent Trips)</CardTitle>
+                  <CardTitle>Notes</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-                    <div className="p-4 bg-green-50 rounded-lg border border-green-200">
-                      <p className="text-sm text-green-600 mb-1">Total Revenue</p>
-                      <p className="text-xl font-bold text-green-900">₱{totalRevenue.toLocaleString()}</p>
-                    </div>
-                    <div className="p-4 bg-red-50 rounded-lg border border-red-200">
-                      <p className="text-sm text-red-600 mb-1">Fuel Costs</p>
-                      <p className="text-xl font-bold text-red-900">₱{totalFuelCost.toLocaleString()}</p>
-                    </div>
-                    <div className="p-4 bg-orange-50 rounded-lg border border-orange-200">
-                      <p className="text-sm text-orange-600 mb-1">Maintenance</p>
-                      <p className="text-xl font-bold text-orange-900">₱{totalMaintenanceCost.toLocaleString()}</p>
-                    </div>
-                    <div className={`p-4 rounded-lg border ${profitability >= 0 ? 'bg-blue-50 border-blue-200' : 'bg-gray-50 border-gray-200'}`}>
-                      <p className={`text-sm mb-1 ${profitability >= 0 ? 'text-blue-600' : 'text-gray-600'}`}>Net Profit</p>
-                      <p className={`text-xl font-bold ${profitability >= 0 ? 'text-blue-900' : 'text-gray-900'}`}>₱{profitability.toLocaleString()}</p>
-                    </div>
-                  </div>
+                  {isEditing && detailForm ? (
+                    <textarea
+                      rows={4}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                      value={detailForm.notesText}
+                      onChange={(e) => setDetailForm((f) => (f ? { ...f, notesText: e.target.value } : f))}
+                    />
+                  ) : (
+                    <p className="text-sm text-gray-800 whitespace-pre-wrap">
+                      {detailForm?.notesText?.trim() ? detailForm.notesText : '—'}
+                    </p>
+                  )}
                 </CardContent>
               </Card>
+
             </div>
 
             {/* Right Column - Maintenance */}
@@ -494,23 +947,7 @@ export function TruckDetailPage() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-4">
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm text-gray-600">Current Mileage</span>
-                        <span className="text-sm font-semibold text-gray-900">{truck.currentMileage.toLocaleString()} km</span>
-                      </div>
-                      <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-blue-600"
-                          style={{ width: `${((truck.currentMileage - truck.mileageAtLastMaintenance) / 2000) * 100}%` }}
-                        />
-                      </div>
-                      <p className="text-xs text-gray-500 mt-1">
-                        {(truck.currentMileage - truck.mileageAtLastMaintenance).toLocaleString()} km since last maintenance
-                      </p>
-                    </div>
-
-                    <div className="pt-4 border-t border-gray-200 space-y-3">
+                    <div className="space-y-3">
                       <div className="flex items-start gap-2">
                         <CheckCircle className="w-4 h-4 text-green-600 mt-0.5" />
                         <div className="flex-1">
@@ -531,35 +968,6 @@ export function TruckDetailPage() {
                       <Wrench className="w-3 h-3 mr-2" />
                       Schedule Maintenance
                     </Button>
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* All Drivers */}
-              <Card>
-                <CardHeader>
-                  <CardTitle>All Drivers ({drivers.length})</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-3">
-                    {drivers.map(driver => (
-                      <div key={driver.driverId} className="flex items-center justify-between gap-2 p-2 rounded hover:bg-gray-50 min-w-0">
-                        <div className="flex items-center gap-3 min-w-0">
-                          <div className="w-8 h-8 bg-gray-100 rounded-full flex items-center justify-center">
-                            <User className="w-4 h-4 text-gray-600" />
-                          </div>
-                          <div className="min-w-0">
-                            <p className="text-sm font-medium text-gray-900 flex items-center gap-2">
-                              {driver.driverName}
-                              {driver.isPrimary && (
-                                <Star className="w-3 h-3 text-yellow-500 fill-yellow-500" />
-                              )}
-                            </p>
-                            <p className="text-xs text-gray-500 break-words">{driver.totalTrips} trips • {driver.onTimeRate}% OTR</p>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
                   </div>
                 </CardContent>
               </Card>
@@ -869,87 +1277,6 @@ export function TruckDetailPage() {
                       </div>
                     </div>
                   ))}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        )}
-
-        {/* PERFORMANCE TAB */}
-        {activeTab === 'performance' && (
-          <div className="space-y-6">
-            {/* KPI Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-              <Card>
-                <CardContent className="p-6">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm text-gray-500">Avg Capacity Use</p>
-                      <p className="text-2xl font-bold text-gray-900 mt-1">
-                        {Math.round(tripHistory.reduce((sum, t) => sum + (t.distance / truck.maxWeight * 100), 0) / tripHistory.length)}%
-                      </p>
-                    </div>
-                    <TrendingUp className="w-8 h-8 text-green-600" />
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardContent className="p-6">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm text-gray-500">Fuel Efficiency</p>
-                      <p className="text-2xl font-bold text-gray-900 mt-1">
-                        {(tripHistory.reduce((sum, t) => sum + t.distance, 0) / 
-                          tripHistory.reduce((sum, t) => sum + t.fuelUsed, 0)).toFixed(1)} km/L
-                      </p>
-                    </div>
-                    <Fuel className="w-8 h-8 text-blue-600" />
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardContent className="p-6">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm text-gray-500">On-Time Rate</p>
-                      <p className="text-2xl font-bold text-gray-900 mt-1">
-                        {Math.round((tripHistory.filter(t => t.status === 'Completed').length / tripHistory.length) * 100)}%
-                      </p>
-                    </div>
-                    <CheckCircle className="w-8 h-8 text-green-600" />
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardContent className="p-6">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm text-gray-500">Avg Trip Revenue</p>
-                      <p className="text-2xl font-bold text-gray-900 mt-1">
-                        ₱{Math.round(totalRevenue / tripHistory.length).toLocaleString()}
-                      </p>
-                    </div>
-                    <DollarSign className="w-8 h-8 text-purple-600" />
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-
-            {/* Charts Placeholder */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Monthly Performance Trends</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="h-64 flex items-center justify-center bg-gray-50 rounded-lg border-2 border-dashed border-gray-300">
-                  <div className="text-center">
-                    <TrendingUp className="w-12 h-12 mx-auto text-gray-400 mb-3" />
-                    <p className="text-gray-600">Performance charts coming soon</p>
-                    <p className="text-sm text-gray-500">Trip volume, revenue, and efficiency trends</p>
-                  </div>
                 </div>
               </CardContent>
             </Card>

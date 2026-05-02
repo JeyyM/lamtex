@@ -693,7 +693,14 @@ export function MaterialDetailPage() {
       const newStatus = computeStockStatus(newTotal, material.reorder_point);
       const { error: matErr } = await supabase
         .from('raw_materials')
-        .update({ total_stock: newTotal, status: newStatus, updated_at: new Date().toISOString() })
+        .update({
+          total_stock: newTotal,
+          status: newStatus,
+          updated_at: new Date().toISOString(),
+          ...(adjustment.type === 'add'
+            ? { last_restock_date: new Date().toISOString().split('T')[0] }
+            : {}),
+        })
         .eq('id', material.id);
       if (matErr) throw matErr;
 

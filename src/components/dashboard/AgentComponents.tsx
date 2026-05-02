@@ -1,11 +1,10 @@
-// Agent Dashboard Components - Collections and Tasks
+// Agent Dashboard Components - Collections
 
 import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { getReceivablesByBranch, getReceivablesSummary } from '@/src/mock/collections';
-import { getAllTasksByAgent } from '@/src/mock/customers';
 import { useAppContext } from '@/src/store/AppContext';
 import {
   DollarSign,
@@ -14,12 +13,7 @@ import {
   CheckCircle,
   Calendar,
   MessageSquare,
-  Phone,
-  FileText,
   TrendingUp,
-  Clipboard,
-  Plus,
-  Eye,
   X,
 } from 'lucide-react';
 
@@ -182,142 +176,6 @@ export function CollectionsPanel() {
           }}
         />
       )}
-    </div>
-  );
-}
-
-export function TasksPanel() {
-  const { addAuditLog } = useAppContext();
-  const [showCreateTask, setShowCreateTask] = useState(false);
-  const allTasks = getAllTasksByAgent();
-  const todayTasks = allTasks.filter(t => t.status !== 'Completed').slice(0, 8);
-
-  const handleCompleteTask = (task: any) => {
-    if (confirm(`Mark task "${task.title}" as completed?`)) {
-      alert('Task marked as completed');
-      addAuditLog('Completed Task', 'Task', `Completed task: ${task.title}`);
-    }
-  };
-
-  const getPriorityColor = (priority: string) => {
-    if (priority === 'Urgent') return 'danger';
-    if (priority === 'High') return 'warning';
-    return 'default';
-  };
-
-  return (
-    <div className="space-y-6">
-      {/* Task Summary */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-xs text-gray-500 mb-1">Today's Tasks</div>
-                <div className="text-2xl font-bold text-gray-900">
-                  {todayTasks.filter(t => t.dueDate === '2026-02-25').length}
-                </div>
-              </div>
-              <Calendar className="w-8 h-8 text-blue-500" />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-xs text-gray-500 mb-1">Urgent</div>
-                <div className="text-2xl font-bold text-red-600">
-                  {todayTasks.filter(t => t.priority === 'Urgent').length}
-                </div>
-              </div>
-              <AlertTriangle className="w-8 h-8 text-red-500" />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-xs text-gray-500 mb-1">In Progress</div>
-                <div className="text-2xl font-bold text-amber-600">
-                  {todayTasks.filter(t => t.status === 'In Progress').length}
-                </div>
-              </div>
-              <Clipboard className="w-8 h-8 text-amber-500" />
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Today's Work List */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center justify-between">
-            <span className="flex items-center gap-2">
-              <Clipboard className="w-5 h-5 text-red-600" />
-              Today's Work
-            </span>
-            <Button variant="primary" size="sm" onClick={() => setShowCreateTask(true)}>
-              <Plus className="w-4 h-4 mr-2" />
-              New Task
-            </Button>
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="p-0">
-          <div className="divide-y divide-gray-200">
-            {todayTasks.map((task) => (
-              <div key={task.id} className="p-4 hover:bg-gray-50">
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <Badge variant={getPriorityColor(task.priority)}>
-                        {task.priority}
-                      </Badge>
-                      <Badge variant="default">{task.type}</Badge>
-                      <Badge variant={task.status === 'Completed' ? 'success' : task.status === 'In Progress' ? 'warning' : 'default'}>
-                        {task.status}
-                      </Badge>
-                    </div>
-                    <h4 className="font-medium text-gray-900">{task.title}</h4>
-                    <div className="text-sm text-gray-500 mt-1">{task.customerName}</div>
-                    {task.description && (
-                      <p className="text-sm text-gray-600 mt-1">{task.description}</p>
-                    )}
-                    <div className="flex items-center gap-3 mt-2 text-xs text-gray-500">
-                      <span className="flex items-center gap-1">
-                        <Calendar className="w-3 h-3" />
-                        {task.dueDate}
-                      </span>
-                      <span>{task.assignedTo}</span>
-                    </div>
-                  </div>
-                  <div className="ml-4">
-                    {task.status !== 'Completed' && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleCompleteTask(task)}
-                      >
-                        <CheckCircle className="w-3 h-3 mr-1" />
-                        Complete
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ))}
-            {todayTasks.length === 0 && (
-              <div className="p-8 text-center text-gray-500">
-                <Clipboard className="w-12 h-12 mx-auto mb-2 text-gray-400" />
-                <p>No tasks for today</p>
-              </div>
-            )}
-          </div>
-        </CardContent>
-      </Card>
     </div>
   );
 }

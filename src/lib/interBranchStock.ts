@@ -6,7 +6,7 @@ async function branchCode(supabase: SupabaseClient, branchId: string): Promise<s
   return (data as { code?: string } | null)?.code ?? '';
 }
 
-async function recalcMaterialTotal(supabase: SupabaseClient, materialId: string) {
+export async function recalcMaterialTotal(supabase: SupabaseClient, materialId: string) {
   const { data } = await supabase.from('material_stock').select('quantity').eq('material_id', materialId);
   const sum = (data ?? []).reduce((s, r) => s + Number((r as { quantity: number }).quantity), 0);
   await supabase
@@ -229,6 +229,12 @@ export async function applyIbrReceiveStock(
         if (ins) throw ins;
       }
       await recalcMaterialTotal(supabase, item.raw_material_id);
+      const today = new Date().toISOString().split('T')[0];
+      const { error: matTouchErr } = await supabase
+        .from('raw_materials')
+        .update({ last_restock_date: today, updated_at: new Date().toISOString() })
+        .eq('id', item.raw_material_id);
+      if (matTouchErr) throw matTouchErr;
     } else if (item.line_kind === 'product' && item.product_variant_id) {
       const stockRecv = Math.floor(recv);
       const { data: row } = await supabase
@@ -254,6 +260,11 @@ export async function applyIbrReceiveStock(
         if (ins) throw ins;
       }
       await recalcVariantTotal(supabase, item.product_variant_id);
+      const { error: pvTouchErr } = await supabase
+        .from('product_variants')
+        .update({ last_restocked: new Date().toISOString() })
+        .eq('id', item.product_variant_id);
+      if (pvTouchErr) throw pvTouchErr;
 
       const { data: vrow } = await supabase
         .from('product_variants')

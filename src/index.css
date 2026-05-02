@@ -46,3 +46,8 @@
     display: none;
   }
 }
+
+/* Google Places Autocomplete panel above stacked cards / modals */
+.pac-container {
+  z-index: 10000 !important;
+}
