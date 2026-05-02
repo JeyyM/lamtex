@@ -35,6 +35,10 @@ export interface DBVariant {
   /** Catalogue reorder point (for display only; no line on the bar). */
   reorderPoint: number;
   bulk_discounts: DBBulkDiscount[];
+  /** Per inventory unit — for trucking / trip load (optional). */
+  weight_kg?: number | null;
+  length_m?: number | null;
+  volume_cbm?: number | null;
 }
 export interface DBProduct {
   id: string;
@@ -64,6 +68,9 @@ function mapRowsToProducts(
       unit_price: Number(v.unit_price ?? 0),
       stock: stockMap[v.id] ?? v.total_stock ?? 0,
       reorderPoint: Math.max(0, Math.floor(Number(v.reorder_point ?? 0))),
+      weight_kg: v.weight_kg != null && v.weight_kg !== '' ? Number(v.weight_kg) : null,
+      length_m: v.length_m != null && v.length_m !== '' ? Number(v.length_m) : null,
+      volume_cbm: v.volume_cbm != null && v.volume_cbm !== '' ? Number(v.volume_cbm) : null,
       bulk_discounts: (v.product_bulk_discounts ?? [])
         .filter((d: any) => d.is_active)
         .map((d: any) => ({
@@ -231,6 +238,7 @@ export interface OrderProductSelectionConfirm {
 
 const VARIANT_SELECT = `
   id, sku, size, description, unit_price, total_stock, reorder_point,
+  weight_kg, length_m, volume_cbm,
   product_bulk_discounts(min_qty, max_qty, discount_percent, is_active)
 `;
 
@@ -304,7 +312,7 @@ export function OrderProductSelectionModal({
   );
   /** Free text while typing; empty allowed (order mode only). */
   const [variantPriceInput, setVariantPriceInput] = useState('0');
-  const [variantDiscounts, setVariantDiscounts] = useState<Array<{ name: string; percentage: number }>>([]);
+  const [variantDiscounts, setVariantDiscounts] = useState<Array<{ name: string; percentage: string }>>([]);
 
   const isProductionLike = purpose === 'production' || purpose === 'interBranch';
   const [initializingEdit, setInitializingEdit] = useState(false);
@@ -674,12 +682,15 @@ export function OrderProductSelectionModal({
     return selectedProduct.variants.filter((v) => variantIsSelectable(v.id));
   }, [selectedProduct, variantIsSelectable]);
 
-  const addDiscount = () => setVariantDiscounts((d) => [...d, { name: '', percentage: 0 }]);
+  const addDiscount = () => setVariantDiscounts((d) => [...d, { name: '', percentage: '' }]);
   const updateDiscount = (index: number, field: 'name' | 'percentage', value: string) => {
     setVariantDiscounts((prev) => {
       const next = [...prev];
-      if (field === 'name') next[index] = { ...next[index]!, name: value };
-      else next[index] = { ...next[index]!, percentage: Math.max(0, Math.min(100, Number(value) || 0)) };
+      const row = next[index];
+      if (!row) return prev;
+      if (field === 'name') next[index] = { ...row, name: value };
+      else if (value === '') next[index] = { ...row, percentage: '' };
+      else if (/^\d*\.?\d*$/.test(value)) next[index] = { ...row, percentage: value };
       return next;
     });
   };
@@ -743,11 +754,28 @@ export function OrderProductSelectionModal({
       stock: selectedVariant.stock,
     };
 
-    if (purpose === 'order' && orderUnitPrice !== undefined) {
-      payload.unitPrice = orderUnitPrice;
-      payload.originalPrice = selectedVariant.unit_price;
-      payload.discounts = [...variantDiscounts];
-    }
+      if (purpose === 'order' && orderUnitPrice !== undefined) {
+        payload.unitPrice = orderUnitPrice;
+        payload.originalPrice = selectedVariant.unit_price;
+        const parsedDiscounts: Array<{ name: string; percentage: number }> = [];
+        for (let i = 0; i < variantDiscounts.length; i++) {
+          const d = variantDiscounts[i]!;
+          const praw = d.percentage.trim();
+          if (praw === '') {
+            parsedDiscounts.push({ name: d.name, percentage: 0 });
+            continue;
+          }
+          const pct = parseFloat(praw);
+          if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+            alert(
+              `Discount "${d.name.trim() || `#${i + 1}`}": enter a valid percentage between 0 and 100, or clear the field.`,
+            );
+            return;
+          }
+          parsedDiscounts.push({ name: d.name, percentage: pct });
+        }
+        payload.discounts = parsedDiscounts.filter((d) => d.name.trim() !== '' || d.percentage > 0);
+      }
 
     onConfirm(payload);
     resetDetail();
@@ -1250,11 +1278,11 @@ export function OrderProductSelectionModal({
                                   className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg"
                                 />
                                 <input
-                                  type="number"
-                                  min="0"
-                                  max="100"
-                                  step="0.1"
-                                  value={d.percentage || ''}
+                                  type="text"
+                                  inputMode="decimal"
+                                  autoComplete="off"
+                                  placeholder="0"
+                                  value={d.percentage}
                                   onChange={(e) => updateDiscount(i, 'percentage', e.target.value)}
                                   onWheel={(e) => e.preventDefault()}
                                   className="w-20 px-3 py-2 text-sm text-center border border-gray-300 rounded-lg [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"

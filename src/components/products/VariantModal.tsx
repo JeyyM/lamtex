@@ -28,6 +28,7 @@ export function VariantModal({ isOpen, onClose, productId, productName, variant 
     reorderPoint: variant?.reorderPoint || 0,
     safetyStock: variant?.safetyStock || 0,
     weight: variant?.weight || 0,
+    volumeCbm: variant?.volumeCbm || 0,
     length: variant?.length || 0,
     outerDiameter: variant?.outerDiameter || 0,
     innerDiameter: variant?.innerDiameter || 0,
@@ -287,7 +288,7 @@ export function VariantModal({ isOpen, onClose, productId, productName, variant 
           {/* Physical Dimensions */}
           <div>
             <h3 className="text-sm font-semibold text-gray-900 mb-3">Physical Dimensions</h3>
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   Weight (kg)
@@ -298,6 +299,20 @@ export function VariantModal({ isOpen, onClose, productId, productName, variant 
                   step="0.01"
                   value={formData.weight}
                   onChange={(e) => handleChange('weight', parseFloat(e.target.value) || 0)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Shipping volume (m³)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.000001"
+                  value={formData.volumeCbm}
+                  onChange={(e) => handleChange('volumeCbm', parseFloat(e.target.value) || 0)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
                 />
               </div>

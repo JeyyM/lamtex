@@ -2,21 +2,53 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Navigation } from 'lucide-react';
 import { Button } from '@/src/components/ui/Button';
 import { getGoogleMapsApiKey, loadGoogleMapsJs } from '@/src/lib/maps';
+import { blueCustomerPinIcon } from '@/src/lib/customerMapPinIcon';
 
 /** Default center (Metro Manila) when no pin is set yet. */
 const DEFAULT_CENTER = { lat: 14.5995, lng: 120.9842 };
+
+export type CompanyMapPickerPinColor = 'default' | 'blue';
+
+function markerIconForPinColor(
+  pinColor: CompanyMapPickerPinColor | undefined,
+): google.maps.Icon | google.maps.Symbol | string | undefined {
+  if (pinColor !== 'blue') return undefined;
+  return blueCustomerPinIcon();
+}
 
 type Props = {
   lat: number | null;
   lng: number | null;
   onPositionChange: (lat: number, lng: number) => void;
+  /** Pin label on hover / accessibility. */
+  markerTitle?: string;
+  /** `blue` = custom blue pin (white outline + center dot); `default` = standard red Maps marker. */
+  pinColor?: CompanyMapPickerPinColor;
+  /** Unique id for the search field (avoid duplicate ids when multiple pickers exist). */
+  searchInputId?: string;
+  searchInputName?: string;
+  /**
+   * Optional fixed marker (e.g. branch store / HQ): default red Google pin, not draggable.
+   * Shown together with the primary editable pin (e.g. blue customer pin).
+   */
+  referencePin?: { lat: number; lng: number; title?: string } | null;
 };
 
-export function CompanyMapPicker({ lat, lng, onPositionChange }: Props) {
+export function CompanyMapPicker({
+  lat,
+  lng,
+  onPositionChange,
+  markerTitle = 'Company HQ — drag to adjust',
+  pinColor = 'default',
+  searchInputId = 'company-map-search',
+  searchInputName = 'lamtex_gmaps_place_query',
+  referencePin = null,
+}: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const mapRef = useRef<google.maps.Map | null>(null);
   const markerRef = useRef<google.maps.Marker | null>(null);
+  const referenceMarkerRef = useRef<google.maps.Marker | null>(null);
   const onPositionChangeRef = useRef(onPositionChange);
   onPositionChangeRef.current = onPositionChange;
 
@@ -50,14 +82,18 @@ export function CompanyMapPicker({ lat, lng, onPositionChange }: Props) {
     const placeMarker = (position: google.maps.LatLngLiteral, pan: boolean) => {
       const map = mapRef.current;
       if (!map) return;
+      const icon = markerIconForPinColor(pinColor);
       if (markerRef.current) {
         markerRef.current.setPosition(position);
+        markerRef.current.setIcon(icon as google.maps.Icon | google.maps.Symbol | string | undefined);
+        markerRef.current.setTitle(markerTitle);
       } else {
         const marker = new google.maps.Marker({
           map,
           position,
           draggable: true,
-          title: 'Company HQ — drag to adjust',
+          title: markerTitle,
+          icon: icon as google.maps.Icon | google.maps.Symbol | string | undefined,
         });
         marker.addListener('dragend', () => {
           const p = marker.getPosition();
@@ -75,10 +111,18 @@ export function CompanyMapPicker({ lat, lng, onPositionChange }: Props) {
         if (cancelled || !containerRef.current) return;
         const hasPin =
           lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng);
-        const center = hasPin ? { lat: lat as number, lng: lng as number } : DEFAULT_CENTER;
+        const ref = referencePin;
+        const hasRef =
+          ref != null && Number.isFinite(ref.lat) && Number.isFinite(ref.lng);
+        const center = hasPin
+          ? { lat: lat as number, lng: lng as number }
+          : hasRef
+            ? { lat: ref!.lat, lng: ref!.lng }
+            : DEFAULT_CENTER;
+        const zoom = hasPin ? 16 : hasRef ? 14 : 12;
         const map = new google.maps.Map(containerRef.current, {
           center,
-          zoom: hasPin ? 16 : 12,
+          zoom,
           mapTypeControl: true,
           streetViewControl: false,
           fullscreenControl: true,
@@ -142,19 +186,56 @@ export function CompanyMapPicker({ lat, lng, onPositionChange }: Props) {
       }
       markerRef.current?.setMap(null);
       markerRef.current = null;
+      referenceMarkerRef.current?.setMap(null);
+      referenceMarkerRef.current = null;
       mapRef.current = null;
       if (el) el.innerHTML = '';
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- map init once; lat/lng sync in next effect
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- lat/lng sync in next effect; referencePin synced below
+  }, [pinColor, markerTitle, referencePin?.lat, referencePin?.lng]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    const ref = referencePin;
+    if (!ref || !Number.isFinite(ref.lat) || !Number.isFinite(ref.lng)) {
+      referenceMarkerRef.current?.setMap(null);
+      referenceMarkerRef.current = null;
+      return;
+    }
+    const pos = { lat: ref.lat, lng: ref.lng };
+    const title = ref.title?.trim() || 'Store / HQ';
+    if (referenceMarkerRef.current) {
+      referenceMarkerRef.current.setPosition(pos);
+      referenceMarkerRef.current.setTitle(title);
+    } else {
+      referenceMarkerRef.current = new google.maps.Marker({
+        map,
+        position: pos,
+        draggable: false,
+        title,
+        zIndex: 1,
+      });
+    }
+    const hasCustomerPin = lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng);
+    if (!hasCustomerPin) {
+      map.panTo(pos);
+      map.setZoom(14);
+    }
+  }, [mapReady, referencePin?.lat, referencePin?.lng, referencePin?.title, lat, lng]);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
     const hasPin = lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng);
-    if (!hasPin) return;
+    if (!hasPin) {
+      markerRef.current?.setMap(null);
+      markerRef.current = null;
+      return;
+    }
 
     const position = { lat: lat as number, lng: lng as number };
+    const icon = markerIconForPinColor(pinColor);
     if (markerRef.current) {
       const cur = markerRef.current.getPosition();
       if (
@@ -165,13 +246,16 @@ export function CompanyMapPicker({ lat, lng, onPositionChange }: Props) {
         return;
       }
       markerRef.current.setPosition(position);
+      markerRef.current.setIcon(icon as google.maps.Icon | google.maps.Symbol | string | undefined);
+      markerRef.current.setTitle(markerTitle);
       map.panTo(position);
     } else {
       const marker = new google.maps.Marker({
         map,
         position,
         draggable: true,
-        title: 'Company HQ — drag to adjust',
+        title: markerTitle,
+        icon: icon as google.maps.Icon | google.maps.Symbol | string | undefined,
       });
       marker.addListener('dragend', () => {
         const p = marker.getPosition();
@@ -179,7 +263,7 @@ export function CompanyMapPicker({ lat, lng, onPositionChange }: Props) {
       });
       markerRef.current = marker;
     }
-  }, [lat, lng]);
+  }, [lat, lng, pinColor, markerTitle]);
 
   const handleUseCurrentLocation = () => {
     if (!navigator.geolocation) {
@@ -235,19 +319,15 @@ export function CompanyMapPicker({ lat, lng, onPositionChange }: Props) {
   return (
     <div className="space-y-3">
       <div className="flex flex-col gap-2 lg:flex-row lg:items-end">
-        <form
-          autoComplete="off"
-          className="min-w-0 flex-1"
-          onSubmit={(e) => e.preventDefault()}
-        >
-          <label htmlFor="company-map-search" className="mb-1 block text-sm font-medium text-gray-700">
+        <div className="min-w-0 flex-1" role="search">
+          <label htmlFor={searchInputId} className="mb-1 block text-sm font-medium text-gray-700">
             Search
           </label>
           <input
-            id="company-map-search"
+            id={searchInputId}
             ref={searchInputRef}
             type="search"
-            name="lamtex_gmaps_place_query"
+            name={searchInputName}
             autoComplete="off"
             autoCorrect="off"
             autoCapitalize="off"
@@ -260,7 +340,7 @@ export function CompanyMapPicker({ lat, lng, onPositionChange }: Props) {
             data-lpignore="true"
             data-1p-ignore
           />
-        </form>
+        </div>
         <Button
           type="button"
           variant="outline"

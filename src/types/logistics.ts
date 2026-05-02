@@ -15,6 +15,11 @@ export interface OrderReadyForDispatch {
   id: string;
   orderNumber: string;
   customer: string;
+  /** customers.id when linked (for map pins). */
+  customerId?: string | null;
+  /** Saved customer map pin; route map uses selected orders with both coords set. */
+  mapLat?: number | null;
+  mapLng?: number | null;
   branch: string;
   destination: string;
   requiredDate: string;
@@ -28,10 +33,13 @@ export interface OrderReadyForDispatch {
 export interface Trip {
   id: string;
   tripNumber: string;
+  /** vehicles.id (UUID) when loaded from Supabase */
   vehicleId: string;
   vehicleName: string;
+  /** employees.id when assigned */
+  driverId?: string | null;
   driverName: string;
-  status: 'Pending' | 'Planned' | 'Loading' | 'In Transit' | 'Completed' | 'Delayed' | 'Failed';
+  status: 'Pending' | 'Scheduled' | 'Loading' | 'In Transit' | 'Completed' | 'Delayed' | 'Failed';
   scheduledDate: string;
   departureTime?: string;
   destinations: string[];
@@ -134,6 +142,12 @@ export interface WarehouseReadiness {
     quantity: number;
   }[];
   lastUpdated: string;
+}
+
+export interface DriverOption {
+  id: string;        // employees.id (UUID)
+  name: string;      // employee_name
+  status: string;    // 'active' | 'on-leave' | 'inactive'
 }
 
 export interface LogisticsAlert {

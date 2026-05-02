@@ -24,6 +24,9 @@ export type PaymentStatus =
 
 export type DeliveryType = 'Truck' | 'Ship' | 'Pickup';
 
+/** Matches DB `orders.urgency` / `urgency_level`. */
+export type OrderUrgency = 'Low' | 'Medium' | 'High' | 'Critical';
+
 export type PaymentTerms = 'COD' | '15 Days' | '30 Days' | '45 Days' | '60 Days' | '90 Days' | 'Custom';
 
 export type StockHint = 'Available' | 'Partial' | 'Not Available';
@@ -37,6 +40,8 @@ export interface OrderDetail {
   branch: string;
   orderDate: string;
   requiredDate: string;
+  /** Dispatch priority; persisted as `orders.urgency`. Omitted in legacy/mock rows → treat as Medium in UI. */
+  urgency?: OrderUrgency;
   deliveryType: DeliveryType;
   paymentTerms: PaymentTerms;
   paymentMethod: 'Online' | 'Offline';

@@ -52,8 +52,11 @@ interface DisplayVariant {
   variantName: string;
   sku: string;
   size: string;
+  /** Numeric string: kg per inventory unit (stick, bundle, piece—same as stock unit) */
   length: string;
   weight: string;
+  /** Numeric string: m³ per inventory unit (shipping/stowage) */
+  volumeCbm: string;
   thickness: string;
   pressure: string;
   stock: number;
@@ -89,6 +92,7 @@ interface VariantRow {
   revenue_ytd: number;
   weight_kg: number | null;
   length_m: number | null;
+  volume_cbm: number | null;
   wall_thickness_mm: number | null;
   lead_time_days: number | null;
   min_order_qty: number | null;
@@ -175,9 +179,12 @@ function toDisplayVariant(v: VariantRow, selectedBranch: string): DisplayVariant
     Array.isArray(v.specs) && v.specs.length > 0
       ? v.specs
       : [
-          ...(v.length_m        ? [{ label: 'Length',         value: `${v.length_m}m`           }] : []),
-          ...(v.weight_kg       ? [{ label: 'Weight',         value: `${v.weight_kg} kg/m`       }] : []),
-          ...(v.wall_thickness_mm ? [{ label: 'Wall Thickness', value: `${v.wall_thickness_mm} mm` }] : []),
+          ...(v.length_m ? [{ label: 'Length (per unit)', value: `${v.length_m} m` }] : []),
+          ...(v.weight_kg ? [{ label: 'Weight (per unit)', value: `${v.weight_kg} kg` }] : []),
+          ...(v.volume_cbm != null && Number(v.volume_cbm) > 0
+            ? [{ label: 'Shipping volume (per unit)', value: `${v.volume_cbm} m³` }]
+            : []),
+          ...(v.wall_thickness_mm ? [{ label: 'Wall thickness', value: `${v.wall_thickness_mm} mm` }] : []),
         ];
 
   return {
@@ -185,9 +192,10 @@ function toDisplayVariant(v: VariantRow, selectedBranch: string): DisplayVariant
     variantName: v.size,
     sku: v.sku,
     size: v.size,
-    length: v.length_m ? `${v.length_m}m` : 'N/A',
-    weight: v.weight_kg ? `${v.weight_kg} kg/m` : 'N/A',
-    thickness: v.wall_thickness_mm ? `${v.wall_thickness_mm} mm` : 'N/A',
+    length: v.length_m != null ? String(v.length_m) : '',
+    weight: v.weight_kg != null ? String(v.weight_kg) : '',
+    volumeCbm: v.volume_cbm != null ? String(v.volume_cbm) : '',
+    thickness: v.wall_thickness_mm != null ? String(v.wall_thickness_mm) : '',
     pressure: 'N/A',
     stock: branchStock,
     reorderPoint: v.reorder_point,
@@ -285,7 +293,7 @@ export default function ProductFamilyPage() {
         .from('product_variants')
         .select(`
           id, sku, size, unit_price, cost_price, total_stock, reorder_point,
-          status, units_sold_ytd, revenue_ytd, weight_kg, length_m, wall_thickness_mm,
+          status, units_sold_ytd, revenue_ytd, weight_kg, length_m, volume_cbm, wall_thickness_mm,
           lead_time_days, min_order_qty, specs,
           product_variant_stock(quantity, branches(code, name)),
           product_bulk_discounts(min_qty, max_qty, discount_percent),
@@ -466,7 +474,8 @@ export default function ProductFamilyPage() {
       status:           computeStockStatus(editedVariant.stock, editedVariant.reorderPoint),
       units_sold_ytd:   editedVariant.unitsSold,
       weight_kg:        parseFloat(editedVariant.weight) || null,
-      length_m:         parseFloat(editedVariant.length)  || null,
+      length_m:         parseFloat(editedVariant.length) || null,
+      volume_cbm:       parseFloat(editedVariant.volumeCbm) || null,
       wall_thickness_mm: parseFloat(editedVariant.thickness) || null,
       lead_time_days:   editedVariant.leadTimeDays || null,
       min_order_qty:    editedVariant.minOrderQty || null,
@@ -502,7 +511,7 @@ export default function ProductFamilyPage() {
     const { data: vars } = await supabase
       .from('product_variants')
       .select(`id, sku, size, unit_price, cost_price, total_stock, reorder_point,
-        status, units_sold_ytd, revenue_ytd, weight_kg, length_m, wall_thickness_mm,
+        status, units_sold_ytd, revenue_ytd, weight_kg, length_m, volume_cbm, wall_thickness_mm,
         lead_time_days, min_order_qty, specs,
         product_variant_stock(quantity, branches(code, name)),
         product_bulk_discounts(min_qty, max_qty, discount_percent),
@@ -600,7 +609,7 @@ export default function ProductFamilyPage() {
         .from('product_variants')
         .select(`
           id, sku, size, unit_price, cost_price, total_stock, reorder_point,
-          status, units_sold_ytd, revenue_ytd, weight_kg, length_m, wall_thickness_mm,
+          status, units_sold_ytd, revenue_ytd, weight_kg, length_m, volume_cbm, wall_thickness_mm,
           lead_time_days, min_order_qty, specs,
           product_variant_stock(quantity, branches(code, name)),
           product_bulk_discounts(min_qty, max_qty, discount_percent),
@@ -725,6 +734,7 @@ export default function ProductFamilyPage() {
                 size: '',
                 length: '',
                 weight: '',
+                volumeCbm: '',
                 thickness: '',
                 pressure: '',
                 stock: 0,
@@ -938,7 +948,7 @@ export default function ProductFamilyPage() {
               onClick={() => {
                 const newVar: DisplayVariant = {
                   id: `NEW-${Date.now()}`,
-                  variantName: '', sku: '', size: '', length: '', weight: '',
+                  variantName: '', sku: '', size: '', length: '', weight: '', volumeCbm: '',
                   thickness: '', pressure: '', stock: 0, reorderPoint: 0,
                   price: 0, cost: 0, monthlyUsage: 0, unitsSold: 0, revenueYtd: 0,
                   status: 'In Stock', monthlyProductionQuota: 0, currentMonthProduced: 0,
@@ -1100,6 +1110,93 @@ export default function ProductFamilyPage() {
             <div>
               <p className="text-xs text-gray-500 uppercase mb-1">Margin</p>
               <p className="text-lg font-bold text-green-600">{margin.toFixed(1)}%</p>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Trucking load — per inventory unit (same unit as stock qty) */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Trucking load (per unit)</CardTitle>
+            <p className="text-xs text-gray-500 mt-1 font-normal">
+              Match <strong>one</strong> stock unit (stick, bundle, or piece). Used later to compare order lines to truck max weight and volume.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div>
+              <p className="text-xs text-gray-500 uppercase mb-1">Weight (kg)</p>
+              {isEditingVariant ? (
+                <input
+                  type="number"
+                  min={0}
+                  step="0.001"
+                  value={editedVariant!.weight}
+                  onChange={(e) => handleInputChange('weight', e.target.value)}
+                  onWheel={(e) => (e.target as HTMLInputElement).blur()}
+                  placeholder="e.g. 8.2"
+                  className="w-full border rounded px-3 py-1.5 text-sm font-medium"
+                />
+              ) : (
+                <p className="text-sm font-medium text-gray-900">
+                  {displayVariant.weight ? `${displayVariant.weight} kg` : '—'}
+                </p>
+              )}
+            </div>
+            <div>
+              <p className="text-xs text-gray-500 uppercase mb-1">Length (m)</p>
+              {isEditingVariant ? (
+                <input
+                  type="number"
+                  min={0}
+                  step="0.001"
+                  value={editedVariant!.length}
+                  onChange={(e) => handleInputChange('length', e.target.value)}
+                  onWheel={(e) => (e.target as HTMLInputElement).blur()}
+                  placeholder="e.g. 3.05"
+                  className="w-full border rounded px-3 py-1.5 text-sm font-medium"
+                />
+              ) : (
+                <p className="text-sm font-medium text-gray-900">
+                  {displayVariant.length ? `${displayVariant.length} m` : '—'}
+                </p>
+              )}
+            </div>
+            <div>
+              <p className="text-xs text-gray-500 uppercase mb-1">Shipping volume (m³)</p>
+              {isEditingVariant ? (
+                <input
+                  type="number"
+                  min={0}
+                  step="0.000001"
+                  value={editedVariant!.volumeCbm}
+                  onChange={(e) => handleInputChange('volumeCbm', e.target.value)}
+                  onWheel={(e) => (e.target as HTMLInputElement).blur()}
+                  placeholder="e.g. 0.048"
+                  className="w-full border rounded px-3 py-1.5 text-sm font-medium"
+                />
+              ) : (
+                <p className="text-sm font-medium text-gray-900">
+                  {displayVariant.volumeCbm ? `${displayVariant.volumeCbm} m³` : '—'}
+                </p>
+              )}
+            </div>
+            <div>
+              <p className="text-xs text-gray-500 uppercase mb-1">Wall thickness (mm)</p>
+              {isEditingVariant ? (
+                <input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={editedVariant!.thickness}
+                  onChange={(e) => handleInputChange('thickness', e.target.value)}
+                  onWheel={(e) => (e.target as HTMLInputElement).blur()}
+                  className="w-full border rounded px-3 py-1.5 text-sm font-medium"
+                />
+              ) : (
+                <p className="text-sm font-medium text-gray-900">
+                  {displayVariant.thickness ? `${displayVariant.thickness} mm` : '—'}
+                </p>
+              )}
             </div>
           </CardContent>
         </Card>

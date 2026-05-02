@@ -7,6 +7,7 @@ import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagin
 import { ProofOfDeliveryModal } from '@/src/components/orders/ProofOfDeliveryModal';
 import { useAppContext } from '@/src/store/AppContext';
 import { supabase } from '@/src/lib/supabase';
+import type { OrderUrgency } from '@/src/types/orders';
 
 const orderLogRoleMap: Record<string, 'Agent' | 'Warehouse Staff' | 'Manager' | 'Admin' | 'System' | 'Logistics'> = {
   Executive: 'Admin',
@@ -53,14 +54,13 @@ interface OrderRow {
   payment_status: string;
   requires_approval: boolean;
   delivery_address: string | null;
+  urgency: string | null;
 }
 
 export function OrdersPage() {
   const navigate = useNavigate();
   const { branch, addAuditLog, role, employeeName, session } = useAppContext();
-  const [activeTab, setActiveTab] = useState<OrderTab>('all');
-  const [searchTerm, setSearchTerm] = useState('');
-  const [creating, setCreating] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');  const [creating, setCreating] = useState(false);
   const [showProofModal, setShowProofModal] = useState(false);
   const [selectedOrderForProof, setSelectedOrderForProof] = useState<{ id: string; customer: string } | null>(null);
   const [allOrders, setAllOrders] = useState<OrderRow[]>([]);
@@ -84,7 +84,7 @@ export function OrdersPage() {
 
     const { data } = await supabase
       .from('orders')
-      .select('id, order_number, customer_name, agent_name, order_date, required_date, total_amount, discount_percent, status, payment_status, requires_approval, delivery_address')
+      .select('id, order_number, customer_name, agent_name, order_date, required_date, total_amount, discount_percent, status, payment_status, requires_approval, delivery_address, urgency')
       .eq('branch_id', branchData.id)
       .order('created_at', { ascending: false });
 
@@ -98,6 +98,10 @@ export function OrdersPage() {
     setHeaderStatusFilter('');
     setHeaderPaymentFilter('');
   }, [branch]);
+
+  useEffect(() => {
+    setTablePage(1);
+  }, [searchTerm, branch, headerStatusFilter, headerPaymentFilter]);
 
   /** Consistent list order: Approved → … → logistics pipeline (not alphabetical). */
   const orderStatusListOrder: string[] = useMemo(
@@ -141,19 +145,10 @@ export function OrdersPage() {
       order.order_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
       (order.customer_name ?? '').toLowerCase().includes(searchTerm.toLowerCase());
 
-    const matchesTab =
-      activeTab === 'all' ||
-      (activeTab === 'draft'     && order.status === 'Draft') ||
-      (activeTab === 'pending'   && order.status === 'Pending') ||
-      (activeTab === 'approved'  && ['Approved', 'Scheduled', 'Loading', 'Packed', 'Ready'].includes(order.status)) ||
-      (activeTab === 'intransit' && order.status === 'In Transit') ||
-      (activeTab === 'delivered' && ['Delivered', 'Completed'].includes(order.status)) ||
-      (activeTab === 'rejected'  && ['Rejected', 'Cancelled'].includes(order.status));
-
     const matchesHeaderStatus = headerStatusFilter === '' || order.status === headerStatusFilter;
     const matchesHeaderPayment = headerPaymentFilter === '' || order.payment_status === headerPaymentFilter;
 
-    return matchesSearch && matchesTab && matchesHeaderStatus && matchesHeaderPayment;
+    return matchesSearch && matchesHeaderStatus && matchesHeaderPayment;
   });
 
   const handleSort = (key: string) => {
@@ -177,13 +172,21 @@ export function OrdersPage() {
       let av: string | number;
       let bv: string | number;
       switch (sortKey) {
-        case 'order_number': av = a.order_number; bv = b.order_number; break;
         case 'customer': av = (a.customer_name ?? '').toLowerCase(); bv = (b.customer_name ?? '').toLowerCase(); break;
         case 'agent': av = (a.agent_name ?? '').toLowerCase(); bv = (b.agent_name ?? '').toLowerCase(); break;
         case 'order_date': av = a.order_date ?? ''; bv = b.order_date ?? ''; break;
         case 'required_date': av = a.required_date ?? ''; bv = b.required_date ?? ''; break;
         case 'amount': av = a.total_amount; bv = b.total_amount; break;
         case 'status': av = a.status; bv = b.status; break;
+        case 'urgency': {
+          const rank = (u: string | null) => {
+            const x = (u === 'Low' || u === 'Medium' || u === 'High' || u === 'Critical' ? u : 'Medium') as OrderUrgency;
+            return { Low: 0, Medium: 1, High: 2, Critical: 3 }[x];
+          };
+          av = rank(a.urgency);
+          bv = rank(b.urgency);
+          break;
+        }
         case 'payment': av = a.payment_status; bv = b.payment_status; break;
         default: av = a.order_date ?? ''; bv = b.order_date ?? '';
       }
@@ -211,10 +214,6 @@ export function OrdersPage() {
     if (tablePage > totalListPages) setTablePage(totalListPages);
   }, [tablePage, totalListPages]);
 
-  useEffect(() => {
-    setTablePage(1);
-  }, [searchTerm, activeTab, branch, headerStatusFilter, headerPaymentFilter]);
-
   const getStatusBadgeVariant = (status: string): 'success' | 'warning' | 'danger' | 'info' | 'default' | 'neutral' | 'outline' | 'destructive' => {
     if (['Delivered', 'Completed', 'Approved'].includes(status)) return 'success';
     if (['Pending', 'Scheduled', 'Loading', 'Packed', 'Ready'].includes(status)) return 'warning';
@@ -230,6 +229,23 @@ export function OrdersPage() {
     if (['Partially Paid', 'Invoiced'].includes(status)) return 'warning';
     if (status === 'Unbilled') return 'neutral';
     return 'default';
+  };
+
+  const displayUrgency = (u: string | null): OrderUrgency =>
+    u === 'Low' || u === 'Medium' || u === 'High' || u === 'Critical' ? u : 'Medium';
+
+  const getUrgencyBadgeVariant = (u: string | null): 'destructive' | 'warning' | 'info' | 'neutral' => {
+    switch (displayUrgency(u)) {
+      case 'Critical':
+        return 'destructive';
+      case 'High':
+        return 'warning';
+      case 'Medium':
+        return 'info';
+      case 'Low':
+      default:
+        return 'neutral';
+    }
   };
 
   const handleViewOrder = (orderId: string) => {
@@ -293,16 +309,6 @@ export function OrdersPage() {
   const handleProofSubmit = (orderId: string, imageFile: File) => {
     console.log('Proof of delivery uploaded for order:', orderId, imageFile.name);
     addAuditLog('Uploaded Proof of Delivery', 'Order', `Uploaded delivery proof for order ${orderId}`);
-  };
-
-  const tabCounts = {
-    all:       allOrders.length,
-    draft:     allOrders.filter(o => o.status === 'Draft').length,
-    pending:   allOrders.filter(o => o.status === 'Pending').length,
-    approved:  allOrders.filter(o => ['Approved', 'Scheduled', 'Loading', 'Packed', 'Ready'].includes(o.status)).length,
-    intransit: allOrders.filter(o => o.status === 'In Transit').length,
-    delivered: allOrders.filter(o => ['Delivered', 'Completed'].includes(o.status)).length,
-    rejected:  allOrders.filter(o => ['Rejected', 'Cancelled'].includes(o.status)).length,
   };
 
   // Driver Simplified View
@@ -414,42 +420,7 @@ export function OrdersPage() {
       </div>
 
       {/* Tabs - Mobile Dropdown */}
-      <div className="md:hidden">
-        <select value={activeTab} onChange={(e) => setActiveTab(e.target.value as OrderTab)}
-          className="w-full px-4 py-3 pr-10 border border-gray-300 rounded-lg text-sm font-medium focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none appearance-none bg-white">
-          <option value="all">All Orders ({tabCounts.all})</option>
-          <option value="draft">Drafts ({tabCounts.draft})</option>
-          <option value="pending">Pending ({tabCounts.pending})</option>
-          <option value="approved">Approved ({tabCounts.approved})</option>
-          <option value="intransit">In Transit ({tabCounts.intransit})</option>
-          <option value="delivered">Delivered ({tabCounts.delivered})</option>
-          <option value="rejected">Rejected ({tabCounts.rejected})</option>
-        </select>
-      </div>
-
       {/* Tabs - Desktop */}
-      <div className="hidden md:block border-b border-gray-200">
-        <nav className="flex gap-6">
-          {([
-            { key: 'all', label: 'All Orders', icon: FileText },
-            { key: 'draft', label: 'Drafts', icon: Edit2 },
-            { key: 'pending', label: 'Pending', icon: Clock },
-            { key: 'approved', label: 'Approved', icon: CheckCircle },
-            { key: 'intransit', label: 'In Transit', icon: Truck },
-            { key: 'delivered', label: 'Delivered', icon: Package },
-            { key: 'rejected', label: 'Rejected', icon: XCircle },
-          ] as const).map(({ key, label, icon: Icon }) => (
-            <button key={key} onClick={() => setActiveTab(key as OrderTab)}
-              className={`flex items-center gap-2 px-1 py-3 border-b-2 text-sm font-medium transition-colors whitespace-nowrap ${
-                activeTab === key ? 'border-red-600 text-red-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}>
-              <Icon className="w-4 h-4" />{label}
-              <span className={`px-2 py-0.5 rounded-full text-xs ${activeTab === key ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-600'}`}>
-                {tabCounts[key as keyof typeof tabCounts]}
-              </span>
-            </button>
-          ))}
-        </nav>
-      </div>
 
       <Card>
         <CardHeader>
@@ -457,20 +428,17 @@ export function OrdersPage() {
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
               <div className="relative flex-1 sm:max-w-md">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                <input type="text" placeholder="Search by order # or customer name..." value={searchTerm}
+                <input type="text" placeholder="Search by customer or order #..." value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none" />
               </div>
-              <Button variant="outline" size="sm" className="gap-2"><Filter className="w-4 h-4" />More Filters</Button>
-            </div>
-            <div className="md:hidden grid grid-cols-1 sm:grid-cols-2 gap-2">
               <select
                 aria-label="Filter by status"
                 value={headerStatusFilter}
                 onChange={(e) => setHeaderStatusFilter(e.target.value)}
-                className="w-full text-sm text-gray-900 border border-gray-300 rounded-lg px-3 py-2 bg-white focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
+                className="text-sm text-gray-900 border border-gray-300 rounded-lg px-3 py-2 bg-white focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
               >
-                <option value="">Status</option>
+                <option value="">All Statuses</option>
                 {distinctOrderStatuses.map((s) => (
                   <option key={s} value={s}>{s}</option>
                 ))}
@@ -479,9 +447,9 @@ export function OrdersPage() {
                 aria-label="Filter by payment"
                 value={headerPaymentFilter}
                 onChange={(e) => setHeaderPaymentFilter(e.target.value)}
-                className="w-full text-sm text-gray-900 border border-gray-300 rounded-lg px-3 py-2 bg-white focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
+                className="text-sm text-gray-900 border border-gray-300 rounded-lg px-3 py-2 bg-white focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
               >
-                <option value="">Payment</option>
+                <option value="">All Payments</option>
                 {distinctPaymentStatuses.map((p) => (
                   <option key={p} value={p}>{p}</option>
                 ))}
@@ -503,13 +471,17 @@ export function OrdersPage() {
                     <div className="space-y-3">
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex items-center gap-2 min-w-0 flex-1">
-                          <span className="font-semibold text-gray-900 truncate">{order.order_number}</span>
+                          <span className="font-semibold text-gray-900 truncate">{order.customer_name ?? '—'}</span>
                           {order.requires_approval && <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0" />}
                         </div>
-                        <Badge variant={getStatusBadgeVariant(order.status)} className="text-xs flex-shrink-0">{order.status}</Badge>
+                        <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                          <Badge variant={getStatusBadgeVariant(order.status)} className="text-xs">{order.status}</Badge>
+                          <Badge variant={getUrgencyBadgeVariant(order.urgency)} className="text-xs">
+                            {displayUrgency(order.urgency)}
+                          </Badge>
+                        </div>
                       </div>
-                      <div className="min-w-0">
-                        <div className="font-medium text-gray-900 break-words">{order.customer_name}</div>
+                      <div className="min-w-0 -mt-1">
                         <div className="text-xs text-gray-500 truncate">{order.agent_name}</div>
                       </div>
                       <div className="grid grid-cols-2 gap-2 text-sm">
@@ -540,9 +512,6 @@ export function OrdersPage() {
                 <table className="w-full text-sm">
                   <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b border-gray-200">
                     <tr>
-                      <th onClick={() => handleSort('order_number')} className="px-6 py-3 text-left font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
-                        <span className="flex items-center">Order #{sortIcon('order_number')}</span>
-                      </th>
                       <th onClick={() => handleSort('customer')} className="px-6 py-3 text-left font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
                         <span className="flex items-center">Customer{sortIcon('customer')}</span>
                       </th>
@@ -571,6 +540,9 @@ export function OrdersPage() {
                           </select>
                         </div>
                       </th>
+                      <th onClick={() => handleSort('urgency')} className="px-6 py-3 text-left font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900 normal-case">
+                        <span className="flex items-center">Urgency{sortIcon('urgency')}</span>
+                      </th>
                       <th className="px-3 py-3 text-left font-medium align-top min-w-[9.5rem] max-w-[13rem]">
                         <div className="normal-case">
                           <select
@@ -593,14 +565,13 @@ export function OrdersPage() {
                     {pagedOrders.map((order) => (
                       <tr key={order.id} className="hover:bg-gray-50 cursor-pointer transition-colors" onClick={() => handleViewOrder(order.id)}>
                         <td className="px-6 py-4">
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium text-gray-900">{order.order_number}</span>
-                            {order.requires_approval && <AlertTriangle className="w-4 h-4 text-amber-500" />}
+                          <div className="flex items-start gap-2">
+                            <div className="min-w-0">
+                              <div className="font-medium text-gray-900">{order.customer_name}</div>
+                              <div className="text-xs text-gray-500">{order.agent_name}</div>
+                            </div>
+                            {order.requires_approval && <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />}
                           </div>
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="font-medium text-gray-900">{order.customer_name}</div>
-                          <div className="text-xs text-gray-500">{order.agent_name}</div>
                         </td>
                         <td className="px-6 py-4 text-gray-600">{order.order_date ?? '—'}</td>
                         <td className="px-6 py-4 text-gray-600">{order.required_date ?? '—'}</td>
@@ -610,6 +581,11 @@ export function OrdersPage() {
                         </td>
                         <td className="px-6 py-4">
                           <Badge variant={getStatusBadgeVariant(order.status)} className="min-w-[120px] justify-center">{order.status}</Badge>
+                        </td>
+                        <td className="px-6 py-4">
+                          <Badge variant={getUrgencyBadgeVariant(order.urgency)} className="min-w-[100px] justify-center">
+                            {displayUrgency(order.urgency)}
+                          </Badge>
                         </td>
                         <td className="px-6 py-4">
                           <Badge variant={getPaymentBadgeVariant(order.payment_status)} className="min-w-[100px] justify-center">{order.payment_status}</Badge>

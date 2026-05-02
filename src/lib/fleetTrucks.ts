@@ -106,6 +106,57 @@ async function loadTripNumbersForVehicles(rows: VehicleRow[]): Promise<Map<strin
   return new Map(data.map((t) => [t.id as string, t.trip_number as string]));
 }
 
+/**
+ * Vehicles that have **non-completed** maintenance with `scheduled_date` on `dateYmd`.
+ * Used to block route assignment on that calendar day.
+ */
+export async function fetchVehicleIdsWithMaintenanceOnDate(
+  vehicleUuids: string[],
+  dateYmd: string,
+): Promise<{ blockedIds: Set<string>; error?: string }> {
+  const ids = [...new Set(vehicleUuids.map((s) => s.trim()).filter(Boolean))];
+  if (!ids.length || !/^\d{4}-\d{2}-\d{2}$/.test(dateYmd)) {
+    return { blockedIds: new Set() };
+  }
+  const { data, error } = await supabase
+    .from('maintenance_records')
+    .select('vehicle_id, status')
+    .in('vehicle_id', ids)
+    .eq('scheduled_date', dateYmd);
+  if (error) return { blockedIds: new Set(), error: error.message };
+  const blocked = new Set<string>();
+  for (const r of data ?? []) {
+    const row = r as { vehicle_id: string; status?: string | null };
+    const st = String(row.status ?? '').trim().toLowerCase();
+    if (st === 'completed') continue;
+    blocked.add(row.vehicle_id);
+  }
+  return { blockedIds: blocked };
+}
+
+/** All scheduled (non-completed) maintenance dates for one vehicle — for trip calendar + confirm guard. */
+export async function fetchMaintenanceScheduledDatesForVehicle(
+  vehicleUuid: string,
+): Promise<{ dates: string[]; error?: string }> {
+  const id = vehicleUuid.trim();
+  if (!id) return { dates: [] };
+  const { data, error } = await supabase
+    .from('maintenance_records')
+    .select('scheduled_date, status')
+    .eq('vehicle_id', id)
+    .not('scheduled_date', 'is', null);
+  if (error) return { dates: [], error: error.message };
+  const dates: string[] = [];
+  for (const r of data ?? []) {
+    const row = r as { scheduled_date: string; status?: string | null };
+    const st = String(row.status ?? '').trim().toLowerCase();
+    if (st === 'completed') continue;
+    const d = String(row.scheduled_date).slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(d)) dates.push(d);
+  }
+  return { dates: [...new Set(dates)] };
+}
+
 /** Trucks for the branch selected in the header (`branches.name` must match). */
 export async function fetchFleetTrucksForBranch(branchName: string): Promise<{
   vehicles: Vehicle[];
@@ -179,16 +230,21 @@ function mapMaintRow(row: {
   notes: string | null;
 }): MaintenanceRecord {
   const cat = row.category as MaintenanceRecord['category'];
+  const scheduledDate = row.scheduled_date ? row.scheduled_date.slice(0, 10) : undefined;
+  const completedDate = row.completed_date ? row.completed_date.slice(0, 10) : undefined;
   return {
     id: row.id,
-    date: (row.completed_date ?? row.scheduled_date ?? '').slice(0, 10) || '—',
-    type: row.category,
+    date: (completedDate ?? scheduledDate ?? '') || '—',
+    type: row.description ?? row.category,
     category: cat,
     cost: num(row.cost),
     serviceProvider: row.vendor ?? '',
     mileage: 0,
-    notes: row.description ?? '',
-    nextDue: row.notes ?? undefined,
+    notes: row.notes ?? '',
+    nextDue: undefined,
+    scheduledDate,
+    completedDate,
+    dbStatus: row.status ?? 'Scheduled',
   };
 }
 
@@ -606,4 +662,84 @@ export async function fetchTruckDetailBundle(vehicleUuid: string): Promise<{
   const editForm = vehicleRowToTruckForm(v);
 
   return { truck, tripHistory, maintenanceHistory, alerts, calendarBookings, editForm };
+}
+
+// ─── Maintenance Actions ──────────────────────────────────────────────────────
+
+export type ScheduleMaintenancePayload = {
+  description: string;
+  scheduledDate: string; // YYYY-MM-DD
+};
+
+/**
+ * Insert a new scheduled maintenance record and update vehicles.maintenance_due
+ * to the earliest upcoming (non-completed) scheduled date.
+ */
+export async function scheduleMaintenance(
+  vehicleUuid: string,
+  data: ScheduleMaintenancePayload,
+): Promise<{ ok: boolean; error?: string }> {
+  const { error: insertError } = await supabase.from('maintenance_records').insert({
+    vehicle_id: vehicleUuid,
+    description: data.description.trim(),
+    scheduled_date: data.scheduledDate,
+    status: 'Scheduled',
+  });
+  if (insertError) return { ok: false, error: insertError.message };
+
+  // Refresh vehicles.maintenance_due to the nearest upcoming scheduled record
+  await _refreshVehicleMaintenanceDue(vehicleUuid);
+  return { ok: true };
+}
+
+export type ConfirmMaintenancePayload = {
+  completedDate: string; // YYYY-MM-DD
+  notes?: string;
+};
+
+/**
+ * Mark a maintenance record as Completed, record the completion date,
+ * then update vehicles.maintenance_due to the next upcoming record.
+ */
+export async function confirmMaintenance(
+  recordId: string,
+  vehicleUuid: string,
+  data: ConfirmMaintenancePayload,
+): Promise<{ ok: boolean; error?: string }> {
+  const { error: updateError } = await supabase
+    .from('maintenance_records')
+    .update({
+      status: 'Completed',
+      completed_date: data.completedDate,
+      notes: data.notes?.trim() || undefined,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', recordId);
+  if (updateError) return { ok: false, error: updateError.message };
+
+  await _refreshVehicleMaintenanceDue(vehicleUuid);
+  return { ok: true };
+}
+
+/** Internal: set vehicles.maintenance_due to the nearest upcoming non-completed scheduled_date. */
+async function _refreshVehicleMaintenanceDue(vehicleUuid: string): Promise<void> {
+  const today = new Date().toISOString().slice(0, 10);
+  const { data: next } = await supabase
+    .from('maintenance_records')
+    .select('scheduled_date')
+    .eq('vehicle_id', vehicleUuid)
+    .neq('status', 'Completed')
+    .not('scheduled_date', 'is', null)
+    .gte('scheduled_date', today)
+    .order('scheduled_date', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  await supabase
+    .from('vehicles')
+    .update({
+      maintenance_due: (next as { scheduled_date: string } | null)?.scheduled_date ?? null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', vehicleUuid);
 }

@@ -1,12 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { Button } from '@/src/components/ui/Button';
-import { Badge } from '@/src/components/ui/Badge';
 import {
   X,
-  Calendar,
-  AlertTriangle,
   CheckCircle,
-  MapPin,
+  Truck,
   Wrench,
   ChevronLeft,
   ChevronRight,
@@ -26,6 +23,29 @@ interface TripScheduleModalProps {
   }>;
 }
 
+/** YYYY-MM-DD from a local Date (avoids UTC-shift). */
+function toDateKey(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** Build month grid; null = padding cell. */
+function buildMonthGrid(year: number, month: number): (Date | null)[] {
+  const first = new Date(year, month, 1);
+  const last = new Date(year, month + 1, 0);
+  const cells: (Date | null)[] = [];
+  for (let i = 0; i < first.getDay(); i++) cells.push(null);
+  for (let d = 1; d <= last.getDate(); d++) cells.push(new Date(year, month, d));
+  return cells;
+}
+
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
 export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
   isOpen,
   onClose,
@@ -34,302 +54,248 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
   orderCount,
   existingBookings,
 }) => {
+  const [year, setYear] = useState(() => new Date().getFullYear());
+  const [month, setMonth] = useState(() => new Date().getMonth());
   const [selectedDates, setSelectedDates] = useState<string[]>([]);
-  const [currentMonth, setCurrentMonth] = useState(new Date('2026-02-27'));
 
   useEffect(() => {
     if (!isOpen) return;
-    const originalOverflow = document.body.style.overflow;
+    const n = new Date();
+    setYear(n.getFullYear());
+    setMonth(n.getMonth());
+    setSelectedDates([]);
+    const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-
-    return () => {
-      document.body.style.overflow = originalOverflow;
-    };
+    return () => { document.body.style.overflow = prev; };
   }, [isOpen]);
 
   if (!isOpen) return null;
 
-  const generateCalendar = () => {
-    const year = currentMonth.getFullYear();
-    const month = currentMonth.getMonth();
-    const firstDay = new Date(year, month, 1);
-    const lastDay = new Date(year, month + 1, 0);
-    const daysInMonth = lastDay.getDate();
-    const startingDayOfWeek = firstDay.getDay();
+  const todayKey = toDateKey(new Date());
 
-    const calendar: (Date | null)[] = [];
-    
-    // Add empty cells for days before the first day
-    for (let i = 0; i < startingDayOfWeek; i++) {
-      calendar.push(null);
-    }
-    
-    // Add days of the month
-    for (let day = 1; day <= daysInMonth; day++) {
-      calendar.push(new Date(year, month, day));
-    }
-    
-    return calendar;
+  // Build lookup — Maintenance wins over Trip for same date
+  const bookingByDate = new Map<string, { type: 'Trip' | 'Maintenance'; tripNumber?: string }>();
+  for (const b of existingBookings) {
+    if (!bookingByDate.has(b.date) || b.type === 'Maintenance') bookingByDate.set(b.date, b);
+  }
+
+  const shiftMonth = (delta: number) => {
+    let m = month + delta;
+    let y = year;
+    if (m > 11) { m -= 12; y++; }
+    if (m < 0)  { m += 12; y--; }
+    setMonth(m);
+    setYear(y);
   };
 
-  const calendar = generateCalendar();
-
-  const getBookingForDate = (date: Date | null) => {
-    if (!date) return null;
-    const dateStr = date.toISOString().split('T')[0];
-    return existingBookings.find(b => b.date === dateStr);
+  const toggleDate = (key: string) => {
+    const d = new Date(key + 'T12:00:00');
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    if (d < today) return;
+    if (bookingByDate.get(key)?.type === 'Maintenance') return;
+    setSelectedDates((prev) =>
+      prev.includes(key) ? prev.filter((x) => x !== key) : [...prev, key].sort()
+    );
   };
 
-  const isDateSelected = (date: Date | null) => {
-    if (!date) return false;
-    const dateStr = date.toISOString().split('T')[0];
-    return selectedDates.includes(dateStr);
-  };
-
-  const toggleDateSelection = (date: Date | null) => {
-    if (!date) return;
-    
-    const today = new Date('2026-02-27');
-    if (date < today) return; // Can't select past dates
-    
-    const dateStr = date.toISOString().split('T')[0];
-    
-    if (selectedDates.includes(dateStr)) {
-      setSelectedDates(selectedDates.filter(d => d !== dateStr));
-    } else {
-      setSelectedDates([...selectedDates, dateStr].sort());
-    }
-  };
-
-  const getDateColor = (date: Date | null, booking: any, isSelected: boolean) => {
-    if (!date) return '';
-    
-    const today = new Date('2026-02-27');
-    const isPast = date < today;
-    
-    if (isPast) return 'bg-gray-100 text-gray-400 cursor-not-allowed';
-    
-    // If selected and has a trip booking (conflict), use orange
-    if (isSelected && booking && booking.type === 'Trip') {
-      return 'bg-orange-600 text-white font-semibold shadow-lg border-2 border-orange-700';
-    }
-    
-    // If selected with no conflict, use blue
-    if (isSelected) return 'bg-blue-600 text-white font-semibold shadow-lg border-2 border-blue-700';
-    
-    if (booking) {
-      if (booking.type === 'Trip') return 'bg-orange-100 text-orange-800 border-2 border-orange-300';
-      if (booking.type === 'Maintenance') return 'bg-red-100 text-red-800 border-2 border-red-300';
-    }
-    
-    return 'bg-white hover:bg-blue-50 border-2 border-gray-200 hover:border-blue-300 cursor-pointer';
-  };
-
-  const hasConflicts = selectedDates.some(dateStr => {
-    return existingBookings.some(b => b.date === dateStr && b.type === 'Trip');
-  });
-
-  const previousMonth = () => {
-    setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1));
-  };
-
-  const nextMonth = () => {
-    setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1));
-  };
-
-  const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 
-                      'July', 'August', 'September', 'October', 'November', 'December'];
+  const cells = buildMonthGrid(year, month);
+  const hasMaintOnSelected = selectedDates.some(
+    (k) => bookingByDate.get(k)?.type === 'Maintenance'
+  );
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-0 sm:p-4">
-      <div className="bg-white w-full max-w-full h-full max-h-screen sm:h-auto sm:max-w-4xl sm:max-h-[90vh] sm:rounded-lg shadow-2xl flex flex-col overflow-hidden">
-        {/* Header */}
-        <div className="sticky top-0 bg-white border-b border-gray-200 px-4 sm:px-6 py-4 flex items-start justify-between gap-3 z-10">
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-              <h2 className="text-lg sm:text-xl font-bold text-gray-900 flex items-center gap-2 break-words min-w-0">
-                <Calendar className="w-6 h-6 text-blue-600" />
-                Schedule Delivery Trip
-              </h2>
-              {hasConflicts && (
-                <Badge variant="warning" className="flex items-center gap-1">
-                  <AlertTriangle className="w-3 h-3" />
-                  Conflict Warning
-                </Badge>
-              )}
-            </div>
-            <p className="text-sm text-gray-600 mt-1 break-words">
-              Select date(s) for trip with {orderCount} orders using {vehicleName}
+    <div
+      className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        className="bg-white rounded-xl shadow-xl w-full max-w-4xl max-h-[92vh] overflow-hidden flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* ── Header ── */}
+        <div className="flex items-start justify-between gap-3 p-4 md:p-5 border-b border-gray-200">
+          <div>
+            <h2 className="text-lg md:text-xl font-bold text-gray-900">
+              Schedule Delivery Trip
+            </h2>
+            <p className="text-sm text-gray-600 mt-1">
+              {orderCount} order{orderCount !== 1 ? 's' : ''} · {vehicleName}
             </p>
           </div>
           <button
+            type="button"
             onClick={onClose}
-            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+            className="p-2 rounded-lg text-gray-500 hover:bg-gray-100"
+            aria-label="Close"
           >
-            <X className="w-5 h-5 text-gray-500" />
+            <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto overflow-x-hidden p-5 sm:p-6 space-y-7 w-full max-w-full">
-          {/* Legend */}
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-4 sm:gap-6 text-sm flex-wrap">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 bg-blue-600 border-2 border-blue-700 rounded flex items-center justify-center">
-                  <CheckCircle className="w-4 h-4 text-white" />
-                </div>
-                <span className="text-sm text-gray-600">Selected</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 bg-orange-600 border-2 border-orange-700 rounded flex items-center justify-center">
-                  <AlertTriangle className="w-4 h-4 text-white" />
-                </div>
-                <span className="text-sm text-gray-600">Conflict</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 bg-orange-100 border-2 border-orange-300 rounded" />
-                <span className="text-sm text-gray-600">Existing Trip</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 bg-red-100 border-2 border-red-300 rounded" />
-                <span className="text-sm text-gray-600">Maintenance</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 bg-white border-2 border-gray-200 rounded" />
-                <span className="text-sm text-gray-600">Available</span>
-              </div>
-            </div>
-            {selectedDates.length > 0 && (
-              <Badge variant="warning" className="text-sm w-fit">
-                {selectedDates.length} {selectedDates.length === 1 ? 'day' : 'days'} selected
-              </Badge>
-            )}
-          </div>
+        {/* ── Body ── */}
+        <div className="flex-1 overflow-y-auto p-4 md:p-5 space-y-4">
 
-          {/* Conflict Warning */}
-          {hasConflicts && (
-            <div className="bg-orange-50 border-2 border-orange-300 rounded-lg p-4">
-              <div className="flex items-start gap-3">
-                <AlertTriangle className="w-5 h-5 text-orange-600 mt-0.5 flex-shrink-0" />
-                <div className="min-w-0 flex-1">
-                  <p className="text-base font-semibold text-orange-900">Schedule Conflict Detected</p>
-                  <p className="text-sm text-orange-700 mt-1 leading-relaxed break-words">
-                    One or more selected dates already have trips scheduled. This may cause resource conflicts.
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Calendar */}
-          <div className="border-2 border-gray-300 rounded-lg overflow-hidden">
-            {/* Calendar Header */}
-            <div className="bg-gray-100 px-4 py-3 flex items-center justify-between border-b-2 border-gray-300">
+          {/* Nav + legend */}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
               <button
-                onClick={previousMonth}
-                className="p-2 hover:bg-gray-200 rounded-lg transition-colors"
+                type="button"
+                onClick={() => shiftMonth(-1)}
+                className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50"
+                aria-label="Previous month"
               >
-                <ChevronLeft className="w-5 h-5 text-gray-700" />
+                <ChevronLeft className="w-5 h-5" />
               </button>
-                <h3 className="text-base sm:text-lg font-bold text-gray-900">
-                {monthNames[currentMonth.getMonth()]} {currentMonth.getFullYear()}
-              </h3>
-              <button
-                onClick={nextMonth}
-                className="p-2 hover:bg-gray-200 rounded-lg transition-colors"
+              <select
+                value={month}
+                onChange={(e) => setMonth(Number(e.target.value))}
+                className="border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white"
               >
-                <ChevronRight className="w-5 h-5 text-gray-700" />
-              </button>
-            </div>
-
-            {/* Calendar Grid */}
-            <div className="p-4 bg-gray-50">
-              <div className="grid grid-cols-7 gap-2">
-                {/* Day headers */}
-                {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
-                  <div key={day} className="text-center text-xs sm:text-sm font-bold text-gray-700 py-2">
-                    {day}
-                  </div>
+                {MONTH_NAMES.map((name, i) => (
+                  <option key={i} value={i}>{name}</option>
                 ))}
-                
-                {/* Calendar days */}
-                {calendar.map((date, index) => {
-                  const booking = getBookingForDate(date);
-                  const isSelected = isDateSelected(date);
-                  const colorClass = getDateColor(date, booking, isSelected);
-                  const isPast = date && date < new Date('2026-02-27');
-                  
-                  return (
-                    <div
-                      key={index}
-                      onClick={() => !isPast && toggleDateSelection(date)}
-                      className={`min-h-[76px] sm:min-h-[90px] p-2 rounded-lg transition-all ${colorClass}`}
-                    >
-                      {date && (
-                        <>
-                          <p className={`text-sm font-bold mb-1 ${isSelected ? 'text-white' : ''}`}>
-                            {date.getDate()}
-                          </p>
-                          {isSelected && (
-                            <div className="flex items-center justify-center mt-2">
-                              <CheckCircle className="w-5 h-5 text-white" />
-                            </div>
-                          )}
-                          {booking && booking.type !== 'Available' && !isSelected && (
-                            <div className="text-xs mt-1 space-y-1">
-                              {booking.type === 'Trip' ? (
-                                <>
-                                  <div className="flex items-center gap-1 mb-1">
-                                    <MapPin className="w-3 h-3" />
-                                    <span className="font-medium">Trip</span>
-                                  </div>
-                                  <p className="truncate font-medium">{booking.tripNumber}</p>
-                                </>
-                              ) : (
-                                <div className="flex items-center gap-1">
-                                  <Wrench className="w-3 h-3" />
-                                  <span className="font-medium">Maint.</span>
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
+              </select>
+              <input
+                type="number"
+                value={year}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  if (e.target.value === '' || !Number.isFinite(n)) return;
+                  setYear(Math.trunc(n));
+                }}
+                className="w-24 border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                aria-label="Year"
+              />
+              <button
+                type="button"
+                onClick={() => shiftMonth(1)}
+                className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50"
+                aria-label="Next month"
+              >
+                <ChevronRight className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Legend */}
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-600">
+              <span className="inline-flex items-center gap-1">
+                <span className="w-2.5 h-2.5 rounded-full bg-blue-600" />
+                Selected
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-500" />
+                Existing trip
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span className="w-2.5 h-2.5 rounded-full bg-red-400" />
+                Maintenance
+              </span>
             </div>
           </div>
 
-          {/* Selected Dates Summary */}
+          {/* Day-of-week headers */}
+          <div className="grid grid-cols-7 gap-1 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">
+            {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
+              <div key={d} className="py-2">{d}</div>
+            ))}
+          </div>
+
+          {/* Calendar grid */}
+          <div className="grid grid-cols-7 gap-1">
+            {cells.map((date, idx) => {
+              if (!date) {
+                return <div key={`pad-${idx}`} className="min-h-[4.5rem] rounded-lg bg-gray-50/50" />;
+              }
+
+              const key = toDateKey(date);
+              const booking = bookingByDate.get(key);
+              const isSelected = selectedDates.includes(key);
+              const isToday = key === todayKey;
+              const today = new Date(); today.setHours(0, 0, 0, 0);
+              const isPast = date < today;
+              const isMaint = booking?.type === 'Maintenance';
+              const isTrip = booking?.type === 'Trip';
+
+              let cellCls = 'min-h-[4.5rem] rounded-lg border p-1.5 text-left transition-all ';
+              if (isSelected) {
+                cellCls += 'ring-2 ring-blue-500 border-blue-400 bg-blue-50/80 cursor-pointer';
+              } else if (isMaint) {
+                cellCls += 'border-red-200 bg-red-50/60 cursor-not-allowed';
+              } else if (isPast) {
+                cellCls += 'border-gray-100 bg-gray-50/70 cursor-not-allowed';
+              } else {
+                cellCls += 'border-gray-200 bg-white hover:border-blue-300 hover:bg-blue-50/30 cursor-pointer';
+              }
+
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  disabled={isPast || isMaint}
+                  onClick={() => toggleDate(key)}
+                  className={cellCls}
+                >
+                  <div className={`text-sm font-semibold ${isToday ? 'text-red-600' : isPast ? 'text-gray-300' : 'text-gray-900'}`}>
+                    {date.getDate()}
+                  </div>
+                  <div className="mt-0.5 space-y-0.5">
+                    {isSelected && (
+                      <div className="truncate rounded px-0.5 py-0.5 text-[10px] leading-tight bg-blue-600 text-white font-medium flex items-center gap-0.5">
+                        <CheckCircle className="w-2.5 h-2.5 shrink-0" />
+                        <span className="truncate">Scheduled</span>
+                      </div>
+                    )}
+                    {!isSelected && isTrip && (
+                      <div
+                        className="truncate rounded px-0.5 py-0.5 text-[10px] leading-tight bg-amber-100 text-amber-800 font-medium flex items-center gap-0.5"
+                        title={booking?.tripNumber}
+                      >
+                        <Truck className="w-2.5 h-2.5 shrink-0" />
+                        <span className="truncate">{booking?.tripNumber ?? 'Trip'}</span>
+                      </div>
+                    )}
+                    {isMaint && (
+                      <div className="truncate rounded px-0.5 py-0.5 text-[10px] leading-tight bg-red-100 text-red-700 font-medium flex items-center gap-0.5">
+                        <Wrench className="w-2.5 h-2.5 shrink-0" />
+                        <span className="truncate">Maintenance</span>
+                      </div>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Selected dates summary */}
           {selectedDates.length > 0 && (
-              <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-4">
-              <h4 className="text-base font-semibold text-blue-900 mb-2">Selected Dates</h4>
+            <div className="rounded-lg border border-gray-200 bg-gray-50/80 p-4">
+              <h3 className="text-sm font-semibold text-gray-900 mb-3">
+                Selected date{selectedDates.length !== 1 ? 's' : ''}
+              </h3>
               <div className="flex flex-wrap gap-2">
-                {selectedDates.map(dateStr => {
-                  const date = new Date(dateStr);
-                  const booking = existingBookings.find(b => b.date === dateStr);
-                  const hasConflict = booking && booking.type === 'Trip';
-                  
+                {selectedDates.map((key) => {
+                  const [y, mo, d] = key.split('-').map(Number);
+                  const label = new Date(y, mo - 1, d).toLocaleDateString('en-PH', {
+                    weekday: 'short', month: 'short', day: 'numeric', year: 'numeric',
+                  });
+                  const hasTrip = bookingByDate.get(key)?.type === 'Trip';
                   return (
                     <div
-                      key={dateStr}
-                      className={`px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2 ${
-                        hasConflict 
-                          ? 'bg-orange-200 text-orange-900 border border-orange-400' 
-                          : 'bg-blue-200 text-blue-900'
+                      key={key}
+                      className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium ${
+                        hasTrip
+                          ? 'border-amber-300 bg-amber-50 text-amber-900'
+                          : 'border-blue-200 bg-blue-50 text-blue-900'
                       }`}
                     >
-                      <Calendar className="w-4 h-4" />
-                      {date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                      {hasConflict && (
-                        <AlertTriangle className="w-4 h-4 text-orange-700" />
-                      )}
+                      <span>{label}</span>
                       <button
-                        onClick={() => toggleDateSelection(date)}
-                        className="ml-1 hover:bg-white/30 rounded p-0.5"
+                        type="button"
+                        onClick={() => toggleDate(key)}
+                        className="ml-1 rounded p-0.5 hover:bg-black/10"
+                        aria-label={`Remove ${label}`}
                       >
                         <X className="w-3 h-3" />
                       </button>
@@ -341,18 +307,18 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
           )}
         </div>
 
-        {/* Footer */}
-        <div className="sticky bottom-0 bg-gray-50 border-t border-gray-200 px-4 sm:px-6 py-4 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3">
+        {/* ── Footer ── */}
+        <div className="border-t border-gray-200 bg-gray-50 px-4 md:px-5 py-4 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3">
           <Button variant="outline" onClick={onClose} className="w-full sm:w-auto justify-center">
             Cancel
           </Button>
           <Button
             variant="primary"
+            disabled={selectedDates.length === 0 || hasMaintOnSelected}
             onClick={() => {
               onConfirm(selectedDates);
               onClose();
             }}
-            disabled={selectedDates.length === 0}
             className="w-full sm:w-auto justify-center"
           >
             <CheckCircle className="w-4 h-4 mr-2" />

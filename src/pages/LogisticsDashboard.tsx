@@ -80,7 +80,7 @@ export function LogisticsDashboard() {
 
   const getStatusColor = (status: string) => {
     if (status === 'Completed' || status === 'Delivered' || status === 'Available') return 'success';
-    if (status === 'In Transit' || status === 'Loading' || status === 'Planned') return 'warning';
+    if (status === 'In Transit' || status === 'Loading' || status === 'Scheduled') return 'warning';
     if (status === 'Delayed' || status === 'Failed' || status === 'Blocked') return 'danger';
     return 'default';
   };
@@ -130,7 +130,7 @@ export function LogisticsDashboard() {
             <Truck className="w-4 h-4 mr-2" />
             View All Deliveries
           </Button>
-          <Button variant="primary" className="whitespace-nowrap" onClick={() => navigate('/logistics')}>
+          <Button variant="primary" className="whitespace-nowrap" onClick={() => navigate('/logistics?tab=routes')}>
             <PlayCircle className="w-4 h-4 mr-2" />
             Create New Trip
           </Button>
@@ -408,7 +408,7 @@ export function LogisticsDashboard() {
                 <Package className="w-5 h-5 text-orange-600" />
                 Orders Awaiting Dispatch ({ordersReady.length})
               </CardTitle>
-              <Button variant="outline" size="sm" onClick={() => navigate('/logistics')}>
+              <Button variant="outline" size="sm" onClick={() => navigate('/logistics?tab=routes')}>
                 Schedule
               </Button>
             </div>

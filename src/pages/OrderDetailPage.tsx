@@ -1,12 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { createPortal } from 'react-dom';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { supabase } from '@/src/lib/supabase';
 import { useAppContext } from '@/src/store/AppContext';
-import { OrderDetail, OrderStatus, OrderLineItem, OrderLog, ProofDocument } from '@/src/types/orders';
+import { OrderDetail, OrderStatus, OrderLineItem, OrderLog, ProofDocument, OrderUrgency } from '@/src/types/orders';
 import { PaymentLink } from '@/src/types/payments';
 import { PaymentLinkModal } from '@/src/components/payments/PaymentLinkModal';
 import {
@@ -54,6 +53,7 @@ import {
   Loader2,
   ThumbsUp,
   PackageCheck,
+  Route,
 } from 'lucide-react';
 
 const ORDER_PROOF_GALLERY_FOLDER = 'order-proofs';
@@ -61,6 +61,13 @@ const ORDER_PROOF_GALLERY_FOLDER = 'order-proofs';
 /** Local proof uploads: images + common business documents (allowlist). */
 const ORDER_PROOF_UPLOAD_EXT =
   /\.(pdf|jpe?g|png|webp|gif|avif|bmp|jfif|doc|docx|xls|xlsx|ppt|pptx|txt|csv|rtf|odt|ods|odp)$/i;
+
+const ORDER_URGENCY_OPTIONS: OrderUrgency[] = ['Low', 'Medium', 'High', 'Critical'];
+
+function parseOrderUrgency(v: unknown): OrderUrgency {
+  if (v === 'Low' || v === 'Medium' || v === 'High' || v === 'Critical') return v;
+  return 'Medium';
+}
 
 function orderProofFileIsImageName(fileName: string): boolean {
   return /\.(jpe?g|png|webp|gif|avif|bmp|jfif)$/i.test(fileName);
@@ -94,9 +101,10 @@ export function OrderDetailPage() {
   const [productsLoading, setProductsLoading] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<DBProductDet | null>(null);
   const [selectedVariant, setSelectedVariant] = useState<DBVariantDet | null>(null);
-  const [variantQuantity, setVariantQuantity] = useState(1);
-  const [variantPrice, setVariantPrice] = useState(0);
-  const [variantDiscounts, setVariantDiscounts] = useState<Array<{ name: string; percentage: number }>>([]);
+  /** String fields so quantity/price/% can be cleared while editing; validated on Add/Update. */
+  const [variantQtyInput, setVariantQtyInput] = useState('1');
+  const [variantPriceInput, setVariantPriceInput] = useState('0');
+  const [variantDiscounts, setVariantDiscounts] = useState<Array<{ name: string; percentage: string }>>([]);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   // Cache fetched products by id for instant lookup when re-editing items
   const [productCache, setProductCache] = useState<Record<string, DBProductDet>>({});
@@ -126,11 +134,9 @@ export function OrderDetailPage() {
   const [rejectionReason, setRejectionReason] = useState('');
   const [approvalLoading, setApprovalLoading] = useState(false);
 
-  const [showScheduleModal, setShowScheduleModal] = useState(false);
-  const [pickScheduleDate, setPickScheduleDate] = useState('');
-  const [logisticsLoading, setLogisticsLoading] = useState(false);
   const [showInTransitModal, setShowInTransitModal] = useState(false);
   const [inTransitSubmitting, setInTransitSubmitting] = useState(false);
+  const [logisticsLoading, setLogisticsLoading] = useState(false);
 
   // Supabase data state
   const [order, setOrder] = useState<OrderDetail | null>(null);
@@ -148,7 +154,7 @@ export function OrderDetailPage() {
         .from('orders')
         .select(`
           id, order_number, branch_id, customer_id, customer_name, agent_id, agent_name,
-          order_date, required_date, delivery_type, payment_terms, payment_method,
+          order_date, required_date, urgency, delivery_type, payment_terms, payment_method,
           status, payment_status, subtotal, discount_percent, discount_amount,
           tax_amount, total_amount, requires_approval, approval_reasons,
           approved_by, approved_date, rejected_by, rejection_reason,
@@ -209,6 +215,7 @@ export function OrderDetailPage() {
         branch: branchName,
         orderDate: (row as any).order_date ?? '',
         requiredDate: (row as any).required_date ?? '',
+        urgency: parseOrderUrgency((row as any).urgency),
         deliveryType: (row as any).delivery_type ?? 'Truck',
         paymentTerms: (row as any).payment_terms ?? 'COD',
         paymentMethod: (row as any).payment_method ?? 'Offline',
@@ -455,9 +462,9 @@ export function OrderDetailPage() {
   const advanceLogisticsStatus = async (
     next: OrderStatus,
     extra?: { scheduled_departure_date?: string | null; actual_delivery?: string | null },
-  ) => {
-    if (!id || !order) return;
-    if (logisticsLoading) return;
+  ): Promise<boolean> => {
+    if (!id || !order) return false;
+    if (logisticsLoading) return false;
     setLogisticsLoading(true);
     const prev = order.status;
     const updatePayload: Record<string, unknown> = {
@@ -490,30 +497,13 @@ export function OrderDetailPage() {
         }
         return n;
       });
+      return true;
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : 'Update failed');
+      return false;
     } finally {
       setLogisticsLoading(false);
     }
-  };
-
-  const openScheduleDepartureModal = () => {
-    if (!order) return;
-    const d =
-      order.scheduledDepartureDate ||
-      (order.requiredDate ? String(order.requiredDate).slice(0, 10) : '') ||
-      new Date().toISOString().slice(0, 10);
-    setPickScheduleDate(d);
-    setShowScheduleModal(true);
-  };
-
-  const confirmScheduleDeparture = async () => {
-    if (!pickScheduleDate) {
-      alert('Choose a date.');
-      return;
-    }
-    await advanceLogisticsStatus('Scheduled', { scheduled_departure_date: pickScheduleDate });
-    setShowScheduleModal(false);
   };
 
   const handleConfirmInTransit = async (rows: { itemId: string; shippedQuantity: number }[]) => {
@@ -725,6 +715,22 @@ export function OrderDetailPage() {
     if (status === 'Overdue') return 'danger';
     if (['Partially Paid', 'Invoiced'].includes(status)) return 'warning';
     return 'neutral';
+  };
+
+  const getUrgencyBadgeVariant = (
+    u: OrderUrgency | undefined,
+  ): 'destructive' | 'warning' | 'info' | 'neutral' => {
+    switch (u ?? 'Medium') {
+      case 'Critical':
+        return 'destructive';
+      case 'High':
+        return 'warning';
+      case 'Medium':
+        return 'info';
+      case 'Low':
+      default:
+        return 'neutral';
+    }
   };
 
   const handleEdit = () => {
@@ -952,6 +958,7 @@ export function OrderDetailPage() {
         payment_method: editedOrder.paymentMethod,
         customer_id: editedOrder.customerId || null,
         customer_name: editedOrder.customer?.trim() ? editedOrder.customer : null,
+        urgency: editedOrder.urgency ?? 'Medium',
         updated_at: new Date().toISOString(),
       })
       .eq('id', id);
@@ -1205,12 +1212,41 @@ export function OrderDetailPage() {
     setProductsLoading(false);
   };
 
+  const qtyForPreview = () => {
+    const t = variantQtyInput.trim();
+    if (t === '') return 0;
+    const n = parseInt(t, 10);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  };
+
+  const priceForPreview = () => {
+    const t = variantPriceInput.trim();
+    if (t === '') return 0;
+    const n = parseFloat(t);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  };
+
+  const parseStepQty = () => {
+    const t = variantQtyInput.trim();
+    if (t === '') return 1;
+    const n = parseInt(t, 10);
+    if (!Number.isFinite(n) || n < 1) return 1;
+    return n;
+  };
+
+  const discountPctPreview = (raw: string) => {
+    const t = raw.trim();
+    if (t === '') return 0;
+    const n = parseFloat(t);
+    return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 0;
+  };
+
   const handleCloseProductModal = () => {
     setShowProductModal(false);
     setSelectedProduct(null);
     setSelectedVariant(null);
-    setVariantQuantity(1);
-    setVariantPrice(0);
+    setVariantQtyInput('1');
+    setVariantPriceInput('0');
     setVariantDiscounts([]);
     setProductSearch('');
     setSelectedCategory(null);
@@ -1274,9 +1310,11 @@ export function OrderDetailPage() {
     const variant: DBVariantDet = cachedVariant ?? product.variants[0];
 
     // Reconstruct discounts
-    const discounts: Array<{ name: string; percentage: number }> = [];
+    const discounts: Array<{ name: string; percentage: string }> = [];
     if (item.discountsBreakdown && item.discountsBreakdown.length > 0) {
-      discounts.push(...item.discountsBreakdown.map(d => ({ ...d })));
+      discounts.push(
+        ...item.discountsBreakdown.map((d) => ({ name: d.name, percentage: String(d.percentage) })),
+      );
     } else {
       const effectivePct = item.discountPercent > 0
         ? item.discountPercent
@@ -1284,45 +1322,88 @@ export function OrderDetailPage() {
             const gross = item.unitPrice * item.quantity;
             return gross > 0 && item.lineTotal < gross ? ((gross - item.lineTotal) / gross) * 100 : 0;
           })();
-      if (effectivePct > 0) discounts.push({ name: 'Discount', percentage: parseFloat(effectivePct.toFixed(4)) });
+      if (effectivePct > 0) discounts.push({ name: 'Discount', percentage: String(parseFloat(effectivePct.toFixed(4))) });
     }
-
 
     setEditingItemId(item.id);
     setSelectedProduct(product);
     setSelectedVariant(variant);
-    setVariantQuantity(item.quantity);
-    setVariantPrice(item.unitPrice);
+    setVariantQtyInput(String(item.quantity));
+    setVariantPriceInput(String(item.unitPrice));
     setVariantDiscounts(discounts);
     setShowProductModal(true);
   };
 
-  const addDiscount = () => setVariantDiscounts([...variantDiscounts, { name: '', percentage: 0 }]);  const updateDiscount = (index: number, field: 'name' | 'percentage', value: string | number) => {
+  const addDiscount = () => setVariantDiscounts([...variantDiscounts, { name: '', percentage: '' }]);
+
+  const updateDiscount = (index: number, field: 'name' | 'percentage', value: string) => {
     const next = [...variantDiscounts];
-    if (field === 'name') next[index].name = value as string;
-    else next[index].percentage = Math.max(0, Math.min(100, Number(value) || 0));
+    if (!next[index]) return;
+    if (field === 'name') next[index] = { ...next[index]!, name: value };
+    else {
+      if (value === '') next[index] = { ...next[index]!, percentage: '' };
+      else if (/^\d*\.?\d*$/.test(value)) next[index] = { ...next[index]!, percentage: value };
+    }
     setVariantDiscounts(next);
   };
+
   const removeDiscount = (index: number) => setVariantDiscounts(variantDiscounts.filter((_, i) => i !== index));
 
-  const calculateFinalPrice = () =>
-    variantDiscounts.reduce((p, d) => p * (1 - d.percentage / 100), variantPrice * variantQuantity);
-
-  const calculateTotalDiscountPct = () => {
-    const subtotal = variantPrice * variantQuantity;
-    if (subtotal === 0) return 0;
-    return ((subtotal - calculateFinalPrice()) / subtotal) * 100;
+  const calculateFinalPrice = () => {
+    let cur = priceForPreview() * qtyForPreview();
+    for (const d of variantDiscounts) {
+      cur *= 1 - discountPctPreview(d.percentage) / 100;
+    }
+    return cur;
   };
 
   const handleAddToOrder = () => {
     if (!editedOrder || !selectedProduct || !selectedVariant) return;
-    const parsedQty = variantQuantity;
-    if (!parsedQty || parsedQty < 1) {
+
+    const rawQty = variantQtyInput.trim();
+    if (rawQty === '') {
+      alert('Enter a quantity.');
+      return;
+    }
+    const parsedQty = parseInt(rawQty, 10);
+    if (!Number.isFinite(parsedQty) || parsedQty < 1) {
       alert('Please enter a valid quantity (minimum 1).');
       return;
     }
-    const finalTotal = calculateFinalPrice();
-    const totalDiscount = calculateTotalDiscountPct();
+
+    const priceRaw = variantPriceInput.trim();
+    if (priceRaw === '') {
+      alert('Enter a price per unit.');
+      return;
+    }
+    const variantPrice = parseFloat(priceRaw);
+    if (!Number.isFinite(variantPrice) || variantPrice < 0) {
+      alert('Enter a valid price per unit.');
+      return;
+    }
+
+    const parsedDiscounts: Array<{ name: string; percentage: number }> = [];
+    for (let i = 0; i < variantDiscounts.length; i++) {
+      const d = variantDiscounts[i]!;
+      const praw = d.percentage.trim();
+      if (praw === '') {
+        parsedDiscounts.push({ name: d.name, percentage: 0 });
+        continue;
+      }
+      const pct = parseFloat(praw);
+      if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+        alert(
+          `Discount "${d.name.trim() || `#${i + 1}`}": enter a valid percentage between 0 and 100, or clear the field.`,
+        );
+        return;
+      }
+      parsedDiscounts.push({ name: d.name, percentage: pct });
+    }
+    const discountsForItem = parsedDiscounts.filter((d) => d.name.trim() !== '' || d.percentage > 0);
+
+    const gross = variantPrice * parsedQty;
+    const finalTotal = discountsForItem.reduce((p, d) => p * (1 - d.percentage / 100), gross);
+    const totalDiscount = gross > 0 ? ((gross - finalTotal) / gross) * 100 : 0;
 
     const updatedItem: OrderLineItem = {
       id: editingItemId ?? `item-${Date.now()}`,
@@ -1335,11 +1416,11 @@ export function OrderDetailPage() {
       originalPrice: selectedVariant.unit_price,
       negotiatedPrice: variantPrice,
       discountPercent: totalDiscount,
-      discountAmount: variantPrice * parsedQty - finalTotal,
+      discountAmount: gross - finalTotal,
       lineTotal: finalTotal,
       stockHint: selectedVariant.stock >= parsedQty ? 'Available' : selectedVariant.stock > 0 ? 'Partial' : 'Not Available',
       availableStock: selectedVariant.stock,
-      discountsBreakdown: variantDiscounts.length > 0 ? [...variantDiscounts] : undefined,
+      discountsBreakdown: discountsForItem.length > 0 ? discountsForItem : undefined,
     };
 
     if (editingItemId) {
@@ -1657,7 +1738,15 @@ export function OrderDetailPage() {
             <span className="sm:hidden">Back</span>
           </Button>
           <div className="min-w-0">
-            <h1 className="text-xl md:text-2xl font-bold text-gray-900 truncate">{order.id}</h1>
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <h1 className="text-xl md:text-2xl font-bold text-gray-900 truncate">{order.id}</h1>
+              <Badge
+                variant={getUrgencyBadgeVariant((isEditing && editedOrder ? editedOrder : order).urgency)}
+                className="shrink-0 text-xs font-semibold md:text-sm"
+              >
+                {(isEditing && editedOrder ? editedOrder : order).urgency ?? 'Medium'}
+              </Badge>
+            </div>
             <p className="text-sm text-gray-500 mt-1">Order Details</p>
           </div>
         </div>
@@ -1723,11 +1812,18 @@ export function OrderDetailPage() {
                 <Button
                   variant="primary"
                   className="gap-2"
-                  disabled={logisticsLoading}
-                  onClick={() => openScheduleDepartureModal()}
+                  onClick={() => {
+                    if (!id || !order) return;
+                    const q = new URLSearchParams({ tab: 'routes', order: id });
+                    if (order.requiredDate) {
+                      const rd = String(order.requiredDate).slice(0, 10);
+                      if (/^\d{4}-\d{2}-\d{2}$/.test(rd)) q.set('date', rd);
+                    }
+                    navigate(`/logistics?${q.toString()}`);
+                  }}
                 >
-                  {logisticsLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Calendar className="w-4 h-4" />}
-                  Schedule
+                  <Route className="h-4 w-4" />
+                  Plan route
                 </Button>
               )}
               {logisticsReplacesFulfill && order.status === 'Scheduled' && (
@@ -1865,7 +1961,7 @@ export function OrderDetailPage() {
       {/* Status and Payment Overview */}
       <Card>
         <CardContent className="p-6">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-6">
             <div>
               <p className="text-sm text-gray-500 mb-2">Order Status</p>
               {isEditing ? (
@@ -1881,6 +1977,31 @@ export function OrderDetailPage() {
               ) : (
                 <Badge variant={getStatusBadgeVariant(displayOrder.status)} className="text-base px-4 py-2">
                   {displayOrder.status}
+                </Badge>
+              )}
+            </div>
+            <div>
+              <p className="text-sm text-gray-500 mb-2">Urgency</p>
+              {isEditing && editedOrder ? (
+                <select
+                  value={editedOrder.urgency ?? 'Medium'}
+                  onChange={(e) =>
+                    setEditedOrder({ ...editedOrder, urgency: e.target.value as OrderUrgency })
+                  }
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none bg-white"
+                >
+                  {ORDER_URGENCY_OPTIONS.map((u) => (
+                    <option key={u} value={u}>
+                      {u}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <Badge
+                  variant={getUrgencyBadgeVariant(displayOrder.urgency)}
+                  className="text-base px-4 py-2"
+                >
+                  {displayOrder.urgency ?? 'Medium'}
                 </Badge>
               )}
             </div>
@@ -1917,57 +2038,6 @@ export function OrderDetailPage() {
         </CardContent>
       </Card>
 
-      {showScheduleModal &&
-        createPortal(
-          <div
-            className="fixed inset-0 z-[100] flex min-h-dvh w-full items-center justify-center overflow-y-auto bg-black/50 p-4"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="schedule-departure-title"
-          >
-            <div className="my-auto w-full max-w-md space-y-4 rounded-xl bg-white p-6 shadow-xl">
-              <h2 id="schedule-departure-title" className="text-lg font-semibold text-gray-900">
-                Set departure date
-              </h2>
-              <p className="text-sm text-gray-600">
-                Choose the date the order is planned to leave the branch. The order will move to <strong>Scheduled</strong>
-                .
-              </p>
-              <div>
-                <label className="mb-1 block text-xs font-medium text-gray-600">Date</label>
-                <input
-                  type="date"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-                  value={pickScheduleDate}
-                  onChange={(e) => setPickScheduleDate(e.target.value)}
-                />
-              </div>
-              <div className="flex justify-end gap-2 pt-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setShowScheduleModal(false)}
-                  disabled={logisticsLoading}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="button"
-                  variant="primary"
-                  onClick={() => void confirmScheduleDeparture()}
-                  disabled={logisticsLoading}
-                  className="gap-2"
-                >
-                  {logisticsLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Calendar className="w-4 h-4" />}
-                  Confirm
-                </Button>
-              </div>
-            </div>
-          </div>,
-          document.body,
-        )}
-
-      {/* Customer, Order Details, Agent & Branch in one row */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {/* Customer Information */}
         <Card>
@@ -1998,22 +2068,11 @@ export function OrderDetailPage() {
                   ))}
                 </select>
                 <div className="pt-2">
-                  <label className="text-xs text-gray-500" htmlFor="edit-scheduled-departure">
-                    Planned departure
-                  </label>
-                  <input
-                    id="edit-scheduled-departure"
-                    type="date"
-                    className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-red-500 focus:ring-1 focus:ring-red-500"
-                    value={editedOrder.scheduledDepartureDate ? editedOrder.scheduledDepartureDate.slice(0, 10) : ''}
-                    onChange={(e) =>
-                      setEditedOrder({
-                        ...editedOrder,
-                        scheduledDepartureDate: e.target.value || undefined,
-                      })
-                    }
-                  />
-                  <p className="mt-1 text-[11px] text-gray-400">Save to apply.</p>
+                  <p className="text-xs text-gray-500">
+                    Planned departure is set in{' '}
+                    <span className="font-medium text-gray-700">Logistics → Route Planning</span> when this order is assigned
+                    to a truck trip.
+                  </p>
                 </div>
               </div>
             ) : (
@@ -2040,8 +2099,16 @@ export function OrderDetailPage() {
                   </div>
                 ) : (
                   <p className="mt-3 text-xs text-gray-500">
-                    No planned departure date — use <span className="text-gray-600">Schedule</span> or{' '}
-                    <span className="text-gray-600">Edit Order</span>.
+                    No planned departure yet — assign this order to a trip in{' '}
+                    <span className="font-medium text-gray-700">Logistics → Route Planning</span>
+                    {order.status === 'Approved' || order.status === 'Partially Fulfilled' ? (
+                      <>
+                        {' '}
+                        (use <span className="text-gray-600">Plan route</span> above).
+                      </>
+                    ) : (
+                      '.'
+                    )}
                   </p>
                 )}
               </div>
@@ -2074,6 +2141,26 @@ export function OrderDetailPage() {
                   />
                 ) : (
                   <span className="font-medium text-gray-900">{order.requiredDate || '—'}</span>
+                )}
+              </div>
+              <div className="flex flex-col gap-1 sm:flex-row sm:justify-between sm:items-center">
+                <span className="text-gray-600">Urgency:</span>
+                {isEditing && editedOrder ? (
+                  <select
+                    className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm font-medium text-gray-900 w-full sm:w-auto max-w-[12rem] bg-white"
+                    value={editedOrder.urgency ?? 'Medium'}
+                    onChange={(e) =>
+                      setEditedOrder({ ...editedOrder, urgency: e.target.value as OrderUrgency })
+                    }
+                  >
+                    {ORDER_URGENCY_OPTIONS.map((u) => (
+                      <option key={u} value={u}>
+                        {u}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <span className="font-medium text-gray-900">{order.urgency ?? 'Medium'}</span>
                 )}
               </div>
               {order.actualDelivery && (
@@ -2848,7 +2935,7 @@ export function OrderDetailPage() {
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-80 overflow-y-auto p-1">
                       {categoryProducts.map(product => (
                         <button key={product.id} type="button"
-                          onClick={() => { if (!product.variants.length) return; setSelectedProduct(product); setSelectedVariant(product.variants[0]); setVariantQuantity(1); setVariantPrice(product.variants[0].unit_price); setVariantDiscounts([]); }}
+                          onClick={() => { if (!product.variants.length) return; setSelectedProduct(product); setSelectedVariant(product.variants[0]); setVariantQtyInput('1'); setVariantPriceInput(String(product.variants[0].unit_price)); setVariantDiscounts([]); }}
                           className="flex flex-col items-center p-3 border border-gray-200 rounded-lg hover:border-red-500 hover:bg-red-50 transition-all group">
                           {product.image_url
                             ? <img src={product.image_url} alt={product.name} className="w-12 h-12 object-cover rounded-lg mb-2" />
@@ -2867,7 +2954,7 @@ export function OrderDetailPage() {
                     ? <div className="col-span-full flex items-center justify-center h-24 text-gray-400 text-sm">No matching products</div>
                     : filteredProducts.map(product => (
                       <button key={product.id} type="button"
-                        onClick={() => { setSelectedProduct(product); setSelectedVariant(product.variants[0]); setVariantQuantity(1); setVariantPrice(product.variants[0].unit_price); setVariantDiscounts([]); }}
+                        onClick={() => { setSelectedProduct(product); setSelectedVariant(product.variants[0]); setVariantQtyInput('1'); setVariantPriceInput(String(product.variants[0].unit_price)); setVariantDiscounts([]); }}
                         className="flex flex-col items-center p-3 border border-gray-200 rounded-lg hover:border-red-500 hover:bg-red-50 transition-all group">
                         {product.image_url
                           ? <img src={product.image_url} alt={product.name} className="w-12 h-12 object-cover rounded-lg mb-2" />
@@ -2891,7 +2978,7 @@ export function OrderDetailPage() {
       {showProductModal && selectedProduct && selectedVariant && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[60] p-0 lg:p-4">
           <div className="bg-white rounded-none lg:rounded-lg shadow-2xl w-full h-full lg:h-auto lg:max-w-4xl lg:max-h-[85vh] overflow-hidden flex flex-col">
-            <button onClick={() => { setSelectedProduct(null); setSelectedVariant(null); setVariantQuantity(1); setVariantPrice(0); setVariantDiscounts([]); }}
+            <button onClick={() => { setSelectedProduct(null); setSelectedVariant(null); setVariantQtyInput('1'); setVariantPriceInput('0'); setVariantDiscounts([]); }}
               className="absolute top-4 right-4 z-20 p-2 bg-white rounded-full shadow-lg hover:bg-gray-100">
               <X className="w-5 h-5 text-gray-600" />
             </button>
@@ -2910,10 +2997,30 @@ export function OrderDetailPage() {
                     <div className="text-sm text-gray-600 mb-2">Price per unit</div>
                     <div className="flex items-center gap-2 min-w-0">
                       <span className="text-lg font-bold text-gray-900 flex-shrink-0">₱</span>
-                      <input type="number" min="0" step="0.01" value={variantPrice}
-                        onChange={(e) => setVariantPrice(Math.max(0, parseFloat(e.target.value) || 0))}
-                        onWheel={(e) => e.currentTarget.blur()}
-                        className="min-w-0 w-full text-xl font-bold text-gray-900 bg-white px-3 py-2 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500" />
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        autoComplete="off"
+                        value={variantPriceInput}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (v === '') {
+                            setVariantPriceInput('');
+                            return;
+                          }
+                          if (/^\d*\.?\d*$/.test(v)) setVariantPriceInput(v);
+                        }}
+                        onBlur={() => {
+                          setVariantPriceInput((prev) => {
+                            const t = prev.trim();
+                            if (t === '') return '';
+                            if (t.endsWith('.')) return t.slice(0, -1) || '';
+                            return prev;
+                          });
+                        }}
+                        onWheel={(e) => e.preventDefault()}
+                        className="min-w-0 w-full text-xl font-bold text-gray-900 bg-white px-3 py-2 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                      />
                     </div>
                     <p className="text-xs text-gray-500 mt-2">Base price: ₱{selectedVariant.unit_price.toLocaleString()}</p>
                   </div>
@@ -2938,7 +3045,7 @@ export function OrderDetailPage() {
                     <div className="grid grid-cols-2 gap-2">
                       {selectedProduct.variants.map(v => (
                         <button key={v.id} type="button"
-                          onClick={() => { setSelectedVariant(v); setVariantQuantity(1); setVariantPrice(v.unit_price); }}
+                          onClick={() => { setSelectedVariant(v); setVariantQtyInput('1'); setVariantPriceInput(String(v.unit_price)); }}
                           className={`px-4 py-3 border-2 rounded-lg font-medium transition-all text-left ${v.id === selectedVariant.id ? 'border-red-600 bg-red-50 text-red-700' : 'border-gray-200 hover:border-gray-300 text-gray-700'}`}>
                           <div className="font-semibold">{v.size}</div>
                           <div className="text-sm font-bold mt-1">₱{v.unit_price.toLocaleString()}</div>
@@ -2951,27 +3058,57 @@ export function OrderDetailPage() {
                   {/* Quantity */}
                   <div>
                     <label className="block text-sm font-semibold text-gray-900 mb-3">Quantity Request</label>
-                    <div className="flex items-center gap-4">
-                      <button type="button" onClick={() => setVariantQuantity(Math.max(1, variantQuantity - 1))}
-                        className="w-12 h-12 flex items-center justify-center border-2 border-gray-300 rounded-lg hover:bg-gray-50">
+                    <div className="flex items-center gap-2 sm:gap-4">
+                      <button
+                        type="button"
+                        onClick={() => setVariantQtyInput(String(Math.max(1, parseStepQty() - 1)))}
+                        className="w-12 h-12 flex shrink-0 items-center justify-center border-2 border-gray-300 rounded-lg hover:bg-gray-50"
+                      >
                         <Minus className="w-5 h-5" />
                       </button>
-                      <input
-                        type="number"
-                        min="1"
-                        max={selectedVariant.stock}
-                        value={variantQuantity}
-                        onChange={(e) => setVariantQuantity(Math.max(1, parseInt(e.target.value) || 1))}
-                        onWheel={(e) => e.currentTarget.blur()}
-                        className="w-24 text-center text-2xl font-bold px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500" />
-                      <button type="button" onClick={() => setVariantQuantity(variantQuantity + 1)}
-                        className="w-12 h-12 flex items-center justify-center border-2 border-gray-300 rounded-lg hover:bg-gray-50">
+                      <div className="relative min-w-0 flex-1 max-w-[9rem]">
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          autoComplete="off"
+                          value={variantQtyInput}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            if (v === '') {
+                              setVariantQtyInput('');
+                              return;
+                            }
+                            if (/^\d+$/.test(v)) setVariantQtyInput(v);
+                          }}
+                          onWheel={(e) => e.preventDefault()}
+                          placeholder="1"
+                          className="w-full text-center text-2xl font-bold pl-3 pr-10 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                        />
+                        {variantQtyInput !== '' && (
+                          <button
+                            type="button"
+                            onClick={() => setVariantQtyInput('')}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                            aria-label="Clear quantity"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setVariantQtyInput(String(Math.min(selectedVariant.stock, parseStepQty() + 1)))
+                        }
+                        className="w-12 h-12 flex shrink-0 items-center justify-center border-2 border-gray-300 rounded-lg hover:bg-gray-50"
+                      >
                         <Plus className="w-5 h-5" />
                       </button>
                     </div>
-                    {variantQuantity > selectedVariant.stock && (
-                      <p className="text-sm text-red-600 mt-2">⚠️ Quantity exceeds available stock</p>
-                    )}
+                    {variantQtyInput.trim() !== '' &&
+                      (parseInt(variantQtyInput, 10) || 0) > selectedVariant.stock && (
+                        <p className="text-sm text-red-600 mt-2">⚠️ Quantity exceeds available stock</p>
+                      )}
                   </div>
 
                   {/* Discounts */}
@@ -2990,10 +3127,16 @@ export function OrderDetailPage() {
                             <input type="text" placeholder="Discount name" value={d.name}
                               onChange={(e) => updateDiscount(i, 'name', e.target.value)}
                               className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500" />
-                            <input type="number" min="0" max="100" step="0.1" placeholder="0" value={d.percentage || ''}
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              autoComplete="off"
+                              placeholder="0"
+                              value={d.percentage}
                               onChange={(e) => updateDiscount(i, 'percentage', e.target.value)}
-                              onWheel={(e) => e.currentTarget.blur()}
-                              className="w-20 px-3 py-2 text-sm text-center border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500" />
+                              onWheel={(e) => e.preventDefault()}
+                              className="w-20 px-3 py-2 text-sm text-center border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                            />
                             <span className="text-sm text-gray-600">%</span>
                             <button type="button" onClick={() => removeDiscount(i)}
                               className="p-2 text-red-600 hover:bg-red-50 rounded-lg">
@@ -3011,18 +3154,23 @@ export function OrderDetailPage() {
                   <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-2">
                     <div className="flex items-center justify-between">
                       <span className="text-sm font-medium text-blue-900">Subtotal</span>
-                      <span className="text-lg font-bold text-blue-900">₱{(variantPrice * variantQuantity).toLocaleString()}</span>
+                      <span className="text-lg font-bold text-blue-900">
+                        ₱{(priceForPreview() * qtyForPreview()).toLocaleString()}
+                      </span>
                     </div>
                     {variantDiscounts.length > 0 && (() => {
-                      let cur = variantPrice * variantQuantity;
+                      let cur = priceForPreview() * qtyForPreview();
                       return (
                         <>
                           {variantDiscounts.map((d, i) => {
-                            const amt = cur * (d.percentage / 100);
+                            const pct = discountPctPreview(d.percentage);
+                            const amt = cur * (pct / 100);
                             cur -= amt;
                             return (
                               <div key={i} className="flex items-center justify-between text-sm">
-                                <span className="text-green-700">{d.name || `Discount ${i + 1}`} ({d.percentage}%)</span>
+                                <span className="text-green-700">
+                                  {d.name || `Discount ${i + 1}`} ({pct}%)
+                                </span>
                                 <span className="text-green-700 font-semibold">-₱{amt.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                               </div>
                             );

@@ -1,8 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Button } from '@/src/components/ui/Button';
-import { Badge } from '@/src/components/ui/Badge';
 import {
   ArrowLeft,
   Save,
@@ -16,9 +15,12 @@ import {
   FileText,
   AlertCircle,
   Loader2,
+  ExternalLink,
 } from 'lucide-react';
 import { supabase } from '@/src/lib/supabase';
 import { useAppContext } from '@/src/store/AppContext';
+import { CompanyMapPicker } from '@/src/components/maps/CompanyMapPicker';
+import { openGoogleMapsSearch } from '@/src/lib/maps';
 import type { ClientType } from '@/src/types/customers';
 
 interface Agent {
@@ -82,14 +84,27 @@ export function CustomerFormPage() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [agentsLoading, setAgentsLoading] = useState(false);
   const [errors, setErrors] = useState<Partial<Record<keyof CustomerFormData, string>>>({});
-  const [loading, setLoading] = useState(false);
+  const [initialFetchLoading, setInitialFetchLoading] = useState(isEditMode);
+  const [saving, setSaving] = useState(false);
+  /** Map pin (saved as map_lat / map_lng); separate from typed address fields. */
+  const [customerMapPin, setCustomerMapPin] = useState<{ lat: number; lng: number } | null>(null);
+  /** Current navbar branch store HQ from company_settings (red default pin on map). */
+  const [branchStorePin, setBranchStorePin] = useState<{ lat: number; lng: number } | null>(null);
+
+  const branchStoreReferencePin = useMemo(
+    () =>
+      branchStorePin
+        ? { lat: branchStorePin.lat, lng: branchStorePin.lng, title: 'Store / HQ' as const }
+        : null,
+    [branchStorePin],
+  );
 
   // Load customer data if editing
   useEffect(() => {
     if (!isEditMode || !id) return;
 
     const fetchCustomer = async () => {
-      setLoading(true);
+      setInitialFetchLoading(true);
       try {
         const { data, error } = await supabase
           .from('customers')
@@ -125,12 +140,19 @@ export function CustomerFormPage() {
           assignedAgent: data.employees?.employee_name ?? '',
           status: (data.status as CustomerFormData['status']) ?? 'Active',
         });
+        const la = data.map_lat != null ? Number(data.map_lat) : null;
+        const ln = data.map_lng != null ? Number(data.map_lng) : null;
+        setCustomerMapPin(
+          la != null && ln != null && Number.isFinite(la) && Number.isFinite(ln)
+            ? { lat: la, lng: ln }
+            : null
+        );
       } catch (err) {
         console.error('Error loading customer:', err);
         alert('Error loading customer data');
         navigate('/customers');
       } finally {
-        setLoading(false);
+        setInitialFetchLoading(false);
       }
     };
 
@@ -177,6 +199,42 @@ export function CustomerFormPage() {
     };
 
     fetchAgents();
+  }, [contextBranch]);
+
+  useEffect(() => {
+    if (!contextBranch) {
+      setBranchStorePin(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const { data: branchRow, error: bErr } = await supabase
+        .from('branches')
+        .select('id')
+        .eq('name', contextBranch)
+        .maybeSingle();
+      if (cancelled) return;
+      if (bErr || !branchRow?.id) {
+        setBranchStorePin(null);
+        return;
+      }
+      const { data: cs } = await supabase
+        .from('company_settings')
+        .select('hq_latitude, hq_longitude')
+        .eq('branch_id', branchRow.id)
+        .maybeSingle();
+      if (cancelled) return;
+      const la = cs?.hq_latitude != null ? Number(cs.hq_latitude) : NaN;
+      const ln = cs?.hq_longitude != null ? Number(cs.hq_longitude) : NaN;
+      if (Number.isFinite(la) && Number.isFinite(ln)) {
+        setBranchStorePin({ lat: la, lng: ln });
+      } else {
+        setBranchStorePin(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [contextBranch]);
 
   const handleInputChange = (
@@ -231,7 +289,7 @@ export function CustomerFormPage() {
 
     if (!validateForm()) return;
 
-    setLoading(true);
+    setSaving(true);
     try {
       // Resolve branch_id from contextBranch name
       const { data: branchData, error: branchError } = await supabase
@@ -262,6 +320,8 @@ export function CustomerFormPage() {
         assigned_agent_id: formData.assignedAgentId || null,
         branch_id: branchData.id,
         status: formData.status,
+        map_lat: customerMapPin?.lat ?? null,
+        map_lng: customerMapPin?.lng ?? null,
       };
 
       if (isEditMode && id) {
@@ -280,7 +340,7 @@ export function CustomerFormPage() {
       console.error('Failed to save customer:', err);
       alert(`Failed to save customer: ${err.message ?? 'Unknown error'}`);
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
   };
 
@@ -290,7 +350,7 @@ export function CustomerFormPage() {
     }
   };
 
-  if (loading) {
+  if (initialFetchLoading) {
     return (
       <div className="flex items-center justify-center h-96">
         <div className="text-center">
@@ -323,9 +383,9 @@ export function CustomerFormPage() {
             <X className="w-4 h-4 mr-2" />
             Cancel
           </Button>
-          <Button variant="primary" onClick={handleSubmit} className="w-full sm:w-auto">
+          <Button variant="primary" onClick={handleSubmit} disabled={saving} className="w-full sm:w-auto">
             <Save className="w-4 h-4 mr-2" />
-            {isEditMode ? 'Save Changes' : 'Create Customer'}
+            {saving ? 'Saving…' : isEditMode ? 'Save Changes' : 'Create Customer'}
           </Button>
         </div>
       </div>
@@ -609,6 +669,48 @@ export function CustomerFormPage() {
                 />
               </div>
             </div>
+
+            <div className="space-y-2 border-t border-gray-100 pt-4">
+              <p className="text-sm text-gray-600">
+                Pin the delivery or billing location on the map (optional). Address fields above stay independent; use
+                search or click the map. <strong className="font-medium text-gray-800">Blue</strong> = customer;
+                when the branch has HQ coordinates in Settings, <strong className="font-medium text-gray-800">red</strong>{' '}
+                = store / HQ on the same map.
+              </p>
+              <CompanyMapPicker
+                lat={customerMapPin?.lat ?? null}
+                lng={customerMapPin?.lng ?? null}
+                onPositionChange={(la, ln) => setCustomerMapPin({ lat: la, lng: ln })}
+                pinColor="blue"
+                markerTitle="Customer location — drag to adjust"
+                searchInputId="customer-map-search"
+                searchInputName="lamtex_gmaps_place_query_customer"
+                referencePin={branchStoreReferencePin}
+              />
+              <div className="flex flex-col-reverse gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full sm:w-auto"
+                  disabled={!customerMapPin}
+                  onClick={() => setCustomerMapPin(null)}
+                >
+                  Clear pin
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full sm:w-auto"
+                  disabled={!customerMapPin}
+                  onClick={() =>
+                    openGoogleMapsSearch(`${customerMapPin!.lat},${customerMapPin!.lng}`)
+                  }
+                >
+                  <ExternalLink className="w-4 h-4 mr-2" />
+                  Google Maps
+                </Button>
+              </div>
+            </div>
           </CardContent>
         </Card>
 
@@ -761,9 +863,9 @@ export function CustomerFormPage() {
             <X className="w-4 h-4 mr-2" />
             Cancel
           </Button>
-          <Button variant="primary" onClick={handleSubmit} className="flex-1">
+          <Button variant="primary" onClick={handleSubmit} disabled={saving} className="flex-1">
             <Save className="w-4 h-4 mr-2" />
-            {isEditMode ? 'Save' : 'Create'}
+            {saving ? 'Saving…' : isEditMode ? 'Save' : 'Create'}
           </Button>
         </div>
       </form>

@@ -5,6 +5,7 @@ import { Button } from '@/src/components/ui/Button';
 import { Badge } from '@/src/components/ui/Badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { supabase } from '@/src/lib/supabase';
+import type { OrderUrgency } from '@/src/types/orders';
 import {
   X,
   Plus,
@@ -29,6 +30,8 @@ interface DBBulkDiscount { min_qty: number; max_qty: number | null; discount_per
 interface DBVariant { id: string; size: string; description: string | null; unit_price: number; stock: number; bulk_discounts: DBBulkDiscount[]; }
 interface DBProduct { id: string; name: string; category_id: string; image_url: string | null; variants: DBVariant[]; }
 interface DBCategory { id: string; name: string; image_url: string | null; }
+
+const ORDER_URGENCY_OPTIONS: OrderUrgency[] = ['Low', 'Medium', 'High', 'Critical'];
 
 interface CreateOrderModalProps {
   customerId?: string;
@@ -106,7 +109,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
   const [variantQtyInput, setVariantQtyInput] = useState('1');
   /** Free text while typing; empty allowed. */
   const [variantPriceInput, setVariantPriceInput] = useState('0');
-  const [variantDiscounts, setVariantDiscounts] = useState<Array<{ name: string; percentage: number }>>([]);
+  const [variantDiscounts, setVariantDiscounts] = useState<Array<{ name: string; percentage: string }>>([]);
   const [editingItemIndex, setEditingItemIndex] = useState<number | null>(null);
   const [deliveryDate, setDeliveryDate] = useState('');
   const [deliveryAddress, setDeliveryAddress] = useState('');
@@ -122,7 +125,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
   const [contactPerson, setContactPerson] = useState('');
   const [contactPhone, setContactPhone] = useState('');
   const [notes, setNotes] = useState('');
-  const [priority, setPriority] = useState<'Normal' | 'High' | 'Urgent'>('Normal');
+  const [orderUrgency, setOrderUrgency] = useState<OrderUrgency>('Medium');
   const [isSubmitting, setIsSubmitting] = useState(false);
   
   // Filter customers based on search
@@ -250,6 +253,13 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
     return n;
   };
 
+  const discountPctPreview = (raw: string) => {
+    const t = raw.trim();
+    if (t === '') return 0;
+    const n = parseFloat(t);
+    return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 0;
+  };
+
   const addItemFromVariant = (product: DBProduct, variant: DBVariant) => {
     const raw = variantQtyInput.trim();
     if (raw === '') {
@@ -273,11 +283,29 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
       return;
     }
 
-    // Apply discounts multiplicatively to get final price
-    const finalPrice = variantDiscounts.reduce((currentPrice, discount) => {
+    const parsedDiscounts: Array<{ name: string; percentage: number }> = [];
+    for (let i = 0; i < variantDiscounts.length; i++) {
+      const d = variantDiscounts[i]!;
+      const praw = d.percentage.trim();
+      if (praw === '') {
+        parsedDiscounts.push({ name: d.name, percentage: 0 });
+        continue;
+      }
+      const pct = parseFloat(praw);
+      if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+        alert(
+          `Discount "${d.name.trim() || `#${i + 1}`}": enter a valid percentage between 0 and 100, or clear the field.`,
+        );
+        return;
+      }
+      parsedDiscounts.push({ name: d.name, percentage: pct });
+    }
+    const discountsForItem = parsedDiscounts.filter((d) => d.name.trim() !== '' || d.percentage > 0);
+
+    const finalPrice = discountsForItem.reduce((currentPrice, discount) => {
       return currentPrice * (1 - discount.percentage / 100);
     }, unitPrice);
-    
+
     const itemData: OrderItem = {
       productId: product.id,
       variantId: variant.id,
@@ -288,7 +316,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
       price: variant.unit_price,
       originalPrice: variant.unit_price,
       negotiatedPrice: unitPrice, // Agent-set price
-      discounts: [...variantDiscounts], // Copy of applied discounts
+      discounts: [...discountsForItem],
       subtotal: finalPrice * quantity,
       stockAvailable: variant.stock,
     };
@@ -310,7 +338,12 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
         const existing = orderItems[existingIndex];
         setVariantQtyInput(String(existing.quantity));
         setVariantPriceInput(String(existing.negotiatedPrice));
-        setVariantDiscounts([...existing.discounts]);
+        setVariantDiscounts(
+          existing.discounts.map((d) => ({
+            name: d.name,
+            percentage: d.percentage === 0 ? '' : String(d.percentage),
+          })),
+        );
         setEditingItemIndex(existingIndex);
         // Keep selectedProduct & selectedVariant open (already set by the caller)
         return;
@@ -329,15 +362,19 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
   };
 
   const addDiscount = () => {
-    setVariantDiscounts([...variantDiscounts, { name: '', percentage: 0 }]);
+    setVariantDiscounts([...variantDiscounts, { name: '', percentage: '' }]);
   };
 
-  const updateDiscount = (index: number, field: 'name' | 'percentage', value: string | number) => {
+  const updateDiscount = (index: number, field: 'name' | 'percentage', value: string) => {
     const newDiscounts = [...variantDiscounts];
+    const row = newDiscounts[index];
+    if (!row) return;
     if (field === 'name') {
-      newDiscounts[index].name = value as string;
-    } else {
-      newDiscounts[index].percentage = Math.max(0, Math.min(100, Number(value) || 0));
+      newDiscounts[index] = { ...row, name: value };
+    } else if (value === '') {
+      newDiscounts[index] = { ...row, percentage: '' };
+    } else if (/^\d*\.?\d*$/.test(value)) {
+      newDiscounts[index] = { ...row, percentage: value };
     }
     setVariantDiscounts(newDiscounts);
   };
@@ -352,7 +389,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
     if (subtotal === 0) return 0;
     
     const finalPrice = variantDiscounts.reduce((currentPrice, discount) => {
-      return currentPrice * (1 - discount.percentage / 100);
+      return currentPrice * (1 - discountPctPreview(discount.percentage) / 100);
     }, subtotal);
     
     const totalDiscountAmount = subtotal - finalPrice;
@@ -363,7 +400,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
     const subtotal = priceForPreview() * qtyForPreview();
     // Apply discounts multiplicatively (cascading)
     return variantDiscounts.reduce((currentPrice, discount) => {
-      return currentPrice * (1 - discount.percentage / 100);
+      return currentPrice * (1 - discountPctPreview(discount.percentage) / 100);
     }, subtotal);
   };
 
@@ -393,7 +430,12 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
     setSelectedVariant(variant);
     setVariantQtyInput(String(item.quantity));
     setVariantPriceInput(String(item.negotiatedPrice));
-    setVariantDiscounts([...item.discounts]);
+    setVariantDiscounts(
+      item.discounts.map((d) => ({
+        name: d.name,
+        percentage: d.percentage === 0 ? '' : String(d.percentage),
+      })),
+    );
     setEditingItemIndex(index);
   };
 
@@ -448,6 +490,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
           payment_status:   'Unbilled',
           subtotal,
           total_amount:     subtotal,
+          urgency:          orderUrgency,
         })
         .select('id')
         .single();
@@ -931,6 +974,24 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Urgency
+                  </label>
+                  <select
+                    value={orderUrgency}
+                    onChange={(e) => setOrderUrgency(e.target.value as OrderUrgency)}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 text-sm bg-white"
+                  >
+                    {ORDER_URGENCY_OPTIONS.map((u) => (
+                      <option key={u} value={u}>
+                        {u}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-500 mt-1">Used for logistics and route planning prioritization</p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
                     Order Notes (Optional)
                   </label>
                   <textarea
@@ -1190,15 +1251,14 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                             />
                             <div className="flex items-center gap-1">
                               <input
-                                type="number"
-                                min="0"
-                                max="100"
-                                step="0.1"
+                                type="text"
+                                inputMode="decimal"
+                                autoComplete="off"
                                 placeholder="0"
-                                value={discount.percentage || ''}
+                                value={discount.percentage}
                                 onChange={(e) => updateDiscount(index, 'percentage', e.target.value)}
                                 onWheel={(e) => e.preventDefault()}
-                                className="w-20 px-3 py-2 text-sm text-center border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                className="w-20 px-3 py-2 text-sm text-center border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500"
                               />
                               <span className="text-sm text-gray-600">%</span>
                             </div>
@@ -1237,14 +1297,14 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                         {(() => {
                           let currentPrice = priceForPreview() * qtyForPreview();
                           return variantDiscounts.map((discount, index) => {
-                            const priceBeforeDiscount = currentPrice;
-                            const discountAmount = currentPrice * (discount.percentage / 100);
+                            const pct = discountPctPreview(discount.percentage);
+                            const discountAmount = currentPrice * (pct / 100);
                             currentPrice = currentPrice - discountAmount;
                             
                             return (
                               <div key={index} className="flex items-center justify-between text-sm">
                                 <span className="text-green-700">
-                                  {discount.name || `Discount ${index + 1}`} ({discount.percentage}%)
+                                  {discount.name || `Discount ${index + 1}`} ({pct}%)
                                 </span>
                                 <span className="text-green-700 font-semibold">
                                   -₱{discountAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}

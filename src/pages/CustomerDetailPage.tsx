@@ -21,6 +21,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import { CreateOrderModal } from '@/src/components/orders/CreateOrderModal';
+import { CustomerLocationMapPreview } from '@/src/components/maps/CustomerLocationMapPreview';
 import { clientCommissionFraction, clientCommissionPercentLabel } from '@/src/types/customers';
 import { openGoogleMapsSearch } from '@/src/lib/maps';
 
@@ -38,6 +39,7 @@ interface CustomerDetail {
   order_count: number; last_order_date: string | null; account_since: string | null;
   assigned_agent_id: string | null;
   employees: { employee_name: string; employee_id: string } | null;
+  branch_id: string | null;
   map_lat: number | null;
   map_lng: number | null;
 }
@@ -99,10 +101,13 @@ export function CustomerDetailPage() {
   const [activeTab, setActiveTab] = useState<'overview' | 'orders'>('overview');
   const [showCreateOrder, setShowCreateOrder] = useState(false);
 
+  const [branchHqPin, setBranchHqPin] = useState<{ lat: number; lng: number } | null>(null);
+
   useEffect(() => {
     if (!id) return;
     const fetchAll = async () => {
       setLoading(true);
+      setBranchHqPin(null);
       try {
         const [custRes, ordersRes] = await Promise.all([
           supabase.from('customers').select('*, employees!assigned_agent_id(employee_name, employee_id)').eq('id', id).single(),
@@ -130,9 +135,23 @@ export function CustomerDetailPage() {
           total_purchases_lifetime: Number(c.total_purchases_lifetime ?? 0), order_count: c.order_count ?? 0,
           last_order_date: c.last_order_date ?? null, account_since: c.account_since ?? null,
           assigned_agent_id: c.assigned_agent_id ?? null, employees: c.employees ?? null,
+          branch_id: c.branch_id ?? null,
           map_lat: c.map_lat != null ? Number(c.map_lat) : null,
           map_lng: c.map_lng != null ? Number(c.map_lng) : null,
         });
+        const bid = c.branch_id ?? null;
+        if (bid) {
+          const { data: cs } = await supabase
+            .from('company_settings')
+            .select('hq_latitude, hq_longitude')
+            .eq('branch_id', bid)
+            .maybeSingle();
+          const hLa = cs?.hq_latitude != null ? Number(cs.hq_latitude) : NaN;
+          const hLn = cs?.hq_longitude != null ? Number(cs.hq_longitude) : NaN;
+          if (Number.isFinite(hLa) && Number.isFinite(hLn)) {
+            setBranchHqPin({ lat: hLa, lng: hLn });
+          }
+        }
         setOrders(
           (ordersRes.data ?? []).map((o: any) => ({
             id: o.id,
@@ -326,6 +345,21 @@ export function CustomerDetailPage() {
                   <InfoRow icon={Phone} label="Alternate Phone" value={customer.alternate_phone} />
                 )}
                 <InfoRow icon={MapPin} label="Address" value={`${customer.address}, ${customer.city}, ${customer.province}`} className="md:col-span-2" />
+                {customer.map_lat != null &&
+                  customer.map_lng != null &&
+                  Number.isFinite(customer.map_lat) &&
+                  Number.isFinite(customer.map_lng) && (
+                    <div className="md:col-span-2">
+                      <CustomerLocationMapPreview
+                        customerLat={customer.map_lat}
+                        customerLng={customer.map_lng}
+                        storeLat={branchHqPin?.lat ?? null}
+                        storeLng={branchHqPin?.lng ?? null}
+                        customerTitle={`${customer.name} — location`}
+                        storeTitle="Store / HQ"
+                      />
+                    </div>
+                  )}
               </CardContent>
             </Card>
 

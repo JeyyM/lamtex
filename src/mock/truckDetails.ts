@@ -63,6 +63,7 @@ export interface TripHistoryRecord {
 
 export interface MaintenanceRecord {
   id: string;
+  /** Display date — completed_date if done, else scheduled_date */
   date: string;
   type: string;
   category: 'Preventive' | 'Corrective' | 'Emergency';
@@ -71,6 +72,12 @@ export interface MaintenanceRecord {
   mileage: number;
   notes: string;
   nextDue?: string;
+  /** Raw YYYY-MM-DD from DB scheduled_date column */
+  scheduledDate?: string;
+  /** Raw YYYY-MM-DD from DB completed_date column */
+  completedDate?: string;
+  /** Raw status string from DB: 'Scheduled' | 'In Progress' | 'Completed' */
+  dbStatus?: string;
 }
 
 export interface CalendarBooking {
@@ -235,22 +242,22 @@ const MAINTENANCE_HISTORY: Record<string, MaintenanceRecord[]> = {
 const CALENDAR_BOOKINGS: Record<string, CalendarBooking[]> = {
   'v1': [
     { date: '2026-02-26', type: 'Trip', tripId: 'TRIP-2026-A-001', tripNumber: 'TRIP-2026-A-001', status: 'In Transit', driver: 'Fernando Santos' },
-    { date: '2026-02-27', type: 'Trip', tripId: 'TRIP-2026-A-020', tripNumber: 'TRIP-2026-A-020', status: 'Planned', driver: 'Marco Reyes' },
+    { date: '2026-02-27', type: 'Trip', tripId: 'TRIP-2026-A-020', tripNumber: 'TRIP-2026-A-020', status: 'Scheduled', driver: 'Marco Reyes' },
     { date: '2026-02-28', type: 'Available' },
-    { date: '2026-03-01', type: 'Trip', tripId: 'TRIP-2026-A-025', tripNumber: 'TRIP-2026-A-025', status: 'Planned', driver: 'Fernando Santos' },
-    { date: '2026-03-03', type: 'Trip', tripId: 'TRIP-2026-A-028', tripNumber: 'TRIP-2026-A-028', status: 'Planned', driver: 'Gabriel Cruz' },
+    { date: '2026-03-01', type: 'Trip', tripId: 'TRIP-2026-A-025', tripNumber: 'TRIP-2026-A-025', status: 'Scheduled', driver: 'Fernando Santos' },
+    { date: '2026-03-03', type: 'Trip', tripId: 'TRIP-2026-A-028', tripNumber: 'TRIP-2026-A-028', status: 'Scheduled', driver: 'Gabriel Cruz' },
     { date: '2026-03-15', type: 'Maintenance', status: 'Scheduled' },
   ],
   'v2': [
     { date: '2026-02-26', type: 'Available' },
-    { date: '2026-02-27', type: 'Trip', tripId: 'TRIP-2026-A-021', tripNumber: 'TRIP-2026-A-021', status: 'Planned', driver: 'Rodrigo Diaz' },
+    { date: '2026-02-27', type: 'Trip', tripId: 'TRIP-2026-A-021', tripNumber: 'TRIP-2026-A-021', status: 'Scheduled', driver: 'Rodrigo Diaz' },
     { date: '2026-03-01', type: 'Available' },
-    { date: '2026-03-02', type: 'Trip', tripId: 'TRIP-2026-A-026', tripNumber: 'TRIP-2026-A-026', status: 'Planned', driver: 'Ernesto Ramos' },
+    { date: '2026-03-02', type: 'Trip', tripId: 'TRIP-2026-A-026', tripNumber: 'TRIP-2026-A-026', status: 'Scheduled', driver: 'Ernesto Ramos' },
     { date: '2026-04-10', type: 'Maintenance', status: 'Scheduled' },
   ],
   'v3': [
     { date: '2026-02-26', type: 'Trip', tripId: 'TRIP-2026-A-002', tripNumber: 'TRIP-2026-A-002', status: 'Loading', driver: 'Alberto Mendoza' },
-    { date: '2026-02-28', type: 'Trip', tripId: 'TRIP-2026-A-023', tripNumber: 'TRIP-2026-A-023', status: 'Planned', driver: 'Eduardo Torres' },
+    { date: '2026-02-28', type: 'Trip', tripId: 'TRIP-2026-A-023', tripNumber: 'TRIP-2026-A-023', status: 'Scheduled', driver: 'Eduardo Torres' },
     { date: '2026-03-02', type: 'Available' },
     { date: '2026-04-01', type: 'Maintenance', status: 'Scheduled' },
   ],

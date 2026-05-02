@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Link } from 'react-router-dom';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
@@ -38,6 +38,9 @@ import {
   Plane,
   Globe,
   X,
+  ChevronLeft,
+  ChevronRight,
+  RefreshCw,
 } from 'lucide-react';
 import {
   getTripsByBranch,
@@ -46,32 +49,98 @@ import {
   getOrdersReadyByBranch,
   getShipmentsByBranch,
 } from '@/src/mock/logisticsDashboard';
+import {
+  fetchLogisticsOrderQueue,
+  fetchTripsForBranch,
+  createTripFromPlanning,
+  fetchDriversForBranch,
+  fetchBranchHqCoords,
+  updateTrip,
+} from '@/src/lib/logisticsScheduling';
 import { RoutePlanningView } from '@/src/components/logistics/RoutePlanningView';
 import { TripDetailsModal } from '@/src/components/logistics/TripDetailsModal';
 import { EditTripModal } from '@/src/components/logistics/EditTripModal';
-import { Vehicle, Trip } from '@/src/types/logistics';
+import { Vehicle, Trip, OrderReadyForDispatch } from '@/src/types/logistics';
 import { fetchFleetTrucksForBranch } from '@/src/lib/fleetTrucks';
 import { TruckFormModal } from '@/src/components/logistics/TruckFormModal';
 
 type ViewMode = 'dispatch' | 'fleet' | 'routes' | 'shipments';
 type TransportType = 'truck' | 'interisland';
 
+function localYmd(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 export function LogisticsPage() {
   const { branch } = useAppContext();
-  const [viewMode, setViewMode] = useState<ViewMode>('dispatch');
+  const { search } = useLocation();
+  const [viewMode, setViewMode] = useState<ViewMode>(() =>
+    new URLSearchParams(search).get('tab') === 'routes' ? 'routes' : 'dispatch',
+  );
+
+  useEffect(() => {
+    if (new URLSearchParams(search).get('tab') === 'routes') setViewMode('routes');
+  }, [search]);
   const [transportType, setTransportType] = useState<TransportType>('truck');
   const [selectedTrip, setSelectedTrip] = useState<Trip | null>(null);
   const [showTripDetails, setShowTripDetails] = useState(false);
   const [showEditTrip, setShowEditTrip] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [filterStatus, setFilterStatus] = useState<string>('All');
+  const [filterStatus, setFilterStatus] = useState<string>('Scheduled');
   const [selectedCalendarTrip, setSelectedCalendarTrip] = useState<Trip | null>(null);
   const [fleetTrucks, setFleetTrucks] = useState<Vehicle[]>([]);
+
+  // Full month-view dispatch calendar
+  const [dispatchCalOpen, setDispatchCalOpen] = useState(false);
+  const [dispatchCalYear, setDispatchCalYear] = useState(() => new Date().getFullYear());
+  const [dispatchCalMonth, setDispatchCalMonth] = useState(() => new Date().getMonth());
+  const [dispatchCalSelectedKey, setDispatchCalSelectedKey] = useState<string | null>(null);
+
+  // 14-day strip day detail
+  const [stripDetailDateKey, setStripDetailDateKey] = useState<string | null>(null);
   const [fleetLoading, setFleetLoading] = useState(false);
   const [fleetError, setFleetError] = useState<string | null>(null);
   const [truckFormOpen, setTruckFormOpen] = useState(false);
   const [truckFormMode, setTruckFormMode] = useState<'create' | 'edit'>('create');
   const [truckFormEditId, setTruckFormEditId] = useState<string | null>(null);
+  const [scheduleTrips, setScheduleTrips] = useState<Trip[]>([]);
+  const [planningOrders, setPlanningOrders] = useState<OrderReadyForDispatch[]>([]);
+  const [logisticsFromDb, setLogisticsFromDb] = useState(false);
+  const [branchHq, setBranchHq] = useState<{ lat: number; lng: number } | null>(null);
+
+  const [planningDrivers, setPlanningDrivers] = useState<import('@/src/types/logistics').DriverOption[]>([]);
+
+  const routePlanningPrefill = useMemo(() => {
+    const q = new URLSearchParams(search);
+    const oid = q.get('order')?.trim();
+    const ds = q.get('date')?.trim().slice(0, 10) ?? '';
+    return {
+      orderIds: oid ? [oid] : undefined as string[] | undefined,
+      tripDate: /^\d{4}-\d{2}-\d{2}$/.test(ds) ? ds : undefined as string | undefined,
+    };
+  }, [search]);
+
+  const refreshLogistics = useCallback(async () => {
+    if (!branch?.trim()) {
+      setScheduleTrips([]);
+      setPlanningOrders([]);
+      setLogisticsFromDb(false);
+      return;
+    }
+    const [oq, tq] = await Promise.all([fetchLogisticsOrderQueue(branch), fetchTripsForBranch(branch)]);
+    if (oq.error || tq.error) {
+      setPlanningOrders(getOrdersReadyByBranch(branch));
+      setScheduleTrips(getTripsByBranch(branch));
+      setLogisticsFromDb(false);
+    } else {
+      setPlanningOrders(oq.orders);
+      setScheduleTrips(tq.trips);
+      setLogisticsFromDb(true);
+    }
+  }, [branch]);
 
   const loadFleet = useCallback(async () => {
     if (!branch?.trim()) {
@@ -91,16 +160,71 @@ export function LogisticsPage() {
     setFleetTrucks(vehicles);
   }, [branch]);
 
-  useEffect(() => {
-    loadFleet();
-  }, [loadFleet]);
+  const loadDrivers = useCallback(async () => {
+    if (!branch?.trim()) { setPlanningDrivers([]); return; }
+    const { drivers } = await fetchDriversForBranch(branch);
+    setPlanningDrivers(drivers);
+  }, [branch]);
 
-  // Get data
-  const trips = getTripsByBranch(branch);
-  const vehicles = getVehiclesByBranch(branch);
-  const deliveries = getDeliveriesByBranch(branch);
-  const ordersReady = getOrdersReadyByBranch(branch);
-  const shipments = getShipmentsByBranch(branch);
+  useEffect(() => { loadFleet(); }, [loadFleet]);
+  useEffect(() => { loadDrivers(); }, [loadDrivers]);
+
+  useEffect(() => {
+    refreshLogistics();
+  }, [refreshLogistics]);
+
+  useEffect(() => {
+    let alive = true;
+    if (!branch?.trim()) {
+      setBranchHq(null);
+      return () => {
+        alive = false;
+      };
+    }
+    void fetchBranchHqCoords(branch).then((p) => {
+      if (alive) setBranchHq(p);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [branch]);
+
+  const trips = logisticsFromDb ? scheduleTrips : getTripsByBranch(branch ?? '');
+  const vehicles = getVehiclesByBranch(branch ?? '');
+  const deliveries = getDeliveriesByBranch(branch ?? '');
+  const ordersReady = logisticsFromDb ? planningOrders : getOrdersReadyByBranch(branch ?? '');
+  const shipments = getShipmentsByBranch(branch ?? '');
+  const vehiclesForStats = fleetTrucks.length > 0 ? fleetTrucks : vehicles;
+
+  const nextFourteenCalendarDays = useMemo(() => {
+    const out: { date: string; day: string; dayNum: number; isToday: boolean }[] = [];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayKey = localYmd(today);
+    for (let i = 0; i < 14; i++) {
+      const d = new Date(today);
+      d.setDate(today.getDate() + i);
+      const date = localYmd(d);
+      out.push({
+        date,
+        day: d.toLocaleDateString(undefined, { weekday: 'short' }),
+        dayNum: d.getDate(),
+        isToday: date === todayKey,
+      });
+    }
+    return out;
+  }, []);
+
+  // Group all trips by date key for full calendar
+  const dispatchCalByDateKey = useMemo(() => {
+    const m: Record<string, Trip[]> = {};
+    for (const t of trips) {
+      if (!t.scheduledDate) continue;
+      if (!m[t.scheduledDate]) m[t.scheduledDate] = [];
+      m[t.scheduledDate].push(t);
+    }
+    return m;
+  }, [trips]);
 
   // Filter trips
   const filteredTrips = trips.filter(trip => {
@@ -113,7 +237,7 @@ export function LogisticsPage() {
 
   const getStatusColor = (status: string) => {
     if (status === 'Completed' || status === 'Delivered' || status === 'Available') return 'success';
-    if (status === 'In Transit' || status === 'Loading' || status === 'Planned' || status === 'On Trip') return 'warning';
+    if (status === 'In Transit' || status === 'Loading' || status === 'Scheduled' || status === 'On Trip') return 'warning';
     if (status === 'Delayed' || status === 'Failed' || status === 'Blocked' || status === 'Maintenance' || status === 'Out of Service') return 'danger';
     return 'default';
   };
@@ -129,7 +253,6 @@ export function LogisticsPage() {
     return <Clock className="w-4 h-4" />;
   };
 
-  // Generate consistent light color based on vehicle ID
   const getVehicleColor = (vehicleId: string) => {
     // Simple seeded random number generator
     let seed = 0;
@@ -154,9 +277,9 @@ export function LogisticsPage() {
   };
 
   const viewModeTabs = [
-    { id: 'dispatch' as ViewMode, label: 'Dispatch Board', icon: <Route className="w-4 h-4" /> },
+    { id: 'dispatch' as ViewMode, label: 'Schedule & Tracking', icon: <Calendar className="w-4 h-4" /> },
     { id: 'fleet' as ViewMode, label: 'Fleet Management', icon: <Truck className="w-4 h-4" /> },
-    { id: 'routes' as ViewMode, label: 'Route Planning', icon: <Map className="w-4 h-4" /> },
+    { id: 'routes' as ViewMode, label: 'Route Planning', icon: <Route className="w-4 h-4" /> },
   ];
 
   return (
@@ -263,12 +386,14 @@ export function LogisticsPage() {
                   onChange={(e) => setFilterStatus(e.target.value)}
                   className="w-full lg:w-auto px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
                 >
-                  <option value="All">All Status</option>
-                  <option value="Planned">Planned</option>
+                  <option value="All">All Statuses</option>
+                  <option value="Scheduled">Scheduled</option>
+                  <option value="Pending">Pending</option>
                   <option value="Loading">Loading</option>
                   <option value="In Transit">In Transit</option>
-                  <option value="Completed">Completed</option>
                   <option value="Delayed">Delayed</option>
+                  <option value="Completed">Completed</option>
+                  <option value="Failed">Failed</option>
                 </select>
                 <Button variant="outline" className="w-full lg:w-auto justify-center">
                   <Filter className="w-4 h-4 mr-2" />
@@ -326,7 +451,7 @@ export function LogisticsPage() {
                   <div>
                     <p className="text-sm text-gray-500">Available Trucks</p>
                     <p className="text-2xl font-bold text-gray-900 mt-1">
-                      {vehicles.filter(v => v.status === 'Available').length}
+                      {vehiclesForStats.filter((v) => v.status === 'Available').length}
                     </p>
                   </div>
                   <div className="p-3 bg-green-100 rounded-lg">
@@ -356,52 +481,50 @@ export function LogisticsPage() {
           {transportType === 'truck' && (
             <Card>
               <CardHeader>
-                <div className="flex items-center gap-2">
-                  <Calendar className="w-5 h-5 text-gray-500" />
-                  <CardTitle>Dispatch Schedule (14 Days)</CardTitle>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <Calendar className="w-5 h-5 text-gray-500" />
+                    <CardTitle>Dispatch Schedule (14 Days)</CardTitle>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const t = new Date();
+                      setDispatchCalYear(t.getFullYear());
+                      setDispatchCalMonth(t.getMonth());
+                      setDispatchCalSelectedKey(localYmd(t));
+                      setDispatchCalOpen(true);
+                    }}
+                    className="inline-flex items-center gap-2 px-3 py-1.5 border border-gray-200 rounded-lg text-sm font-medium hover:bg-gray-50 bg-white"
+                  >
+                    <Calendar className="w-4 h-4 text-blue-600" />
+                    View calendar
+                  </button>
                 </div>
               </CardHeader>
               <CardContent>
                 {/* Calendar Grid */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2">
                   {(() => {
-                    // Hardcoded calendar days for illustration (Feb 25 - Mar 10, 2026)
-                    const calendarDays = [
-                      { date: '2026-02-25', day: 'Wed', dayNum: 25, isToday: false },
-                      { date: '2026-02-26', day: 'Thu', dayNum: 26, isToday: false },
-                      { date: '2026-02-27', day: 'Fri', dayNum: 27, isToday: false },
-                      { date: '2026-02-28', day: 'Sat', dayNum: 28, isToday: false },
-                      { date: '2026-03-01', day: 'Sun', dayNum: 1, isToday: false },
-                      { date: '2026-03-02', day: 'Mon', dayNum: 2, isToday: false },
-                      { date: '2026-03-03', day: 'Tue', dayNum: 3, isToday: false },
-                      { date: '2026-03-04', day: 'Wed', dayNum: 4, isToday: true },  // Today
-                      { date: '2026-03-05', day: 'Thu', dayNum: 5, isToday: false },
-                      { date: '2026-03-06', day: 'Fri', dayNum: 6, isToday: false },
-                      { date: '2026-03-07', day: 'Sat', dayNum: 7, isToday: false },
-                      { date: '2026-03-08', day: 'Sun', dayNum: 8, isToday: false },
-                      { date: '2026-03-09', day: 'Mon', dayNum: 9, isToday: false },
-                      { date: '2026-03-10', day: 'Tue', dayNum: 10, isToday: false },
-                    ];
-
-                    // Map trips to calendar events
                     const eventsByDate: Record<string, Trip[]> = {};
-                    trips.forEach(trip => {
+                    filteredTrips.forEach((trip) => {
                       const dateKey = trip.scheduledDate;
                       if (!eventsByDate[dateKey]) eventsByDate[dateKey] = [];
                       eventsByDate[dateKey].push(trip);
                     });
 
-                    return calendarDays.map((day, idx) => {
+                    return nextFourteenCalendarDays.map((day) => {
                       const dayTrips = eventsByDate[day.date] || [];
 
                       return (
                         <div
-                          key={idx}
+                          key={day.date}
+                          onClick={() => dayTrips.length > 0 && setStripDetailDateKey(day.date)}
                           className={`min-h-28 p-2 rounded-lg border transition-all ${
                             day.isToday
                               ? 'bg-red-50 border-red-300 ring-2 ring-red-200'
                               : 'bg-white border-gray-200'
-                          } ${dayTrips.length > 0 ? 'hover:shadow-md' : 'opacity-60'}`}
+                          } ${dayTrips.length > 0 ? 'hover:shadow-md cursor-pointer' : 'opacity-60'}`}
                         >
                           <div className="flex flex-col h-full">
                             <div className="flex items-center justify-between mb-2">
@@ -414,21 +537,17 @@ export function LogisticsPage() {
                             </div>
                             
                             <div className="flex-1 space-y-1 overflow-hidden">
-                              {dayTrips.slice(0, 4).map((trip, tripIdx) => {
+                              {dayTrips.slice(0, 2).map((trip, tripIdx) => {
                                 const colors = getVehicleColor(trip.vehicleId);
                                 return (
                                   <div
-                                    key={tripIdx}
-                                    className="text-xs p-1.5 rounded cursor-pointer hover:opacity-80 transition-opacity"
+                                    key={trip.id + String(tripIdx)}
+                                    className="text-xs p-1.5 rounded"
                                     style={{
                                       backgroundColor: colors.bg,
                                       borderLeft: `3px solid ${colors.border}`
                                     }}
                                     title={`${trip.tripNumber} - ${trip.vehicleName} (${trip.driverName})`}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setSelectedCalendarTrip(trip);
-                                    }}
                                   >
                                     <div className="flex items-center gap-1">
                                       <Truck className="w-3 h-3 flex-shrink-0" style={{ color: colors.text }} />
@@ -442,9 +561,9 @@ export function LogisticsPage() {
                                   </div>
                                 );
                               })}
-                              {dayTrips.length > 4 && (
+                              {dayTrips.length > 2 && (
                                 <div className="text-[10px] text-gray-500 text-center font-medium pt-0.5">
-                                  +{dayTrips.length - 4} more
+                                  +{dayTrips.length - 2} more
                                 </div>
                               )}
                             </div>
@@ -508,7 +627,7 @@ export function LogisticsPage() {
                               {trip.status === 'In Transit' && <Navigation className="w-4 h-4 text-blue-600" />}
                               {trip.status === 'Completed' && <CheckCircle className="w-4 h-4 text-green-600" />}
                               {trip.status === 'Delayed' && <AlertTriangle className="w-4 h-4 text-red-600" />}
-                              {trip.status === 'Planned' && <Calendar className="w-4 h-4 text-gray-600" />}
+                              {trip.status === 'Scheduled' && <Calendar className="w-4 h-4 text-gray-600" />}
                               {trip.status === 'Loading' && <Package className="w-4 h-4 text-yellow-600" />}
                             </div>
                             <div>
@@ -1204,11 +1323,39 @@ export function LogisticsPage() {
       {viewMode === 'routes' && (
         <RoutePlanningView
           ordersReady={ordersReady}
-          vehicles={vehicles}
-          onCreateTrip={(selectedOrders, vehicleId) => {
-            console.log('Creating trip with orders:', selectedOrders, 'for vehicle:', vehicleId);
-            // In real implementation, would create trip and update state
-            alert(`Trip created with ${selectedOrders.length} orders for vehicle ${vehicleId}`);
+          vehicles={fleetTrucks.length > 0 ? fleetTrucks : vehicles}
+          existingTrips={trips}
+          drivers={planningDrivers}
+          initialSelectedOrderIds={routePlanningPrefill.orderIds}
+          initialTripDate={routePlanningPrefill.tripDate}
+          originLat={branchHq?.lat}
+          originLng={branchHq?.lng}
+          originTitle={branch?.trim() ? `${branch} (depot)` : 'Depot / branch'}
+          onCreateTrip={async (selectedOrderIds, vehicleId, scheduledDate, driverId) => {
+            if (!branch?.trim()) {
+              window.alert('Select a branch in the header.');
+              return;
+            }
+            const picked = ordersReady.filter((o) => selectedOrderIds.includes(o.id));
+            const totalWeight = picked.reduce((s, o) => s + o.weight, 0);
+            const totalVolume = picked.reduce((s, o) => s + o.volume, 0);
+            const driverRecord = driverId ? planningDrivers.find((d) => d.id === driverId) : null;
+            const res = await createTripFromPlanning({
+              branchName: branch,
+              vehicleUuid: vehicleId,
+              orderUuids: selectedOrderIds,
+              scheduledDate,
+              totalWeightKg: totalWeight,
+              totalVolumeCbm: totalVolume,
+              driverUuid: driverId ?? null,
+              driverName: driverRecord?.name ?? null,
+            });
+            if (!res.ok) {
+              window.alert(res.error ?? 'Could not create trip');
+              return;
+            }
+            await refreshLogistics();
+            loadFleet();
           }}
         />
       )}
@@ -1238,153 +1385,27 @@ export function LogisticsPage() {
             setSelectedTrip(null);
           }}
           trip={selectedTrip}
-          onSave={(updatedTrip) => {
-            console.log('Trip updated:', updatedTrip);
-            // TODO: Save to backend
+          drivers={planningDrivers}
+          vehicles={fleetTrucks}
+          availableOrders={planningOrders}
+          onSave={async (params) => {
+            const result = await updateTrip({ tripId: selectedTrip.id, ...params });
+            if (!result.ok) throw new Error(result.error ?? 'Failed to save trip');
             setShowEditTrip(false);
             setSelectedTrip(null);
+            refreshLogistics();
           }}
         />
       )}
 
-      {/* Calendar Trip Detail Modal */}
-      {selectedCalendarTrip && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-            {/* Header */}
-            <div 
-              className="flex items-center gap-3 p-6 border-b border-gray-200"
-              style={{
-                backgroundColor: getVehicleColor(selectedCalendarTrip.vehicleId).bg,
-                borderLeftWidth: '6px',
-                borderLeftColor: getVehicleColor(selectedCalendarTrip.vehicleId).border
-              }}
-            >
-              <div className="p-3 bg-white rounded-lg shadow-sm">
-                <Truck className="w-6 h-6" style={{ color: getVehicleColor(selectedCalendarTrip.vehicleId).text }} />
-              </div>
-              <div className="flex-1">
-                <h2 className="text-xl font-semibold" style={{ color: getVehicleColor(selectedCalendarTrip.vehicleId).text }}>
-                  {selectedCalendarTrip.tripNumber}
-                </h2>
-                <p className="text-sm opacity-80" style={{ color: getVehicleColor(selectedCalendarTrip.vehicleId).text }}>
-                  Scheduled for {selectedCalendarTrip.scheduledDate}
-                </p>
-              </div>
-              <button
-                onClick={() => setSelectedCalendarTrip(null)}
-                className="text-gray-400 hover:text-gray-600 transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Content */}
-            <div className="p-6 space-y-6">
-              {/* Vehicle & Driver */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <p className="text-xs text-gray-500 uppercase font-medium">Vehicle</p>
-                  <div className="flex items-center gap-2">
-                    <Truck className="w-4 h-4 text-gray-400" />
-                    <p className="text-sm font-medium text-gray-900">{selectedCalendarTrip.vehicleName}</p>
-                  </div>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-xs text-gray-500 uppercase font-medium">Driver</p>
-                  <div className="flex items-center gap-2">
-                    <Users className="w-4 h-4 text-gray-400" />
-                    <p className="text-sm font-medium text-gray-900">{selectedCalendarTrip.driverName}</p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Status & Schedule */}
-              <div className="grid grid-cols-3 gap-4">
-                <div className="space-y-1">
-                  <p className="text-xs text-gray-500 uppercase font-medium">Status</p>
-                  <Badge variant={getStatusColor(selectedCalendarTrip.status)}>
-                    {selectedCalendarTrip.status}
-                  </Badge>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-xs text-gray-500 uppercase font-medium">Departure</p>
-                  <p className="text-sm font-medium text-gray-900">
-                    {selectedCalendarTrip.departureTime || 'TBD'}
-                  </p>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-xs text-gray-500 uppercase font-medium">ETA</p>
-                  <p className="text-sm font-medium text-gray-900">
-                    {selectedCalendarTrip.eta || 'TBD'}
-                  </p>
-                </div>
-              </div>
-
-              {/* Route */}
-              <div className="space-y-2">
-                <p className="text-xs text-gray-500 uppercase font-medium">Route</p>
-                <div className="flex items-center gap-2 p-3 bg-gray-50 rounded-lg">
-                  <MapPin className="w-4 h-4 text-gray-400" />
-                  <p className="text-sm text-gray-900">{selectedCalendarTrip.destinations.join(' → ')}</p>
-                </div>
-              </div>
-
-              {/* Capacity */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs text-gray-500 uppercase font-medium">Capacity Used</p>
-                  <p className="text-sm font-bold text-gray-900">{selectedCalendarTrip.capacityUsed}%</p>
-                </div>
-                <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
-                  <div
-                    className="h-full rounded-full transition-all"
-                    style={{
-                      width: `${selectedCalendarTrip.capacityUsed}%`,
-                      backgroundColor: getVehicleColor(selectedCalendarTrip.vehicleId).border
-                    }}
-                  />
-                </div>
-              </div>
-
-              {/* Orders */}
-              <div className="space-y-2">
-                <p className="text-xs text-gray-500 uppercase font-medium">Orders ({selectedCalendarTrip.orders.length})</p>
-                <div className="flex flex-wrap gap-2">
-                  {selectedCalendarTrip.orders.map((orderId, idx) => (
-                    <span
-                      key={idx}
-                      className="px-2 py-1 bg-gray-100 text-gray-700 text-xs rounded"
-                    >
-                      {orderId}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            {/* Footer */}
-            <div className="flex items-center justify-end gap-3 p-6 border-t border-gray-200 bg-gray-50">
-              <Button
-                variant="outline"
-                onClick={() => setSelectedCalendarTrip(null)}
-              >
-                Close
-              </Button>
-              <Button
-                variant="primary"
-                onClick={() => {
-                  setSelectedTrip(selectedCalendarTrip);
-                  setShowTripDetails(true);
-                  setSelectedCalendarTrip(null);
-                }}
-              >
-                View Full Details
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Calendar Trip Detail Modal — replaced by TripDetailsModal */}
+      {selectedCalendarTrip && (() => {
+        // Immediately open the full TripDetailsModal and clear this state
+        setSelectedTrip(selectedCalendarTrip);
+        setShowTripDetails(true);
+        setSelectedCalendarTrip(null);
+        return null;
+      })()}
       <TruckFormModal
         key={`${truckFormMode}-${truckFormEditId ?? 'new'}`}
         isOpen={truckFormOpen}
@@ -1394,6 +1415,309 @@ export function LogisticsPage() {
         vehicleUuid={truckFormEditId}
         onSaved={() => loadFleet()}
       />
+
+      {/* ── 14-day Strip: Day Detail Modal ────────────────────── */}
+      {stripDetailDateKey && (() => {
+        const [y, mo, d] = stripDetailDateKey.split('-').map(Number);
+        const dateLabel = new Date(y, mo - 1, d).toLocaleDateString('en-PH', {
+          weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+        });
+        const dayTrips = dispatchCalByDateKey[stripDetailDateKey] ?? [];
+
+        // Single trip → skip the picker and open TripDetailsModal directly
+        if (dayTrips.length === 1) {
+          setSelectedTrip(dayTrips[0]);
+          setShowTripDetails(true);
+          setStripDetailDateKey(null);
+          return null;
+        }
+
+        return (
+          <div
+            className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+            onClick={() => setStripDetailDateKey(null)}
+          >
+            <div
+              className="bg-white rounded-xl shadow-xl w-full max-w-sm"
+              onClick={(e) => e.stopPropagation()}
+              role="dialog"
+              aria-modal="true"
+            >
+              <div className="p-4 border-b border-gray-200 flex items-start justify-between gap-3">
+                <h3 className="font-bold text-gray-900 text-base">{dateLabel}</h3>
+                <button
+                  type="button"
+                  onClick={() => setStripDetailDateKey(null)}
+                  className="text-gray-400 hover:text-gray-600 shrink-0 p-1 rounded-lg hover:bg-gray-100"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="p-2">
+                {dayTrips.map((trip) => {
+                  const colors = getVehicleColor(trip.vehicleId);
+                  return (
+                    <button
+                      key={trip.id}
+                      type="button"
+                      className="w-full flex items-center gap-3 px-3 py-3 rounded-lg hover:bg-gray-50 transition-colors text-left"
+                      onClick={() => {
+                        setSelectedTrip(trip);
+                        setShowTripDetails(true);
+                        setStripDetailDateKey(null);
+                      }}
+                    >
+                      <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ backgroundColor: colors.bg }}>
+                        <Truck className="w-4 h-4" style={{ color: colors.text }} />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold text-gray-900 truncate">{trip.tripNumber}</p>
+                        <p className="text-xs text-gray-500 truncate">{trip.vehicleName}{trip.driverName !== '—' ? ` · ${trip.driverName}` : ''}</p>
+                      </div>
+                      <span className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded border shrink-0 ${
+                        trip.status === 'Completed'  ? 'bg-green-100 text-green-800 border-green-300' :
+                        trip.status === 'In Transit' ? 'bg-blue-100 text-blue-800 border-blue-300' :
+                        trip.status === 'Loading'    ? 'bg-amber-100 text-amber-800 border-amber-300' :
+                        trip.status === 'Delayed'    ? 'bg-red-100 text-red-800 border-red-300' :
+                                                       'bg-gray-100 text-gray-800 border-gray-300'
+                      }`}>
+                        {trip.status}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── Full Dispatch Calendar Modal ───────────────────────── */}
+      {dispatchCalOpen && (() => {
+        const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+        const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+        const todayKey = localYmd(new Date());
+
+        // Build month grid
+        const firstDay = new Date(dispatchCalYear, dispatchCalMonth, 1);
+        const lastDay = new Date(dispatchCalYear, dispatchCalMonth + 1, 0);
+        const cells: (Date | null)[] = [];
+        for (let i = 0; i < firstDay.getDay(); i++) cells.push(null);
+        for (let d = 1; d <= lastDay.getDate(); d++) cells.push(new Date(dispatchCalYear, dispatchCalMonth, d));
+
+        const shiftMonth = (delta: number) => {
+          const d = new Date(dispatchCalYear, dispatchCalMonth + delta, 1);
+          setDispatchCalYear(d.getFullYear());
+          setDispatchCalMonth(d.getMonth());
+        };
+
+        const selectedTrips = dispatchCalSelectedKey ? (dispatchCalByDateKey[dispatchCalSelectedKey] ?? []) : [];
+
+        return (
+          <div
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+            onClick={() => setDispatchCalOpen(false)}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="dispatch-cal-title"
+              className="bg-white rounded-xl shadow-xl w-full max-w-4xl max-h-[92vh] overflow-hidden flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex items-start justify-between gap-3 p-4 md:p-5 border-b border-gray-200">
+                <div>
+                  <h2 id="dispatch-cal-title" className="text-lg md:text-xl font-bold text-gray-900">
+                    Dispatch Calendar
+                  </h2>
+                  <p className="text-sm text-gray-600 mt-1">
+                    All scheduled trips{branch ? ` · ${branch}` : ''}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => void refreshLogistics()}
+                    className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50"
+                    title="Refresh"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDispatchCalOpen(false)}
+                    className="p-2 rounded-lg text-gray-500 hover:bg-gray-100"
+                    aria-label="Close"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Body */}
+              <div className="flex-1 overflow-y-auto p-4 md:p-5 space-y-4">
+                {/* Nav + legend */}
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <button type="button" onClick={() => shiftMonth(-1)} className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50" aria-label="Previous month">
+                      <ChevronLeft className="w-5 h-5" />
+                    </button>
+                    <select value={dispatchCalMonth} onChange={(e) => setDispatchCalMonth(Number(e.target.value))} className="border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white">
+                      {MONTH_NAMES.map((n, i) => <option key={i} value={i}>{n}</option>)}
+                    </select>
+                    <input
+                      type="number"
+                      value={dispatchCalYear}
+                      onChange={(e) => { const n = Number(e.target.value); if (e.target.value !== '' && Number.isFinite(n)) setDispatchCalYear(Math.trunc(n)); }}
+                      className="w-24 border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                      aria-label="Year"
+                    />
+                    <button type="button" onClick={() => shiftMonth(1)} className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50" aria-label="Next month">
+                      <ChevronRight className="w-5 h-5" />
+                    </button>
+                  </div>
+                  {/* Legend */}
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-600">
+                    {(['Scheduled','In Transit','Loading','Completed','Delayed'] as Trip['status'][]).map((s) => (
+                      <span key={s} className="inline-flex items-center gap-1">
+                        <span className={`w-2.5 h-2.5 rounded-full ${
+                          s === 'Completed' ? 'bg-green-500' :
+                          s === 'In Transit' ? 'bg-blue-500' :
+                          s === 'Loading' ? 'bg-amber-500' :
+                          s === 'Delayed' ? 'bg-red-500' : 'bg-gray-400'
+                        }`} />
+                        {s}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Day headers */}
+                <div className="grid grid-cols-7 gap-1 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                  {DAY_NAMES.map((d) => <div key={d} className="py-2">{d}</div>)}
+                </div>
+
+                {/* Calendar grid */}
+                <div className="grid grid-cols-7 gap-1">
+                  {cells.map((cell, idx) => {
+                    if (!cell) return <div key={`pad-${idx}`} className="min-h-[4.5rem] rounded-lg bg-gray-50/50" />;
+                    const cellKey = localYmd(cell);
+                    const isToday = cellKey === todayKey;
+                    const isSelected = cellKey === dispatchCalSelectedKey;
+                    const dayTrips = dispatchCalByDateKey[cellKey] ?? [];
+                    const shown = dayTrips.slice(0, 2);
+                    const overflow = dayTrips.length - shown.length;
+
+                    return (
+                      <button
+                        key={cellKey}
+                        type="button"
+                        onClick={() => setDispatchCalSelectedKey(cellKey === dispatchCalSelectedKey ? null : cellKey)}
+                        className={`min-h-[4.5rem] rounded-lg border p-1.5 text-left transition-all cursor-pointer ${
+                          isSelected
+                            ? 'ring-2 ring-blue-500 border-blue-400 bg-blue-50/60'
+                            : 'border-gray-200 bg-white hover:border-blue-300 hover:bg-blue-50/20'
+                        }`}
+                      >
+                        <div className={`text-sm font-semibold mb-0.5 ${isToday ? 'text-red-600' : 'text-gray-900'}`}>
+                          {cell.getDate()}
+                        </div>
+                        <div className="space-y-0.5">
+                          {shown.map((trip) => {
+                            const chipColor =
+                              trip.status === 'Completed' ? 'bg-green-600 text-white' :
+                              trip.status === 'In Transit' ? 'bg-blue-600 text-white' :
+                              trip.status === 'Loading' ? 'bg-amber-500 text-white' :
+                              trip.status === 'Delayed' ? 'bg-red-500 text-white' :
+                              'bg-gray-500 text-white';
+                            return (
+                              <div
+                                key={trip.id}
+                                className={`truncate rounded px-0.5 py-0.5 text-[10px] leading-tight font-medium ${chipColor}`}
+                                title={`${trip.tripNumber} · ${trip.vehicleName} · ${trip.driverName}`}
+                              >
+                                {trip.vehicleName}
+                              </div>
+                            );
+                          })}
+                          {overflow > 0 && (
+                            <div className="text-[10px] text-gray-500 font-medium text-center">+{overflow}</div>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Selected date detail panel */}
+                {dispatchCalSelectedKey && (
+                  <div className="rounded-lg border border-gray-200 bg-gray-50/80 p-4">
+                    <h3 className="text-sm font-semibold text-gray-900 mb-3">
+                      {(() => {
+                        const [y, mo, d] = dispatchCalSelectedKey.split('-').map(Number);
+                        return new Date(y, mo - 1, d).toLocaleDateString('en-PH', {
+                          weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+                        });
+                      })()}
+                    </h3>
+                    {selectedTrips.length === 0 ? (
+                      <p className="text-sm text-gray-500">No trips scheduled on this date.</p>
+                    ) : (
+                      <ul className="space-y-1.5">
+                        {selectedTrips.map((trip) => {
+                          const colors = getVehicleColor(trip.vehicleId);
+                          return (
+                            <li key={trip.id}>
+                              <button
+                                type="button"
+                                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border border-gray-200 bg-white hover:border-blue-300 hover:bg-blue-50 transition-colors text-left"
+                                onClick={() => {
+                                  setSelectedTrip(trip);
+                                  setShowTripDetails(true);
+                                  setDispatchCalOpen(false);
+                                }}
+                              >
+                                <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ backgroundColor: colors.bg }}>
+                                  <Truck className="w-4 h-4" style={{ color: colors.text }} />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <p className="font-semibold text-gray-900 text-sm">{trip.tripNumber}</p>
+                                  <p className="text-xs text-gray-500 truncate">{trip.vehicleName}{trip.driverName !== '—' ? ` · ${trip.driverName}` : ''}</p>
+                                </div>
+                                <span className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded border shrink-0 ${
+                                  trip.status === 'Completed'  ? 'bg-green-100 text-green-800 border-green-300' :
+                                  trip.status === 'In Transit' ? 'bg-blue-100 text-blue-800 border-blue-300' :
+                                  trip.status === 'Loading'    ? 'bg-amber-100 text-amber-800 border-amber-300' :
+                                  trip.status === 'Delayed'    ? 'bg-red-100 text-red-800 border-red-300' :
+                                                                  'bg-gray-100 text-gray-800 border-gray-300'
+                                }`}>
+                                  {trip.status}
+                                </span>
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="border-t border-gray-200 bg-gray-50 px-4 md:px-5 py-3 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setDispatchCalOpen(false)}
+                  className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium hover:bg-gray-100"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

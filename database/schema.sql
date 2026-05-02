@@ -582,6 +582,8 @@ CREATE TABLE IF NOT EXISTS product_variants (
   outer_diameter_mm NUMERIC(10,3),
   inner_diameter_mm NUMERIC(10,3),
   wall_thickness_mm NUMERIC(10,3),
+  -- Shipping volume per inventory unit (m³); compare to vehicles.max_volume_cbm when loading trips
+  volume_cbm      NUMERIC(12,6),
   specs           JSONB NOT NULL DEFAULT '[]'::jsonb,
   
   -- Status
@@ -1996,13 +1998,16 @@ CREATE TABLE IF NOT EXISTS trip_history (
 CREATE TABLE IF NOT EXISTS maintenance_records (
   id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   vehicle_id      UUID NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
-  category        maintenance_category NOT NULL,
+  -- category is optional from the UI; defaults to 'Preventive' if not supplied
+  category        maintenance_category NOT NULL DEFAULT 'Preventive',
   description     TEXT NOT NULL,
   scheduled_date  DATE,
   completed_date  DATE,
   cost            NUMERIC(12,2) DEFAULT 0,
   vendor          VARCHAR(300),
-  status          VARCHAR(50) DEFAULT 'Scheduled',  -- Scheduled, In Progress, Completed
+  -- Application-managed statuses: 'Scheduled' | 'In Progress' | 'Completed'
+  -- 'Overdue' is computed on the application layer: scheduled_date < CURRENT_DATE AND status != 'Completed'
+  status          VARCHAR(50) DEFAULT 'Scheduled',
   notes           TEXT,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()

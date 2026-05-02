@@ -62,9 +62,11 @@ export interface ProductVariant {
   reorderPoint: number;
   safetyStock: number;
   
-  // Physical specs
+  // Physical specs (per inventory unit — same unit as stock qty; used for trucking load)
   weight?: number; // kg
-  length?: number; // meters or cm
+  /** Shipping / stowage volume (m³) for truck capacity */
+  volumeCbm?: number;
+  length?: number; // meters (longest dimension, e.g. pipe stick)
   outerDiameter?: number; // mm
   innerDiameter?: number; // mm
   wallThickness?: number; // mm
@@ -151,6 +153,7 @@ export interface VariantFormData {
   reorderPoint: number;
   safetyStock: number;
   weight?: number;
+  volumeCbm?: number;
   length?: number;
   outerDiameter?: number;
   innerDiameter?: number;

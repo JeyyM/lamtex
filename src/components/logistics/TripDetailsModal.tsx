@@ -1,8 +1,48 @@
 import React, { useEffect, useState } from 'react';
-import { X, MapPin, Truck, User, Calendar, Clock, Package, AlertTriangle, Edit, CheckCircle, Phone, Mail, Building, FileText, Navigation } from 'lucide-react';
+import { X, MapPin, Truck, User, Calendar, Clock, Package, AlertTriangle, Edit, CheckCircle, Phone, Mail, Building, FileText, Navigation, ExternalLink, Loader2 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { Trip } from '@/src/types/logistics';
+import { supabase } from '@/src/lib/supabase';
+
+interface OrderLineItem {
+  id: string;
+  productName: string;
+  variantDescription: string;
+  quantity: number;
+  unitPrice: number;
+  lineTotal: number;
+}
+
+interface TripOrder {
+  order: {
+    id: string;
+    orderNumber: string;
+    customer: string;
+    orderDate: string;
+    requiredDate: string;
+    paymentTerms: string;
+    status: string;
+    paymentStatus: string;
+    deliveryType: string;
+    agent: string;
+    totalAmount: number;
+    items: OrderLineItem[];
+    orderNotes?: string;
+  };
+  customer: {
+    name: string;
+    type: string;
+    contactPerson: string;
+    phone: string;
+    email: string;
+    address: string;
+    city: string;
+    province: string;
+    postalCode: string;
+  } | null;
+}
 
 interface TripDetailsModalProps {
   isOpen: boolean;
@@ -12,130 +52,117 @@ interface TripDetailsModalProps {
 }
 
 export function TripDetailsModal({ isOpen, onClose, trip, onEdit }: TripDetailsModalProps) {
+  const navigate = useNavigate();
+  const [ordersData, setOrdersData] = useState<TripOrder[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState(false);
+
+  // Fetch real orders whenever the modal opens or the trip changes
   useEffect(() => {
     if (!isOpen) return;
     const originalOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
 
+    const load = async () => {
+      if (!trip.orders.length) { setOrdersData([]); return; }
+      setOrdersLoading(true);
+      try {
+        // Fetch all orders for this trip in one query
+        const { data: rows } = await supabase
+          .from('orders')
+          .select(
+            'id, order_number, customer_id, customer_name, agent_name, order_date, required_date, payment_terms, status, payment_status, delivery_type, total_amount, order_notes',
+          )
+          .in('id', trip.orders);
+
+        if (!rows?.length) { setOrdersData([]); setOrdersLoading(false); return; }
+
+        // Fetch all line items for these orders in one query
+        const { data: lineRows } = await supabase
+          .from('order_line_items')
+          .select('id, order_id, product_name, variant_description, quantity, unit_price, line_total')
+          .in('order_id', trip.orders)
+          .order('created_at');
+
+        // Fetch customer details for all unique customer IDs
+        const custIds = [...new Set(rows.map((r: any) => r.customer_id).filter(Boolean))];
+        const { data: custRows } = custIds.length
+          ? await supabase
+              .from('customers')
+              .select('id, name, type, contact_person, phone, email, address, city, province, postal_code')
+              .in('id', custIds)
+          : { data: [] };
+
+        const custMap = new Map((custRows ?? []).map((c: any) => [c.id, c]));
+        const lineMap = new Map<string, OrderLineItem[]>();
+        for (const li of lineRows ?? []) {
+          const oid = (li as any).order_id as string;
+          if (!lineMap.has(oid)) lineMap.set(oid, []);
+          lineMap.get(oid)!.push({
+            id: (li as any).id,
+            productName: (li as any).product_name ?? '—',
+            variantDescription: (li as any).variant_description ?? '',
+            quantity: Number((li as any).quantity ?? 0),
+            unitPrice: Number((li as any).unit_price ?? 0),
+            lineTotal: Number((li as any).line_total ?? 0),
+          });
+        }
+
+        const result: TripOrder[] = rows.map((r: any) => {
+          const cust = custMap.get(r.customer_id) ?? null;
+          return {
+            order: {
+              id: r.id,
+              orderNumber: r.order_number ?? r.id,
+              customer: r.customer_name ?? '—',
+              orderDate: r.order_date ? new Date(r.order_date).toLocaleDateString('en-PH') : '—',
+              requiredDate: r.required_date ? new Date(r.required_date).toLocaleDateString('en-PH') : '—',
+              paymentTerms: r.payment_terms ?? '—',
+              status: r.status ?? '—',
+              paymentStatus: r.payment_status ?? '—',
+              deliveryType: r.delivery_type ?? '—',
+              agent: r.agent_name ?? '—',
+              totalAmount: Number(r.total_amount ?? 0),
+              items: lineMap.get(r.id) ?? [],
+              orderNotes: r.order_notes ?? undefined,
+            },
+            customer: cust ? {
+              name: cust.name ?? '—',
+              type: cust.type ?? '—',
+              contactPerson: cust.contact_person ?? '—',
+              phone: cust.phone ?? '—',
+              email: cust.email ?? '—',
+              address: cust.address ?? '—',
+              city: cust.city ?? '—',
+              province: cust.province ?? '—',
+              postalCode: cust.postal_code ?? '',
+            } : null,
+          };
+        });
+
+        // Keep same order as trip.orders array
+        const orderIndex = new Map(trip.orders.map((id, i) => [id, i]));
+        result.sort((a, b) => (orderIndex.get(a.order.id) ?? 0) - (orderIndex.get(b.order.id) ?? 0));
+
+        setOrdersData(result);
+      } finally {
+        setOrdersLoading(false);
+      }
+    };
+
+    load();
+
     return () => {
       document.body.style.overflow = originalOverflow;
     };
-  }, [isOpen]);
+  }, [isOpen, trip.id]);
 
   if (!isOpen) return null;
 
-  // Fixed illustrative orders for demo purposes
-  const customersInTrip = [
-    {
-      order: {
-        id: 'ORD-2026-1234',
-        customer: 'ABC Hardware',
-        customerId: 'CUS-001',
-        orderDate: '2026-02-24',
-        requiredDate: '2026-02-26',
-        paymentTerms: '30 Days',
-        status: 'Approved',
-        paymentStatus: 'Unbilled',
-        deliveryType: 'Truck',
-        agent: 'Pedro Reyes',
-        totalAmount: 125500,
-        items: [
-          {
-            id: 'OL-1',
-            productName: 'UPVC Sanitary Pipe',
-            variantDescription: '4" x 10ft - Standard white',
-            quantity: 50,
-            unitPrice: 950,
-            lineTotal: 47500,
-          },
-          {
-            id: 'OL-2',
-            productName: 'PVC Elbow',
-            variantDescription: '4" - 90 degree',
-            quantity: 100,
-            unitPrice: 120,
-            lineTotal: 12000,
-          },
-          {
-            id: 'OL-3',
-            productName: 'Solvent Cement',
-            variantDescription: '500ml Industrial Grade',
-            quantity: 20,
-            unitPrice: 450,
-            lineTotal: 9000,
-          },
-        ],
-        orderNotes: 'Urgent delivery - Construction project deadline. Call before arrival.',
-      },
-      customer: {
-        name: 'ABC Hardware',
-        type: 'Hardware Store',
-        contactPerson: 'Roberto Santos',
-        phone: '+63 917 123 4567',
-        email: 'roberto@abchardware.com',
-        address: '123 Commonwealth Avenue',
-        city: 'Quezon City',
-        province: 'Metro Manila',
-        postalCode: '1121',
-      },
-    },
-    {
-      order: {
-        id: 'ORD-2026-1250',
-        customer: 'BuildPro Manila',
-        customerId: 'CUS-002',
-        orderDate: '2026-02-23',
-        requiredDate: '2026-02-26',
-        paymentTerms: '45 Days',
-        status: 'Approved',
-        paymentStatus: 'Unbilled',
-        deliveryType: 'Truck',
-        agent: 'Juan Dela Cruz',
-        totalAmount: 89750,
-        items: [
-          {
-            id: 'OL-4',
-            productName: 'PVC Conduit Pipe',
-            variantDescription: '3/4" x 10ft - Orange',
-            quantity: 75,
-            unitPrice: 380,
-            lineTotal: 28500,
-          },
-          {
-            id: 'OL-5',
-            productName: 'Junction Box',
-            variantDescription: '4" x 4" - Heavy duty',
-            quantity: 150,
-            unitPrice: 85,
-            lineTotal: 12750,
-          },
-          {
-            id: 'OL-6',
-            productName: 'PVC Coupling',
-            variantDescription: '3/4" - Standard',
-            quantity: 200,
-            unitPrice: 45,
-            lineTotal: 9000,
-          },
-        ],
-      },
-      customer: {
-        name: 'BuildPro Manila',
-        type: 'Construction Company',
-        contactPerson: 'Maria Gonzales',
-        phone: '+63 917 234 5678',
-        email: 'maria@buildpro.ph',
-        address: '456 Taft Avenue',
-        city: 'Manila',
-        province: 'Metro Manila',
-        postalCode: '1004',
-      },
-    },
-  ];
+  const customersInTrip = ordersData;
 
   const getStatusColor = (status: string) => {
     if (status === 'Completed' || status === 'Delivered') return 'success';
-    if (status === 'In Transit' || status === 'Loading' || status === 'Planned') return 'warning';
+    if (status === 'In Transit' || status === 'Loading' || status === 'Scheduled') return 'warning';
     if (status === 'Delayed' || status === 'Failed') return 'danger';
     return 'default';
   };
@@ -224,13 +251,26 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit }: TripDetailsM
           <div>
             <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
               <Package className="w-5 h-5 text-gray-600" />
-              Orders & Customers ({customersInTrip.length} order{customersInTrip.length > 1 ? 's' : ''})
+              Orders & Customers
+              {!ordersLoading && (
+                <span className="text-base font-normal text-gray-500">
+                  ({customersInTrip.length} order{customersInTrip.length !== 1 ? 's' : ''})
+                </span>
+              )}
             </h3>
-            
+
+            {ordersLoading ? (
+              <div className="flex items-center justify-center py-12 text-gray-400 gap-2">
+                <Loader2 className="w-5 h-5 animate-spin" />
+                <span className="text-sm">Loading orders…</span>
+              </div>
+            ) : customersInTrip.length === 0 ? (
+              <p className="text-sm text-gray-500 py-4">No orders assigned to this trip.</p>
+            ) : (
             <div className="space-y-4">
               {customersInTrip.map(({ order, customer }, index) => {
-                if (!order || !customer) return null;
-                
+                if (!order) return null;
+
                 return (
                   <div key={order.id} className="border border-gray-200 rounded-lg overflow-hidden w-full max-w-full">
                     {/* Customer Header */}
@@ -241,12 +281,15 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit }: TripDetailsM
                             <Badge variant="default" className="text-xs">
                               Stop {index + 1}
                             </Badge>
-                            <h4 className="font-bold text-gray-900 break-words">{customer.name}</h4>
-                            <Badge variant="outline" className="text-xs">
-                              {customer.type}
-                            </Badge>
+                            <h4 className="font-bold text-gray-900 break-words">{customer?.name ?? order.customer}</h4>
+                            {customer?.type && (
+                              <Badge variant="outline" className="text-xs">
+                                {customer.type}
+                              </Badge>
+                            )}
                           </div>
-                          
+
+                          {customer && (
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                             <div className="flex items-start gap-2 text-gray-600 min-w-0">
                               <MapPin className="w-4 h-4 text-gray-400" />
@@ -265,8 +308,9 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit }: TripDetailsM
                               <span className="break-words leading-relaxed">{customer.email}</span>
                             </div>
                           </div>
+                          )}
                         </div>
-                        
+
                         <div className="sm:ml-4">
                           <Badge variant={order.status === 'Approved' ? 'success' : 'warning'}>
                             {order.status}
@@ -280,7 +324,18 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit }: TripDetailsM
                       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
                         <div>
                           <p className="text-sm text-gray-500 mb-1">Order Number</p>
-                          <p className="text-base font-medium text-gray-900 break-words leading-relaxed">{order.id}</p>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="text-base font-medium text-gray-900 break-words leading-relaxed">{order.orderNumber}</p>
+                            <button
+                              type="button"
+                              onClick={() => { onClose(); navigate(`/orders/${order.id}`); }}
+                              className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-800 hover:underline"
+                              title="Go to order page"
+                            >
+                              <ExternalLink className="w-3.5 h-3.5" />
+                              View Order
+                            </button>
+                          </div>
                         </div>
                         <div>
                           <p className="text-sm text-gray-500 mb-1">Order Date</p>
@@ -388,6 +443,7 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit }: TripDetailsM
                 );
               })}
             </div>
+            )}
           </div>
 
           {/* Driver & Vehicle Information */}
@@ -441,12 +497,11 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit }: TripDetailsM
               <FileText className="w-5 h-5 text-gray-600" />
               Logistics Notes
             </h3>
-            <textarea
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm resize-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              rows={3}
-              placeholder="Add notes for driver, special delivery instructions, route changes, etc..."
-              defaultValue={trip.delayReason || ''}
-            />
+            {trip.delayReason ? (
+              <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{trip.delayReason}</p>
+            ) : (
+              <p className="text-sm text-gray-400 italic">No logistics notes for this trip.</p>
+            )}
           </div>
         </div>
 

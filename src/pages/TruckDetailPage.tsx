@@ -24,6 +24,8 @@ import {
   XCircle,
   Plus,
   Loader2,
+  X,
+  AlertTriangle,
 } from 'lucide-react';
 import type {
   TruckDetails,
@@ -36,7 +38,11 @@ import {
   fetchTruckDetailBundle,
   isFleetVehicleUuid,
   updateTruck,
+  scheduleMaintenance,
+  confirmMaintenance,
   type TruckFormPayload,
+  type ScheduleMaintenancePayload,
+  type ConfirmMaintenancePayload,
 } from '@/src/lib/fleetTrucks';
 import type { Vehicle } from '@/src/types/logistics';
 
@@ -71,6 +77,95 @@ export function TruckDetailPage() {
   const [savingEdit, setSavingEdit] = useState(false);
   const editSnapshotRef = useRef<string | null>(null);
   const isEditingRef = useRef(false);
+
+  // ── Maintenance modals ───────────────────────────────────────────────────
+  const today = new Date().toISOString().slice(0, 10);
+
+  const [showScheduleModal, setShowScheduleModal] = useState(false);
+  const [scheduleForm, setScheduleForm] = useState<ScheduleMaintenancePayload>({
+    description: '',
+    scheduledDate: today,
+  });
+  const [scheduleSaving, setScheduleSaving] = useState(false);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [confirmTarget, setConfirmTarget] = useState<MaintenanceRecord | null>(null);
+  const [confirmForm, setConfirmForm] = useState<ConfirmMaintenancePayload>({
+    completedDate: today,
+    notes: '',
+  });
+  const [confirmSaving, setConfirmSaving] = useState(false);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
+
+  /** Computed display status — 'Overdue' if past scheduled date and not completed. */
+  const getDisplayStatus = (
+    record: MaintenanceRecord,
+  ): 'Scheduled' | 'In Progress' | 'Completed' | 'Overdue' => {
+    if (record.dbStatus === 'Completed') return 'Completed';
+    if (record.scheduledDate && record.scheduledDate < today) return 'Overdue';
+    return (record.dbStatus as 'Scheduled' | 'In Progress') ?? 'Scheduled';
+  };
+
+  const openScheduleModal = () => {
+    setScheduleForm({
+      description: '',
+      scheduledDate: today,
+    });
+    setScheduleError(null);
+    setShowScheduleModal(true);
+  };
+
+  const openConfirmModal = (record: MaintenanceRecord) => {
+    setConfirmTarget(record);
+    setConfirmForm({
+      completedDate: today,
+      notes: '',
+    });
+    setConfirmError(null);
+    setShowConfirmModal(true);
+  };
+
+  const handleScheduleSave = async () => {
+    if (!vehicleId || !isFleetVehicleUuid(vehicleId)) return;
+    if (!scheduleForm.description.trim()) {
+      setScheduleError('Description is required.');
+      return;
+    }
+    if (!scheduleForm.scheduledDate) {
+      setScheduleError('Scheduled date is required.');
+      return;
+    }
+    setScheduleSaving(true);
+    setScheduleError(null);
+    const res = await scheduleMaintenance(vehicleId, scheduleForm);
+    setScheduleSaving(false);
+    if (!res.ok) {
+      setScheduleError(res.error ?? 'Could not schedule maintenance.');
+      return;
+    }
+    setShowScheduleModal(false);
+    setRefreshKey((k) => k + 1);
+  };
+
+  const handleConfirmSave = async () => {
+    if (!vehicleId || !confirmTarget) return;
+    if (!confirmForm.completedDate) {
+      setConfirmError('Completed date is required.');
+      return;
+    }
+    setConfirmSaving(true);
+    setConfirmError(null);
+    const res = await confirmMaintenance(confirmTarget.id, vehicleId, confirmForm);
+    setConfirmSaving(false);
+    if (!res.ok) {
+      setConfirmError(res.error ?? 'Could not confirm maintenance.');
+      return;
+    }
+    setShowConfirmModal(false);
+    setConfirmTarget(null);
+    setRefreshKey((k) => k + 1);
+  };
 
   useEffect(() => {
     isEditingRef.current = isEditing;
@@ -176,6 +271,11 @@ export function TruckDetailPage() {
   }
 
   const kmSinceLastMaintenance = Math.max(0, displayTotalDistanceKm - truck.mileageAtLastMaintenance);
+
+  const lastCompletedMaintenance = maintenanceHistory
+    .filter((r) => r.dbStatus === 'Completed')
+    .sort((a, b) => (b.completedDate ?? '').localeCompare(a.completedDate ?? ''))
+    [0] ?? null;
 
   const getStatusColor = (status: string) => {
     if (status === 'Available') return 'success';
@@ -343,10 +443,6 @@ export function TruckDetailPage() {
               )}
             </>
           )}
-          <Button variant="outline" size="sm" className="w-full sm:w-auto justify-center">
-            <Calendar className="w-4 h-4 mr-2" />
-            Schedule Trip
-          </Button>
         </div>
       </div>
 
@@ -949,25 +1045,44 @@ export function TruckDetailPage() {
                   <div className="space-y-4">
                     <div className="space-y-3">
                       <div className="flex items-start gap-2">
-                        <CheckCircle className="w-4 h-4 text-green-600 mt-0.5" />
-                        <div className="flex-1">
+                        <CheckCircle className="w-4 h-4 text-green-600 mt-0.5 flex-shrink-0" />
+                        <div className="flex-1 min-w-0">
                           <p className="text-sm font-medium text-gray-900">Last Maintenance</p>
-                          <p className="text-xs text-gray-600">{truck.lastMaintenanceDate}</p>
+                          <p className="text-xs text-gray-600">{truck.lastMaintenanceDate || '—'}</p>
+                          {lastCompletedMaintenance?.notes && (
+                            <p className="text-xs text-gray-500 mt-1 italic leading-snug">
+                              "{lastCompletedMaintenance.notes}"
+                            </p>
+                          )}
                         </div>
                       </div>
                       <div className="flex items-start gap-2">
-                        <Clock className="w-4 h-4 text-orange-600 mt-0.5" />
-                        <div className="flex-1">
+                        {truck.nextMaintenanceDue && truck.nextMaintenanceDue < today ? (
+                          <AlertTriangle className="w-4 h-4 text-red-600 mt-0.5 flex-shrink-0" />
+                        ) : (
+                          <Clock className="w-4 h-4 text-orange-600 mt-0.5 flex-shrink-0" />
+                        )}
+                        <div className="flex-1 min-w-0">
                           <p className="text-sm font-medium text-gray-900">Next Due</p>
-                          <p className="text-xs text-gray-600">{truck.nextMaintenanceDue}</p>
+                          <div className="flex flex-wrap items-center gap-2 mt-0.5">
+                            <p className="text-xs text-gray-600">{truck.nextMaintenanceDue || '—'}</p>
+                            {truck.nextMaintenanceDue && truck.nextMaintenanceDue !== '—' && truck.nextMaintenanceDue < today && (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-semibold bg-red-100 text-red-700">
+                                <AlertTriangle className="w-3 h-3" />
+                                Overdue
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </div>
 
-                    <Button variant="outline" size="sm" className="w-full">
-                      <Wrench className="w-3 h-3 mr-2" />
-                      Schedule Maintenance
-                    </Button>
+                    <div className="flex flex-col gap-2 pt-1">
+                      <Button variant="outline" size="sm" className="w-full justify-center" onClick={openScheduleModal}>
+                        <Wrench className="w-3 h-3 mr-2" />
+                        Schedule Maintenance
+                      </Button>
+                    </div>
                   </div>
                 </CardContent>
               </Card>
@@ -1215,74 +1330,315 @@ export function TruckDetailPage() {
               <CardHeader>
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                   <CardTitle>Maintenance History</CardTitle>
-                  <Button variant="primary" size="sm" className="w-full sm:w-auto justify-center">
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    className="w-full sm:w-auto justify-center bg-red-600 hover:bg-red-700"
+                    onClick={openScheduleModal}
+                  >
                     <Plus className="w-4 h-4 mr-2" />
-                    Add Maintenance Record
+                    Schedule Maintenance
                   </Button>
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="space-y-3">
-                  {maintenanceHistory.map((record) => (
-                    <div key={record.id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
-                      <div className="flex items-start justify-between mb-3">
-                        <div className="flex items-start gap-3">
-                          <div className={`p-2 rounded-lg ${
-                            record.category === 'Preventive' ? 'bg-green-100' :
-                            record.category === 'Corrective' ? 'bg-orange-100' :
-                            'bg-red-100'
-                          }`}>
-                            <Wrench className={`w-5 h-5 ${
-                              record.category === 'Preventive' ? 'text-green-600' :
-                              record.category === 'Corrective' ? 'text-orange-600' :
-                              'text-red-600'
-                            }`} />
+                {maintenanceHistory.length === 0 ? (
+                  <div className="text-center py-12 text-gray-500">
+                    <Wrench className="w-10 h-10 mx-auto mb-3 text-gray-300" />
+                    <p className="text-sm font-medium">No maintenance records yet</p>
+                    <p className="text-xs mt-1">Use "Schedule Maintenance" to add one.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {maintenanceHistory.map((record) => {
+                      const displayStatus = getDisplayStatus(record);
+                      const isActionable = displayStatus !== 'Completed';
+                      return (
+                        <div
+                          key={record.id}
+                          className={`border rounded-lg p-4 transition-shadow hover:shadow-md ${
+                            displayStatus === 'Overdue'
+                              ? 'border-red-200 bg-red-50'
+                              : displayStatus === 'Completed'
+                              ? 'border-gray-200'
+                              : 'border-orange-200 bg-orange-50'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between mb-3 gap-3">
+                            <div className="flex items-start gap-3 min-w-0 flex-1">
+                              <div
+                                className={`p-2 rounded-lg flex-shrink-0 ${
+                                  record.category === 'Preventive'
+                                    ? 'bg-green-100'
+                                    : record.category === 'Corrective'
+                                    ? 'bg-orange-100'
+                                    : 'bg-red-100'
+                                }`}
+                              >
+                                <Wrench
+                                  className={`w-5 h-5 ${
+                                    record.category === 'Preventive'
+                                      ? 'text-green-600'
+                                      : record.category === 'Corrective'
+                                      ? 'text-orange-600'
+                                      : 'text-red-600'
+                                  }`}
+                                />
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-2 mb-1">
+                                  <p className="font-semibold text-gray-900">{record.notes || record.type}</p>
+                                  <Badge
+                                    variant={
+                                      displayStatus === 'Completed'
+                                        ? 'success'
+                                        : displayStatus === 'Overdue'
+                                        ? 'danger'
+                                        : 'warning'
+                                    }
+                                  >
+                                    {displayStatus === 'Overdue' && (
+                                      <AlertTriangle className="w-3 h-3 mr-1 inline" />
+                                    )}
+                                    {displayStatus}
+                                  </Badge>
+                                </div>
+                                <p className="text-sm text-gray-600 break-words">{record.notes}</p>
+                              </div>
+                            </div>
+                            <div className="text-right flex-shrink-0">
+                              <p className="font-semibold text-gray-900">
+                                {record.cost > 0 ? `₱${record.cost.toLocaleString()}` : '—'}
+                              </p>
+                            </div>
                           </div>
-                          <div>
-                            <p className="font-semibold text-gray-900">{record.type}</p>
-                            <p className="text-sm text-gray-600 mt-1">{record.notes}</p>
+
+                          <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3 pt-3 border-t border-gray-200 text-sm">
+                            <div>
+                              <span className="text-gray-500 text-xs">Scheduled</span>
+                              <p className="font-medium text-gray-900">{record.scheduledDate ?? '—'}</p>
+                            </div>
+                            {record.completedDate && (
+                              <div>
+                                <span className="text-gray-500 text-xs">Completed</span>
+                                <p className="font-medium text-green-700">{record.completedDate}</p>
+                              </div>
+                            )}
+                            {record.serviceProvider && (
+                              <div>
+                                <span className="text-gray-500 text-xs">Vendor</span>
+                                <p className="font-medium text-gray-900">{record.serviceProvider}</p>
+                              </div>
+                            )}
+                            {record.mileage > 0 && (
+                              <div>
+                                <span className="text-gray-500 text-xs">Mileage</span>
+                                <p className="font-medium text-gray-900">{record.mileage.toLocaleString()} km</p>
+                              </div>
+                            )}
                           </div>
+
+                          {isActionable && (
+                            <div className="mt-3 pt-3 border-t border-gray-200 flex justify-end">
+                              <Button
+                                variant="primary"
+                                size="sm"
+                                className="bg-green-600 hover:bg-green-700 justify-center"
+                                onClick={() => openConfirmModal(record)}
+                              >
+                                <CheckCircle className="w-3.5 h-3.5 mr-1.5" />
+                                Confirm Maintenance Done
+                              </Button>
+                            </div>
+                          )}
                         </div>
-                        <div className="text-right">
-                          <p className="font-semibold text-gray-900">₱{record.cost.toLocaleString()}</p>
-                          <Badge variant={
-                            record.category === 'Preventive' ? 'success' :
-                            record.category === 'Corrective' ? 'warning' :
-                            'danger'
-                          }>
-                            {record.category}
-                          </Badge>
-                        </div>
-                      </div>
-                      
-                      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 pt-3 border-t border-gray-200 text-sm">
-                        <div>
-                          <span className="text-gray-500">Date</span>
-                          <p className="font-medium text-gray-900">{record.date}</p>
-                        </div>
-                        <div>
-                          <span className="text-gray-500">Mileage</span>
-                          <p className="font-medium text-gray-900">{record.mileage.toLocaleString()} km</p>
-                        </div>
-                        <div>
-                          <span className="text-gray-500">Service Provider</span>
-                          <p className="font-medium text-gray-900">{record.serviceProvider}</p>
-                        </div>
-                        {record.nextDue && (
-                          <div>
-                            <span className="text-gray-500">Next Due</span>
-                            <p className="font-medium text-gray-900">{record.nextDue}</p>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                      );
+                    })}
+                  </div>
+                )}
               </CardContent>
             </Card>
           </div>
         )}
       </div>
+
+      {/* ── Schedule Maintenance Modal ─────────────────────────────────────── */}
+      {showScheduleModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col">
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+              <div className="flex items-center gap-2">
+                <Wrench className="w-5 h-5 text-red-600" />
+                <h2 className="text-base font-semibold text-gray-900">Schedule Maintenance</h2>
+              </div>
+              <button
+                onClick={() => setShowScheduleModal(false)}
+                className="p-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="overflow-y-auto flex-1 px-6 py-5 space-y-4">
+              {scheduleError && (
+                <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+                  <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                  {scheduleError}
+                </div>
+              )}
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Description <span className="text-red-500">*</span>
+                </label>
+                <textarea
+                  rows={4}
+                  placeholder="e.g. Oil change & filter replacement, brake inspection, etc."
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-500 resize-none"
+                  value={scheduleForm.description}
+                  onChange={(e) => setScheduleForm((f) => ({ ...f, description: e.target.value }))}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Scheduled Date <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="date"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                  value={scheduleForm.scheduledDate}
+                  onChange={(e) => setScheduleForm((f) => ({ ...f, scheduledDate: e.target.value }))}
+                />
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-gray-200">
+              <Button variant="outline" size="sm" onClick={() => setShowScheduleModal(false)} disabled={scheduleSaving}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                className="bg-red-600 hover:bg-red-700"
+                onClick={handleScheduleSave}
+                disabled={scheduleSaving}
+              >
+                {scheduleSaving ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Saving…
+                  </>
+                ) : (
+                  <>
+                    <Calendar className="w-4 h-4 mr-2" />
+                    Schedule
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Confirm Maintenance Modal ──────────────────────────────────────── */}
+      {showConfirmModal && confirmTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col">
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+              <div className="flex items-center gap-2">
+                <CheckCircle className="w-5 h-5 text-green-600" />
+                <h2 className="text-base font-semibold text-gray-900">Confirm Maintenance Done</h2>
+              </div>
+              <button
+                onClick={() => setShowConfirmModal(false)}
+                className="p-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="overflow-y-auto flex-1 px-6 py-5 space-y-4">
+              {/* Summary of the record being confirmed */}
+              <div className="p-3 bg-gray-50 rounded-lg border border-gray-200 text-sm space-y-1">
+                <p className="font-medium text-gray-900">{confirmTarget.notes || confirmTarget.type}</p>
+                <p className="text-gray-500">
+                  {confirmTarget.category} •{' '}
+                  Scheduled: {confirmTarget.scheduledDate ?? '—'}
+                </p>
+                {getDisplayStatus(confirmTarget) === 'Overdue' && (
+                  <div className="flex items-center gap-1 mt-1 text-red-700 font-medium">
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                    This maintenance is overdue
+                  </div>
+                )}
+              </div>
+
+              {confirmError && (
+                <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+                  <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                  {confirmError}
+                </div>
+              )}
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Date Completed <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="date"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                  value={confirmForm.completedDate}
+                  onChange={(e) => setConfirmForm((f) => ({ ...f, completedDate: e.target.value }))}
+                />
+                <p className="text-xs text-gray-500 mt-1">Can be any date — before or after scheduled date.</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+                <textarea
+                  rows={3}
+                  placeholder="Any remarks about the completed maintenance"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 resize-none"
+                  value={confirmForm.notes ?? ''}
+                  onChange={(e) => setConfirmForm((f) => ({ ...f, notes: e.target.value }))}
+                />
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-gray-200">
+              <Button variant="outline" size="sm" onClick={() => setShowConfirmModal(false)} disabled={confirmSaving}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                className="bg-green-600 hover:bg-green-700"
+                onClick={handleConfirmSave}
+                disabled={confirmSaving}
+              >
+                {confirmSaving ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Saving…
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle className="w-4 h-4 mr-2" />
+                    Confirm Completed
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
