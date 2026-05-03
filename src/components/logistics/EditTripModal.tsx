@@ -36,7 +36,8 @@ type OrderDetail = {
   status: string;
 };
 
-const TRIP_STATUSES = ['Pending', 'Scheduled', 'Loading', 'In Transit', 'Delayed', 'Completed', 'Failed'] as const;
+const TRIP_STATUSES = ['Scheduled', 'Loading', 'Packed', 'Ready', 'In Transit', 'Delayed', 'Delivered', 'Cancelled'] as const;
+const ORDER_STATUSES = ['Pending', 'Approved', 'Scheduled', 'Loading', 'In Transit', 'Delivered', 'Cancelled', 'On Hold'] as const;
 
 function orderStatusBadge(status: string) {
   switch (status) {
@@ -84,6 +85,10 @@ export function EditTripModal({
     setVehicleId(trip.vehicleId ?? '');
     setDriverId(trip.driverId ?? '');
     setTripOrderIds(trip.orders ?? []);
+    // initialize per-order statuses from trip orders — will be overwritten once DB fetch completes
+    const init: Record<string, string> = {};
+    (trip.orders ?? []).forEach((id) => { init[id] = 'Scheduled'; });
+    setOrderStatuses(init);
     setNotes(trip.delayReason ?? '');
     setSaveError('');
     setOrderSearch('');
@@ -108,9 +113,17 @@ export function EditTripModal({
             destination: ((o.delivery_address as string) || '').split(/[\n,]/)[0]?.trim()?.slice(0, 80) || '—',
             weight: num(o.weight_kg, 10),
             volume: num(o.volume_cbm, 0.05),
-            status: (o.status as string) ?? 'Unknown',
+            status: (o.status as string) ?? 'Scheduled',
           }))
         );
+        // seed per-order statuses from real DB status
+        setOrderStatuses((prev) => {
+          const next = { ...prev };
+          (data ?? []).forEach((o) => {
+            next[o.id as string] = (o.status as string) ?? 'Scheduled';
+          });
+          return next;
+        });
         setOrdersLoading(false);
       });
   }, [isOpen, trip.orders]);
@@ -142,8 +155,18 @@ export function EditTripModal({
     return !q || o.orderNumber.toLowerCase().includes(q) || o.customer.toLowerCase().includes(q) || o.destination.toLowerCase().includes(q);
   });
 
-  const handleRemoveOrder = (id: string) => setTripOrderIds((prev) => prev.filter((oid) => oid !== id));
-  const handleAddOrder = (id: string) => setTripOrderIds((prev) => [...prev, id]);
+  const handleRemoveOrder = (id: string) => {
+    setTripOrderIds((prev) => prev.filter((oid) => oid !== id));
+    setOrderStatuses((s) => {
+      const copy = { ...s };
+      delete copy[id];
+      return copy;
+    });
+  };
+  const handleAddOrder = (id: string) => {
+    setTripOrderIds((prev) => [...prev, id]);
+    setOrderStatuses((s) => ({ ...s, [id]: allOrdersMap.get(id)?.status ?? 'Scheduled' }));
+  };
 
   const handleSave = async () => {
     if (!vehicleId) { setSaveError('Please select a truck.'); return; }
@@ -163,6 +186,7 @@ export function EditTripModal({
         totalWeightKg: Math.round(totalWeight * 100) / 100,
         totalVolumeCbm: Math.round(totalVolume * 1000) / 1000,
         notes,
+        orderStatuses,
       });
     } catch (e: unknown) {
       setSaveError((e as Error)?.message ?? 'Save failed.');
@@ -285,9 +309,10 @@ export function EditTripModal({
             ) : tripOrderIds.length === 0 ? (
               <p className="text-sm text-gray-400 italic py-2">No orders assigned to this trip yet.</p>
             ) : (
-              <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+              <div className="space-y-3">
                 {tripOrderIds.map((id) => {
                   const o = allOrdersMap.get(id);
+                  const orderSt = orderStatuses[id] ?? 'Scheduled';
                   if (!o) return (
                     <div key={id} className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2 text-xs text-gray-400">
                       <span className="font-mono">{id.slice(0, 8)}…</span>
@@ -298,21 +323,38 @@ export function EditTripModal({
                     </div>
                   );
                   return (
-                    <div key={id} className="flex items-center justify-between bg-blue-50 border border-blue-100 rounded-lg px-3 py-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2 flex-wrap">
+                    <div key={id} className="bg-blue-50 border border-blue-100 rounded-lg px-3 py-3 space-y-2">
+                      {/* Top row: order number + remove */}
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
                           <span className="text-sm font-semibold text-blue-800">{o.orderNumber}</span>
-                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${orderStatusBadge(o.status)}`}>{o.status}</span>
+                          <p className="text-xs text-gray-600 mt-0.5">{o.customer}</p>
+                          <p className="text-xs text-gray-500 truncate">{o.destination}</p>
                         </div>
-                        <p className="text-xs text-gray-600 mt-0.5">{o.customer}</p>
-                        <p className="text-xs text-gray-500 mt-0.5 truncate">{o.destination}</p>
+                        <div className="flex items-center gap-3 flex-shrink-0">
+                          <span className="text-xs text-gray-500 hidden sm:block">{o.weight.toFixed(0)} kg · {o.volume.toFixed(2)} m³</span>
+                          <button type="button" onClick={() => handleRemoveOrder(id)}
+                            className="p-1 rounded hover:bg-red-100 text-red-500 transition-colors" title="Remove from trip">
+                            <Minus className="w-4 h-4" />
+                          </button>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-3 ml-3 flex-shrink-0">
-                        <span className="text-xs text-gray-500 hidden sm:block">{o.weight.toFixed(0)} kg · {o.volume.toFixed(2)} m³</span>
-                        <button type="button" onClick={() => handleRemoveOrder(id)}
-                          className="p-1 rounded hover:bg-red-100 text-red-500 transition-colors" title="Remove from trip">
-                          <Minus className="w-4 h-4" />
-                        </button>
+                      {/* Per-order status selector */}
+                      <div>
+                        <p className="text-xs font-medium text-gray-500 mb-1.5">Order Status</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {ORDER_STATUSES.map((s) => (
+                            <button key={s} type="button"
+                              onClick={() => setOrderStatuses((prev) => ({ ...prev, [id]: s }))}
+                              className={`px-2.5 py-1 rounded-md border text-xs transition-colors ${
+                                orderSt === s
+                                  ? 'border-blue-600 bg-blue-600 text-white font-semibold'
+                                  : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300'
+                              }`}>
+                              {s}
+                            </button>
+                          ))}
+                        </div>
                       </div>
                     </div>
                   );

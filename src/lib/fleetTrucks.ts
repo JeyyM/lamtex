@@ -9,6 +9,103 @@ import type {
   TruckAlert,
 } from '@/src/mock/truckDetails';
 
+// ─── Vehicle ↔ Trip sync ──────────────────────────────────────────────────────
+
+export type TripSyncPayload = {
+  tripId: string;
+  tripNumber: string;
+  vehicleId: string;         // vehicles.id UUID
+  driverName: string;
+  scheduledDate: string;     // YYYY-MM-DD
+  destinations: string[];
+  ordersCount: number;
+  capacityUsedPercent: number;
+  branchId?: string | null;
+};
+
+/**
+ * Called when a trip becomes active (Loading / In Transit).
+ * Sets vehicles.status = 'On Trip' and vehicles.current_trip_id.
+ */
+export async function syncVehicleOnTripStart(p: Pick<TripSyncPayload, 'vehicleId' | 'tripId'>): Promise<void> {
+  if (!p.vehicleId) return;
+  await supabase
+    .from('vehicles')
+    .update({ status: 'On Trip', current_trip_id: p.tripId, updated_at: new Date().toISOString() })
+    .eq('id', p.vehicleId);
+}
+
+/**
+ * Called when a trip reaches a terminal status (Complete / Delivered / Cancelled).
+ * - Sets vehicles.status = 'Available', clears current_trip_id
+ * - Increments vehicles.trips_today
+ * - Recalculates vehicles.utilization_percent (rolling avg of last 10 trips for this vehicle)
+ * - Inserts a record into trip_history
+ */
+export async function syncVehicleOnTripComplete(
+  p: TripSyncPayload,
+  finalStatus: 'Completed' | 'Failed' | 'Complete' | 'Delivered' | 'Cancelled',
+): Promise<void> {
+  if (!p.vehicleId) return;
+  // Map app-level statuses to DB enum values for trip_history
+  const dbStatus: 'Completed' | 'Failed' =
+    finalStatus === 'Cancelled' || finalStatus === 'Failed' ? 'Failed' : 'Completed';
+  const now = new Date().toISOString();
+
+  // 1. Fetch current trips_today so we can increment it
+  const { data: vrow } = await supabase
+    .from('vehicles')
+    .select('trips_today, utilization_percent')
+    .eq('id', p.vehicleId)
+    .maybeSingle();
+
+  const tripsToday = (Number((vrow as { trips_today?: number } | null)?.trips_today) || 0) + 1;
+
+  // 2. Rolling utilization: average capacity of last 10 trips for this vehicle in trip_history
+  const { data: recent } = await supabase
+    .from('trip_history')
+    .select('delivery_success_rate')
+    .eq('vehicle_id', p.vehicleId)
+    .order('created_at', { ascending: false })
+    .limit(9);
+
+  const pastRates = ((recent ?? []) as { delivery_success_rate?: number | null }[])
+    .map((r) => Number(r.delivery_success_rate ?? 0))
+    .filter((n) => Number.isFinite(n));
+  const allRates = [...pastRates, p.capacityUsedPercent];
+  const avgUtil = Math.round(allRates.reduce((s, v) => s + v, 0) / allRates.length);
+
+  // 3. Update vehicle
+  await supabase
+    .from('vehicles')
+    .update({
+      status: 'Available',
+      current_trip_id: null,
+      trips_today: tripsToday,
+      utilization_percent: avgUtil,
+      updated_at: now,
+    })
+    .eq('id', p.vehicleId);
+
+  // 4. Insert trip_history row (upsert on trip_id to avoid duplicates)
+  await supabase.from('trip_history').upsert(
+    {
+      trip_id: p.tripId,
+      trip_number: p.tripNumber,
+      vehicle_id: p.vehicleId,
+      driver_name: p.driverName,
+      scheduled_date: p.scheduledDate,
+      destinations: p.destinations,
+      orders_count: p.ordersCount,
+      delivery_success_rate: p.capacityUsedPercent,
+      status: dbStatus,
+      branch_id: p.branchId ?? null,
+      created_at: now,
+    },
+    { onConflict: 'trip_id', ignoreDuplicates: false },
+  );
+}
+
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -407,17 +504,17 @@ function parseTruckFormNumericFields(
   form: TruckFormPayload,
 ): { ok: true; nums: TruckFormNumericFields } | { ok: false; error: string } {
   const w = parseOptionalNonNegNumber('Max weight (kg)', form.maxWeightKg);
-  if (!w.ok) return w;
+  if (!w.ok) return w as { ok: false; error: string };
   const v = parseOptionalNonNegNumber('Max volume (m³)', form.maxVolumeCbm);
-  if (!v.ok) return v;
+  if (!v.ok) return v as { ok: false; error: string };
   const o = parseOptionalNonNegNumber('Total distance (km)', form.currentOdometerKm);
-  if (!o.ok) return o;
+  if (!o.ok) return o as { ok: false; error: string };
   const l = parseOptionalNonNegNumberOrNull('Length (m)', form.lengthM);
-  if (!l.ok) return l;
+  if (!l.ok) return l as { ok: false; error: string };
   const wDim = parseOptionalNonNegNumberOrNull('Width (m)', form.widthM);
-  if (!wDim.ok) return wDim;
+  if (!wDim.ok) return wDim as { ok: false; error: string };
   const h = parseOptionalNonNegNumberOrNull('Height (m)', form.heightM);
-  if (!h.ok) return h;
+  if (!h.ok) return h as { ok: false; error: string };
   return {
     ok: true,
     nums: {
@@ -489,7 +586,7 @@ export async function createTruck(
     return { ok: false, error: 'Vehicle code and name are required.' };
   }
   const parsed = parseTruckFormNumericFields(form);
-  if (!parsed.ok) return { ok: false, error: parsed.error };
+  if (!parsed.ok) return { ok: false, error: (parsed as { ok: false; error: string }).error };
   const row = formToDbRow(form, bid, { isCreate: true }, parsed.nums);
   const { error } = await supabase.from('vehicles').insert(row);
   if (error) return { ok: false, error: error.message };
@@ -513,7 +610,7 @@ export async function updateTruck(
   const code = form.vehicleId.trim().toUpperCase();
   if (!code) return { ok: false, error: 'Vehicle code is required.' };
   const parsed = parseTruckFormNumericFields(form);
-  if (!parsed.ok) return { ok: false, error: parsed.error };
+  if (!parsed.ok) return { ok: false, error: (parsed as { ok: false; error: string }).error };
 
   const bid = await resolveBranchIdByName(form.branchName.trim());
   if (!bid) return { ok: false, error: 'Could not find a branch with that name.' };

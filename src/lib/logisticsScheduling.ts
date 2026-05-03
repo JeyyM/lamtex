@@ -8,8 +8,8 @@ import type { OrderReadyForDispatch, Trip, DriverOption } from '@/src/types/logi
 
 const QUEUE_STATUSES = ['Approved'] as const;
 
-/** Trips that still “hold” assigned orders on the truck/driver calendar. */
-const ACTIVE_TRIP_STATUSES = ['Pending', 'Scheduled', 'Loading', 'In Transit', 'Delayed'] as const;
+/** Trips that still "hold" assigned orders on the truck/driver calendar. */
+const ACTIVE_TRIP_STATUSES = ['Scheduled', 'Loading', 'Packed', 'Ready', 'In Transit', 'Delayed'] as const;
 
 function num(n: unknown, fallback = 0): number {
   if (n == null || n === '') return fallback;
@@ -24,17 +24,32 @@ function fmtDate(d: string | null | undefined): string {
 
 function mapDbTripStatus(s: string): Trip['status'] {
   const allowed: Trip['status'][] = [
-    'Pending',
     'Scheduled',
     'Loading',
+    'Packed',
+    'Ready',
     'In Transit',
-    'Completed',
     'Delayed',
-    'Failed',
+    'Delivered',
+    'Cancelled',
+    'Complete',
   ];
-  // Accept legacy 'Planned' from DB rows and treat as 'Scheduled'
-  if (s === 'Planned') return 'Scheduled';
+  // Accept legacy DB values and map to new app-facing statuses
+  if (s === 'Planned' || s === 'Pending') return 'Scheduled';
+  if (s === 'Completed') return 'Complete';
+  if (s === 'Failed') return 'Cancelled';
   return (allowed.includes(s as Trip['status']) ? s : 'Scheduled') as Trip['status'];
+}
+
+/** Reverse of mapDbTripStatus: converts app-facing status to the DB enum value. */
+function toDbTripStatus(s: string): string {
+  // DB enum: 'Pending' | 'Planned' | 'Loading' | 'In Transit' | 'Completed' | 'Delayed' | 'Failed'
+  if (s === 'Scheduled') return 'Planned';
+  if (s === 'Complete') return 'Completed';
+  if (s === 'Packed' || s === 'Ready') return 'Loading';
+  if (s === 'Delivered') return 'Completed';
+  if (s === 'Cancelled') return 'Failed';
+  return s;
 }
 
 /** Branch depot / HQ pin from company_settings (for route map origin). */
@@ -272,9 +287,7 @@ export async function createTripFromPlanning(params: {
       vehicle_name: (veh.vehicle_name as string) ?? null,
       driver_id: params.driverUuid ?? null,
       driver_name: params.driverName ?? null,
-      status: 'Scheduled',
-      scheduled_date: d,
-      order_ids: params.orderUuids,
+      status: toDbTripStatus('Scheduled'),
       destinations: [],
       weight_used_kg: params.totalWeightKg,
       volume_used_cbm: params.totalVolumeCbm,
@@ -323,6 +336,7 @@ export async function updateTrip(params: {
   totalWeightKg: number;
   totalVolumeCbm: number;
   notes?: string;
+  orderStatuses?: Record<string, string>;
 }): Promise<{ ok: boolean; error?: string }> {
   const { data: veh, error: vErr } = await supabase
     .from('vehicles')
@@ -340,7 +354,7 @@ export async function updateTrip(params: {
   const { error: updErr } = await supabase
     .from('trips')
     .update({
-      status: params.status,
+      status: toDbTripStatus(params.status),
       vehicle_id: params.vehicleUuid,
       vehicle_name: params.vehicleName,
       driver_id: params.driverUuid,
@@ -367,13 +381,14 @@ export async function updateTrip(params: {
       .in('id', removed);
   }
 
-  // Orders newly added to this trip → mark as Scheduled
-  const added = params.orderUuids.filter((id) => !params.previousOrderUuids.includes(id));
-  if (added.length > 0) {
+  // Apply per-order status from the editor; fall back to 'Scheduled' for any without explicit status
+  const now = new Date().toISOString();
+  for (const id of params.orderUuids) {
+    const orderSt = params.orderStatuses?.[id] ?? 'Scheduled';
     await supabase
       .from('orders')
-      .update({ status: 'Scheduled', updated_at: new Date().toISOString() })
-      .in('id', added);
+      .update({ status: orderSt, updated_at: now })
+      .eq('id', id);
   }
 
   return { ok: true };

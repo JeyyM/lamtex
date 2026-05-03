@@ -41,6 +41,9 @@ import {
   ChevronLeft,
   ChevronRight,
   RefreshCw,
+  ArrowUp,
+  ArrowDown,
+  ArrowUpDown,
 } from 'lucide-react';
 import {
   getTripsByBranch,
@@ -61,8 +64,9 @@ import { RoutePlanningView } from '@/src/components/logistics/RoutePlanningView'
 import { TripDetailsModal } from '@/src/components/logistics/TripDetailsModal';
 import { EditTripModal } from '@/src/components/logistics/EditTripModal';
 import { Vehicle, Trip, OrderReadyForDispatch } from '@/src/types/logistics';
-import { fetchFleetTrucksForBranch } from '@/src/lib/fleetTrucks';
+import { fetchFleetTrucksForBranch, syncVehicleOnTripStart, syncVehicleOnTripComplete } from '@/src/lib/fleetTrucks';
 import { TruckFormModal } from '@/src/components/logistics/TruckFormModal';
+import { supabase } from '@/src/lib/supabase';
 
 type ViewMode = 'dispatch' | 'fleet' | 'routes' | 'shipments';
 type TransportType = 'truck' | 'interisland';
@@ -89,7 +93,10 @@ export function LogisticsPage() {
   const [showTripDetails, setShowTripDetails] = useState(false);
   const [showEditTrip, setShowEditTrip] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [filterStatus, setFilterStatus] = useState<string>('Scheduled');
+  const [filterStatus, setFilterStatus] = useState<string>('All');
+  const [showCompleted, setShowCompleted] = useState(false);
+  const [tripSortKey, setTripSortKey] = useState<string>('scheduledDate');
+  const [tripSortDir, setTripSortDir] = useState<'asc' | 'desc'>('asc');
   const [selectedCalendarTrip, setSelectedCalendarTrip] = useState<Trip | null>(null);
   const [fleetTrucks, setFleetTrucks] = useState<Vehicle[]>([]);
 
@@ -112,6 +119,12 @@ export function LogisticsPage() {
   const [branchHq, setBranchHq] = useState<{ lat: number; lng: number } | null>(null);
 
   const [planningDrivers, setPlanningDrivers] = useState<import('@/src/types/logistics').DriverOption[]>([]);
+  // Lowest order dispatch-stage per trip (for the dispatch table badge)
+  const [tripLowestOrderStatus, setTripLowestOrderStatus] = useState<Record<string, string>>({});
+  // Full per-trip order status map — used for real-time badge updates
+  const [tripOrderStatusMap, setTripOrderStatusMap] = useState<Record<string, Record<string, string>>>({});
+  const lowestOrderStatus = (tripId: string, tripStatus: string) =>
+    tripLowestOrderStatus[tripId] ?? tripStatus;
 
   const routePlanningPrefill = useMemo(() => {
     const q = new URLSearchParams(search);
@@ -139,6 +152,33 @@ export function LogisticsPage() {
       setPlanningOrders(oq.orders);
       setScheduleTrips(tq.trips);
       setLogisticsFromDb(true);
+      // Fetch order statuses for all trips to show lowest-stage badge in dispatch table
+      const allOrderIds = [...new Set(tq.trips.flatMap((t) => t.orders))];
+      if (allOrderIds.length) {
+        const { data: orderRows } = await supabase
+          .from('orders')
+          .select('id, status')
+          .in('id', allOrderIds);
+        const statusMap: Record<string, string> = {};
+        for (const row of orderRows ?? []) statusMap[row.id as string] = (row.status as string) ?? 'Scheduled';
+        const RANK: Record<string, number> = { Scheduled: 1, Loading: 2, Packed: 3, Ready: 4, 'In Transit': 5, Delivered: 6, Complete: 7, Delayed: 8, Cancelled: 9 };
+        const lowest: Record<string, string> = {};
+        const perTripMap: Record<string, Record<string, string>> = {};
+        for (const trip of tq.trips) {
+          if (!trip.orders.length) continue;
+          let lowestRank = Infinity; let lowestSt: string = trip.status;
+          perTripMap[trip.id] = {};
+          for (const oid of trip.orders) {
+            const st = statusMap[oid] ?? 'Scheduled';
+            perTripMap[trip.id][oid] = st;
+            const rank = RANK[st] ?? 99;
+            if (rank < lowestRank) { lowestRank = rank; lowestSt = st; }
+          }
+          lowest[trip.id] = lowestSt;
+        }
+        setTripLowestOrderStatus(lowest);
+        setTripOrderStatusMap(perTripMap);
+      }
     }
   }, [branch]);
 
@@ -226,19 +266,73 @@ export function LogisticsPage() {
     return m;
   }, [trips]);
 
+  // Sort + filter helpers
+  const handleTripSort = (key: string) => {
+    if (tripSortKey === key) setTripSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setTripSortKey(key); setTripSortDir('asc'); }
+  };
+  const tripSortIcon = (col: string) => {
+    if (tripSortKey !== col) return <ArrowUpDown className="w-3 h-3 ml-1 inline opacity-40" />;
+    return tripSortDir === 'asc'
+      ? <ArrowUp className="w-3 h-3 ml-1 text-red-600 inline" />
+      : <ArrowDown className="w-3 h-3 ml-1 text-red-600 inline" />;
+  };
+
   // Filter trips
-  const filteredTrips = trips.filter(trip => {
-    const matchesSearch = trip.tripNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         trip.driverName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         trip.destinations.some(d => d.toLowerCase().includes(searchQuery.toLowerCase()));
-    const matchesStatus = filterStatus === 'All' || trip.status === filterStatus;
-    return matchesSearch && matchesStatus;
-  });
+  const filteredTrips = useMemo(() => {
+    const filtered = trips.filter(trip => {
+      const matchesSearch = trip.tripNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                           trip.driverName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                           trip.destinations.some(d => d.toLowerCase().includes(searchQuery.toLowerCase()));
+      const matchesStatus = filterStatus === 'All'
+        ? (showCompleted || (trip.status !== 'Complete' && trip.status !== 'Delivered' && trip.status !== 'Cancelled'))
+        : trip.status === filterStatus;
+      return matchesSearch && matchesStatus;
+    });
+
+    return [...filtered].sort((a, b) => {
+      let av: string | number;
+      let bv: string | number;
+      switch (tripSortKey) {
+        case 'vehicleName':
+          av = a.vehicleName.toLowerCase();
+          bv = b.vehicleName.toLowerCase();
+          break;
+        case 'driverName':
+          av = (a.driverName || '').toLowerCase();
+          bv = (b.driverName || '').toLowerCase();
+          break;
+        case 'scheduledDate':
+          av = a.departureTime || a.scheduledDate || '';
+          bv = b.departureTime || b.scheduledDate || '';
+          break;
+        case 'orders':
+          av = a.orders.length;
+          bv = b.orders.length;
+          break;
+        case 'status':
+          av = lowestOrderStatus(a.id, a.status);
+          bv = lowestOrderStatus(b.id, b.status);
+          break;
+        default:
+          av = a.scheduledDate || '';
+          bv = b.scheduledDate || '';
+      }
+      if (typeof av === 'number' && typeof bv === 'number') {
+        return tripSortDir === 'asc' ? av - bv : bv - av;
+      }
+      const as = String(av); const bs = String(bv);
+      if (as < bs) return tripSortDir === 'asc' ? -1 : 1;
+      if (as > bs) return tripSortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [trips, searchQuery, filterStatus, showCompleted, tripSortKey, tripSortDir, tripLowestOrderStatus]);
 
   const getStatusColor = (status: string) => {
-    if (status === 'Completed' || status === 'Delivered' || status === 'Available') return 'success';
-    if (status === 'In Transit' || status === 'Loading' || status === 'Scheduled' || status === 'On Trip') return 'warning';
+    if (status === 'Complete' || status === 'Completed' || status === 'Delivered' || status === 'Available') return 'success';
+    if (status === 'In Transit' || status === 'Loading' || status === 'Packed' || status === 'Ready' || status === 'Scheduled' || status === 'On Trip') return 'warning';
     if (status === 'Delayed' || status === 'Failed' || status === 'Blocked' || status === 'Maintenance' || status === 'Out of Service') return 'danger';
+    if (status === 'Cancelled') return 'danger';
     return 'default';
   };
 
@@ -388,12 +482,13 @@ export function LogisticsPage() {
                 >
                   <option value="All">All Statuses</option>
                   <option value="Scheduled">Scheduled</option>
-                  <option value="Pending">Pending</option>
                   <option value="Loading">Loading</option>
+                  <option value="Packed">Packed</option>
+                  <option value="Ready">Ready</option>
                   <option value="In Transit">In Transit</option>
                   <option value="Delayed">Delayed</option>
-                  <option value="Completed">Completed</option>
-                  <option value="Failed">Failed</option>
+                  <option value="Delivered">Delivered</option>
+                  <option value="Cancelled">Cancelled</option>
                 </select>
                 <Button variant="outline" className="w-full lg:w-auto justify-center">
                   <Filter className="w-4 h-4 mr-2" />
@@ -581,6 +676,15 @@ export function LogisticsPage() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle>{transportType === 'truck' ? 'Dispatch Queue' : 'Shipment Queue'}</CardTitle>
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <span className="text-xs text-gray-500 font-medium">Show Completed</span>
+                <div
+                  onClick={() => setShowCompleted(v => !v)}
+                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${showCompleted ? 'bg-red-600' : 'bg-gray-300'}`}
+                >
+                  <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${showCompleted ? 'translate-x-4' : 'translate-x-1'}`} />
+                </div>
+              </label>
             </CardHeader>
             <CardContent className="p-0">
               {transportType === 'truck' ? (
@@ -590,60 +694,48 @@ export function LogisticsPage() {
                 <table className="w-full">
                   <thead className="bg-gray-50 border-b border-gray-200">
                     <tr>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Trip Details
-                      </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Vehicle & Driver
+                      <th
+                        onClick={() => handleTripSort('vehicleName')}
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                      >
+                        <span className="inline-flex items-center">Vehicle & Driver{tripSortIcon('vehicleName')}</span>
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Route
                       </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Schedule
+                      <th
+                        onClick={() => handleTripSort('scheduledDate')}
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                      >
+                        <span className="inline-flex items-center">Schedule{tripSortIcon('scheduledDate')}</span>
                       </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Orders
+                      <th
+                        onClick={() => handleTripSort('orders')}
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                      >
+                        <span className="inline-flex items-center">Orders{tripSortIcon('orders')}</span>
                       </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Status
-                      </th>
-                      <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Actions
+                      <th
+                        onClick={() => handleTripSort('status')}
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                      >
+                        <span className="inline-flex items-center">Status{tripSortIcon('status')}</span>
                       </th>
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
                     {filteredTrips.map((trip) => (
-                      <tr key={trip.id} className="hover:bg-gray-50">
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="flex items-center gap-2">
-                            <div className={`p-2 rounded-lg ${
-                              trip.status === 'In Transit' ? 'bg-blue-100' :
-                              trip.status === 'Completed' ? 'bg-green-100' :
-                              trip.status === 'Delayed' ? 'bg-red-100' :
-                              'bg-gray-100'
-                            }`}>
-                              {trip.status === 'In Transit' && <Navigation className="w-4 h-4 text-blue-600" />}
-                              {trip.status === 'Completed' && <CheckCircle className="w-4 h-4 text-green-600" />}
-                              {trip.status === 'Delayed' && <AlertTriangle className="w-4 h-4 text-red-600" />}
-                              {trip.status === 'Scheduled' && <Calendar className="w-4 h-4 text-gray-600" />}
-                              {trip.status === 'Loading' && <Package className="w-4 h-4 text-yellow-600" />}
-                            </div>
-                            <div>
-                              <div className="text-sm font-medium text-gray-900">{trip.tripNumber}</div>
-                              <div className="text-xs text-gray-500">
-                                {trip.orders.length} order{trip.orders.length > 1 ? 's' : ''}
-                              </div>
-                            </div>
-                          </div>
-                        </td>
+                      <tr
+                        key={trip.id}
+                        className="hover:bg-gray-50 cursor-pointer"
+                        onClick={() => { setSelectedTrip(trip); setShowTripDetails(true); }}
+                      >
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="flex items-center gap-2">
                             <Truck className="w-4 h-4 text-gray-400" />
                             <div>
                               <div className="text-sm font-medium text-gray-900">{trip.vehicleName}</div>
-                              <div className="text-xs text-gray-500">{trip.driverName}</div>
+                              <div className="text-xs text-gray-500">{trip.driverName || '—'}</div>
                             </div>
                           </div>
                         </td>
@@ -662,38 +754,15 @@ export function LogisticsPage() {
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="text-sm text-gray-900">{trip.departureTime || trip.scheduledDate}</div>
-                          <div className="text-xs text-gray-500">ETA: {trip.eta || 'TBD'}</div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="text-sm text-gray-900">{trip.orders.length} orders</div>
-                          <div className="text-xs text-gray-500">
-                            {trip.capacityUsed}% full
-                          </div>
+                          <div className="text-sm text-gray-900">{trip.orders.length} order{trip.orders.length !== 1 ? 's' : ''}</div>
+                          <div className="text-xs text-gray-500">{trip.capacityUsed}% full</div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
-                          <Badge variant={getStatusColor(trip.status)}>
-                            {trip.status}
+                          <Badge variant={getStatusColor(lowestOrderStatus(trip.id, trip.status))}>
+                            {lowestOrderStatus(trip.id, trip.status)}
                           </Badge>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-right text-sm">
-                          <div className="flex items-center justify-end gap-2">
-                            <button
-                              onClick={() => {
-                                setSelectedTrip(trip);
-                                setShowTripDetails(true);
-                              }}
-                              className="text-blue-600 hover:text-blue-800"
-                              title="View Details"
-                            >
-                              <FileText className="w-4 h-4" />
-                            </button>
-                            <button
-                              className="text-gray-600 hover:text-gray-800"
-                              title="Contact Driver"
-                            >
-                              <Phone className="w-4 h-4" />
-                            </button>
-                          </div>
                         </td>
                       </tr>
                     ))}
@@ -703,23 +772,27 @@ export function LogisticsPage() {
 
               <div className="md:hidden divide-y divide-gray-200">
                 {filteredTrips.map((trip) => (
-                  <div key={trip.id} className="p-4 space-y-3 w-full">
+                  <div
+                    key={trip.id}
+                    className="p-4 space-y-3 w-full cursor-pointer hover:bg-gray-50 active:bg-gray-100 transition-colors"
+                    onClick={() => { setSelectedTrip(trip); setShowTripDetails(true); }}
+                  >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0 flex-1">
-                        <p className="text-sm font-medium text-gray-900 break-words">{trip.tripNumber}</p>
+                        <p className="text-sm font-medium text-gray-900 break-words">{trip.vehicleName}</p>
                         <p className="text-xs text-gray-500 mt-1 break-words">
-                          {trip.orders.length} order{trip.orders.length > 1 ? 's' : ''} • {trip.vehicleName}
+                          {trip.orders.length} order{trip.orders.length !== 1 ? 's' : ''} • {trip.driverName || '—'}
                         </p>
                       </div>
-                      <Badge variant={getStatusColor(trip.status)} className="flex-shrink-0">
-                        {trip.status}
+                      <Badge variant={getStatusColor(lowestOrderStatus(trip.id, trip.status))} className="flex-shrink-0">
+                        {lowestOrderStatus(trip.id, trip.status)}
                       </Badge>
                     </div>
 
                     <div className="grid grid-cols-2 gap-3 text-sm">
                       <div>
                         <p className="text-xs text-gray-500">Driver</p>
-                        <p className="text-gray-900 break-words">{trip.driverName}</p>
+                        <p className="text-gray-900 break-words">{trip.driverName || '—'}</p>
                       </div>
                       <div>
                         <p className="text-xs text-gray-500">Schedule</p>
@@ -727,39 +800,12 @@ export function LogisticsPage() {
                       </div>
                       <div className="col-span-2">
                         <p className="text-xs text-gray-500">Route</p>
-                        <p className="text-gray-900 break-words">{trip.destinations.join(' -> ')}</p>
+                        <p className="text-gray-900 break-words">{trip.destinations.join(' → ') || '—'}</p>
                       </div>
                       <div>
                         <p className="text-xs text-gray-500">Capacity</p>
                         <p className="text-gray-900">{trip.capacityUsed}% full</p>
                       </div>
-                      <div>
-                        <p className="text-xs text-gray-500">ETA</p>
-                        <p className="text-gray-900">{trip.eta || 'TBD'}</p>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2 pt-1">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="flex-1 justify-center"
-                        onClick={() => {
-                          setSelectedTrip(trip);
-                          setShowTripDetails(true);
-                        }}
-                      >
-                        <FileText className="w-4 h-4 mr-2" />
-                        Details
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="flex-1 justify-center"
-                      >
-                        <Phone className="w-4 h-4 mr-2" />
-                        Contact
-                      </Button>
                     </div>
                   </div>
                 ))}
@@ -1373,6 +1419,53 @@ export function LogisticsPage() {
             setShowTripDetails(false);
             setShowEditTrip(true);
           }}
+          onOrderStatusChange={(tripId, orderId, newStatus) => {
+            const RANK: Record<string, number> = { Scheduled: 1, Loading: 2, Packed: 3, Ready: 4, 'In Transit': 5, Delivered: 6, Complete: 7, Delayed: 8, Cancelled: 9 };
+            setTripOrderStatusMap((prev) => {
+              const updated = {
+                ...prev,
+                [tripId]: { ...(prev[tripId] ?? {}), [orderId]: newStatus },
+              };
+              const statuses = Object.values(updated[tripId] ?? {}) as string[];
+              let lowestRank = Infinity; let lowestSt = newStatus;
+              for (const st of statuses) {
+                const r = RANK[st] ?? 99;
+                if (r < lowestRank) { lowestRank = r; lowestSt = st; }
+              }
+              setTripLowestOrderStatus((s) => ({ ...s, [tripId]: lowestSt }));
+              return updated;
+            });
+          }}
+          onTripStatusChange={(tripId, newStatus) => {
+            setScheduleTrips((prev) => prev.map((t) =>
+              t.id === tripId ? { ...t, status: newStatus as Trip['status'] } : t
+            ));
+            if (selectedTrip?.id === tripId) {
+              setSelectedTrip((t) => t ? { ...t, status: newStatus as Trip['status'] } : t);
+            }
+            // Sync vehicle status with trip lifecycle
+            const trip = selectedTrip?.id === tripId ? selectedTrip : scheduleTrips.find((t) => t.id === tripId);
+            if (trip?.vehicleId) {
+              if (newStatus === 'In Transit' || newStatus === 'Loading') {
+                syncVehicleOnTripStart({ vehicleId: trip.vehicleId, tripId }).then(() => loadFleet());
+              } else if (newStatus === 'Complete' || newStatus === 'Delivered' || newStatus === 'Cancelled') {
+                syncVehicleOnTripComplete(
+                  {
+                    vehicleId: trip.vehicleId,
+                    tripId,
+                    tripNumber: trip.tripNumber,
+                    driverName: trip.driverName ?? '',
+                    scheduledDate: trip.scheduledDate,
+                    destinations: trip.destinations ?? [],
+                    ordersCount: trip.orderIds?.length ?? 0,
+                    capacityUsedPercent: trip.capacityUsedPercent ?? 0,
+                    branchId: branch ?? '',
+                  },
+                  newStatus,
+                ).then(() => loadFleet());
+              }
+            }
+          }}
         />
       )}
 
@@ -1579,13 +1672,14 @@ export function LogisticsPage() {
                   </div>
                   {/* Legend */}
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-600">
-                    {(['Scheduled','In Transit','Loading','Completed','Delayed'] as Trip['status'][]).map((s) => (
+                    {(['Scheduled','Loading','Packed','Ready','In Transit','Delayed','Delivered','Cancelled'] as Trip['status'][]).map((s) => (
                       <span key={s} className="inline-flex items-center gap-1">
                         <span className={`w-2.5 h-2.5 rounded-full ${
-                          s === 'Completed' ? 'bg-green-500' :
+                          s === 'Delivered' ? 'bg-green-500' :
                           s === 'In Transit' ? 'bg-blue-500' :
-                          s === 'Loading' ? 'bg-amber-500' :
-                          s === 'Delayed' ? 'bg-red-500' : 'bg-gray-400'
+                          s === 'Loading' || s === 'Packed' || s === 'Ready' ? 'bg-amber-500' :
+                          s === 'Delayed' ? 'bg-red-500' :
+                          s === 'Cancelled' ? 'bg-gray-500' : 'bg-gray-400'
                         }`} />
                         {s}
                       </span>

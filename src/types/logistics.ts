@@ -39,7 +39,7 @@ export interface Trip {
   /** employees.id when assigned */
   driverId?: string | null;
   driverName: string;
-  status: 'Pending' | 'Scheduled' | 'Loading' | 'In Transit' | 'Completed' | 'Delayed' | 'Failed';
+  status: 'Scheduled' | 'Loading' | 'Packed' | 'Ready' | 'In Transit' | 'Delayed' | 'Delivered' | 'Cancelled';
   scheduledDate: string;
   departureTime?: string;
   destinations: string[];

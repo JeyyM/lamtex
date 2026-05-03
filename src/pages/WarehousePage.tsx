@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { Package, FileText, Truck, Calendar, History, Search, AlertTriangle, CheckCircle, X, Factory, ShoppingCart, Clock, MapPin, TrendingUp, Activity, Brain, Target, RefreshCw, GitBranch, Loader2, ArrowUp, ArrowDown, ArrowUpDown, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Package, FileText, Truck, Calendar, History, Search, AlertTriangle, CheckCircle, X, Factory, ShoppingCart, Clock, MapPin, TrendingUp, Activity, Brain, Target, RefreshCw, GitBranch, Loader2, ArrowUp, ArrowDown, ArrowUpDown, ChevronLeft, ChevronRight, Camera, CheckCircle2 } from 'lucide-react';
+import { MarkInTransitModal } from '@/src/components/orders/MarkInTransitModal';
+import { FulfillOrderModal, type FulfillmentData } from '@/src/components/orders/FulfillOrderModal';
+import type { OrderLineItem } from '@/src/types/orders';
 import { Button } from '@/src/components/ui/Button';
 import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagination';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine, Area, ComposedChart } from 'recharts';
@@ -212,6 +215,20 @@ interface OrderDeliveryCalEvent {
   dateType: 'required' | 'scheduled' | 'delivered';
   status: string;
   urgency: string;
+}
+
+/** A live order row for the Orders & Loading tab. */
+interface WarehouseOrderRow {
+  id: string;
+  orderNumber: string;
+  customerName: string;
+  deliveryAddress: string | null;
+  requiredDate: string | null;
+  status: string;
+  urgency: string;
+  branchId: string | null;
+  branchCode: string;
+  items: OrderLineItem[];
 }
 
 function orderDeliveryChipClass(ev: OrderDeliveryCalEvent): string {
@@ -590,7 +607,7 @@ function finishedGoodProductHref(productId: string, categorySlug: string): strin
 
 export default function WarehousePage() {
   const navigate = useNavigate();
-  const { branch } = useAppContext();
+  const { branch, addAuditLog, session, employeeName, role } = useAppContext();
   const [activeTab, setActiveTab] = useState<TabType>('inventory');
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
@@ -629,6 +646,15 @@ export default function WarehousePage() {
   const [ordersCalEvents, setOrdersCalEvents] = useState<OrderDeliveryCalEvent[]>([]);
   const [ordersCalLoading, setOrdersCalLoading] = useState(false);
   const [ordersCalSelectedKey, setOrdersCalSelectedKey] = useState<string | null>(null);
+
+  // Orders & Loading tab — live order rows + modals
+  const [warehouseOrders, setWarehouseOrders] = useState<WarehouseOrderRow[]>([]);
+  const [warehouseOrdersLoading, setWarehouseOrdersLoading] = useState(false);
+  const [showInTransitModal, setShowInTransitModal] = useState(false);
+  const [inTransitOrder, setInTransitOrder] = useState<WarehouseOrderRow | null>(null);
+  const [inTransitSubmitting, setInTransitSubmitting] = useState(false);
+  const [showProofModal, setShowProofModal] = useState(false);
+  const [proofOrder, setProofOrder] = useState<WarehouseOrderRow | null>(null);
 
   const [finishedGoodsRows, setFinishedGoodsRows] = useState<FinishedGood[]>([]);
   const [rawMaterialsRows, setRawMaterialsRows] = useState<RawMaterial[]>([]);
@@ -1339,6 +1365,75 @@ export default function WarehousePage() {
     }
   }, [branch]);
 
+  const fetchWarehouseOrders = useCallback(async () => {
+    setWarehouseOrdersLoading(true);
+    try {
+      const branchResult = branch
+        ? await supabase.from('branches').select('id, code').eq('name', branch).maybeSingle()
+        : null;
+      const bid = branchResult?.data?.id ?? null;
+      const bcode = (branchResult?.data as { code?: string } | null)?.code ?? '';
+
+      let q = supabase
+        .from('orders')
+        .select('id, order_number, customer_name, delivery_address, required_date, status, urgency, branch_id')
+        .not('status', 'in', '("Draft","Cancelled","Rejected","Delivered","Completed","Partially Fulfilled")')
+        .order('required_date', { ascending: true });
+      if (bid) q = (q as typeof q).eq('branch_id', bid);
+
+      const { data: orderRows, error } = await q;
+      if (error) throw error;
+      if (!orderRows?.length) { setWarehouseOrders([]); return; }
+
+      const orderIds = (orderRows as any[]).map((o) => o.id as string);
+      const { data: lineRows } = await supabase
+        .from('order_line_items')
+        .select('id, order_id, product_name, variant_description, quantity, unit_price, quantity_shipped, quantity_delivered, variant_id, sku, line_total, discount_percent, discount_amount')
+        .in('order_id', orderIds);
+
+      const linesByOrder: Record<string, OrderLineItem[]> = {};
+      for (const lr of (lineRows ?? []) as any[]) {
+        const oid = lr.order_id as string;
+        if (!linesByOrder[oid]) linesByOrder[oid] = [];
+        linesByOrder[oid].push({
+          id: lr.id,
+          sku: lr.sku ?? '',
+          variantId: lr.variant_id ?? undefined,
+          productName: lr.product_name ?? '',
+          variantDescription: lr.variant_description ?? '',
+          quantity: Number(lr.quantity ?? 0),
+          unitPrice: Number(lr.unit_price ?? 0),
+          discountPercent: Number(lr.discount_percent ?? 0),
+          discountAmount: Number(lr.discount_amount ?? 0),
+          lineTotal: Number(lr.line_total ?? 0),
+          stockHint: 'Available',
+          quantityShipped: Number(lr.quantity_shipped ?? 0),
+          quantityDelivered: Number(lr.quantity_delivered ?? 0),
+        });
+      }
+
+      setWarehouseOrders(
+        (orderRows as any[]).map((o) => ({
+          id: o.id,
+          orderNumber: o.order_number ?? '—',
+          customerName: o.customer_name ?? '—',
+          deliveryAddress: o.delivery_address ?? null,
+          requiredDate: o.required_date ?? null,
+          status: o.status ?? '',
+          urgency: o.urgency ?? '',
+          branchId: o.branch_id ?? null,
+          branchCode: bcode,
+          items: linesByOrder[o.id] ?? [],
+        }))
+      );
+    } catch (e: unknown) {
+      console.error('Failed to load warehouse orders:', e);
+      setWarehouseOrders([]);
+    } finally {
+      setWarehouseOrdersLoading(false);
+    }
+  }, [branch]);
+
   useEffect(() => {
     if (activeTab === 'requests') void fetchSchedule();
   }, [activeTab, fetchSchedule]);
@@ -1349,7 +1444,8 @@ export default function WarehousePage() {
 
   useEffect(() => {
     if (activeTab === 'orders') void fetchOrdersCalendarEvents();
-  }, [activeTab, branch, fetchOrdersCalendarEvents]);
+    if (activeTab === 'orders') void fetchWarehouseOrders();
+  }, [activeTab, branch, fetchOrdersCalendarEvents, fetchWarehouseOrders]);
 
   useEffect(() => {
     setScheduleSearch('');
@@ -1361,6 +1457,190 @@ export default function WarehousePage() {
   useEffect(() => {
     void fetchWarehouseInventory();
   }, [fetchWarehouseInventory]);
+
+  // ── Orders & Loading tab handlers ────────────────────────────────────────
+  const handleConfirmInTransit = async (rows: { itemId: string; shippedQuantity: number }[]) => {
+    if (!inTransitOrder) return;
+    const byLine = new Map(rows.map((r) => [r.itemId, r.shippedQuantity]));
+    const order = inTransitOrder;
+
+    for (const li of order.items) {
+      const ship = byLine.get(li.id);
+      if (ship === undefined) continue;
+      if (ship < 0) { alert('Each sent quantity must be 0 or more.'); return; }
+      const prevCum = li.quantityShipped ?? 0;
+      if (prevCum + ship > li.quantity) {
+        alert(`"${li.productName}": cannot send more than the remaining to fulfill this line (ordered ${li.quantity}, already ${prevCum} in transit, this shipment: ${ship}).`);
+        return;
+      }
+    }
+    if (!order.branchId) {
+      alert('This order has no branch assigned.');
+      return;
+    }
+    setInTransitSubmitting(true);
+    const branchId = order.branchId;
+    const branchCode = order.branchCode;
+    const lineWithShip = order.items.map((li) => ({ line: li, ship: byLine.get(li.id) ?? 0 }));
+
+    // Stock validation
+    for (const { line: l, ship } of lineWithShip) {
+      if (!l.variantId || ship <= 0) continue;
+      const { data: pvs, error: pErr } = await supabase
+        .from('product_variant_stock')
+        .select('id, quantity')
+        .eq('variant_id', l.variantId)
+        .eq('branch_id', branchId)
+        .maybeSingle();
+      if (pErr) { setInTransitSubmitting(false); alert(pErr.message); return; }
+      const onHand = pvs ? Number((pvs as any).quantity) : 0;
+      if (onHand < ship) {
+        setInTransitSubmitting(false);
+        alert(`Not enough stock for "${l.productName}" at this branch. On hand: ${onHand}, sending: ${ship}.`);
+        return;
+      }
+    }
+
+    try {
+      for (const { line: l, ship } of lineWithShip) {
+        if (l.variantId && ship > 0) {
+          const { data: pvs } = await supabase
+            .from('product_variant_stock')
+            .select('id, quantity')
+            .eq('variant_id', l.variantId)
+            .eq('branch_id', branchId)
+            .single();
+          if (!pvs) throw new Error(`No inventory row for "${l.productName}" at this branch.`);
+          const newBranch = Math.max(0, Number((pvs as any).quantity) - ship);
+          const { error: u1 } = await supabase
+            .from('product_variant_stock')
+            .update({ quantity: newBranch, updated_at: new Date().toISOString() })
+            .eq('id', (pvs as any).id);
+          if (u1) throw u1;
+
+          const { data: vrow } = await supabase
+            .from('product_variants')
+            .select('total_stock, sku')
+            .eq('id', l.variantId)
+            .single();
+          if (vrow) {
+            const newTotal = Math.max(0, Number((vrow as any).total_stock ?? 0) - ship);
+            const { error: u2 } = await supabase
+              .from('product_variants')
+              .update({ total_stock: newTotal, updated_at: new Date().toISOString() })
+              .eq('id', l.variantId);
+            if (u2) throw u2;
+          }
+
+          const { error: mErr } = await supabase.from('product_stock_movements').insert({
+            variant_id: l.variantId,
+            variant_sku: (vrow as any)?.sku ?? l.sku,
+            product_name: l.productName,
+            movement_type: 'Out',
+            quantity: ship,
+            from_branch: branchCode || null,
+            reason: 'Order in transit (shipment)',
+            performed_by: employeeName || session?.user?.email || role,
+            reference_number: order.id,
+            timestamp: new Date().toISOString(),
+          });
+          if (mErr) throw mErr;
+        }
+
+        const prevCum = l.quantityShipped ?? 0;
+        const { error: lineErr } = await supabase
+          .from('order_line_items')
+          .update({ quantity_shipped: prevCum + (byLine.get(l.id) ?? 0), updated_at: new Date().toISOString() })
+          .eq('id', l.id);
+        if (lineErr) throw lineErr;
+      }
+
+      const { error: ordErr } = await supabase
+        .from('orders')
+        .update({ status: 'In Transit', updated_at: new Date().toISOString() })
+        .eq('id', order.id);
+      if (ordErr) throw ordErr;
+
+      // Update local state
+      setWarehouseOrders((prev) =>
+        prev.map((o) =>
+          o.id !== order.id
+            ? o
+            : {
+                ...o,
+                status: 'In Transit',
+                items: o.items.map((li) => {
+                  const ship = byLine.get(li.id) ?? 0;
+                  return { ...li, quantityShipped: (li.quantityShipped ?? 0) + ship };
+                }),
+              }
+        )
+      );
+      setShowInTransitModal(false);
+      setInTransitOrder(null);
+      addAuditLog('In transit (shipment)', 'Order', `Order ${order.orderNumber} marked in transit from Warehouse`);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Failed to confirm in transit';
+      alert(msg);
+    } finally {
+      setInTransitSubmitting(false);
+    }
+  };
+
+  const handleSendProof = (ord: WarehouseOrderRow) => {
+    setProofOrder(ord);
+    setShowProofModal(true);
+  };
+
+  const handleFulfillOrder = useCallback(async (fulfillmentData: FulfillmentData[], _proofImageUrls: string[]) => {
+    if (!proofOrder) return;
+    const orderId = proofOrder.id;
+    const items = proofOrder.items;
+
+    const newDeliveredFor = (itemId: string) => {
+      const line = items.find((l) => l.id === itemId);
+      const fd = fulfillmentData.find((f) => f.itemId === itemId);
+      return (line?.quantityDelivered ?? 0) + (fd?.deliveredQuantity ?? 0);
+    };
+
+    // Delivered only when every line matches original ordered qty
+    const isComplete = items.every((l) => newDeliveredFor(l.id) >= l.quantity);
+    const newStatus = isComplete ? 'Delivered' : 'Partially Fulfilled';
+    const now = new Date().toISOString();
+
+    for (const fd of fulfillmentData) {
+      const line = items.find((l) => l.id === fd.itemId);
+      if (!line) continue;
+      const acc = (line.quantityDelivered ?? 0) + fd.deliveredQuantity;
+      const { error } = await supabase
+        .from('order_line_items')
+        .update({ quantity_delivered: acc, updated_at: now })
+        .eq('id', fd.itemId);
+      if (error) { alert('Failed to save line items: ' + error.message); return; }
+    }
+
+    const updatePayload: Record<string, unknown> = { status: newStatus, updated_at: now };
+    if (isComplete) updatePayload.actual_delivery = now.slice(0, 10);
+
+    const { error: ordErr } = await supabase.from('orders').update(updatePayload).eq('id', orderId);
+    if (ordErr) { alert('Failed to record delivery: ' + ordErr.message); return; }
+
+    addAuditLog('Recorded Delivery', 'Order', `Order ${proofOrder.orderNumber} marked ${newStatus} from Warehouse`);
+
+    // Update local state
+    setWarehouseOrders((prev) => prev.map((o) => {
+      if (o.id !== orderId) return o;
+      const updatedItems = o.items.map((l) => {
+        const fd = fulfillmentData.find((f) => f.itemId === l.id);
+        return fd ? { ...l, quantityDelivered: (l.quantityDelivered ?? 0) + fd.deliveredQuantity } : l;
+      });
+      return { ...o, status: newStatus, items: updatedItems };
+    }));
+
+    setShowProofModal(false);
+    setProofOrder(null);
+  }, [proofOrder, addAuditLog]);
+  // ─────────────────────────────────────────────────────────────────────────
 
   const finishedGoodsCategories = ['all', ...Array.from(new Set(finishedGoodsRows.map((item) => item.category)))];
   const safeCategoryFilter = categoryFilter !== 'all' && !finishedGoodsCategories.includes(categoryFilter)
@@ -3059,457 +3339,182 @@ export default function WarehousePage() {
               </div>
             </div>
 
-            {/* Orders Ready for Loading */}
+            {/* Orders — live from DB */}
             <div className="bg-white rounded-lg border border-gray-200">
-              <div className="p-4 border-b border-gray-200">
-                <h3 className="text-lg font-semibold text-gray-900">Orders Ready for Loading</h3>
-              </div>
-
-              <div className="hidden md:block overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-gray-50 border-b border-gray-200">
-                    <tr>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase">Order</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase">Customer</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase">Destination</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase">Stock Status</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase">Weight/Volume</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase">Required</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase">Urgency</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-200">
-                    {/* Order 1 - All Stock Available */}
-                    <tr 
-                      className="hover:bg-gray-50 cursor-pointer"
-                      onClick={() => {
-                        setSelectedOrder({
-                          orderNumber: 'ORD-2026-1234',
-                          customer: 'BuildRight Corp',
-                          destination: 'Quezon City',
-                          requiredDate: 'Feb 28, 2026',
-                          items: [
-                            { name: 'PVC Pipe 4" Pressure', sku: 'PVC-P-4-001', quantity: 100, currentStock: 200, unit: 'pcs', status: 'available' },
-                            { name: 'PVC Elbow 4"', sku: 'PVC-E-4-001', quantity: 50, currentStock: 150, unit: 'pcs', status: 'available' },
-                            { name: 'PVC Tee 4"', sku: 'PVC-T-4-001', quantity: 30, currentStock: 80, unit: 'pcs', status: 'available' }
-                          ],
-                          totalWeight: 850,
-                          totalVolume: 4.2,
-                          urgency: 'High',
-                          status: 'Approved'
-                        });
-                        setShowOrderDetailModal(true);
-                      }}
-                    >
-                      <td className="px-4 py-3">
-                        <div className="font-medium text-gray-900">Order 1 - All Stock Available</div>
-                        <div className="text-xs text-gray-600">ORD-2026-1234</div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="text-sm text-gray-900">BuildRight Corp</div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1">
-                          <MapPin className="w-4 h-4 text-gray-400" />
-                          <span className="text-sm">Quezon City</span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1">
-                          <CheckCircle className="w-4 h-4 text-green-600" />
-                          <span className="text-sm font-medium text-green-600">All Available</span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="text-sm text-gray-900">850 kg</div>
-                        <div className="text-xs text-gray-600">4.2 m³</div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1">
-                          <Calendar className="w-4 h-4 text-gray-400" />
-                          <span className="text-sm">Feb 28</span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className="px-2 py-1 bg-red-50 text-red-700 rounded text-xs font-medium">High</span>
-                      </td>
-                    </tr>
-
-                    {/* Order 2 - Stock Shortage */}
-                    <tr 
-                      className="hover:bg-gray-50 bg-red-50 cursor-pointer"
-                      onClick={() => {
-                        setSelectedOrder({
-                          orderNumber: 'ORD-2026-1235',
-                          customer: 'MegaConstruct Inc',
-                          destination: 'Makati City',
-                          requiredDate: 'Feb 29, 2026',
-                          items: [
-                            { name: 'PVC Pipe 4" Sanitary', sku: 'PVC-S-4-001', quantity: 200, currentStock: 50, unit: 'pcs', status: 'shortage', nextBatch: { date: 'Mar 2', quantity: 500 } },
-                            { name: 'PVC Elbow 2"', sku: 'PVC-E-2-001', quantity: 100, currentStock: 80, unit: 'pcs', status: 'partial', nextBatch: { date: 'Mar 1', quantity: 300 } },
-                            { name: 'PVC Cap 4"', sku: 'PVC-C-4-001', quantity: 50, currentStock: 100, unit: 'pcs', status: 'available' },
-                            { name: 'PVC Adapter 4"', sku: 'PVC-A-4-001', quantity: 30, currentStock: 60, unit: 'pcs', status: 'available' }
-                          ],
-                          totalWeight: 1200,
-                          totalVolume: 6.8,
-                          urgency: 'Medium',
-                          status: 'Approved'
-                        });
-                        setShowOrderDetailModal(true);
-                      }}
-                    >
-                      <td className="px-4 py-3">
-                        <div className="font-medium text-gray-900">Order 2 - Stock Shortage</div>
-                        <div className="text-xs text-gray-600">ORD-2026-1235</div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="text-sm text-gray-900">MegaConstruct Inc</div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1">
-                          <MapPin className="w-4 h-4 text-gray-400" />
-                          <span className="text-sm">Makati City</span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1">
-                          <AlertTriangle className="w-4 h-4 text-red-600" />
-                          <span className="text-sm font-medium text-red-600">Stock Issues</span>
-                        </div>
-                        <div className="text-xs text-gray-600 mt-1">2 items affected</div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="text-sm text-gray-900">1,200 kg</div>
-                        <div className="text-xs text-gray-600">6.8 m³</div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1">
-                          <Calendar className="w-4 h-4 text-gray-400" />
-                          <span className="text-sm">Feb 29</span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className="px-2 py-1 bg-yellow-50 text-yellow-700 rounded text-xs font-medium">Medium</span>
-                      </td>
-                    </tr>
-
-                    {/* Order 3 - All Available */}
-                    <tr 
-                      className="hover:bg-gray-50 cursor-pointer"
-                      onClick={() => {
-                        setSelectedOrder({
-                          orderNumber: 'ORD-2026-1236',
-                          customer: 'CityWorks Ltd',
-                          destination: 'Pasig City',
-                          requiredDate: 'Mar 1, 2026',
-                          items: [
-                            { name: 'PVC Pipe 6" Pressure', sku: 'PVC-P-6-001', quantity: 80, currentStock: 150, unit: 'pcs', status: 'available' },
-                            { name: 'PVC Coupling 6"', sku: 'PVC-C-6-001', quantity: 40, currentStock: 25, unit: 'pcs', status: 'partial', nextBatch: { date: 'Mar 3', quantity: 200 } }
-                          ],
-                          totalWeight: 720,
-                          totalVolume: 3.8,
-                          urgency: 'Low',
-                          status: 'Approved'
-                        });
-                        setShowOrderDetailModal(true);
-                      }}
-                    >
-                      <td className="px-4 py-3">
-                        <div className="font-medium text-gray-900">Order 3 - Partial Stock</div>
-                        <div className="text-xs text-gray-600">ORD-2026-1236</div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="text-sm text-gray-900">CityWorks Ltd</div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1">
-                          <MapPin className="w-4 h-4 text-gray-400" />
-                          <span className="text-sm">Pasig City</span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1">
-                          <AlertTriangle className="w-4 h-4 text-yellow-600" />
-                          <span className="text-sm font-medium text-yellow-600">Partial Stock</span>
-                        </div>
-                        <div className="text-xs text-gray-600 mt-1">1 item affected</div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="text-sm text-gray-900">720 kg</div>
-                        <div className="text-xs text-gray-600">3.8 m³</div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1">
-                          <Calendar className="w-4 h-4 text-gray-400" />
-                          <span className="text-sm">Mar 1</span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className="px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs font-medium">Low</span>
-                      </td>
-                    </tr>
-
-                    {/* Order 4 - Assigned to Truck - Loading */}
-                    <tr 
-                      className="hover:bg-gray-50 cursor-pointer"
-                      onClick={() => {
-                        setSelectedOrder({
-                          orderNumber: 'ORD-2026-1237',
-                          customer: 'Manila Builders',
-                          destination: 'Manila',
-                          requiredDate: 'Mar 2, 2026',
-                          items: [
-                            { name: 'PVC Pipe 4" Pressure', sku: 'PVC-P-4-001', quantity: 120, currentStock: 200, unit: 'pcs', status: 'available' },
-                            { name: 'PVC Elbow 4"', sku: 'PVC-E-4-001', quantity: 60, currentStock: 150, unit: 'pcs', status: 'available' },
-                            { name: 'PVC Tee 4"', sku: 'PVC-T-4-001', quantity: 40, currentStock: 80, unit: 'pcs', status: 'available' }
-                          ],
-                          totalWeight: 950,
-                          totalVolume: 5.1,
-                          urgency: 'High',
-                          status: 'Assigned',
-                          truckId: 'TRK-003',
-                          truckName: 'Truck 003 (DEF-9012)',
-                          driverName: 'Pedro Cruz',
-                          scheduledDeparture: 'Today, 1:00 PM'
-                        });
-                        setShowOrderDetailModal(true);
-                      }}
-                    >
-                      <td className="px-4 py-3">
-                        <div className="font-medium text-gray-900">Order 4 - Assigned to Truck</div>
-                        <div className="text-xs text-gray-600">ORD-2026-1237</div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="text-sm text-gray-900">Manila Builders</div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1">
-                          <MapPin className="w-4 h-4 text-gray-400" />
-                          <span className="text-sm">Manila</span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1">
-                          <CheckCircle className="w-4 h-4 text-green-600" />
-                          <span className="text-sm font-medium text-green-600">All Available</span>
-                        </div>
-                        <div className="text-xs text-blue-600 mt-1 font-medium">📦 Truck 003 assigned</div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="text-sm text-gray-900">950 kg</div>
-                        <div className="text-xs text-gray-600">5.1 m³</div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1">
-                          <Calendar className="w-4 h-4 text-gray-400" />
-                          <span className="text-sm">Mar 2</span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className="px-2 py-1 bg-red-50 text-red-700 rounded text-xs font-medium">High</span>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="md:hidden divide-y divide-gray-200">
-                <div
-                  className="p-4 space-y-3"
-                  onClick={() => {
-                    setSelectedOrder({
-                      orderNumber: 'ORD-2026-1234',
-                      customer: 'BuildRight Corp',
-                      destination: 'Quezon City',
-                      requiredDate: 'Feb 28, 2026',
-                      items: [
-                        { name: 'PVC Pipe 4" Pressure', sku: 'PVC-P-4-001', quantity: 100, currentStock: 200, unit: 'pcs', status: 'available' },
-                        { name: 'PVC Elbow 4"', sku: 'PVC-E-4-001', quantity: 50, currentStock: 150, unit: 'pcs', status: 'available' },
-                        { name: 'PVC Tee 4"', sku: 'PVC-T-4-001', quantity: 30, currentStock: 80, unit: 'pcs', status: 'available' }
-                      ],
-                      totalWeight: 850,
-                      totalVolume: 4.2,
-                      urgency: 'High',
-                      status: 'Approved'
-                    });
-                    setShowOrderDetailModal(true);
-                  }}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <p className="font-medium text-gray-900 break-words">Order 1 - All Stock Available</p>
-                      <p className="text-xs text-gray-600 mt-1">ORD-2026-1234 • BuildRight Corp</p>
-                    </div>
-                    <span className="px-2 py-1 bg-red-50 text-red-700 rounded text-xs font-medium flex-shrink-0">High</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3 text-sm">
-                    <div>
-                      <p className="text-xs text-gray-500">Destination</p>
-                      <p className="text-gray-900">Quezon City</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500">Required</p>
-                      <p className="text-gray-900">Feb 28</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500">Weight / Volume</p>
-                      <p className="text-gray-900">850 kg / 4.2 m3</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500">Stock Status</p>
-                      <p className="text-green-600 font-medium">All Available</p>
-                    </div>
-                  </div>
-                </div>
-
-                <div
-                  className="p-4 space-y-3 bg-red-50"
-                  onClick={() => {
-                    setSelectedOrder({
-                      orderNumber: 'ORD-2026-1235',
-                      customer: 'MegaConstruct Inc',
-                      destination: 'Makati City',
-                      requiredDate: 'Feb 29, 2026',
-                      items: [
-                        { name: 'PVC Pipe 4" Sanitary', sku: 'PVC-S-4-001', quantity: 200, currentStock: 50, unit: 'pcs', status: 'shortage', nextBatch: { date: 'Mar 2', quantity: 500 } },
-                        { name: 'PVC Elbow 2"', sku: 'PVC-E-2-001', quantity: 100, currentStock: 80, unit: 'pcs', status: 'partial', nextBatch: { date: 'Mar 1', quantity: 300 } },
-                        { name: 'PVC Cap 4"', sku: 'PVC-C-4-001', quantity: 50, currentStock: 100, unit: 'pcs', status: 'available' },
-                        { name: 'PVC Adapter 4"', sku: 'PVC-A-4-001', quantity: 30, currentStock: 60, unit: 'pcs', status: 'available' }
-                      ],
-                      totalWeight: 1200,
-                      totalVolume: 6.8,
-                      urgency: 'Medium',
-                      status: 'Approved'
-                    });
-                    setShowOrderDetailModal(true);
-                  }}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <p className="font-medium text-gray-900 break-words">Order 2 - Stock Shortage</p>
-                      <p className="text-xs text-gray-600 mt-1">ORD-2026-1235 • MegaConstruct Inc</p>
-                    </div>
-                    <span className="px-2 py-1 bg-yellow-50 text-yellow-700 rounded text-xs font-medium flex-shrink-0">Medium</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3 text-sm">
-                    <div>
-                      <p className="text-xs text-gray-500">Destination</p>
-                      <p className="text-gray-900">Makati City</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500">Required</p>
-                      <p className="text-gray-900">Feb 29</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500">Weight / Volume</p>
-                      <p className="text-gray-900">1,200 kg / 6.8 m3</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500">Stock Status</p>
-                      <p className="text-red-600 font-medium">Stock Issues (2)</p>
-                    </div>
-                  </div>
-                </div>
-
-                <div
-                  className="p-4 space-y-3"
-                  onClick={() => {
-                    setSelectedOrder({
-                      orderNumber: 'ORD-2026-1236',
-                      customer: 'CityWorks Ltd',
-                      destination: 'Pasig City',
-                      requiredDate: 'Mar 1, 2026',
-                      items: [
-                        { name: 'PVC Pipe 6" Pressure', sku: 'PVC-P-6-001', quantity: 80, currentStock: 150, unit: 'pcs', status: 'available' },
-                        { name: 'PVC Coupling 6"', sku: 'PVC-C-6-001', quantity: 40, currentStock: 25, unit: 'pcs', status: 'partial', nextBatch: { date: 'Mar 3', quantity: 200 } }
-                      ],
-                      totalWeight: 720,
-                      totalVolume: 3.8,
-                      urgency: 'Low',
-                      status: 'Approved'
-                    });
-                    setShowOrderDetailModal(true);
-                  }}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <p className="font-medium text-gray-900 break-words">Order 3 - Partial Stock</p>
-                      <p className="text-xs text-gray-600 mt-1">ORD-2026-1236 • CityWorks Ltd</p>
-                    </div>
-                    <span className="px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs font-medium flex-shrink-0">Low</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3 text-sm">
-                    <div>
-                      <p className="text-xs text-gray-500">Destination</p>
-                      <p className="text-gray-900">Pasig City</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500">Required</p>
-                      <p className="text-gray-900">Mar 1</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500">Weight / Volume</p>
-                      <p className="text-gray-900">720 kg / 3.8 m3</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500">Stock Status</p>
-                      <p className="text-yellow-600 font-medium">Partial Stock</p>
-                    </div>
-                  </div>
-                </div>
-
-                <div
-                  className="p-4 space-y-3"
-                  onClick={() => {
-                    setSelectedOrder({
-                      orderNumber: 'ORD-2026-1237',
-                      customer: 'Manila Builders',
-                      destination: 'Manila',
-                      requiredDate: 'Mar 2, 2026',
-                      items: [
-                        { name: 'PVC Pipe 4" Pressure', sku: 'PVC-P-4-001', quantity: 120, currentStock: 200, unit: 'pcs', status: 'available' },
-                        { name: 'PVC Elbow 4"', sku: 'PVC-E-4-001', quantity: 60, currentStock: 150, unit: 'pcs', status: 'available' },
-                        { name: 'PVC Tee 4"', sku: 'PVC-T-4-001', quantity: 40, currentStock: 80, unit: 'pcs', status: 'available' }
-                      ],
-                      totalWeight: 950,
-                      totalVolume: 5.1,
-                      urgency: 'High',
-                      status: 'Assigned',
-                      truckId: 'TRK-003',
-                      truckName: 'Truck 003 (DEF-9012)',
-                      driverName: 'Pedro Cruz',
-                      scheduledDeparture: 'Today, 1:00 PM'
-                    });
-                    setShowOrderDetailModal(true);
-                  }}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <p className="font-medium text-gray-900 break-words">Order 4 - Assigned to Truck</p>
-                      <p className="text-xs text-gray-600 mt-1">ORD-2026-1237 • Manila Builders</p>
-                    </div>
-                    <span className="px-2 py-1 bg-red-50 text-red-700 rounded text-xs font-medium flex-shrink-0">High</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3 text-sm">
-                    <div>
-                      <p className="text-xs text-gray-500">Destination</p>
-                      <p className="text-gray-900">Manila</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500">Required</p>
-                      <p className="text-gray-900">Mar 2</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500">Weight / Volume</p>
-                      <p className="text-gray-900">950 kg / 5.1 m3</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500">Stock Status</p>
-                      <p className="text-green-600 font-medium">All Available</p>
-                    </div>
-                  </div>
+              <div className="p-4 border-b border-gray-200 flex items-center justify-between gap-3">
+                <h3 className="text-lg font-semibold text-gray-900">Orders</h3>
+                <div className="flex items-center gap-2">
+                  {warehouseOrdersLoading && <Loader2 className="w-4 h-4 animate-spin text-gray-400" />}
+                  <button
+                    type="button"
+                    onClick={() => void fetchWarehouseOrders()}
+                    className="inline-flex items-center gap-1 px-2 py-1 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded hover:bg-gray-50 transition-colors"
+                  >
+                    <RefreshCw className="w-3 h-3" />
+                    Refresh
+                  </button>
                 </div>
               </div>
+
+              {warehouseOrdersLoading ? (
+                <div className="py-12 text-center text-gray-500">
+                  <Loader2 className="w-8 h-8 mx-auto mb-2 animate-spin text-gray-400" />
+                  <p className="text-sm">Loading orders…</p>
+                </div>
+              ) : warehouseOrders.length === 0 ? (
+                <div className="py-12 text-center text-gray-400">
+                  <Package className="w-10 h-10 mx-auto mb-2 text-gray-300" />
+                  <p className="text-sm font-medium">No active orders for this branch</p>
+                </div>
+              ) : (
+                <>
+                  {/* Desktop table */}
+                  <div className="hidden md:block overflow-x-auto">
+                    <table className="w-full">
+                      <thead className="bg-gray-50 border-b border-gray-200">
+                        <tr>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase">Order</th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase">Customer</th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase">Destination</th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase">Status</th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase">Required</th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase">Urgency</th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200">
+                        {warehouseOrders.map((ord) => (
+                          <tr key={ord.id} className="hover:bg-gray-50">
+                            <td className="px-4 py-3">
+                              <div className="font-medium text-gray-900">{ord.orderNumber}</div>
+                            </td>
+                            <td className="px-4 py-3">
+                              <div className="text-sm text-gray-900">{ord.customerName}</div>
+                            </td>
+                            <td className="px-4 py-3">
+                              <div className="flex items-center gap-1">
+                                <MapPin className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                                <span className="text-sm">{ord.deliveryAddress ?? '—'}</span>
+                              </div>
+                            </td>
+                            <td className="px-4 py-3">
+                              <span className={`inline-block text-xs font-semibold uppercase px-2 py-0.5 rounded border ${orderDeliveryStatusBadge(ord.status)}`}>
+                                {ord.status}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3">
+                              <div className="flex items-center gap-1">
+                                <Calendar className="w-4 h-4 text-gray-400" />
+                                <span className="text-sm">
+                                  {ord.requiredDate
+                                    ? new Date(ord.requiredDate).toLocaleDateString('en-PH', { month: 'short', day: 'numeric' })
+                                    : '—'}
+                                </span>
+                              </div>
+                            </td>
+                            <td className="px-4 py-3">
+                              {ord.urgency ? (
+                                <span className={`px-2 py-1 rounded text-xs font-medium ${
+                                  ord.urgency === 'High' || ord.urgency === 'Critical'
+                                    ? 'bg-red-50 text-red-700'
+                                    : ord.urgency === 'Medium'
+                                      ? 'bg-yellow-50 text-yellow-700'
+                                      : 'bg-gray-100 text-gray-700'
+                                }`}>{ord.urgency}</span>
+                              ) : <span className="text-gray-400 text-xs">—</span>}
+                            </td>
+                            <td className="px-4 py-3">
+                              <div className="flex items-center gap-2">
+                                {['Approved', 'Scheduled', 'Loading', 'Packed', 'Ready'].includes(ord.status) && (
+                                  <button
+                                    type="button"
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 text-white rounded-lg text-xs font-medium hover:bg-amber-700 transition-colors"
+                                    onClick={() => { setInTransitOrder(ord); setShowInTransitModal(true); }}
+                                  >
+                                    <Truck className="w-3.5 h-3.5" />
+                                    Mark In Transit
+                                  </button>
+                                )}
+                                {ord.status === 'In Transit' && (
+                                  <button
+                                    type="button"
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-medium hover:bg-emerald-700 transition-colors"
+                                    onClick={() => handleSendProof(ord)}
+                                  >
+                                    <CheckCircle2 className="w-3.5 h-3.5" />
+                                    Record delivery
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Mobile cards */}
+                  <div className="md:hidden divide-y divide-gray-200">
+                    {warehouseOrders.map((ord) => (
+                      <div key={ord.id} className="p-4 space-y-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <p className="font-medium text-gray-900 break-words">{ord.orderNumber}</p>
+                            <p className="text-xs text-gray-600 mt-1">{ord.customerName}</p>
+                          </div>
+                          <span className={`inline-block text-[10px] font-semibold uppercase px-2 py-0.5 rounded border flex-shrink-0 ${orderDeliveryStatusBadge(ord.status)}`}>
+                            {ord.status}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3 text-sm">
+                          <div>
+                            <p className="text-xs text-gray-500">Destination</p>
+                            <p className="text-gray-900">{ord.deliveryAddress ?? '—'}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-gray-500">Required</p>
+                            <p className="text-gray-900">
+                              {ord.requiredDate
+                                ? new Date(ord.requiredDate).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })
+                                : '—'}
+                            </p>
+                          </div>
+                          {ord.urgency && (
+                            <div>
+                              <p className="text-xs text-gray-500">Urgency</p>
+                              <p className={`font-medium ${
+                                ord.urgency === 'High' || ord.urgency === 'Critical' ? 'text-red-600' : ord.urgency === 'Medium' ? 'text-yellow-600' : 'text-gray-700'
+                              }`}>{ord.urgency}</p>
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap gap-2 pt-1">
+                          {['Approved', 'Scheduled', 'Loading', 'Packed', 'Ready'].includes(ord.status) && (
+                            <button
+                              type="button"
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 text-white rounded-lg text-xs font-medium hover:bg-amber-700 transition-colors"
+                              onClick={() => { setInTransitOrder(ord); setShowInTransitModal(true); }}
+                            >
+                              <Truck className="w-3.5 h-3.5" />
+                              Mark In Transit
+                            </button>
+                          )}
+                          {ord.status === 'In Transit' && (
+                            <button
+                              type="button"
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-medium hover:bg-emerald-700 transition-colors"
+                              onClick={() => handleSendProof(ord)}
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              Record delivery
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Available Trucks */}
@@ -3519,7 +3524,6 @@ export default function WarehousePage() {
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 p-4">
-                {/* Truck 1 - Available */}
                 <div className="border border-gray-200 rounded-lg p-4 hover:border-blue-400 hover:shadow-md transition-all cursor-pointer">
                   <div className="flex items-start justify-between mb-3">
                     <div>
@@ -4789,6 +4793,30 @@ export default function WarehousePage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ── Mark In Transit Modal ─────────────────────────────────────── */}
+      {showInTransitModal && inTransitOrder && (
+        <MarkInTransitModal
+          isOpen={showInTransitModal}
+          onClose={() => { if (!inTransitSubmitting) { setShowInTransitModal(false); setInTransitOrder(null); } }}
+          orderNumber={inTransitOrder.orderNumber}
+          items={inTransitOrder.items}
+          submitting={inTransitSubmitting}
+          onConfirm={handleConfirmInTransit}
+        />
+      )}
+
+      {/* ── Fulfill Order (Record Delivery) Modal ────────────────────── */}
+      {showProofModal && proofOrder && (
+        <FulfillOrderModal
+          isOpen={showProofModal}
+          onClose={() => { setShowProofModal(false); setProofOrder(null); }}
+          orderId={proofOrder.id}
+          orderNumber={proofOrder.orderNumber}
+          items={proofOrder.items}
+          onFulfill={handleFulfillOrder}
+        />
       )}
     </div>
   );

@@ -14,6 +14,7 @@ import {
   fulfillmentRemaining,
 } from '@/src/components/orders/FulfillOrderModal';
 import { MarkInTransitModal } from '@/src/components/orders/MarkInTransitModal';
+import { CancelOrderModal, CancellationData } from '@/src/components/orders/CancelOrderModal';
 import {
   orderLogCardHeadline,
   OrderActivityLogHumanDetails,
@@ -133,6 +134,7 @@ export function OrderDetailPage() {
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [rejectionReason, setRejectionReason] = useState('');
   const [approvalLoading, setApprovalLoading] = useState(false);
+  const [showCancelModal, setShowCancelModal] = useState(false);
 
   const [showInTransitModal, setShowInTransitModal] = useState(false);
   const [inTransitSubmitting, setInTransitSubmitting] = useState(false);
@@ -703,7 +705,7 @@ export function OrderDetailPage() {
   }
 
   const getStatusBadgeVariant = (status: OrderStatus): 'success' | 'warning' | 'danger' | 'info' | 'neutral' => {
-    if (['Delivered', 'Completed', 'Approved'].includes(status)) return 'success';
+    if (['Delivered', 'Approved'].includes(status)) return 'success';
     if (['Pending', 'Scheduled', 'Loading', 'Packed', 'Ready'].includes(status)) return 'warning';
     if (['Rejected', 'Cancelled'].includes(status)) return 'danger';
     if (['In Transit', 'Partially Fulfilled'].includes(status)) return 'info';
@@ -928,6 +930,92 @@ export function OrderDetailPage() {
     setApprovalLoading(false);
     setShowRejectModal(false);
     setRejectionReason('');
+  };
+
+  const handleCancelOrder = async (data: CancellationData) => {
+    if (!order || !id) return;
+    const now = new Date().toISOString();
+    const actorName = employeeName || session?.user?.email || role;
+
+    // 1. Mark order Cancelled in DB
+    const { error: orderErr } = await supabase
+      .from('orders')
+      .update({
+        status: 'Cancelled',
+        cancelled_at: now,
+        cancellation_reason: data.reason,
+        updated_at: now,
+      })
+      .eq('id', id);
+    if (orderErr) { alert('Failed to cancel order: ' + orderErr.message); return; }
+
+    // 2. Return stock if requested and order had stock deducted (In Transit or later)
+    if (data.restockItems && order.branchId) {
+      const stockedStatuses: OrderStatus[] = ['In Transit', 'Delivered', 'Partially Fulfilled'];
+      if (stockedStatuses.includes(order.status)) {
+        const { data: br } = await supabase.from('branches').select('code').eq('id', order.branchId).maybeSingle();
+        const branchCode = (br as { code?: string } | null)?.code ?? '';
+        for (const li of order.items) {
+          if (!li.variantId) continue;
+          const shipped = li.quantityShipped ?? 0;
+          if (shipped <= 0) continue;
+
+          // Restore branch stock
+          const { data: pvs } = await supabase
+            .from('product_variant_stock')
+            .select('id, quantity')
+            .eq('variant_id', li.variantId)
+            .eq('branch_id', order.branchId)
+            .maybeSingle();
+          if (pvs) {
+            await supabase
+              .from('product_variant_stock')
+              .update({ quantity: Number(pvs.quantity) + shipped, updated_at: now })
+              .eq('id', pvs.id);
+          }
+
+          // Restore total stock on variant
+          const { data: vrow } = await supabase
+            .from('product_variants')
+            .select('total_stock, sku')
+            .eq('id', li.variantId)
+            .maybeSingle();
+          if (vrow) {
+            await supabase
+              .from('product_variants')
+              .update({ total_stock: Number(vrow.total_stock ?? 0) + shipped, updated_at: now })
+              .eq('id', li.variantId);
+          }
+
+          // Stock movement record
+          await supabase.from('product_stock_movements').insert({
+            variant_id: li.variantId,
+            variant_sku: vrow?.sku ?? li.sku,
+            product_name: li.productName,
+            movement_type: 'In',
+            quantity: shipped,
+            to_branch: branchCode || null,
+            reason: `Order cancelled — stock returned (${data.reason})`,
+            performed_by: actorName,
+            reference_number: order.id,
+            timestamp: now,
+          });
+        }
+      }
+    }
+
+    // 3. Insert order log
+    await insertOrderLog(
+      'cancelled',
+      `Order cancelled by ${actorName} — ${data.reason}`,
+      { status: order.status },
+      { status: 'Cancelled', reason: data.reason, restockItems: data.restockItems },
+      data.additionalNotes ? { notes: data.additionalNotes } : null,
+    );
+    addAuditLog('Cancelled Order', 'Order', `Cancelled order ${order.id}: ${data.reason}`);
+
+    setOrder({ ...order, status: 'Cancelled', cancelledAt: now, cancellationReason: data.reason });
+    setShowCancelModal(false);
   };
 
   const handleSave = async () => {
@@ -1272,7 +1360,7 @@ export function OrderDetailPage() {
     let cachedVariant: DBVariantDet | null = null;
 
     if (variantUuid) {
-      cachedProduct = Object.values(productCache).find(p =>
+      cachedProduct = (Object.values(productCache) as DBProductDet[]).find(p =>
         p.variants.some(v => v.id.toLowerCase() === variantUuid.toLowerCase())
       ) ?? null;
       cachedVariant = cachedProduct?.variants.find(
@@ -1282,7 +1370,7 @@ export function OrderDetailPage() {
 
     // Name-based fallback for legacy items with no variant identifier
     if (!cachedProduct && item.productName) {
-      cachedProduct = Object.values(productCache).find(
+      cachedProduct = (Object.values(productCache) as DBProductDet[]).find(
         p => p.name === item.productName
       ) ?? null;
       // Match the right variant by its size label
@@ -1657,7 +1745,6 @@ export function OrderDetailPage() {
     'In Transit',
     'Partially Fulfilled',
     'Delivered',
-    'Completed',
     'Cancelled',
     'Rejected',
   ];
@@ -1892,6 +1979,16 @@ export function OrderDetailPage() {
                   <Send className="w-4 h-4" />
                   Resubmit
                 </Button>
+              )}
+              {!['Cancelled', 'Rejected', 'Delivered'].includes(order.status) && (
+                <button
+                  type="button"
+                  onClick={() => setShowCancelModal(true)}
+                  className="inline-flex min-h-[2.5rem] shrink-0 items-center justify-center gap-2 rounded-lg border-2 border-red-300 bg-white px-4 py-2 text-sm font-semibold text-red-600 transition-colors hover:bg-red-50 sm:px-5"
+                >
+                  <X className="h-4 w-4 shrink-0" />
+                  Cancel Order
+                </button>
               )}
             </>
           )}
@@ -3291,6 +3388,18 @@ export function OrderDetailPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Cancel Order Modal */}
+      {showCancelModal && order && (
+        <CancelOrderModal
+          orderId={order.id}
+          orderNumber={order.id}
+          customerName={order.customer}
+          orderAmount={order.totalAmount}
+          onClose={() => setShowCancelModal(false)}
+          onConfirm={(data) => void handleCancelOrder(data)}
+        />
       )}
 
       {/* Invoice Generation Modal */}

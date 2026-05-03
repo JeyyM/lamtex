@@ -18,7 +18,7 @@ const STATUS_OPTIONS: Vehicle['status'][] = [
   'Out of Service',
 ];
 
-export type TruckFormModalProps = {
+export type TruckFormModalProps = React.Attributes & {
   isOpen: boolean;
   onClose: () => void;
   mode: 'create' | 'edit';
