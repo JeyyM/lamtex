@@ -3,12 +3,16 @@ import { createPortal } from 'react-dom';
 import { X, Truck, Package } from 'lucide-react';
 import { OrderLineItem } from '@/src/types/orders';
 
+export type MarkInTransitModalPurpose = 'markPacked' | 'inTransit';
+
 export interface MarkInTransitModalProps {
   isOpen: boolean;
   onClose: () => void;
   orderNumber: string;
   items: OrderLineItem[];
   submitting?: boolean;
+  /** markPacked: Loading→Packed (record loaded qty). inTransit: Packed→In Transit (default). */
+  purpose?: MarkInTransitModalPurpose;
   /** Per line, units on this shipment (added to cumulative quantity_shipped). */
   onConfirm: (rows: { itemId: string; shippedQuantity: number }[]) => void | Promise<void>;
 }
@@ -25,6 +29,7 @@ export function MarkInTransitModal({
   orderNumber,
   items,
   submitting = false,
+  purpose = 'inTransit',
   onConfirm,
 }: MarkInTransitModalProps) {
   const [inputValues, setInputValues] = useState<Record<string, string>>({});
@@ -46,6 +51,15 @@ export function MarkInTransitModal({
   }, [isOpen, items]);
 
   if (!isOpen) return null;
+
+  const isPacked = purpose === 'markPacked';
+  const title = isPacked ? 'Record loaded quantities' : 'Confirm in transit';
+  const hint = isPacked
+    ? 'Enter what is loaded for this shipment. Stock is deducted and the order moves to Packed. You can send a follow-up shipment from Mark in transit if needed.'
+    : "This shipment is added to the line's in-transit total. What you enter below is only for this send; limits are the remaining to fulfill the order line.";
+  const sectionTitle = isPacked ? 'Quantity loaded (this shipment)' : 'Quantity to send (this shipment)';
+  const inputLabel = isPacked ? 'Loaded (this time)' : 'Sent (this time)';
+  const confirmLabel = isPacked ? 'Confirm packed' : 'Confirm in transit';
 
   const setQty = (itemId: string, value: string) => {
     setInputValues((prev) => ({ ...prev, [itemId]: value }));
@@ -91,13 +105,10 @@ export function MarkInTransitModal({
           <div>
             <h2 id="in-transit-title" className="flex items-center gap-2 text-xl font-bold text-gray-900">
               <Truck className="h-6 w-6 text-amber-600" />
-              Confirm in transit
+              {title}
             </h2>
             <p className="mt-1 text-sm text-gray-600">Order #{orderNumber}</p>
-            <p className="mt-1 text-sm text-gray-500">
-              This shipment is added to the line&apos;s in-transit total. What you enter below is only for <strong>this</strong> send;
-              limits are the remaining to fulfill the order line.
-            </p>
+            <p className="mt-1 text-sm text-gray-500">{hint}</p>
           </div>
           <button
             type="button"
@@ -111,7 +122,7 @@ export function MarkInTransitModal({
 
         <div className="max-h-[calc(min(90dvh,900px)-200px)] overflow-y-auto p-6">
           <div className="space-y-3">
-            <h3 className="font-semibold text-gray-900">Quantity to send (this shipment)</h3>
+            <h3 className="font-semibold text-gray-900">{sectionTitle}</h3>
             {items.map((item) => {
               const v = quantities[item.id] ?? 0;
               const hasVariant = Boolean(item.variantId);
@@ -148,7 +159,7 @@ export function MarkInTransitModal({
                       )}
                     </div>
                     <div className="flex flex-col items-stretch sm:items-end">
-                      <label className="mb-1 text-xs text-gray-500">Sent (this time)</label>
+                      <label className="mb-1 text-xs text-gray-500">{inputLabel}</label>
                       <div className="flex items-baseline justify-end gap-1.5 sm:gap-2">
                         <input
                           type="number"
@@ -194,7 +205,7 @@ export function MarkInTransitModal({
             ) : (
               <>
                 <Truck className="h-5 w-5" />
-                Confirm in transit
+                {confirmLabel}
               </>
             )}
           </button>

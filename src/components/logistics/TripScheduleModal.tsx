@@ -7,12 +7,14 @@ import {
   Wrench,
   ChevronLeft,
   ChevronRight,
+  Loader2,
 } from 'lucide-react';
 
 interface TripScheduleModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onConfirm: (selectedDates: string[]) => void;
+  /** Parent should close the modal after a successful create. May return a Promise. */
+  onConfirm: (selectedDates: string[]) => void | Promise<void>;
   vehicleName: string;
   orderCount: number;
   existingBookings: Array<{
@@ -57,6 +59,7 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
   const [year, setYear] = useState(() => new Date().getFullYear());
   const [month, setMonth] = useState(() => new Date().getMonth());
   const [selectedDates, setSelectedDates] = useState<string[]>([]);
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -64,6 +67,7 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
     setYear(n.getFullYear());
     setMonth(n.getMonth());
     setSelectedDates([]);
+    setSubmitting(false);
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => { document.body.style.overflow = prev; };
@@ -80,6 +84,7 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
   }
 
   const shiftMonth = (delta: number) => {
+    if (submitting) return;
     let m = month + delta;
     let y = year;
     if (m > 11) { m -= 12; y++; }
@@ -89,6 +94,7 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
   };
 
   const toggleDate = (key: string) => {
+    if (submitting) return;
     const d = new Date(key + 'T12:00:00');
     const today = new Date(); today.setHours(0, 0, 0, 0);
     if (d < today) return;
@@ -106,7 +112,7 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
   return (
     <div
       className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4"
-      onClick={onClose}
+      onClick={() => !submitting && onClose()}
     >
       <div
         role="dialog"
@@ -126,8 +132,9 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
           </div>
           <button
             type="button"
-            onClick={onClose}
-            className="p-2 rounded-lg text-gray-500 hover:bg-gray-100"
+            onClick={() => !submitting && onClose()}
+            disabled={submitting}
+            className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 disabled:opacity-50 disabled:pointer-events-none"
             aria-label="Close"
           >
             <X className="w-5 h-5" />
@@ -143,7 +150,8 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
               <button
                 type="button"
                 onClick={() => shiftMonth(-1)}
-                className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50"
+                disabled={submitting}
+                className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-50 disabled:pointer-events-none"
                 aria-label="Previous month"
               >
                 <ChevronLeft className="w-5 h-5" />
@@ -151,7 +159,8 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
               <select
                 value={month}
                 onChange={(e) => setMonth(Number(e.target.value))}
-                className="border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white"
+                disabled={submitting}
+                className="border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {MONTH_NAMES.map((name, i) => (
                   <option key={i} value={i}>{name}</option>
@@ -165,13 +174,15 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
                   if (e.target.value === '' || !Number.isFinite(n)) return;
                   setYear(Math.trunc(n));
                 }}
-                className="w-24 border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                disabled={submitting}
+                className="w-24 border border-gray-200 rounded-lg px-3 py-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                 aria-label="Year"
               />
               <button
                 type="button"
                 onClick={() => shiftMonth(1)}
-                className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50"
+                disabled={submitting}
+                className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-50 disabled:pointer-events-none"
                 aria-label="Next month"
               >
                 <ChevronRight className="w-5 h-5" />
@@ -233,7 +244,7 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
                 <button
                   key={key}
                   type="button"
-                  disabled={isPast || isMaint}
+                  disabled={isPast || isMaint || submitting}
                   onClick={() => toggleDate(key)}
                   className={cellCls}
                 >
@@ -294,7 +305,8 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
                       <button
                         type="button"
                         onClick={() => toggleDate(key)}
-                        className="ml-1 rounded p-0.5 hover:bg-black/10"
+                        disabled={submitting}
+                        className="ml-1 rounded p-0.5 hover:bg-black/10 disabled:opacity-50 disabled:pointer-events-none"
                         aria-label={`Remove ${label}`}
                       >
                         <X className="w-3 h-3" />
@@ -309,20 +321,33 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
 
         {/* ── Footer ── */}
         <div className="border-t border-gray-200 bg-gray-50 px-4 md:px-5 py-4 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3">
-          <Button variant="outline" onClick={onClose} className="w-full sm:w-auto justify-center">
+          <Button variant="outline" onClick={onClose} disabled={submitting} className="w-full sm:w-auto justify-center">
             Cancel
           </Button>
           <Button
             variant="primary"
-            disabled={selectedDates.length === 0 || hasMaintOnSelected}
-            onClick={() => {
-              onConfirm(selectedDates);
-              onClose();
+            disabled={selectedDates.length === 0 || hasMaintOnSelected || submitting}
+            onClick={async () => {
+              setSubmitting(true);
+              try {
+                await Promise.resolve(onConfirm(selectedDates));
+              } finally {
+                setSubmitting(false);
+              }
             }}
-            className="w-full sm:w-auto justify-center"
+            className="w-full sm:w-auto justify-center min-w-[12rem]"
           >
-            <CheckCircle className="w-4 h-4 mr-2" />
-            Schedule Trip ({selectedDates.length} {selectedDates.length === 1 ? 'day' : 'days'})
+            {submitting ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                Creating trip…
+              </>
+            ) : (
+              <>
+                <CheckCircle className="w-4 h-4 mr-2" />
+                Schedule Trip ({selectedDates.length} {selectedDates.length === 1 ? 'day' : 'days'})
+              </>
+            )}
           </Button>
         </div>
       </div>

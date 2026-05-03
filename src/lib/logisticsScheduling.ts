@@ -1,12 +1,12 @@
 /**
  * Logistics scheduling: orders ready for route planning, branch trips, trip creation.
- * Only **Approved** orders (not yet on an active trip) appear in the available-orders list for scheduling.
+ * **Approved** and **Partially Fulfilled** orders (not on an active trip) appear for scheduling.
  */
 import { supabase } from '@/src/lib/supabase';
 import { resolveBranchIdByName } from '@/src/lib/branchCompanySettings';
 import type { OrderReadyForDispatch, Trip, DriverOption } from '@/src/types/logistics';
 
-const QUEUE_STATUSES = ['Approved'] as const;
+const QUEUE_STATUSES = ['Approved', 'Partially Fulfilled'] as const;
 
 /** Trips that still "hold" assigned orders on the truck/driver calendar. */
 const ACTIVE_TRIP_STATUSES = ['Scheduled', 'Loading', 'Packed', 'Ready', 'In Transit', 'Delayed'] as const;
@@ -68,7 +68,7 @@ export async function fetchBranchHqCoords(branchName: string): Promise<{ lat: nu
   return { lat: la, lng: ln };
 }
 
-/** Orders eligible for new trip assignment: **Approved** only, not already on an active trip. */
+/** Orders eligible for new trip assignment: Approved or Partially Fulfilled, not already on an active trip. */
 export async function fetchLogisticsOrderQueue(branchName: string): Promise<{
   orders: OrderReadyForDispatch[];
   error?: string;
@@ -100,6 +100,30 @@ export async function fetchLogisticsOrderQueue(branchName: string): Promise<{
 
   if (error) return { orders: [], error: error.message };
 
+  const partialIds = (orders ?? [])
+    .filter((o) => String((o as { status?: string }).status ?? '').trim() === 'Partially Fulfilled')
+    .map((o) => o.id as string);
+
+  /** Per order: total ordered units vs still to deliver (for load scaling). */
+  const remainderByOrder = new Map<string, { ordered: number; remaining: number }>();
+
+  if (partialIds.length) {
+    const { data: lineRows, error: lineErr } = await supabase
+      .from('order_line_items')
+      .select('order_id, quantity, quantity_delivered')
+      .in('order_id', partialIds);
+    if (lineErr) return { orders: [], error: lineErr.message };
+    for (const row of lineRows ?? []) {
+      const oid = row.order_id as string;
+      const q = Math.max(0, num(row.quantity, 0));
+      const d = Math.max(0, num(row.quantity_delivered, 0));
+      const cur = remainderByOrder.get(oid) ?? { ordered: 0, remaining: 0 };
+      cur.ordered += q;
+      cur.remaining += Math.max(0, q - d);
+      remainderByOrder.set(oid, cur);
+    }
+  }
+
   const out: OrderReadyForDispatch[] = [];
   for (const o of orders ?? []) {
     if (assigned.has(o.id as string)) continue;
@@ -115,6 +139,21 @@ export async function fetchLogisticsOrderQueue(branchName: string): Promise<{
     const custRow = o.customers as { map_lat?: unknown; map_lng?: unknown } | null;
     const mLa = custRow?.map_lat != null ? Number(custRow.map_lat) : NaN;
     const mLn = custRow?.map_lng != null ? Number(custRow.map_lng) : NaN;
+
+    const st = String((o as { status?: string }).status ?? '').trim();
+    let volume = Math.max(0.01, num(o.volume_cbm, 0.05));
+    let weight = Math.max(1, num(o.weight_kg, 10));
+    let notes: string | undefined;
+
+    if (st === 'Partially Fulfilled') {
+      const rem = remainderByOrder.get(o.id as string);
+      if (!rem || rem.remaining <= 0 || rem.ordered <= 0) continue;
+      const scale = Math.min(1, rem.remaining / rem.ordered);
+      volume = Math.max(0.01, volume * scale);
+      weight = Math.max(1, weight * scale);
+      notes = `Partial: ${rem.remaining} of ${rem.ordered} units still to deliver`;
+    }
+
     out.push({
       id: o.id as string,
       orderNumber: o.order_number as string,
@@ -125,8 +164,9 @@ export async function fetchLogisticsOrderQueue(branchName: string): Promise<{
       branch: branchLabel,
       destination: dest,
       requiredDate: fmtDate(o.required_date as string | null),
-      volume: Math.max(0.01, num(o.volume_cbm, 0.05)),
-      weight: Math.max(1, num(o.weight_kg, 10)),
+      volume,
+      weight,
+      notes,
       urgency: urg,
       priority: urg === 'High' ? 1 : urg === 'Low' ? 3 : 2,
     });
@@ -148,6 +188,23 @@ export async function fetchTripsForBranch(branchName: string): Promise<{ trips: 
     .order('scheduled_date', { ascending: true });
 
   if (error) return { trips: [], error: error.message };
+
+  const vehicleIds = [
+    ...new Set(
+      (data ?? [])
+        .map((r) => r.vehicle_id as string | null | undefined)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0),
+    ),
+  ];
+  const plateByVehicleId = new Map<string, string>();
+  if (vehicleIds.length) {
+    const { data: vrows } = await supabase.from('vehicles').select('id, plate_number').in('id', vehicleIds);
+    for (const v of vrows ?? []) {
+      const id = v.id as string;
+      const plate = (v.plate_number as string | null | undefined)?.trim();
+      if (plate) plateByVehicleId.set(id, plate);
+    }
+  }
 
   const trips: Trip[] = (data ?? []).map((row: Record<string, unknown>) => {
     const vehicleUuid = (row.vehicle_id as string) ?? '';
@@ -173,6 +230,7 @@ export async function fetchTripsForBranch(branchName: string): Promise<{ trips: 
       volumeUsed: num(row.volume_used_cbm, 0),
       maxWeight: num(row.max_weight_kg, 5000),
       maxVolume: num(row.max_volume_cbm, 25),
+      plateNumber: vehicleUuid ? plateByVehicleId.get(vehicleUuid) ?? null : null,
       eta: eta ? fmtDate(eta) : undefined,
       actualArrival: arr ? new Date(arr).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) : undefined,
       delayReason: (row.delay_reason as string) ?? undefined,
@@ -181,6 +239,95 @@ export async function fetchTripsForBranch(branchName: string): Promise<{ trips: 
   });
 
   return { trips };
+}
+
+const TRIP_DETAIL_ROW_SELECT =
+  'id, trip_number, vehicle_id, vehicle_name, driver_id, driver_name, status, scheduled_date, departure_time, destinations, order_ids, capacity_used_percent, weight_used_kg, volume_used_cbm, max_weight_kg, max_volume_cbm, eta, actual_arrival, delay_reason, branches ( name )';
+
+async function tripRowRecordToTrip(r: Record<string, unknown>): Promise<Trip> {
+  const vehicleUuid = (r.vehicle_id as string) ?? '';
+  let plate: string | null = null;
+  if (vehicleUuid) {
+    const { data: vrow } = await supabase.from('vehicles').select('plate_number').eq('id', vehicleUuid).maybeSingle();
+    plate = (vrow?.plate_number as string | null | undefined)?.trim() || null;
+  }
+
+  const brRaw = r.branches as { name?: string } | { name?: string }[] | null;
+  const branchName = Array.isArray(brRaw) ? (brRaw[0]?.name ?? '') : (brRaw?.name ?? '');
+
+  const orderIds = ((r.order_ids ?? []) as string[]).filter(Boolean);
+  const dest = (r.destinations as string[] | null) ?? [];
+  const dep = r.departure_time as string | null;
+  const eta = r.eta as string | null;
+  const arr = r.actual_arrival as string | null;
+
+  return {
+    id: r.id as string,
+    tripNumber: r.trip_number as string,
+    vehicleId: vehicleUuid,
+    vehicleName: (r.vehicle_name as string) ?? '—',
+    driverId: (r.driver_id as string | null) ?? null,
+    driverName: (r.driver_name as string) ?? '—',
+    status: mapDbTripStatus((r.status as string) ?? 'Scheduled'),
+    scheduledDate: fmtDate(r.scheduled_date as string),
+    departureTime: dep
+      ? new Date(dep).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })
+      : undefined,
+    destinations: dest.length ? dest : ['—'],
+    orders: orderIds,
+    capacityUsed: num(r.capacity_used_percent, 0),
+    weightUsed: num(r.weight_used_kg, 0),
+    volumeUsed: num(r.volume_used_cbm, 0),
+    maxWeight: num(r.max_weight_kg, 5000),
+    maxVolume: num(r.max_volume_cbm, 25),
+    plateNumber: plate,
+    eta: eta ? fmtDate(eta) : undefined,
+    actualArrival: arr
+      ? new Date(arr).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })
+      : undefined,
+    delayReason: (r.delay_reason as string) ?? undefined,
+    branch: branchName,
+  };
+}
+
+/** Load one trip by primary key for detail modals (e.g. truck trip history). */
+export async function fetchTripById(tripId: string): Promise<{ trip: Trip | null; error?: string }> {
+  const id = tripId.trim();
+  if (!id) return { trip: null };
+
+  const { data: row, error } = await supabase.from('trips').select(TRIP_DETAIL_ROW_SELECT).eq('id', id).maybeSingle();
+
+  if (error) return { trip: null, error: error.message };
+  if (!row) return { trip: null };
+
+  return { trip: await tripRowRecordToTrip(row as Record<string, unknown>) };
+}
+
+/**
+ * Resolve a live `trips` row when `trip_history.trip_id` was never stored (e.g. legacy snapshots).
+ * Picks the latest matching row by scheduled date for this vehicle + trip number.
+ */
+export async function fetchTripForVehicleByTripNumber(
+  vehicleUuid: string,
+  tripNumber: string,
+): Promise<{ trip: Trip | null; error?: string }> {
+  const vid = vehicleUuid.trim();
+  const tripNum = tripNumber.trim();
+  if (!vid || !tripNum || tripNum === '—') return { trip: null };
+
+  const { data: rows, error } = await supabase
+    .from('trips')
+    .select(TRIP_DETAIL_ROW_SELECT)
+    .eq('vehicle_id', vid)
+    .eq('trip_number', tripNum)
+    .order('scheduled_date', { ascending: false })
+    .limit(1);
+
+  if (error) return { trip: null, error: error.message };
+  const row = rows?.[0] as Record<string, unknown> | undefined;
+  if (!row) return { trip: null };
+
+  return { trip: await tripRowRecordToTrip(row) };
 }
 
 export function tripsConflictingVehicleAndDate(
@@ -243,7 +390,7 @@ export async function createTripFromPlanning(params: {
   totalVolumeCbm: number;
   driverUuid?: string | null;
   driverName?: string | null;
-}): Promise<{ ok: boolean; error?: string; tripId?: string }> {
+}): Promise<{ ok: boolean; error?: string; tripId?: string; tripNumber?: string }> {
   const bid = await resolveBranchIdByName(params.branchName.trim());
   if (!bid) return { ok: false, error: 'Branch not found' };
   if (!params.vehicleUuid) return { ok: false, error: 'Select a truck' };
@@ -288,6 +435,8 @@ export async function createTripFromPlanning(params: {
       driver_id: params.driverUuid ?? null,
       driver_name: params.driverName ?? null,
       status: toDbTripStatus('Scheduled'),
+      scheduled_date: d,
+      order_ids: params.orderUuids,
       destinations: [],
       weight_used_kg: params.totalWeightKg,
       volume_used_cbm: params.totalVolumeCbm,
@@ -317,7 +466,7 @@ export async function createTripFromPlanning(params: {
     return { ok: false, error: ordErr.message };
   }
 
-  return { ok: true, tripId };
+  return { ok: true, tripId, tripNumber };
 }
 
 /**

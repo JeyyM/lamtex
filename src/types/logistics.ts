@@ -39,7 +39,7 @@ export interface Trip {
   /** employees.id when assigned */
   driverId?: string | null;
   driverName: string;
-  status: 'Scheduled' | 'Loading' | 'Packed' | 'Ready' | 'In Transit' | 'Delayed' | 'Delivered' | 'Cancelled';
+  status: 'Scheduled' | 'Loading' | 'Packed' | 'Ready' | 'In Transit' | 'Delayed' | 'Delivered' | 'Complete' | 'Cancelled';
   scheduledDate: string;
   departureTime?: string;
   destinations: string[];
@@ -49,6 +49,8 @@ export interface Trip {
   volumeUsed: number; // cubic meters
   maxWeight: number;
   maxVolume: number;
+  /** From vehicles.plate_number when trips are loaded from Supabase (not the UUID in vehicleId). */
+  plateNumber?: string | null;
   eta?: string;
   actualArrival?: string;
   delayReason?: string;

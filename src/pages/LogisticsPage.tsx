@@ -67,16 +67,17 @@ import { Vehicle, Trip, OrderReadyForDispatch } from '@/src/types/logistics';
 import { fetchFleetTrucksForBranch, syncVehicleOnTripStart, syncVehicleOnTripComplete } from '@/src/lib/fleetTrucks';
 import { TruckFormModal } from '@/src/components/logistics/TruckFormModal';
 import { supabase } from '@/src/lib/supabase';
+import {
+  localYmd,
+  DISPATCH_QUEUE_STATUS_OPTIONS,
+  dispatchQueueStatusSelectClass,
+  tripStatusDisplay,
+  tripStatusIsCompletedUi,
+  getDispatchVehicleColor,
+} from '@/src/lib/dispatchQueueUi';
 
 type ViewMode = 'dispatch' | 'fleet' | 'routes' | 'shipments';
 type TransportType = 'truck' | 'interisland';
-
-function localYmd(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
 
 export function LogisticsPage() {
   const { branch } = useAppContext();
@@ -123,8 +124,11 @@ export function LogisticsPage() {
   const [tripLowestOrderStatus, setTripLowestOrderStatus] = useState<Record<string, string>>({});
   // Full per-trip order status map — used for real-time badge updates
   const [tripOrderStatusMap, setTripOrderStatusMap] = useState<Record<string, Record<string, string>>>({});
-  const lowestOrderStatus = (tripId: string, tripStatus: string) =>
-    tripLowestOrderStatus[tripId] ?? tripStatus;
+  /** Prefer trip-level Delayed so reporting a delay is not hidden by orders still marked In Transit. */
+  const lowestOrderStatus = (tripId: string, tripStatus: string) => {
+    if (tripStatus === 'Delayed') return 'Delayed';
+    return tripLowestOrderStatus[tripId] ?? tripStatus;
+  };
 
   const routePlanningPrefill = useMemo(() => {
     const q = new URLSearchParams(search);
@@ -347,28 +351,7 @@ export function LogisticsPage() {
     return <Clock className="w-4 h-4" />;
   };
 
-  const getVehicleColor = (vehicleId: string) => {
-    // Simple seeded random number generator
-    let seed = 0;
-    for (let i = 0; i < vehicleId.length; i++) {
-      seed = seed * 31 + vehicleId.charCodeAt(i);
-    }
-    
-    // Use seed to generate pseudo-random values
-    const random1 = Math.abs(Math.sin(seed) * 10000) % 1;
-    const random2 = Math.abs(Math.sin(seed * 2) * 10000) % 1;
-    const random3 = Math.abs(Math.sin(seed * 3) * 10000) % 1;
-    
-    const hue = Math.floor(random1 * 360);
-    const saturation = 55 + Math.floor(random2 * 20); // 55-75%
-    const lightness = 75 + Math.floor(random3 * 10); // 75-85%
-    
-    return {
-      bg: `hsl(${hue}, ${saturation}%, ${lightness}%)`,
-      text: `hsl(${hue}, ${Math.min(saturation + 25, 95)}%, 25%)`, // Darker text
-      border: `hsl(${hue}, ${saturation}%, ${lightness - 20}%)` // Darker border
-    };
-  };
+  const getVehicleColor = getDispatchVehicleColor;
 
   const viewModeTabs = [
     { id: 'dispatch' as ViewMode, label: 'Schedule & Tracking', icon: <Calendar className="w-4 h-4" /> },
@@ -379,16 +362,8 @@ export function LogisticsPage() {
   return (
     <div className="space-y-6 w-full max-w-full overflow-x-hidden">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 w-full max-w-full">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Logistics Management</h1>
-        </div>
-        <div className="w-full sm:w-auto flex items-center gap-3">
-          <Button variant="primary" onClick={() => setViewMode('routes')} className="w-full sm:w-auto justify-center">
-            <Plus className="w-4 h-4 mr-2" />
-            Create New Trip
-          </Button>
-        </div>
+      <div className="w-full max-w-full">
+        <h1 className="text-2xl font-bold text-gray-900">Logistics Management</h1>
       </div>
 
       {/* Transport Type Toggle */}
@@ -468,13 +443,14 @@ export function LogisticsPage() {
                   <input
                     type="text"
                     placeholder={transportType === 'truck' 
-                      ? "Search by Trip ID, Driver, or Destination..." 
+                      ? "Search by trip ID or driver..." 
                       : "Search by Shipment ID, Captain, or Port..."}
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
                   />
                 </div>
+                {transportType !== 'truck' && (
                 <select
                   value={filterStatus}
                   onChange={(e) => setFilterStatus(e.target.value)}
@@ -488,8 +464,10 @@ export function LogisticsPage() {
                   <option value="In Transit">In Transit</option>
                   <option value="Delayed">Delayed</option>
                   <option value="Delivered">Delivered</option>
+                  <option value="Complete">Completed</option>
                   <option value="Cancelled">Cancelled</option>
                 </select>
+                )}
                 <Button variant="outline" className="w-full lg:w-auto justify-center">
                   <Filter className="w-4 h-4 mr-2" />
                   More Filters
@@ -674,17 +652,36 @@ export function LogisticsPage() {
 
           {/* Dispatch Table */}
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
+            <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3">
               <CardTitle>{transportType === 'truck' ? 'Dispatch Queue' : 'Shipment Queue'}</CardTitle>
-              <label className="flex items-center gap-2 cursor-pointer select-none">
-                <span className="text-xs text-gray-500 font-medium">Show Completed</span>
-                <div
-                  onClick={() => setShowCompleted(v => !v)}
-                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${showCompleted ? 'bg-red-600' : 'bg-gray-300'}`}
-                >
-                  <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${showCompleted ? 'translate-x-4' : 'translate-x-1'}`} />
-                </div>
-              </label>
+              <div className="flex flex-wrap items-center gap-3">
+                {transportType === 'truck' && (
+                  <select
+                    aria-label="Filter dispatch queue by status"
+                    value={filterStatus === 'All' ? '' : filterStatus}
+                    onChange={(e) => setFilterStatus(e.target.value === '' ? 'All' : e.target.value)}
+                    className={`${dispatchQueueStatusSelectClass} w-[min(100%,14rem)] md:hidden`}
+                  >
+                    <option value="">Status</option>
+                    {DISPATCH_QUEUE_STATUS_OPTIONS.map((s) => (
+                      <option key={s} value={s}>
+                        {s === 'Complete' ? 'Completed' : s}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <span className="text-xs text-gray-500 font-medium">Show Completed</span>
+                  <div
+                    onClick={() => setShowCompleted((v) => !v)}
+                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${showCompleted ? 'bg-red-600' : 'bg-gray-300'}`}
+                  >
+                    <span
+                      className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${showCompleted ? 'translate-x-4' : 'translate-x-1'}`}
+                    />
+                  </div>
+                </label>
+              </div>
             </CardHeader>
             <CardContent className="p-0">
               {transportType === 'truck' ? (
@@ -700,9 +697,6 @@ export function LogisticsPage() {
                       >
                         <span className="inline-flex items-center">Vehicle & Driver{tripSortIcon('vehicleName')}</span>
                       </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Route
-                      </th>
                       <th
                         onClick={() => handleTripSort('scheduledDate')}
                         className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
@@ -715,11 +709,23 @@ export function LogisticsPage() {
                       >
                         <span className="inline-flex items-center">Orders{tripSortIcon('orders')}</span>
                       </th>
-                      <th
-                        onClick={() => handleTripSort('status')}
-                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
-                      >
-                        <span className="inline-flex items-center">Status{tripSortIcon('status')}</span>
+                      <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider align-top min-w-[10.5rem] max-w-[14rem]">
+                        <div className="normal-case">
+                          <select
+                            aria-label="Filter dispatch queue by status"
+                            value={filterStatus === 'All' ? '' : filterStatus}
+                            onChange={(e) => setFilterStatus(e.target.value === '' ? 'All' : e.target.value)}
+                            onClick={(e) => e.stopPropagation()}
+                            className={dispatchQueueStatusSelectClass}
+                          >
+                            <option value="">Status</option>
+                            {DISPATCH_QUEUE_STATUS_OPTIONS.map((s) => (
+                              <option key={s} value={s}>
+                                {s === 'Complete' ? 'Completed' : s}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
                       </th>
                     </tr>
                   </thead>
@@ -740,19 +746,6 @@ export function LogisticsPage() {
                           </div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="flex items-center gap-2">
-                            <MapPin className="w-4 h-4 text-gray-400" />
-                            <div>
-                              <div className="text-sm text-gray-900">
-                                {trip.destinations.join(' → ')}
-                              </div>
-                              <div className="text-xs text-gray-500">
-                                {trip.capacityUsed}% capacity
-                              </div>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
                           <div className="text-sm text-gray-900">{trip.departureTime || trip.scheduledDate}</div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
@@ -760,7 +753,10 @@ export function LogisticsPage() {
                           <div className="text-xs text-gray-500">{trip.capacityUsed}% full</div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
-                          <Badge variant={getStatusColor(lowestOrderStatus(trip.id, trip.status))}>
+                          <Badge
+                            variant={getStatusColor(lowestOrderStatus(trip.id, trip.status))}
+                            className="min-w-[120px] justify-center"
+                          >
                             {lowestOrderStatus(trip.id, trip.status)}
                           </Badge>
                         </td>
@@ -799,10 +795,6 @@ export function LogisticsPage() {
                         <p className="text-gray-900">{trip.departureTime || trip.scheduledDate}</p>
                       </div>
                       <div className="col-span-2">
-                        <p className="text-xs text-gray-500">Route</p>
-                        <p className="text-gray-900 break-words">{trip.destinations.join(' → ') || '—'}</p>
-                      </div>
-                      <div>
                         <p className="text-xs text-gray-500">Capacity</p>
                         <p className="text-gray-900">{trip.capacityUsed}% full</p>
                       </div>
@@ -1380,7 +1372,7 @@ export function LogisticsPage() {
           onCreateTrip={async (selectedOrderIds, vehicleId, scheduledDate, driverId) => {
             if (!branch?.trim()) {
               window.alert('Select a branch in the header.');
-              return;
+              return undefined;
             }
             const picked = ordersReady.filter((o) => selectedOrderIds.includes(o.id));
             const totalWeight = picked.reduce((s, o) => s + o.weight, 0);
@@ -1398,10 +1390,18 @@ export function LogisticsPage() {
             });
             if (!res.ok) {
               window.alert(res.error ?? 'Could not create trip');
-              return;
+              return undefined;
             }
             await refreshLogistics();
             loadFleet();
+            const vehicleList = fleetTrucks.length > 0 ? fleetTrucks : vehicles;
+            const v = vehicleList.find((x) => x.id === vehicleId);
+            return {
+              tripNumber: res.tripNumber ?? 'New trip',
+              scheduledDate: scheduledDate.trim().slice(0, 10),
+              orderCount: selectedOrderIds.length,
+              vehicleName: v?.vehicleName?.trim() ? v.vehicleName : 'Selected truck',
+            };
           }}
         />
       )}
@@ -1436,12 +1436,26 @@ export function LogisticsPage() {
               return updated;
             });
           }}
-          onTripStatusChange={(tripId, newStatus) => {
+          onTripStatusChange={(tripId, newStatus, extra) => {
             setScheduleTrips((prev) => prev.map((t) =>
-              t.id === tripId ? { ...t, status: newStatus as Trip['status'] } : t
+              t.id === tripId
+                ? {
+                    ...t,
+                    status: newStatus as Trip['status'],
+                    ...(extra?.delayReason != null ? { delayReason: extra.delayReason } : {}),
+                  }
+                : t
             ));
             if (selectedTrip?.id === tripId) {
-              setSelectedTrip((t) => t ? { ...t, status: newStatus as Trip['status'] } : t);
+              setSelectedTrip((t) =>
+                t
+                  ? {
+                      ...t,
+                      status: newStatus as Trip['status'],
+                      ...(extra?.delayReason != null ? { delayReason: extra.delayReason } : {}),
+                    }
+                  : t
+              );
             }
             // Sync vehicle status with trip lifecycle
             const trip = selectedTrip?.id === tripId ? selectedTrip : scheduleTrips.find((t) => t.id === tripId);
@@ -1458,7 +1472,7 @@ export function LogisticsPage() {
                     scheduledDate: trip.scheduledDate,
                     destinations: trip.destinations ?? [],
                     ordersCount: trip.orderIds?.length ?? 0,
-                    capacityUsedPercent: trip.capacityUsedPercent ?? 0,
+                    capacityUsedPercent: trip.capacityUsed ?? 0,
                     branchId: branch ?? '',
                   },
                   newStatus,
@@ -1568,13 +1582,13 @@ export function LogisticsPage() {
                         <p className="text-xs text-gray-500 truncate">{trip.vehicleName}{trip.driverName !== '—' ? ` · ${trip.driverName}` : ''}</p>
                       </div>
                       <span className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded border shrink-0 ${
-                        trip.status === 'Completed'  ? 'bg-green-100 text-green-800 border-green-300' :
+                        tripStatusIsCompletedUi(trip.status)  ? 'bg-green-100 text-green-800 border-green-300' :
                         trip.status === 'In Transit' ? 'bg-blue-100 text-blue-800 border-blue-300' :
                         trip.status === 'Loading'    ? 'bg-amber-100 text-amber-800 border-amber-300' :
                         trip.status === 'Delayed'    ? 'bg-red-100 text-red-800 border-red-300' :
                                                        'bg-gray-100 text-gray-800 border-gray-300'
                       }`}>
-                        {trip.status}
+                        {tripStatusDisplay(trip.status)}
                       </span>
                     </button>
                   );
@@ -1672,16 +1686,16 @@ export function LogisticsPage() {
                   </div>
                   {/* Legend */}
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-600">
-                    {(['Scheduled','Loading','Packed','Ready','In Transit','Delayed','Delivered','Cancelled'] as Trip['status'][]).map((s) => (
+                    {(['Scheduled','Loading','Packed','Ready','In Transit','Delayed','Delivered','Complete','Cancelled'] as Trip['status'][]).map((s) => (
                       <span key={s} className="inline-flex items-center gap-1">
                         <span className={`w-2.5 h-2.5 rounded-full ${
-                          s === 'Delivered' ? 'bg-green-500' :
+                          s === 'Delivered' || s === 'Complete' ? 'bg-green-500' :
                           s === 'In Transit' ? 'bg-blue-500' :
                           s === 'Loading' || s === 'Packed' || s === 'Ready' ? 'bg-amber-500' :
                           s === 'Delayed' ? 'bg-red-500' :
                           s === 'Cancelled' ? 'bg-gray-500' : 'bg-gray-400'
                         }`} />
-                        {s}
+                        {s === 'Complete' ? 'Completed' : s}
                       </span>
                     ))}
                   </div>
@@ -1720,7 +1734,7 @@ export function LogisticsPage() {
                         <div className="space-y-0.5">
                           {shown.map((trip) => {
                             const chipColor =
-                              trip.status === 'Completed' ? 'bg-green-600 text-white' :
+                              tripStatusIsCompletedUi(trip.status) ? 'bg-green-600 text-white' :
                               trip.status === 'In Transit' ? 'bg-blue-600 text-white' :
                               trip.status === 'Loading' ? 'bg-amber-500 text-white' :
                               trip.status === 'Delayed' ? 'bg-red-500 text-white' :
@@ -1780,13 +1794,13 @@ export function LogisticsPage() {
                                   <p className="text-xs text-gray-500 truncate">{trip.vehicleName}{trip.driverName !== '—' ? ` · ${trip.driverName}` : ''}</p>
                                 </div>
                                 <span className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded border shrink-0 ${
-                                  trip.status === 'Completed'  ? 'bg-green-100 text-green-800 border-green-300' :
+                                  tripStatusIsCompletedUi(trip.status)  ? 'bg-green-100 text-green-800 border-green-300' :
                                   trip.status === 'In Transit' ? 'bg-blue-100 text-blue-800 border-blue-300' :
                                   trip.status === 'Loading'    ? 'bg-amber-100 text-amber-800 border-amber-300' :
                                   trip.status === 'Delayed'    ? 'bg-red-100 text-red-800 border-red-300' :
                                                                   'bg-gray-100 text-gray-800 border-gray-300'
                                 }`}>
-                                  {trip.status}
+                                  {tripStatusDisplay(trip.status)}
                                 </span>
                               </button>
                             </li>

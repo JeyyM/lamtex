@@ -21,6 +21,12 @@ import {
   type ProductionLineRow,
 } from '@/src/components/production/RecordProductionModal';
 import {
+  getPrLogActionColor,
+  getPrLogActionIcon,
+  prLogCardHeadline,
+  PrActivityLogHumanDetails,
+} from '@/src/components/production/PrActivityLogHuman';
+import {
   ArrowLeft,
   Factory,
   Loader2,
@@ -125,43 +131,6 @@ const getPRStatusIcon = (s: PRStatus) => {
   return <FileText className="w-4 h-4" />;
 };
 
-function prLogActionIcon(action: string) {
-  switch (action) {
-    case 'drafted': return <FileText className="w-4 h-4" />;
-    case 'submitted': return <Send className="w-4 h-4" />;
-    case 'requested':
-    case 'line_added': return <ClipboardList className="w-4 h-4" />;
-    case 'approved': return <CheckCircle className="w-4 h-4" />;
-    case 'rejected': return <XCircle className="w-4 h-4" />;
-    case 'in_progress': return <PlayCircle className="w-4 h-4" />;
-    case 'completed': return <CheckCircle className="w-4 h-4" />;
-    case 'cancelled': return <Ban className="w-4 h-4" />;
-    case 'line_removed': return <Trash2 className="w-4 h-4" />;
-    case 'order_linked': return <ShoppingCart className="w-4 h-4" />;
-    case 'order_unlinked': return <XCircle className="w-4 h-4" />;
-    case 'updated': return <FileText className="w-4 h-4" />;
-    default: return <Clock className="w-4 h-4" />;
-  }
-}
-
-function prLogActionColor(action: string) {
-  switch (action) {
-    case 'drafted': return 'text-slate-600 bg-slate-100';
-    case 'submitted': return 'text-amber-600 bg-amber-50';
-    case 'approved':
-    case 'completed': return 'text-green-600 bg-green-50';
-    case 'rejected': return 'text-red-600 bg-red-50';
-    case 'in_progress': return 'text-violet-600 bg-violet-50';
-    case 'requested': return 'text-amber-600 bg-amber-50';
-    case 'line_added': return 'text-blue-600 bg-blue-50';
-    case 'line_removed': return 'text-orange-600 bg-orange-50';
-    case 'order_linked': return 'text-cyan-600 bg-cyan-50';
-    case 'order_unlinked': return 'text-orange-600 bg-orange-50';
-    case 'cancelled': return 'text-gray-600 bg-gray-50';
-    default: return 'text-gray-600 bg-gray-50';
-  }
-}
-
 const prLogRoleMap: Record<string, string> = {
   Executive: 'Admin',
   Agent: 'Agent',
@@ -174,23 +143,21 @@ const prLogRoleMap: Record<string, string> = {
   Finance: 'Finance',
 };
 
-function prLogRoleBadgeColor(role: string) {
+/** Same role badge colors as purchase orders / customer orders activity log. */
+function prActivityLogRoleBadgeColor(role: string) {
   switch (role) {
     case 'Agent':
       return 'bg-blue-100 text-blue-800';
     case 'Manager':
       return 'bg-purple-100 text-purple-800';
-    case 'Warehouse':
     case 'Warehouse Staff':
       return 'bg-orange-100 text-orange-800';
     case 'Logistics':
-    case 'Driver':
       return 'bg-green-100 text-green-800';
-    case 'Executive':
-    case 'Admin':
-      return 'bg-red-100 text-red-800';
     case 'Production':
       return 'bg-amber-100 text-amber-800';
+    case 'Admin':
+      return 'bg-red-100 text-red-800';
     case 'System':
       return 'bg-gray-100 text-gray-800';
     default:
@@ -205,6 +172,9 @@ type LogRow = {
   description: string | null;
   created_at: string;
   performed_by_role: string | null;
+  old_value: unknown;
+  new_value: unknown;
+  metadata: unknown;
 };
 
 type InvolvedOrderLine = {
@@ -389,6 +359,8 @@ export function ProductionRequestDetailPage() {
   const [showAccept, setShowAccept] = useState(false);
   const [showReject, setShowReject] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
+  const [showCancelPr, setShowCancelPr] = useState(false);
+  const [cancelPrNote, setCancelPrNote] = useState('');
   const [showAddLine, setShowAddLine] = useState(false);
   /** `production_request_items.id` when opening the picker to edit that line; `null` = add. */
   const [editingPrLineId, setEditingPrLineId] = useState<string | null>(null);
@@ -413,7 +385,7 @@ export function ProductionRequestDetailPage() {
   const fetchLogs = useCallback(async (requestId: string) => {
     const { data, error: e } = await supabase
       .from('production_request_logs')
-      .select('id, action, performed_by, description, created_at, performed_by_role')
+      .select('id, action, performed_by, description, created_at, performed_by_role, old_value, new_value, metadata')
       .eq('request_id', requestId)
       .order('created_at', { ascending: false });
     if (e) {
@@ -670,6 +642,44 @@ export function ProductionRequestDetailPage() {
       void fetchPR({ silent: true });
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : 'Failed to reject');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleCancelPr = async () => {
+    if (!id || !pr) return;
+    setSaving(true);
+    try {
+      const now = new Date().toISOString();
+      const note = cancelPrNote.trim();
+      const { error: u } = await supabase
+        .from('production_requests')
+        .update({
+          status: 'Cancelled',
+          accepted_by: null,
+          accepted_at: null,
+          rejected_by: null,
+          rejection_reason: null,
+          expected_completion_date: expDate || null,
+          notes: pr.notes,
+          updated_at: now,
+        })
+        .eq('id', id);
+      if (u) throw u;
+      await insertLog(
+        'cancelled',
+        note ? `Cancelled by ${actor}. ${note}` : `Cancelled by ${actor}.`,
+        { status: 'Cancelled', ...(note ? { note } : {}) },
+      );
+      addAuditLog('Cancelled PR', 'Production', note ? `${pr.pr_number}: ${note}` : pr.pr_number);
+      setShowCancelPr(false);
+      setCancelPrNote('');
+      setIsEditing(false);
+      setEditedStatus(null);
+      void fetchPR({ silent: true });
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : 'Failed to cancel');
     } finally {
       setSaving(false);
     }
@@ -1249,6 +1259,18 @@ export function ProductionRequestDetailPage() {
                 >
                   <CheckCircle className="w-4 h-4" />
                   Mark complete
+                </Button>
+              )}
+              {['Draft', 'Requested', 'Accepted', 'In Progress'].includes(pr.status) && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="gap-2 border-red-300 text-red-700 hover:bg-red-50"
+                  onClick={() => setShowCancelPr(true)}
+                  disabled={saving}
+                >
+                  <Ban className="w-4 h-4" />
+                  Cancel request
                 </Button>
               )}
               <Button variant="outline" onClick={handleEdit} className="gap-2" disabled={saving}>
@@ -1863,13 +1885,16 @@ export function ProductionRequestDetailPage() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <Clock className="w-5 h-5" />
-            Production request activity
+            Activity log
           </CardTitle>
         </CardHeader>
         <CardContent>
           <div className="space-y-3">
             {logs.length === 0 ? (
-              <p className="text-sm text-gray-500 text-center py-8">No activity yet.</p>
+              <p className="text-sm text-gray-500 text-center py-8">
+                No activity recorded yet. Submissions, approvals, status changes, production runs, order links, and notes
+                will appear here.
+              </p>
             ) : (
               logs.map((log, index) => {
                 const isLast = index === logs.length - 1;
@@ -1881,34 +1906,37 @@ export function ProductionRequestDetailPage() {
                   hour: 'numeric',
                   minute: '2-digit',
                 });
+                const roleLabel =
+                  log.performed_by_role === 'Admin' ? 'Executive' : log.performed_by_role ?? '';
                 return (
-                  <div key={log.id} className="relative pl-8 pb-3 last:pb-0">
+                  <div key={log.id} className="relative pl-8 pb-3">
                     {!isLast && <div className="absolute left-3 top-8 bottom-0 w-0.5 bg-gray-200" aria-hidden />}
                     <div
-                      className={`absolute left-0 top-1 w-6 h-6 rounded-full flex items-center justify-center ${prLogActionColor(
+                      className={`absolute left-0 top-1 w-6 h-6 rounded-full flex items-center justify-center ${getPrLogActionColor(
                         log.action,
                       )}`}
                     >
-                      {prLogActionIcon(log.action)}
+                      {getPrLogActionIcon(log.action)}
                     </div>
                     <div className="bg-gray-50 rounded-lg p-3 hover:bg-gray-100 transition-colors">
                       <div className="flex items-start justify-between gap-2 mb-1">
-                        <p className="text-sm font-medium text-gray-900 flex-1">{log.description || log.action}</p>
-                        {log.performed_by_role && (
+                        <p className="text-sm font-medium text-gray-900 flex-1">{prLogCardHeadline(log)}</p>
+                        {roleLabel && (
                           <span
-                            className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${prLogRoleBadgeColor(
-                              log.performed_by_role,
+                            className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${prActivityLogRoleBadgeColor(
+                              log.performed_by_role ?? '',
                             )}`}
                           >
-                            {log.performed_by_role}
+                            {roleLabel}
                           </span>
                         )}
                       </div>
-                      <div className="flex items-center gap-2 text-xs text-gray-500">
-                        <User className="w-3.5 h-3.5 flex-shrink-0" />
+                      <div className="flex items-center gap-2 text-xs text-gray-500 mt-1 mb-1">
+                        <User className="w-3.5 h-3.5 shrink-0" />
                         <span className="font-medium text-gray-700">{log.performed_by ?? '—'}</span>
                         <span>· {timeStr}</span>
                       </div>
+                      <PrActivityLogHumanDetails log={log} />
                     </div>
                   </div>
                 );
@@ -1978,6 +2006,60 @@ export function ProductionRequestDetailPage() {
                 >
                   {saving && <Loader2 className="w-4 h-4 animate-spin mr-1" />}
                   Reject
+                </Button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
+
+      {showCancelPr &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[100] flex min-h-[100dvh] w-full items-center justify-center bg-black/50 p-4"
+            role="presentation"
+            onClick={() => {
+              if (!saving) {
+                setShowCancelPr(false);
+                setCancelPrNote('');
+              }
+            }}
+          >
+            <div
+              className="bg-white rounded-lg shadow-xl max-w-md w-full p-6 space-y-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="font-semibold text-lg">Cancel this production request?</h3>
+              <p className="text-sm text-gray-600">
+                The request will be marked <span className="font-semibold">Cancelled</span>. This is recorded in the
+                request log.
+              </p>
+              <textarea
+                className="w-full border rounded-lg p-2 text-sm"
+                rows={3}
+                placeholder="Notes (optional)…"
+                value={cancelPrNote}
+                onChange={(e) => setCancelPrNote(e.target.value)}
+              />
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setShowCancelPr(false);
+                    setCancelPrNote('');
+                  }}
+                  disabled={saving}
+                >
+                  Back
+                </Button>
+                <Button
+                  variant="primary"
+                  className="bg-red-600 hover:bg-red-700"
+                  onClick={() => void handleCancelPr()}
+                  disabled={saving}
+                >
+                  {saving && <Loader2 className="w-4 h-4 animate-spin mr-1" />}
+                  Confirm cancel
                 </Button>
               </div>
             </div>

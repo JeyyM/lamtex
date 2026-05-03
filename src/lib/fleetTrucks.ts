@@ -281,8 +281,93 @@ export async function fetchFleetTrucksForBranch(branchName: string): Promise<{
 }
 
 
+/** Trip statuses that count as finished legs for totals and utilization averages. */
+const TRIP_DB_TERMINAL = new Set(['Completed', 'Failed', 'Delayed']);
+
+function dbStatusToHistoryLabel(st: string): string {
+  if (st === 'Failed') return 'Failed';
+  if (st === 'Delayed') return 'Delayed';
+  if (st === 'Completed') return 'Completed';
+  if (st === 'In Transit') return 'In Transit';
+  if (st === 'Loading') return 'Loading';
+  if (st === 'Planned' || st === 'Pending') return 'Scheduled';
+  return st.trim() || 'Scheduled';
+}
+
+function liveTripRowToHistoryRecord(row: {
+  id: string;
+  trip_number: string | null;
+  scheduled_date: string | null;
+  driver_id?: string | null;
+  driver_name: string | null;
+  destinations: string[] | null;
+  order_ids: string[] | null;
+  status: string | null;
+  capacity_used_percent: number | string | null;
+}): TripHistoryRecord {
+  const st = String(row.status ?? '');
+  const orderIds = ((row.order_ids ?? []) as string[]).filter(Boolean);
+  const dsr = row.capacity_used_percent;
+  return {
+    id: row.id,
+    tripId: row.id,
+    tripNumber: row.trip_number ?? '—',
+    date: (row.scheduled_date ?? '').slice(0, 10),
+    driverName: row.driver_name ?? '',
+    driverId: (row.driver_id as string | null) ?? '',
+    route: row.destinations ?? [],
+    ordersCount: orderIds.length,
+    distance: 0,
+    duration: '—',
+    status: dbStatusToHistoryLabel(st),
+    fuelUsed: 0,
+    fuelCost: 0,
+    revenue: 0,
+    deliverySuccessRate: dsr != null && dsr !== '' ? num(dsr) : undefined,
+  };
+}
+
+function computeTruckUtilizationDisplay(params: {
+  liveTrips: { scheduled_date: string | null; status: string | null; capacity_used_percent: unknown }[];
+  histOnly: { scheduled_date: string | null; status: string | null; delivery_success_rate: unknown }[];
+  vehicleColumn: number;
+}): number {
+  type Point = { date: string; rate: number };
+  const points: Point[] = [];
+  for (const t of params.liveTrips) {
+    if (!TRIP_DB_TERMINAL.has(String(t.status ?? ''))) continue;
+    points.push({
+      date: (t.scheduled_date ?? '').slice(0, 10),
+      rate: num(t.capacity_used_percent),
+    });
+  }
+  for (const h of params.histOnly) {
+    if (!TRIP_DB_TERMINAL.has(String(h.status ?? ''))) continue;
+    points.push({
+      date: (h.scheduled_date ?? '').slice(0, 10),
+      rate: num(h.delivery_success_rate),
+    });
+  }
+  const weekAgo = new Date();
+  weekAgo.setDate(weekAgo.getDate() - 7);
+  const weekYmd = weekAgo.toISOString().slice(0, 10);
+  const inWeek = points.filter((p) => p.date >= weekYmd && Number.isFinite(p.rate) && p.rate >= 0);
+  if (inWeek.length) {
+    return Math.round(inWeek.reduce((s, p) => s + p.rate, 0) / inWeek.length);
+  }
+  const sorted = [...points]
+    .filter((p) => Number.isFinite(p.rate) && p.rate >= 0)
+    .sort((a, b) => b.date.localeCompare(a.date));
+  const recent = sorted.slice(0, 10);
+  if (recent.length) {
+    return Math.round(recent.reduce((s, p) => s + p.rate, 0) / recent.length);
+  }
+  return Math.round(params.vehicleColumn);
+}
+
 function mapTripRowToHistory(row: {
   id: string;
+  trip_id: string | null;
   trip_number: string | null;
   scheduled_date: string | null;
   driver_name: string | null;
@@ -292,13 +377,15 @@ function mapTripRowToHistory(row: {
   delivery_success_rate: number | string | null;
 }): TripHistoryRecord {
   const st = row.status ?? 'Completed';
-  const status: TripHistoryRecord['status'] =
-    st === 'Delayed' || st === 'Failed' ? st : 'Completed';
+  const status =
+    st === 'Delayed' ? 'Delayed' : st === 'Failed' ? 'Failed' : st === 'Completed' ? 'Completed' : 'Completed';
   const dsr = row.delivery_success_rate;
-  const deliverySuccessRate =
-    dsr != null && dsr !== '' ? num(dsr) : undefined;
+  const deliverySuccessRate = dsr != null && dsr !== '' ? num(dsr) : undefined;
+  const tripId = row.trip_id ?? null;
+  const rowId = tripId ?? `hist-${row.id}`;
   return {
-    id: row.id,
+    id: rowId,
+    tripId,
     tripNumber: row.trip_number ?? '—',
     date: (row.scheduled_date ?? '').slice(0, 10),
     driverName: row.driver_name ?? '',
@@ -349,7 +436,7 @@ export function calendarBookingsFromTripHistory(trips: TripHistoryRecord[]): Cal
   return trips.map((t) => ({
     date: t.date,
     type: 'Trip' as const,
-    tripId: t.id,
+    tripId: t.tripId ?? undefined,
     tripNumber: t.tripNumber,
     status: t.status,
     driver: t.driverName,
@@ -673,11 +760,11 @@ export async function fetchTruckDetailBundle(vehicleUuid: string): Promise<{
   const mv = num(v.max_volume_cbm);
   const odo = int(v.current_odometer_km);
 
-  const [{ data: th }, { data: mr }] = await Promise.all([
+  const [{ data: th }, { data: mr }, { data: liveTrips }] = await Promise.all([
     supabase
       .from('trip_history')
       .select(
-        'id, trip_number, scheduled_date, driver_name, destinations, orders_count, status, delivery_success_rate',
+        'id, trip_id, trip_number, scheduled_date, driver_name, destinations, orders_count, status, delivery_success_rate',
       )
       .eq('vehicle_id', vehicleUuid.trim())
       .order('scheduled_date', { ascending: false }),
@@ -688,11 +775,44 @@ export async function fetchTruckDetailBundle(vehicleUuid: string): Promise<{
       )
       .eq('vehicle_id', vehicleUuid.trim())
       .order('scheduled_date', { ascending: false }),
+    supabase
+      .from('trips')
+      .select(
+        'id, trip_number, scheduled_date, driver_id, driver_name, destinations, order_ids, status, capacity_used_percent',
+      )
+      .eq('vehicle_id', vehicleUuid.trim())
+      .order('scheduled_date', { ascending: false }),
   ]);
 
-  const tripHistory = (th ?? []).map((r) =>
-    mapTripRowToHistory(r as Parameters<typeof mapTripRowToHistory>[0]),
-  );
+  type LiveTripRow = Parameters<typeof liveTripRowToHistoryRecord>[0];
+  type HistRow = Parameters<typeof mapTripRowToHistory>[0];
+
+  const liveRows = (liveTrips ?? []) as LiveTripRow[];
+  const liveById = new Set(liveRows.map((t) => t.id));
+  const histRows = (th ?? []) as HistRow[];
+  const histOnly = histRows.filter((h) => {
+    const tid = h.trip_id;
+    if (tid == null || tid === '') return true;
+    return !liveById.has(tid);
+  });
+
+  const fromLive = liveRows.map(liveTripRowToHistoryRecord);
+  const fromHist = histOnly.map(mapTripRowToHistory);
+  const tripHistory = [...fromLive, ...fromHist].sort((a, b) => {
+    const d = b.date.localeCompare(a.date);
+    if (d !== 0) return d;
+    return (b.tripNumber || '').localeCompare(a.tripNumber || '');
+  });
+
+  const terminalLive = liveRows.filter((t) => TRIP_DB_TERMINAL.has(String(t.status ?? ''))).length;
+  const terminalHist = histOnly.filter((h) => TRIP_DB_TERMINAL.has(String(h.status ?? ''))).length;
+  const totalTripsCounted = terminalLive + terminalHist;
+
+  const utilizationPercent = computeTruckUtilizationDisplay({
+    liveTrips: liveRows,
+    histOnly,
+    vehicleColumn: num(v.utilization_percent),
+  });
   const maintenanceHistory = (mr ?? []).map((r) =>
     mapMaintRow(r as Parameters<typeof mapMaintRow>[0]),
   );
@@ -748,8 +868,8 @@ export async function fetchTruckDetailBundle(vehicleUuid: string): Promise<{
     nextMaintenanceDue: fmtDate(v.maintenance_due) ?? maintenanceHistory.find((m) => m.nextDue)?.nextDue ?? '—',
     totalDistance: odo,
     mileageAtLastMaintenance: Math.max(0, odo - 2000),
-    totalTrips: tripHistory.length,
-    utilizationPercent: Math.round(num(v.utilization_percent)),
+    totalTrips: totalTripsCounted,
+    utilizationPercent,
     nextAvailableTime: fmtDateTime(v.next_available_time),
     currentTrip,
   };

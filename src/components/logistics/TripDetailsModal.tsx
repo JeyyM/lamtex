@@ -1,6 +1,5 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { X, MapPin, Truck, User, Calendar, Clock, Package, AlertTriangle, Edit, CheckCircle, Phone, Mail, Building, FileText, Navigation, ExternalLink, Loader2, Camera, CheckCircle2, Ban } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { Trip } from '@/src/types/logistics';
@@ -23,7 +22,7 @@ interface OrderLineItem {
   variantId: string | null;
   discountPercent: number;
   discountAmount: number;
-  quantityShipped: number;
+  quantityShipped?: number;
   quantityDelivered: number;
   stockHint: 'Available' | 'Partial' | 'Not Available';
 }
@@ -63,17 +62,44 @@ interface TripDetailsModalProps {
   trip: Trip;
   onEdit: () => void;
   onOrderStatusChange?: (tripId: string, orderId: string, newStatus: string) => void;
-  onTripStatusChange?: (tripId: string, newStatus: string) => void;
+  onTripStatusChange?: (tripId: string, newStatus: string, extra?: { delayReason?: string }) => void;
+}
+
+/** Trip is done (truck can return) once every assigned order is delivered, partially fulfilled, or cancelled. */
+const TRUCK_RETURN_ORDER_STATUSES = new Set<string>(['Delivered', 'Partially Fulfilled', 'Cancelled']);
+
+function allTripOrdersAllowTruckReturn(orderIds: string[], statuses: Record<string, string>): boolean {
+  if (orderIds.length === 0) return false;
+  return orderIds.every((id) => {
+    const st = statuses[id];
+    return st != null && TRUCK_RETURN_ORDER_STATUSES.has(st);
+  });
+}
+
+async function persistTripCompletedInDb(tripId: string): Promise<boolean> {
+  const now = new Date().toISOString();
+  const { error } = await supabase
+    .from('trips')
+    .update({ status: 'Completed', actual_arrival: now, updated_at: now })
+    .eq('id', tripId);
+  if (error) {
+    console.error('persistTripCompletedInDb', error);
+    return false;
+  }
+  return true;
 }
 
 export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusChange, onTripStatusChange }: TripDetailsModalProps) {
-  const navigate = useNavigate();
   const { addAuditLog, session, employeeName, role, branch } = useAppContext();
   const [ordersData, setOrdersData] = useState<TripOrder[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
-  // Per-order dispatch status (Scheduled → Loading → Packed → Ready)
+  // Per-order dispatch status (Scheduled → Loading → Packed, then in transit with qty modal)
   const [orderStatuses, setOrderStatuses] = useState<Record<string, string>>({});
   const [statusSaving, setStatusSaving] = useState<Record<string, boolean>>({});
+
+  const [showReportDelayModal, setShowReportDelayModal] = useState(false);
+  const [delayExplanation, setDelayExplanation] = useState('');
+  const [delaySaving, setDelaySaving] = useState(false);
 
   // Derived trip badge: lowest order status wins
   const ORDER_STATUS_RANK: Record<string, number> = {
@@ -82,6 +108,7 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
     'Partially Fulfilled': 5,
   };
   const displayTripStatus = React.useMemo(() => {
+    if (trip.status === 'Delayed') return 'Delayed';
     const vals = Object.values(orderStatuses) as string[];
     if (!vals.length) return trip.status as string;
     let lowestRank = Infinity; let lowestSt: string = trip.status;
@@ -96,6 +123,8 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
   const [showInTransitModal, setShowInTransitModal] = useState(false);
   const [inTransitOrder, setInTransitOrder] = useState<TripOrder | null>(null);
   const [inTransitSubmitting, setInTransitSubmitting] = useState(false);
+  /** Order status after confirming quantities: Packed (from Loading) or In Transit (from Packed/Ready). */
+  const shipQtyNextOrderStatusRef = useRef<'Packed' | 'In Transit'>('In Transit');
 
   // Proof of Delivery modal state
   const [showProofModal, setShowProofModal] = useState(false);
@@ -104,19 +133,26 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
   // Cancel order modal state
   const [cancelTarget, setCancelTarget] = useState<{ id: string; orderNumber: string; customer: string; totalAmount: number } | null>(null);
 
-  const ORDER_DISPATCH_STAGES = ['Scheduled', 'Loading', 'Packed', 'Ready'] as const;
-  const stageRank = (s: string) => {
-    const i = ORDER_DISPATCH_STAGES.indexOf(s as typeof ORDER_DISPATCH_STAGES[number]);
+  /** Advance one step at a time until Packed; confirm loaded qty + In Transit is a separate action. */
+  const ORDER_DISPATCH_STAGES = ['Scheduled', 'Loading', 'Packed'] as const;
+  /** Ready = legacy stop before in transit (same outbound gate as Packed). */
+  const dispatchPipelineIndex = (s: string): number => {
+    const u = String(s ?? '').trim();
+    if (u === 'Approved' || u === 'Scheduled') return 0;
+    if (u === 'Loading') return 1;
+    if (u === 'Packed' || u === 'Ready') return 2;
+    const i = ORDER_DISPATCH_STAGES.indexOf(u as (typeof ORDER_DISPATCH_STAGES)[number]);
     return i >= 0 ? i : -1;
   };
-  const nextStage = (current: string): typeof ORDER_DISPATCH_STAGES[number] | null => {
-    const idx = stageRank(current);
+  const nextStage = (current: string): (typeof ORDER_DISPATCH_STAGES)[number] | null => {
+    const idx = dispatchPipelineIndex(current);
     if (idx < 0 || idx >= ORDER_DISPATCH_STAGES.length - 1) return null;
     return ORDER_DISPATCH_STAGES[idx + 1];
   };
 
   const handleAdvanceStatus = async (orderId: string) => {
-    const current = orderStatuses[orderId] ?? 'Scheduled';
+    const raw = orderStatuses[orderId] ?? 'Scheduled';
+    const current = String(raw).trim() || 'Scheduled';
     const next = nextStage(current);
     if (!next) return;
     setStatusSaving((s) => ({ ...s, [orderId]: true }));
@@ -130,66 +166,103 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
     onOrderStatusChange?.(trip.id, orderId, next);
   };
 
-  const handleConfirmInTransit = useCallback(async (rows: { itemId: string; shippedQuantity: number }[]) => {
-    if (!inTransitOrder) return;
-    setInTransitSubmitting(true);
-    try {
-      const orderId = inTransitOrder.order.id;
-      const branchId = branch?.id ?? null;
+  const applyTripShipment = useCallback(
+    async (
+      tripOrder: TripOrder,
+      rows: { itemId: string; shippedQuantity: number }[],
+      nextOrderStatus: 'Packed' | 'In Transit',
+    ) => {
+      setInTransitSubmitting(true);
+      try {
+        const orderId = tripOrder.order.id;
+        const branchId = branch?.id ?? null;
+        const movementNoteBase =
+          nextOrderStatus === 'Packed'
+            ? `Packed / loaded for order ${tripOrder.order.orderNumber} (Trip ${trip.tripNumber})`
+            : `Dispatched for order ${tripOrder.order.orderNumber} (Trip ${trip.tripNumber})`;
 
-      for (const row of rows) {
-        if (row.shippedQuantity <= 0) continue;
-        const item = inTransitOrder.order.items.find((i) => i.id === row.itemId);
-        if (!item?.variantId) continue;
+        for (const row of rows) {
+          if (row.shippedQuantity <= 0) continue;
+          const item = tripOrder.order.items.find((i) => i.id === row.itemId);
+          if (!item?.variantId) continue;
 
-        // Deduct from stock
-        const { data: stockRow } = await supabase
-          .from('product_variant_stock')
-          .select('id, quantity')
-          .eq('variant_id', item.variantId)
-          .eq('branch_id', branchId)
-          .maybeSingle();
+          const { data: stockRow } = await supabase
+            .from('product_variant_stock')
+            .select('id, quantity')
+            .eq('variant_id', item.variantId)
+            .eq('branch_id', branchId)
+            .maybeSingle();
 
-        if (stockRow) {
-          const newQty = Math.max(0, Number(stockRow.quantity) - row.shippedQuantity);
-          await supabase.from('product_variant_stock').update({ quantity: newQty }).eq('id', stockRow.id);
+          if (stockRow) {
+            const newQty = Math.max(0, Number(stockRow.quantity) - row.shippedQuantity);
+            await supabase.from('product_variant_stock').update({ quantity: newQty }).eq('id', stockRow.id);
+          }
+
+          await supabase.from('product_stock_movements').insert({
+            variant_id: item.variantId,
+            branch_id: branchId,
+            movement_type: 'outgoing',
+            quantity: row.shippedQuantity,
+            reference_type: 'order',
+            reference_id: orderId,
+            notes: movementNoteBase,
+            created_by: session?.user?.id ?? null,
+          });
+
+          const newShipped = (item.quantityShipped ?? 0) + row.shippedQuantity;
+          await supabase.from('order_line_items').update({ quantity_shipped: newShipped }).eq('id', row.itemId);
         }
 
-        // Record movement
-        await supabase.from('product_stock_movements').insert({
-          variant_id: item.variantId,
-          branch_id: branchId,
-          movement_type: 'outgoing',
-          quantity: row.shippedQuantity,
-          reference_type: 'order',
-          reference_id: orderId,
-          notes: `Dispatched for order ${inTransitOrder.order.orderNumber} (Trip ${trip.tripNumber})`,
-          created_by: session?.user?.id ?? null,
-        });
+        await supabase
+          .from('orders')
+          .update({ status: nextOrderStatus, updated_at: new Date().toISOString() })
+          .eq('id', orderId);
 
-        // Update line item shipped quantity
-        const newShipped = (item.quantityShipped ?? 0) + row.shippedQuantity;
-        await supabase.from('order_line_items').update({ quantity_shipped: newShipped }).eq('id', row.itemId);
+        const auditMsg =
+          nextOrderStatus === 'Packed'
+            ? `Marked order ${tripOrder.order.orderNumber} as Packed (loaded) from Trip ${trip.tripNumber}`
+            : `Marked order ${tripOrder.order.orderNumber} as In Transit from Trip ${trip.tripNumber}`;
+        addAuditLog?.(auditMsg, 'order');
+
+        setOrderStatuses((s) => ({ ...s, [orderId]: nextOrderStatus }));
+        setOrdersData((prev) =>
+          prev.map((o) =>
+            o.order.id === orderId
+              ? {
+                  ...o,
+                  order: {
+                    ...o.order,
+                    status: nextOrderStatus,
+                    items: o.order.items.map((li) => {
+                      const row = rows.find((r) => r.itemId === li.id);
+                      if (!row || row.shippedQuantity <= 0) return li;
+                      return { ...li, quantityShipped: (li.quantityShipped ?? 0) + row.shippedQuantity };
+                    }),
+                  },
+                }
+              : o,
+          ),
+        );
+        onOrderStatusChange?.(trip.id, orderId, nextOrderStatus);
+      } catch (err) {
+        console.error('applyTripShipment error', err);
+      } finally {
+        setInTransitSubmitting(false);
       }
+    },
+    [branch, session, trip, addAuditLog, onOrderStatusChange],
+  );
 
-      // Update order status to In Transit
-      await supabase.from('orders').update({ status: 'In Transit', updated_at: new Date().toISOString() }).eq('id', orderId);
-
-      addAuditLog?.(`Marked order ${inTransitOrder.order.orderNumber} as In Transit from Trip ${trip.tripNumber}`, 'order');
-
-      setOrderStatuses((s) => ({ ...s, [orderId]: 'In Transit' }));
-      setOrdersData((prev) => prev.map((o) =>
-        o.order.id === orderId ? { ...o, order: { ...o.order, status: 'In Transit' } } : o
-      ));
-      onOrderStatusChange?.(trip.id, orderId, 'In Transit');
+  const handleConfirmPackShipment = useCallback(
+    async (rows: { itemId: string; shippedQuantity: number }[]) => {
+      if (!inTransitOrder) return;
+      await applyTripShipment(inTransitOrder, rows, 'Packed');
       setShowInTransitModal(false);
       setInTransitOrder(null);
-    } catch (err) {
-      console.error('handleConfirmInTransit error', err);
-    } finally {
-      setInTransitSubmitting(false);
-    }
-  }, [inTransitOrder, branch, session, trip, addAuditLog, onOrderStatusChange]);
+      shipQtyNextOrderStatusRef.current = 'In Transit';
+    },
+    [inTransitOrder, applyTripShipment],
+  );
 
   const handleFulfillOrder = useCallback(async (fulfillmentData: FulfillmentData[], _proofImageUrls: string[]) => {
     if (!proofTarget) return;
@@ -220,7 +293,6 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
 
     addAuditLog?.(`Recorded delivery for order ${target?.order.orderNumber ?? orderId} (Trip ${trip.tripNumber}) → ${newStatus}`, 'order');
 
-    setOrderStatuses((s) => ({ ...s, [orderId]: newStatus }));
     setOrdersData((prev) => prev.map((o) => {
       if (o.order.id !== orderId) return o;
       const updatedItems = o.order.items.map((l) => {
@@ -231,22 +303,14 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
     }));
     onOrderStatusChange?.(trip.id, orderId, newStatus);
 
-    // Auto-complete trip if every order is now Delivered
+    // Auto-complete trip when every order is delivered, partially fulfilled, or cancelled (truck can return).
     setOrderStatuses((latestStatuses) => {
       const allStatuses = { ...latestStatuses, [orderId]: newStatus };
-      const allDelivered = trip.orders.length > 0 &&
-        trip.orders.every((oid) => {
-          const st = allStatuses[oid];
-          return st === 'Delivered' || st === 'Partially Fulfilled';
-        });
-      const fullyDelivered = trip.orders.length > 0 &&
-        trip.orders.every((oid) => allStatuses[oid] === 'Delivered');
-      if (fullyDelivered) {
-        supabase.from('logistics_trips').update({ status: 'Completed', updated_at: new Date().toISOString() }).eq('id', trip.id).then(() => {});
-        onTripStatusChange?.(trip.id, 'Complete');
-      } else if (allDelivered) {
-        supabase.from('logistics_trips').update({ status: 'Completed', updated_at: new Date().toISOString() }).eq('id', trip.id).then(() => {});
-        onTripStatusChange?.(trip.id, 'Delivered');
+      if (allTripOrdersAllowTruckReturn(trip.orders, allStatuses)) {
+        void (async () => {
+          const ok = await persistTripCompletedInDb(trip.id);
+          if (ok) onTripStatusChange?.(trip.id, 'Complete');
+        })();
       }
       return allStatuses;
     });
@@ -319,13 +383,55 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
     }
 
     addAuditLog?.(`Cancelled order ${orderNumber} (Trip ${trip.tripNumber}): ${data.reason}`, 'order');
-    setOrderStatuses((s) => ({ ...s, [orderId]: 'Cancelled' }));
+    const mergedStatuses = { ...orderStatuses, [orderId]: 'Cancelled' };
+    setOrderStatuses(mergedStatuses);
     setOrdersData((prev) => prev.map((o) =>
       o.order.id === orderId ? { ...o, order: { ...o.order, status: 'Cancelled' } } : o
     ));
     onOrderStatusChange?.(trip.id, orderId, 'Cancelled');
+
+    if (allTripOrdersAllowTruckReturn(trip.orders, mergedStatuses)) {
+      const ok = await persistTripCompletedInDb(trip.id);
+      if (ok) onTripStatusChange?.(trip.id, 'Complete');
+    }
+
     setCancelTarget(null);
-  }, [cancelTarget, ordersData, orderStatuses, trip, employeeName, session, role, addAuditLog, onOrderStatusChange]);
+  }, [cancelTarget, ordersData, orderStatuses, trip, employeeName, session, role, addAuditLog, onOrderStatusChange, onTripStatusChange]);
+
+  useEffect(() => {
+    if (!showReportDelayModal) return;
+    setDelayExplanation((trip.delayReason ?? '').trim());
+  }, [showReportDelayModal, trip.delayReason]);
+
+  const handleSubmitReportDelay = useCallback(async () => {
+    const text = delayExplanation.trim();
+    if (!text) {
+      window.alert('Please describe what happened.');
+      return;
+    }
+    setDelaySaving(true);
+    try {
+      const now = new Date().toISOString();
+      const { error } = await supabase
+        .from('trips')
+        .update({
+          status: 'Delayed',
+          delay_reason: text,
+          updated_at: now,
+        })
+        .eq('id', trip.id);
+      if (error) {
+        window.alert(error.message);
+        return;
+      }
+      const summary = text.length > 200 ? `${text.slice(0, 200)}…` : text;
+      addAuditLog?.('Reported trip delay', 'trip', `${trip.tripNumber}: ${summary}`);
+      onTripStatusChange?.(trip.id, 'Delayed', { delayReason: text });
+      setShowReportDelayModal(false);
+    } finally {
+      setDelaySaving(false);
+    }
+  }, [delayExplanation, trip.id, trip.tripNumber, addAuditLog, onTripStatusChange]);
 
   // Fetch real orders whenever the modal opens or the trip changes
   useEffect(() => {
@@ -379,7 +485,10 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
             variantId: (li as any).product_variants?.id ?? null,
             discountPercent: Number((li as any).discount_percent ?? 0),
             discountAmount: Number((li as any).discount_amount ?? 0),
-            quantityShipped: Number((li as any).quantity_shipped ?? 0),
+            quantityShipped:
+              (li as any).quantity_shipped != null && (li as any).quantity_shipped !== ''
+                ? Number((li as any).quantity_shipped)
+                : undefined,
             quantityDelivered: Number((li as any).quantity_delivered ?? 0),
             stockHint: ((li as any).stock_hint as 'Available' | 'Partial' | 'Not Available') ?? 'Available',
           });
@@ -443,7 +552,7 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
   const customersInTrip = ordersData;
 
   const getStatusColor = (status: string) => {
-    if (status === 'Delivered') return 'success';
+    if (status === 'Delivered' || status === 'Complete') return 'success';
     if (status === 'Cancelled') return 'danger';
     if (status === 'In Transit' || status === 'Loading' || status === 'Scheduled') return 'warning';
     if (status === 'Delayed' || status === 'Failed') return 'danger';
@@ -461,13 +570,27 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
                 <Truck className="w-6 h-6 text-blue-600" />
                 Trip Details: {trip.tripNumber}
               </h2>
-              <Badge variant={getStatusColor(displayTripStatus)} className="flex-shrink-0">{displayTripStatus}</Badge>
+              <Badge variant={getStatusColor(displayTripStatus)} className="flex-shrink-0">
+                {displayTripStatus === 'Complete' ? 'Completed' : displayTripStatus}
+              </Badge>
             </div>
             <p className="text-sm text-gray-500 mt-1 break-words">
               {trip.vehicleName} • {trip.driverName}
             </p>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {trip.status !== 'Complete' && trip.status !== 'Cancelled' && (
+              <Button
+                type="button"
+                onClick={() => setShowReportDelayModal(true)}
+                variant="outline"
+                size="sm"
+                className="inline-flex border-amber-300 text-amber-900 hover:bg-amber-50"
+              >
+                <AlertTriangle className="w-4 h-4 mr-2" />
+                Report Delay
+              </Button>
+            )}
             <Button onClick={onEdit} variant="outline" size="sm" className="hidden sm:inline-flex">
               <Edit className="w-4 h-4 mr-2" />
               Edit Trip Info
@@ -598,16 +721,26 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
                           <Badge variant={order.status === 'Approved' || order.status === 'Ready' ? 'success' : order.status === 'Loading' || order.status === 'Packed' ? 'warning' : 'default'}>
                             {orderStatuses[order.id] ?? order.status}
                           </Badge>
+                          {/* Advance Scheduled → Loading → Packed */}
                           {(() => {
-                            const current = orderStatuses[order.id] ?? order.status;
+                            const current = String(orderStatuses[order.id] ?? order.status ?? '').trim();
                             const next = nextStage(current);
                             if (!next) return null;
                             const saving = statusSaving[order.id];
+                            const openPackedQtyModal = next === 'Packed';
                             return (
                               <button
                                 type="button"
                                 disabled={saving}
-                                onClick={() => handleAdvanceStatus(order.id)}
+                                onClick={() => {
+                                  if (openPackedQtyModal) {
+                                    shipQtyNextOrderStatusRef.current = 'Packed';
+                                    setInTransitOrder({ order, customer });
+                                    setShowInTransitModal(true);
+                                  } else {
+                                    void handleAdvanceStatus(order.id);
+                                  }
+                                }}
                                 className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-900 hover:bg-gray-700 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors"
                               >
                                 {saving
@@ -618,17 +751,25 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
                               </button>
                             );
                           })()}
-                          {/* Mark In Transit — available when order is Approved / Scheduled / Loading / Packed / Ready */}
-                          {['Approved', 'Scheduled', 'Loading', 'Packed', 'Ready'].includes(orderStatuses[order.id] ?? order.status) && (
+                          {/* Loaded qty confirm + In Transit from Packed / legacy Ready */}
+                          {['Packed', 'Ready'].includes(String(orderStatuses[order.id] ?? order.status ?? '').trim()) && (
                             <button
                               type="button"
+                              disabled={inTransitSubmitting}
                               onClick={() => {
-                                setInTransitOrder({ order, customer });
-                                setShowInTransitModal(true);
+                                const rows = order.items.map((i) => ({
+                                  itemId: i.id,
+                                  shippedQuantity: Math.max(0, Number(i.quantity) - Number(i.quantityShipped ?? 0)),
+                                }));
+                                void applyTripShipment({ order, customer }, rows, 'In Transit');
                               }}
-                              className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg transition-colors"
+                              className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors"
                             >
-                              <Truck className="w-3.5 h-3.5" />
+                              {inTransitSubmitting ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Truck className="w-3.5 h-3.5" />
+                              )}
                               Mark In Transit
                             </button>
                           )}
@@ -673,15 +814,16 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
                           <p className="text-sm text-gray-500 mb-1">Order Number</p>
                           <div className="flex items-center gap-2 flex-wrap">
                             <p className="text-base font-medium text-gray-900 break-words leading-relaxed">{order.orderNumber}</p>
-                            <button
-                              type="button"
-                              onClick={() => { onClose(); navigate(`/orders/${order.id}`); }}
+                            <a
+                              href={`/orders/${order.id}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
                               className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-800 hover:underline"
-                              title="Go to order page"
+                              title="Open order in new tab"
                             >
                               <ExternalLink className="w-3.5 h-3.5" />
                               View Order
-                            </button>
+                            </a>
                           </div>
                         </div>
                         <div>
@@ -828,7 +970,9 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
                 </div>
                 <div className="flex flex-col sm:flex-row sm:justify-between gap-1">
                   <span className="text-gray-500">Plate:</span>
-                  <span className="text-gray-900 break-words text-left sm:text-right">{trip.vehicleId}</span>
+                  <span className="text-gray-900 break-words text-left sm:text-right">
+                    {trip.plateNumber?.trim() ? trip.plateNumber.trim() : '—'}
+                  </span>
                 </div>
                 <div className="flex flex-col sm:flex-row sm:justify-between gap-1">
                   <span className="text-gray-500">Capacity:</span>
@@ -844,7 +988,7 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
               <FileText className="w-5 h-5 text-gray-600" />
               Logistics Notes
             </h3>
-            {trip.delayReason ? (
+            {trip.status !== 'Delayed' && trip.delayReason?.trim() ? (
               <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{trip.delayReason}</p>
             ) : (
               <p className="text-sm text-gray-400 italic">No logistics notes for this trip.</p>
@@ -875,7 +1019,13 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
       {showInTransitModal && inTransitOrder && (
         <MarkInTransitModal
           isOpen={showInTransitModal}
-          onClose={() => { if (!inTransitSubmitting) { setShowInTransitModal(false); setInTransitOrder(null); } }}
+          onClose={() => {
+            if (!inTransitSubmitting) {
+              setShowInTransitModal(false);
+              setInTransitOrder(null);
+              shipQtyNextOrderStatusRef.current = 'In Transit';
+            }
+          }}
           orderNumber={inTransitOrder.order.orderNumber}
           items={inTransitOrder.order.items.map((i) => ({
             id: i.id,
@@ -892,8 +1042,9 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
             quantityShipped: i.quantityShipped,
             quantityDelivered: i.quantityDelivered,
           }) as OrdersLineItem)}
+          purpose="markPacked"
           submitting={inTransitSubmitting}
-          onConfirm={handleConfirmInTransit}
+          onConfirm={handleConfirmPackShipment}
         />
       )}
 
@@ -930,13 +1081,78 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
       {/* ── Cancel Order Modal ───────────────────────────────────── */}
       {cancelTarget && (
         <CancelOrderModal
-          orderId={cancelTarget.id}
           orderNumber={cancelTarget.orderNumber}
           customerName={cancelTarget.customer}
           orderAmount={cancelTarget.totalAmount}
           onClose={() => setCancelTarget(null)}
           onConfirm={(data) => void handleCancelOrderInTrip(data)}
         />
+      )}
+
+      {/* Report delay — nested modal */}
+      {showReportDelayModal && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/40">
+          <div
+            className="bg-white rounded-xl shadow-xl max-w-lg w-full max-h-[90vh] flex flex-col border border-gray-200"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="report-delay-title"
+          >
+            <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-gray-200">
+              <h3 id="report-delay-title" className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+                Report trip delay
+              </h3>
+              <button
+                type="button"
+                onClick={() => !delaySaving && setShowReportDelayModal(false)}
+                className="p-2 rounded-lg hover:bg-gray-100"
+                aria-label="Close"
+              >
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+            <div className="p-5 flex-1 overflow-y-auto space-y-3">
+              <p className="text-sm text-gray-600 leading-relaxed">
+                Describe what happened (traffic, vehicle issue, customer unavailable, etc.). This sets the trip to{' '}
+                <span className="font-semibold">Delayed</span> and stores the note for your team.
+              </p>
+              <label htmlFor="delay-explanation" className="block text-sm font-semibold text-gray-800">
+                What happened?
+              </label>
+              <textarea
+                id="delay-explanation"
+                rows={5}
+                value={delayExplanation}
+                onChange={(e) => setDelayExplanation(e.target.value)}
+                disabled={delaySaving}
+                placeholder="e.g. Stuck in traffic on SLEX; dispatcher notified. New ETA 4:30 PM."
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:outline-none resize-y min-h-[120px] disabled:opacity-60"
+              />
+            </div>
+            <div className="flex flex-col-reverse sm:flex-row justify-end gap-2 px-5 py-4 border-t border-gray-200 bg-gray-50 rounded-b-xl">
+              <Button type="button" variant="outline" onClick={() => !delaySaving && setShowReportDelayModal(false)} disabled={delaySaving}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="primary"
+                onClick={() => void handleSubmitReportDelay()}
+                disabled={delaySaving}
+                className="bg-amber-600 hover:bg-amber-700 border-amber-600"
+              >
+                {delaySaving ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Saving…
+                  </>
+                ) : (
+                  'Save delay report'
+                )}
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

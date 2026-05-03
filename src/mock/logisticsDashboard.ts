@@ -66,6 +66,7 @@ const ORDERS_READY: OrderReadyForDispatch[] = [
   { id: 'ord2', orderNumber: 'ORD-2026-1237', customer: 'HomeDepot Makati', branch: 'Branch A', destination: 'Makati City', requiredDate: '2026-03-01', volume: 8.2, weight: 1520, urgency: 'Low', priority: 3, mapLat: 14.5547, mapLng: 121.0244 },
   { id: 'ord3', orderNumber: 'ORD-2026-1238', customer: 'QuickBuild Supply', branch: 'Branch A', destination: 'Pasig City', requiredDate: '2026-02-27', volume: 15.8, weight: 3200, urgency: 'Medium', priority: 2, mapLat: 14.5764, mapLng: 121.0851 },
   { id: 'ord4', orderNumber: 'ORD-2026-1250', customer: 'BuildPro Manila', branch: 'Branch A', destination: 'Manila', requiredDate: '2026-02-26', volume: 6.5, weight: 1100, urgency: 'High', priority: 1, mapLat: 14.5995, mapLng: 120.9842 },
+  { id: 'ord4b', orderNumber: 'ORD-2026-1299', customer: 'Metro Partial Demo', branch: 'Branch A', destination: 'Mandaluyong', requiredDate: '2026-02-28', volume: 3.25, weight: 600, urgency: 'Medium', priority: 2, notes: 'Partial: 5 of 10 units still to deliver', mapLat: 14.5794, mapLng: 121.0359 },
   { id: 'ord5', orderNumber: 'ORD-2026-1251', customer: 'Construction Plus', branch: 'Branch A', destination: 'Caloocan', requiredDate: '2026-02-28', volume: 10.2, weight: 2100, urgency: 'Medium', priority: 2, mapLat: 14.654, mapLng: 120.9849 },
 
   { id: 'ord6', orderNumber: 'ORD-2026-1240', customer: 'Visayas Builders', branch: 'Branch B', destination: 'Cebu City', requiredDate: '2026-02-26', volume: 10.5, weight: 1980, urgency: 'High', priority: 1, mapLat: 10.3157, mapLng: 123.8854 },
@@ -135,7 +136,7 @@ const TRIPS: Trip[] = [
   { id: 'trip7', tripNumber: 'TRIP-2026-C-001', vehicleId: 'TRK-C01', vehicleName: 'Truck C01', driverName: 'Antonio Ramirez', status: 'In Transit', scheduledDate: '2026-02-25', departureTime: '08:30', destinations: ['Davao City', 'Toril'], orders: ['ORD-2026-1245', 'ORD-2026-1253'], capacityUsed: 52, weightUsed: 2600, volumeUsed: 13.7, maxWeight: 5000, maxVolume: 25, eta: '2026-02-25 13:30', branch: 'Branch C' },
   
   // Old completed trip
-  { id: 'trip4', tripNumber: 'TRIP-2026-A-004', vehicleId: 'TRK-002', vehicleName: 'Truck 002', driverName: 'Carlos Garcia', status: 'Completed', scheduledDate: '2026-02-24', departureTime: '06:00', destinations: ['Makati City'], orders: ['ORD-2026-1235'], capacityUsed: 30, weightUsed: 1850, volumeUsed: 9.5, maxWeight: 5000, maxVolume: 25, actualArrival: '2026-02-24 10:30', branch: 'Branch A' },
+  { id: 'trip4', tripNumber: 'TRIP-2026-A-004', vehicleId: 'TRK-002', vehicleName: 'Truck 002', driverName: 'Carlos Garcia', status: 'Complete', scheduledDate: '2026-02-24', departureTime: '06:00', destinations: ['Makati City'], orders: ['ORD-2026-1235'], capacityUsed: 30, weightUsed: 1850, volumeUsed: 9.5, maxWeight: 5000, maxVolume: 25, actualArrival: '2026-02-24 10:30', branch: 'Branch A' },
 ];
 
 export function getTripsByBranch(branch: Branch): Trip[] {

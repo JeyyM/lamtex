@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Package, FileText, Truck, Calendar, History, Search, AlertTriangle, CheckCircle, X, Factory, ShoppingCart, Clock, MapPin, TrendingUp, Activity, Brain, Target, RefreshCw, GitBranch, Loader2, ArrowUp, ArrowDown, ArrowUpDown, ChevronLeft, ChevronRight, Camera, CheckCircle2 } from 'lucide-react';
-import { MarkInTransitModal } from '@/src/components/orders/MarkInTransitModal';
 import { FulfillOrderModal, type FulfillmentData } from '@/src/components/orders/FulfillOrderModal';
 import type { OrderLineItem } from '@/src/types/orders';
 import { Button } from '@/src/components/ui/Button';
@@ -218,6 +217,16 @@ interface OrderDeliveryCalEvent {
 }
 
 /** A live order row for the Orders & Loading tab. */
+/** Order statuses shown on Orders & Loading (warehouse + handoff). */
+const WAREHOUSE_LOADING_TAB_STATUSES = [
+  'Approved',
+  'Scheduled',
+  'Loading',
+  'Packed',
+  'Ready',
+  'In Transit',
+] as const;
+
 interface WarehouseOrderRow {
   id: string;
   orderNumber: string;
@@ -229,6 +238,17 @@ interface WarehouseOrderRow {
   branchId: string | null;
   branchCode: string;
   items: OrderLineItem[];
+  /** True when branch stock cannot cover remaining qty to ship for any line. */
+  hasShortage: boolean;
+}
+
+function warehouseOrderHasShortage(order: WarehouseOrderRow, onHandByVariant: Map<string, number>): boolean {
+  return order.items.some((li) => {
+    if (!li.variantId) return false;
+    const rem = Math.max(0, li.quantity - (li.quantityShipped ?? 0));
+    if (rem <= 0) return false;
+    return (onHandByVariant.get(li.variantId) ?? 0) < rem;
+  });
 }
 
 function orderDeliveryChipClass(ev: OrderDeliveryCalEvent): string {
@@ -253,10 +273,13 @@ function orderDeliveryStatusBadge(status: string): string {
       return 'bg-green-100 text-green-800 border-green-300';
     case 'In Transit':
       return 'bg-blue-100 text-blue-800 border-blue-300';
-    case 'Scheduled':
-    case 'Loading':
-    case 'Packed':
     case 'Ready':
+      return 'bg-emerald-100 text-emerald-900 border-emerald-300';
+    case 'Packed':
+      return 'bg-violet-100 text-violet-900 border-violet-300';
+    case 'Loading':
+      return 'bg-orange-100 text-orange-900 border-orange-300';
+    case 'Scheduled':
     case 'Partially Fulfilled':
       return 'bg-amber-100 text-amber-900 border-amber-300';
     case 'Approved':
@@ -650,9 +673,20 @@ export default function WarehousePage() {
   // Orders & Loading tab — live order rows + modals
   const [warehouseOrders, setWarehouseOrders] = useState<WarehouseOrderRow[]>([]);
   const [warehouseOrdersLoading, setWarehouseOrdersLoading] = useState(false);
-  const [showInTransitModal, setShowInTransitModal] = useState(false);
-  const [inTransitOrder, setInTransitOrder] = useState<WarehouseOrderRow | null>(null);
   const [inTransitSubmitting, setInTransitSubmitting] = useState(false);
+  /** Order id while advancing Loading → Packed → Ready (or Start loading). */
+  const [warehouseStatusOrderId, setWarehouseStatusOrderId] = useState<string | null>(null);
+
+  const warehouseLoadingStats = useMemo(() => {
+    const rows = warehouseOrders;
+    return {
+      readyToLoad: rows.filter((o) => o.status === 'Scheduled').length,
+      loadingInProgress: rows.filter((o) => o.status === 'Loading' || o.status === 'Packed').length,
+      readyToDepart: rows.filter((o) => o.status === 'Ready').length,
+      stockIssues: rows.filter((o) => o.hasShortage).length,
+      awaitingSchedule: rows.filter((o) => o.status === 'Approved').length,
+    };
+  }, [warehouseOrders]);
   const [showProofModal, setShowProofModal] = useState(false);
   const [proofOrder, setProofOrder] = useState<WarehouseOrderRow | null>(null);
 
@@ -1377,7 +1411,7 @@ export default function WarehousePage() {
       let q = supabase
         .from('orders')
         .select('id, order_number, customer_name, delivery_address, required_date, status, urgency, branch_id')
-        .not('status', 'in', '("Draft","Cancelled","Rejected","Delivered","Completed","Partially Fulfilled")')
+        .in('status', [...WAREHOUSE_LOADING_TAB_STATUSES])
         .order('required_date', { ascending: true });
       if (bid) q = (q as typeof q).eq('branch_id', bid);
 
@@ -1412,8 +1446,28 @@ export default function WarehousePage() {
         });
       }
 
-      setWarehouseOrders(
-        (orderRows as any[]).map((o) => ({
+      const variantIds = new Set<string>();
+      for (const oid of orderIds) {
+        for (const li of linesByOrder[oid] ?? []) {
+          if (li.variantId) variantIds.add(li.variantId);
+        }
+      }
+
+      const onHandByVariant = new Map<string, number>();
+      if (bid && variantIds.size > 0) {
+        const { data: pvsData } = await supabase
+          .from('product_variant_stock')
+          .select('variant_id, quantity')
+          .eq('branch_id', bid)
+          .in('variant_id', [...variantIds]);
+        for (const row of (pvsData ?? []) as { variant_id: string; quantity: unknown }[]) {
+          onHandByVariant.set(row.variant_id, Number(row.quantity ?? 0));
+        }
+      }
+
+      const rows: WarehouseOrderRow[] = (orderRows as any[]).map((o) => {
+        const items = linesByOrder[o.id] ?? [];
+        const base: WarehouseOrderRow = {
           id: o.id,
           orderNumber: o.order_number ?? '—',
           customerName: o.customer_name ?? '—',
@@ -1423,9 +1477,13 @@ export default function WarehousePage() {
           urgency: o.urgency ?? '',
           branchId: o.branch_id ?? null,
           branchCode: bcode,
-          items: linesByOrder[o.id] ?? [],
-        }))
-      );
+          items,
+          hasShortage: false,
+        };
+        return { ...base, hasShortage: warehouseOrderHasShortage(base, onHandByVariant) };
+      });
+
+      setWarehouseOrders(rows);
     } catch (e: unknown) {
       console.error('Failed to load warehouse orders:', e);
       setWarehouseOrders([]);
@@ -1459,10 +1517,11 @@ export default function WarehousePage() {
   }, [fetchWarehouseInventory]);
 
   // ── Orders & Loading tab handlers ────────────────────────────────────────
-  const handleConfirmInTransit = async (rows: { itemId: string; shippedQuantity: number }[]) => {
-    if (!inTransitOrder) return;
+  const handleConfirmInTransit = async (
+    rows: { itemId: string; shippedQuantity: number }[],
+    order: WarehouseOrderRow,
+  ) => {
     const byLine = new Map(rows.map((r) => [r.itemId, r.shippedQuantity]));
-    const order = inTransitOrder;
 
     for (const li of order.items) {
       const ship = byLine.get(li.id);
@@ -1569,6 +1628,7 @@ export default function WarehousePage() {
             : {
                 ...o,
                 status: 'In Transit',
+                hasShortage: false,
                 items: o.items.map((li) => {
                   const ship = byLine.get(li.id) ?? 0;
                   return { ...li, quantityShipped: (li.quantityShipped ?? 0) + ship };
@@ -1576,14 +1636,49 @@ export default function WarehousePage() {
               }
         )
       );
-      setShowInTransitModal(false);
-      setInTransitOrder(null);
       addAuditLog('In transit (shipment)', 'Order', `Order ${order.orderNumber} marked in transit from Warehouse`);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Failed to confirm in transit';
       alert(msg);
     } finally {
       setInTransitSubmitting(false);
+    }
+  };
+
+  const advanceWarehouseOrderStatus = async (order: WarehouseOrderRow, nextStatus: string) => {
+    const allowed: Record<string, string> = {
+      Scheduled: 'Loading',
+      Loading: 'Packed',
+      Packed: 'Ready',
+    };
+    if (allowed[order.status] !== nextStatus) {
+      alert(`Cannot move order from ${order.status} to ${nextStatus}.`);
+      return;
+    }
+    setWarehouseStatusOrderId(order.id);
+    try {
+      const { error } = await supabase
+        .from('orders')
+        .update({ status: nextStatus, updated_at: new Date().toISOString() })
+        .eq('id', order.id);
+      if (error) throw error;
+      setWarehouseOrders((prev) => prev.map((o) => (o.id === order.id ? { ...o, status: nextStatus } : o)));
+      const label =
+        nextStatus === 'Loading'
+          ? 'Start loading'
+          : nextStatus === 'Packed'
+            ? 'Mark packed'
+            : 'mark ready to depart';
+      addAuditLog(
+        `Order ${label}`,
+        'Order',
+        `${order.orderNumber} → ${nextStatus} (warehouse loading)`,
+      );
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Could not update order status';
+      alert(msg);
+    } finally {
+      setWarehouseStatusOrderId(null);
     }
   };
 
@@ -1628,14 +1723,18 @@ export default function WarehousePage() {
     addAuditLog('Recorded Delivery', 'Order', `Order ${proofOrder.orderNumber} marked ${newStatus} from Warehouse`);
 
     // Update local state
-    setWarehouseOrders((prev) => prev.map((o) => {
-      if (o.id !== orderId) return o;
-      const updatedItems = o.items.map((l) => {
-        const fd = fulfillmentData.find((f) => f.itemId === l.id);
-        return fd ? { ...l, quantityDelivered: (l.quantityDelivered ?? 0) + fd.deliveredQuantity } : l;
-      });
-      return { ...o, status: newStatus, items: updatedItems };
-    }));
+    setWarehouseOrders((prev) =>
+      prev
+        .map((o) => {
+          if (o.id !== orderId) return o;
+          const updatedItems = o.items.map((l) => {
+            const fd = fulfillmentData.find((f) => f.itemId === l.id);
+            return fd ? { ...l, quantityDelivered: (l.quantityDelivered ?? 0) + fd.deliveredQuantity } : l;
+          });
+          return { ...o, status: newStatus, items: updatedItems };
+        })
+        .filter((o) => (WAREHOUSE_LOADING_TAB_STATUSES as readonly string[]).includes(o.status)),
+    );
 
     setShowProofModal(false);
     setProofOrder(null);
@@ -2127,6 +2226,9 @@ export default function WarehousePage() {
     { id: 'movements' as TabType, label: 'Movements', icon: History }
   ];
 
+  const warehouseHeaderNavLinkClass =
+    'inline-flex items-center justify-center gap-2 font-medium transition-colors rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 h-8 px-3 text-xs';
+
   return (
     <div className="min-h-screen bg-gray-50 w-full max-w-full overflow-x-hidden">
       {/* Header */}
@@ -2138,36 +2240,18 @@ export default function WarehousePage() {
               <p className="text-sm text-gray-600 mt-1">Track inventory, manage requests, and coordinate logistics</p>
             </div>
             <div className="flex flex-wrap gap-2 justify-end md:shrink-0">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="gap-2"
-                onClick={() => navigate('/production-requests')}
-              >
+              <Link to="/production-requests" className={warehouseHeaderNavLinkClass}>
                 <Factory className="h-4 w-4" />
                 Production requests
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="gap-2"
-                onClick={() => navigate('/purchase-orders')}
-              >
+              </Link>
+              <Link to="/purchase-orders" className={warehouseHeaderNavLinkClass}>
                 <ShoppingCart className="h-4 w-4" />
                 Purchase orders
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="gap-2"
-                onClick={() => navigate('/inter-branch-requests')}
-              >
+              </Link>
+              <Link to="/inter-branch-requests" className={warehouseHeaderNavLinkClass}>
                 <GitBranch className="h-4 w-4" />
                 Inter-Branch
-              </Button>
+              </Link>
             </div>
           </div>
         </div>
@@ -3303,7 +3387,13 @@ export default function WarehousePage() {
           <div className="space-y-6">
             {/* Tab heading + calendar button */}
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-xl font-bold text-gray-900">Orders &amp; Loading</h2>
+              <div>
+                <h2 className="text-xl font-bold text-gray-900">Orders &amp; Loading</h2>
+                <p className="text-sm text-gray-600 mt-1 max-w-2xl">
+                  Logistics schedules routes and assigns trips; warehouse moves each order through{' '}
+                  <span className="font-medium text-gray-800">loading → packed → ready</span>, then releases stock when the truck departs (in transit).
+                </p>
+              </div>
               <button
                 type="button"
                 onClick={openOrdersCalendar}
@@ -3315,27 +3405,38 @@ export default function WarehousePage() {
               </button>
             </div>
 
+            {warehouseLoadingStats.awaitingSchedule > 0 && (
+              <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                {warehouseLoadingStats.awaitingSchedule} order
+                {warehouseLoadingStats.awaitingSchedule !== 1 ? 's are' : ' is'} still <strong>Approved</strong> — waiting for logistics to schedule a trip. Assign trucks on{' '}
+                <Link to="/logistics" className="text-blue-700 font-medium hover:underline">
+                  Logistics
+                </Link>
+                .
+              </p>
+            )}
+
             {/* Header with Stats */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
               <div className="bg-white rounded-lg border border-gray-200 p-4">
-                <p className="text-sm text-gray-600">Ready to Load</p>
-                <p className="text-2xl font-bold text-blue-600">8</p>
-                <p className="text-xs text-gray-500 mt-1">Orders approved</p>
+                <p className="text-sm text-gray-600">Ready to load</p>
+                <p className="text-2xl font-bold text-blue-600">{warehouseLoadingStats.readyToLoad}</p>
+                <p className="text-xs text-gray-500 mt-1">Scheduled — not yet loading</p>
               </div>
               <div className="bg-white rounded-lg border border-gray-200 p-4">
-                <p className="text-sm text-gray-600">Currently Loading</p>
-                <p className="text-2xl font-bold text-yellow-600">2</p>
-                <p className="text-xs text-gray-500 mt-1">Trucks in progress</p>
+                <p className="text-sm text-gray-600">Loading / packing</p>
+                <p className="text-2xl font-bold text-yellow-600">{warehouseLoadingStats.loadingInProgress}</p>
+                <p className="text-xs text-gray-500 mt-1">Loading or packed (staging)</p>
               </div>
               <div className="bg-white rounded-lg border border-gray-200 p-4">
-                <p className="text-sm text-gray-600">Ready to Depart</p>
-                <p className="text-2xl font-bold text-green-600">1</p>
-                <p className="text-xs text-gray-500 mt-1">Loaded & verified</p>
+                <p className="text-sm text-gray-600">Ready to depart</p>
+                <p className="text-2xl font-bold text-green-600">{warehouseLoadingStats.readyToDepart}</p>
+                <p className="text-xs text-gray-500 mt-1">Cleared — release when dispatch departs</p>
               </div>
               <div className="bg-white rounded-lg border border-gray-200 p-4">
-                <p className="text-sm text-gray-600">Stock Issues</p>
-                <p className="text-2xl font-bold text-red-600">3</p>
-                <p className="text-xs text-gray-500 mt-1">Orders with shortages</p>
+                <p className="text-sm text-gray-600">Stock issues</p>
+                <p className="text-2xl font-bold text-red-600">{warehouseLoadingStats.stockIssues}</p>
+                <p className="text-xs text-gray-500 mt-1">Short vs remaining to ship</p>
               </div>
             </div>
 
@@ -3362,9 +3463,12 @@ export default function WarehousePage() {
                   <p className="text-sm">Loading orders…</p>
                 </div>
               ) : warehouseOrders.length === 0 ? (
-                <div className="py-12 text-center text-gray-400">
+                <div className="py-12 text-center text-gray-400 px-4">
                   <Package className="w-10 h-10 mx-auto mb-2 text-gray-300" />
-                  <p className="text-sm font-medium">No active orders for this branch</p>
+                  <p className="text-sm font-medium text-gray-700">No orders in the loading pipeline</p>
+                  <p className="text-xs mt-2 text-gray-500 max-w-lg mx-auto">
+                    After logistics schedules a trip, orders move to <strong>Scheduled</strong> and show up here for loading, packing, and ready-to-depart steps.
+                  </p>
                 </div>
               ) : (
                 <>
@@ -3386,7 +3490,14 @@ export default function WarehousePage() {
                         {warehouseOrders.map((ord) => (
                           <tr key={ord.id} className="hover:bg-gray-50">
                             <td className="px-4 py-3">
-                              <div className="font-medium text-gray-900">{ord.orderNumber}</div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium text-gray-900">{ord.orderNumber}</span>
+                                {ord.hasShortage && (
+                                  <span className="inline-flex" title="Not enough stock at this branch for remaining qty to ship">
+                                    <AlertTriangle className="w-4 h-4 text-red-500" />
+                                  </span>
+                                )}
+                              </div>
                             </td>
                             <td className="px-4 py-3">
                               <div className="text-sm text-gray-900">{ord.customerName}</div>
@@ -3424,15 +3535,74 @@ export default function WarehousePage() {
                               ) : <span className="text-gray-400 text-xs">—</span>}
                             </td>
                             <td className="px-4 py-3">
-                              <div className="flex items-center gap-2">
-                                {['Approved', 'Scheduled', 'Loading', 'Packed', 'Ready'].includes(ord.status) && (
+                              <div className="flex flex-wrap items-center gap-2">
+                                {ord.status === 'Approved' && (
+                                  <span className="text-xs text-gray-500 italic">Awaiting logistics schedule</span>
+                                )}
+                                {ord.status === 'Scheduled' && (
                                   <button
                                     type="button"
-                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 text-white rounded-lg text-xs font-medium hover:bg-amber-700 transition-colors"
-                                    onClick={() => { setInTransitOrder(ord); setShowInTransitModal(true); }}
+                                    disabled={warehouseStatusOrderId === ord.id || inTransitSubmitting}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                                    onClick={() => void advanceWarehouseOrderStatus(ord, 'Loading')}
                                   >
-                                    <Truck className="w-3.5 h-3.5" />
-                                    Mark In Transit
+                                    {warehouseStatusOrderId === ord.id ? (
+                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    ) : (
+                                      <Package className="w-3.5 h-3.5" />
+                                    )}
+                                    Start loading
+                                  </button>
+                                )}
+                                {ord.status === 'Loading' && (
+                                  <button
+                                    type="button"
+                                    disabled={warehouseStatusOrderId === ord.id || inTransitSubmitting}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-violet-600 text-white rounded-lg text-xs font-medium hover:bg-violet-700 disabled:opacity-50 transition-colors"
+                                    onClick={() => void advanceWarehouseOrderStatus(ord, 'Packed')}
+                                  >
+                                    {warehouseStatusOrderId === ord.id ? (
+                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    ) : (
+                                      <CheckCircle className="w-3.5 h-3.5" />
+                                    )}
+                                    Mark packed
+                                  </button>
+                                )}
+                                {ord.status === 'Packed' && (
+                                  <button
+                                    type="button"
+                                    disabled={warehouseStatusOrderId === ord.id || inTransitSubmitting}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-medium hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+                                    onClick={() => void advanceWarehouseOrderStatus(ord, 'Ready')}
+                                  >
+                                    {warehouseStatusOrderId === ord.id ? (
+                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    ) : (
+                                      <CheckCircle2 className="w-3.5 h-3.5" />
+                                    )}
+                                    Ready to depart
+                                  </button>
+                                )}
+                                {ord.status === 'Ready' && (
+                                  <button
+                                    type="button"
+                                    disabled={inTransitSubmitting}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 text-white rounded-lg text-xs font-medium hover:bg-amber-700 disabled:opacity-50 transition-colors"
+                                    onClick={() => {
+                                      const rows = ord.items.map((li) => ({
+                                        itemId: li.id,
+                                        shippedQuantity: Math.max(0, li.quantity - (li.quantityShipped ?? 0)),
+                                      }));
+                                      void handleConfirmInTransit(rows, ord);
+                                    }}
+                                  >
+                                    {inTransitSubmitting ? (
+                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    ) : (
+                                      <Truck className="w-3.5 h-3.5" />
+                                    )}
+                                    Release (in transit)
                                   </button>
                                 )}
                                 {ord.status === 'In Transit' && (
@@ -3459,7 +3629,12 @@ export default function WarehousePage() {
                       <div key={ord.id} className="p-4 space-y-3">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0 flex-1">
-                            <p className="font-medium text-gray-900 break-words">{ord.orderNumber}</p>
+                            <p className="font-medium text-gray-900 break-words flex items-center gap-2">
+                              {ord.orderNumber}
+                              {ord.hasShortage && (
+                                <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0" title="Stock shortage" />
+                              )}
+                            </p>
                             <p className="text-xs text-gray-600 mt-1">{ord.customerName}</p>
                           </div>
                           <span className={`inline-block text-[10px] font-semibold uppercase px-2 py-0.5 rounded border flex-shrink-0 ${orderDeliveryStatusBadge(ord.status)}`}>
@@ -3489,14 +3664,73 @@ export default function WarehousePage() {
                           )}
                         </div>
                         <div className="flex flex-wrap gap-2 pt-1">
-                          {['Approved', 'Scheduled', 'Loading', 'Packed', 'Ready'].includes(ord.status) && (
+                          {ord.status === 'Approved' && (
+                            <span className="text-xs text-gray-500 italic">Awaiting logistics schedule</span>
+                          )}
+                          {ord.status === 'Scheduled' && (
                             <button
                               type="button"
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 text-white rounded-lg text-xs font-medium hover:bg-amber-700 transition-colors"
-                              onClick={() => { setInTransitOrder(ord); setShowInTransitModal(true); }}
+                              disabled={warehouseStatusOrderId === ord.id || inTransitSubmitting}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                              onClick={() => void advanceWarehouseOrderStatus(ord, 'Loading')}
                             >
-                              <Truck className="w-3.5 h-3.5" />
-                              Mark In Transit
+                              {warehouseStatusOrderId === ord.id ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Package className="w-3.5 h-3.5" />
+                              )}
+                              Start loading
+                            </button>
+                          )}
+                          {ord.status === 'Loading' && (
+                            <button
+                              type="button"
+                              disabled={warehouseStatusOrderId === ord.id || inTransitSubmitting}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-violet-600 text-white rounded-lg text-xs font-medium hover:bg-violet-700 disabled:opacity-50 transition-colors"
+                              onClick={() => void advanceWarehouseOrderStatus(ord, 'Packed')}
+                            >
+                              {warehouseStatusOrderId === ord.id ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <CheckCircle className="w-3.5 h-3.5" />
+                              )}
+                              Mark packed
+                            </button>
+                          )}
+                          {ord.status === 'Packed' && (
+                            <button
+                              type="button"
+                              disabled={warehouseStatusOrderId === ord.id || inTransitSubmitting}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-medium hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+                              onClick={() => void advanceWarehouseOrderStatus(ord, 'Ready')}
+                            >
+                              {warehouseStatusOrderId === ord.id ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                              )}
+                              Ready to depart
+                            </button>
+                          )}
+                          {ord.status === 'Ready' && (
+                            <button
+                              type="button"
+                              disabled={inTransitSubmitting}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 text-white rounded-lg text-xs font-medium hover:bg-amber-700 disabled:opacity-50 transition-colors"
+                              onClick={() => {
+                                const rows = ord.items.map((li) => ({
+                                  itemId: li.id,
+                                  shippedQuantity: Math.max(0, li.quantity - (li.quantityShipped ?? 0)),
+                                }));
+                                void handleConfirmInTransit(rows, ord);
+                              }}
+                            >
+                              {inTransitSubmitting ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Truck className="w-3.5 h-3.5" />
+                              )}
+                              Release (in transit)
                             </button>
                           )}
                           {ord.status === 'In Transit' && (
@@ -3517,172 +3751,14 @@ export default function WarehousePage() {
               )}
             </div>
 
-            {/* Available Trucks */}
-            <div className="bg-white rounded-lg border border-gray-200">
-              <div className="p-4 border-b border-gray-200">
-                <h3 className="text-lg font-semibold text-gray-900">Available Trucks</h3>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 p-4">
-                <div className="border border-gray-200 rounded-lg p-4 hover:border-blue-400 hover:shadow-md transition-all cursor-pointer">
-                  <div className="flex items-start justify-between mb-3">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <Truck className="w-5 h-5 text-blue-600" />
-                        <div className="font-semibold text-gray-900">Truck 002</div>
-                      </div>
-                      <div className="text-xs text-gray-500 mt-1">ABC-5678</div>
-                    </div>
-                    <span className="px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                      Available
-                    </span>
-                  </div>
-
-                  <div className="space-y-2 mb-3">
-                    <div className="flex items-center gap-2 text-sm text-gray-600">
-                      <Clock className="w-4 h-4" />
-                      <span>Driver: Carlos Garcia</span>
-                    </div>
-                    <div className="text-xs text-gray-500">Next departure: 2:00 PM</div>
-                  </div>
-
-                  <div className="space-y-2 mb-3">
-                    <div>
-                      <div className="flex items-center justify-between text-xs mb-1">
-                        <span className="text-gray-600">Weight</span>
-                        <span className="font-medium">0/5,000 kg (0%)</span>
-                      </div>
-                      <div className="w-full bg-gray-200 rounded-full h-2">
-                        <div className="bg-blue-500 h-2 rounded-full" style={{ width: '0%' }}></div>
-                      </div>
-                    </div>
-                    <div>
-                      <div className="flex items-center justify-between text-xs mb-1">
-                        <span className="text-gray-600">Volume</span>
-                        <span className="font-medium">0/25 m³ (0%)</span>
-                      </div>
-                      <div className="w-full bg-gray-200 rounded-full h-2">
-                        <div className="bg-purple-500 h-2 rounded-full" style={{ width: '0%' }}></div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="text-xs text-gray-500 mb-3">
-                    Orders: 0 • Ready for loading
-                  </div>
-
-                  <button className="w-full px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium">
-                    Start Loading
-                  </button>
-                </div>
-
-                {/* Truck 2 - Loading (64%) */}
-                <div className="border border-yellow-300 rounded-lg p-4 bg-yellow-50">
-                  <div className="flex items-start justify-between mb-3">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <Truck className="w-5 h-5 text-yellow-600" />
-                        <div className="font-semibold text-gray-900">Truck 003</div>
-                      </div>
-                      <div className="text-xs text-gray-500 mt-1">DEF-9012</div>
-                    </div>
-                    <span className="px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
-                      Loading
-                    </span>
-                  </div>
-
-                  <div className="space-y-2 mb-3">
-                    <div className="flex items-center gap-2 text-sm text-gray-600">
-                      <Clock className="w-4 h-4" />
-                      <span>Driver: Pedro Cruz</span>
-                    </div>
-                    <div className="text-xs text-gray-500">Departure: 1:00 PM</div>
-                  </div>
-
-                  <div className="space-y-2 mb-3">
-                    <div>
-                      <div className="flex items-center justify-between text-xs mb-1">
-                        <span className="text-gray-600">Weight</span>
-                        <span className="font-medium">3,200/5,000 kg (64%)</span>
-                      </div>
-                      <div className="w-full bg-gray-200 rounded-full h-2">
-                        <div className="bg-blue-500 h-2 rounded-full" style={{ width: '64%' }}></div>
-                      </div>
-                    </div>
-                    <div>
-                      <div className="flex items-center justify-between text-xs mb-1">
-                        <span className="text-gray-600">Volume</span>
-                        <span className="font-medium">15.8/25 m³ (63%)</span>
-                      </div>
-                      <div className="w-full bg-gray-200 rounded-full h-2">
-                        <div className="bg-purple-500 h-2 rounded-full" style={{ width: '63%' }}></div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="text-xs text-gray-500 mb-3">
-                    Orders: 2 • Loading in progress
-                  </div>
-
-                  <button className="w-full px-3 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition-colors text-sm font-medium">
-                    Continue Loading
-                  </button>
-                </div>
-
-                {/* Truck 3 - Ready to Depart (85%) */}
-                <div className="border border-green-300 rounded-lg p-4 bg-green-50">
-                  <div className="flex items-start justify-between mb-3">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <Truck className="w-5 h-5 text-green-600" />
-                        <div className="font-semibold text-gray-900">Truck 001</div>
-                      </div>
-                      <div className="text-xs text-gray-500 mt-1">ABC-1234</div>
-                    </div>
-                    <span className="px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800 flex items-center gap-1">
-                      <CheckCircle className="w-3 h-3" />
-                      Ready
-                    </span>
-                  </div>
-
-                  <div className="space-y-2 mb-3">
-                    <div className="flex items-center gap-2 text-sm text-gray-600">
-                      <Clock className="w-4 h-4" />
-                      <span>Driver: Juan Santos</span>
-                    </div>
-                    <div className="text-xs text-green-600 font-medium">✓ Loaded & verified</div>
-                  </div>
-
-                  <div className="space-y-2 mb-3">
-                    <div>
-                      <div className="flex items-center justify-between text-xs mb-1">
-                        <span className="text-gray-600">Weight</span>
-                        <span className="font-medium">4,250/5,000 kg (85%)</span>
-                      </div>
-                      <div className="w-full bg-gray-200 rounded-full h-2">
-                        <div className="bg-blue-500 h-2 rounded-full" style={{ width: '85%' }}></div>
-                      </div>
-                    </div>
-                    <div>
-                      <div className="flex items-center justify-between text-xs mb-1">
-                        <span className="text-gray-600">Volume</span>
-                        <span className="font-medium">21.3/25 m³ (85%)</span>
-                      </div>
-                      <div className="w-full bg-gray-200 rounded-full h-2">
-                        <div className="bg-purple-500 h-2 rounded-full" style={{ width: '85%' }}></div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="text-xs text-gray-500 mb-3">
-                    Orders: 3 • Ready for dispatch
-                  </div>
-
-                  <button className="w-full px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium">
-                    Confirm Departure
-                  </button>
-                </div>
-              </div>
+            <div className="bg-gray-50 rounded-lg border border-gray-200 p-4 text-sm text-gray-700">
+              <p>
+                <span className="font-semibold text-gray-900">Trucks and routes</span> are scheduled in{' '}
+                <Link to="/logistics" className="text-blue-700 font-medium hover:underline">
+                  Logistics
+                </Link>
+                . This tab only tracks <span className="font-medium text-gray-900">order-level loading progress</span> at the warehouse.
+              </p>
             </div>
           </div>
         )}
@@ -4793,18 +4869,6 @@ export default function WarehousePage() {
             </div>
           </div>
         </div>
-      )}
-
-      {/* ── Mark In Transit Modal ─────────────────────────────────────── */}
-      {showInTransitModal && inTransitOrder && (
-        <MarkInTransitModal
-          isOpen={showInTransitModal}
-          onClose={() => { if (!inTransitSubmitting) { setShowInTransitModal(false); setInTransitOrder(null); } }}
-          orderNumber={inTransitOrder.orderNumber}
-          items={inTransitOrder.items}
-          submitting={inTransitSubmitting}
-          onConfirm={handleConfirmInTransit}
-        />
       )}
 
       {/* ── Fulfill Order (Record Delivery) Modal ────────────────────── */}

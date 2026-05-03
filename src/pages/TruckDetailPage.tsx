@@ -16,8 +16,8 @@ import {
   MapPin,
   Package,
   Edit,
-  Download,
   Navigation,
+  Search,
   Weight,
   Box,
   Ruler,
@@ -26,12 +26,17 @@ import {
   Loader2,
   X,
   AlertTriangle,
+  ArrowUp,
+  ArrowDown,
+  ArrowUpDown,
+  ChevronLeft,
+  ChevronRight,
+  RefreshCw,
 } from 'lucide-react';
 import type {
   TruckDetails,
   TripHistoryRecord,
   MaintenanceRecord,
-  CalendarBooking,
   TruckAlert,
 } from '@/src/mock/truckDetails';
 import {
@@ -44,7 +49,18 @@ import {
   type ScheduleMaintenancePayload,
   type ConfirmMaintenancePayload,
 } from '@/src/lib/fleetTrucks';
-import type { Vehicle } from '@/src/types/logistics';
+import type { Vehicle, Trip } from '@/src/types/logistics';
+import { TripDetailsModal } from '@/src/components/logistics/TripDetailsModal';
+import { fetchTripById, fetchTripForVehicleByTripNumber } from '@/src/lib/logisticsScheduling';
+import {
+  localYmd,
+  DISPATCH_QUEUE_STATUS_OPTIONS,
+  dispatchQueueStatusSelectClass,
+  tripStatusDisplay,
+  tripStatusIsCompletedUi,
+  getDispatchVehicleColor,
+  dispatchTableStatusBadgeVariant,
+} from '@/src/lib/dispatchQueueUi';
 
 const TRUCK_STATUS_OPTIONS: Vehicle['status'][] = [
   'Available',
@@ -57,19 +73,27 @@ const TRUCK_STATUS_OPTIONS: Vehicle['status'][] = [
 const inlineInputClass =
   'w-full max-w-[16rem] px-2 py-1.5 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-red-500';
 
-type TabMode = 'overview' | 'trips' | 'schedule' | 'maintenance';
+type TabMode = 'overview' | 'trips' | 'maintenance';
 
 export function TruckDetailPage() {
   const { vehicleId } = useParams<{ vehicleId: string }>();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<TabMode>('overview');
-  const [tripFilter, setTripFilter] = useState<string>('All');
+  const [tripSearchQuery, setTripSearchQuery] = useState('');
+  const [filterStatus, setFilterStatus] = useState<string>('All');
+  const [tripRecordsTimeframe, setTripRecordsTimeframe] = useState<'all' | 'upcoming' | 'past'>('all');
+  const [tripSortKey, setTripSortKey] = useState<string>('scheduledDate');
+  const [tripSortDir, setTripSortDir] = useState<'asc' | 'desc'>('asc');
+  const [truckStripDetailKey, setTruckStripDetailKey] = useState<string | null>(null);
+  const [truckCalOpen, setTruckCalOpen] = useState(false);
+  const [truckCalYear, setTruckCalYear] = useState(() => new Date().getFullYear());
+  const [truckCalMonth, setTruckCalMonth] = useState(() => new Date().getMonth());
+  const [truckCalSelectedKey, setTruckCalSelectedKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [truck, setTruck] = useState<TruckDetails | null>(null);
   const [tripHistory, setTripHistory] = useState<TripHistoryRecord[]>([]);
   const [maintenanceHistory, setMaintenanceHistory] = useState<MaintenanceRecord[]>([]);
-  const [calendarBookings, setCalendarBookings] = useState<CalendarBooking[]>([]);
   const [alerts, setAlerts] = useState<TruckAlert[]>([]);
   const [refreshKey, setRefreshKey] = useState(0);
   const [detailForm, setDetailForm] = useState<TruckFormPayload | null>(null);
@@ -97,6 +121,10 @@ export function TruckDetailPage() {
   });
   const [confirmSaving, setConfirmSaving] = useState(false);
   const [confirmError, setConfirmError] = useState<string | null>(null);
+
+  const [tripDetailOpen, setTripDetailOpen] = useState(false);
+  const [tripDetailTrip, setTripDetailTrip] = useState<Trip | null>(null);
+  const [tripDetailLoading, setTripDetailLoading] = useState(false);
 
   /** Computed display status — 'Overdue' if past scheduled date and not completed. */
   const getDisplayStatus = (
@@ -182,7 +210,6 @@ export function TruckDetailPage() {
       setTruck(null);
       setTripHistory([]);
       setMaintenanceHistory([]);
-      setCalendarBookings([]);
       setAlerts([]);
       setDetailForm(null);
       return;
@@ -201,7 +228,6 @@ export function TruckDetailPage() {
       setTruck(bundle.truck);
       setTripHistory(bundle.tripHistory);
       setMaintenanceHistory(bundle.maintenanceHistory);
-      setCalendarBookings(bundle.calendarBookings);
       setAlerts(bundle.alerts);
       if (!isEditingRef.current) {
         setDetailForm(bundle.editForm ?? null);
@@ -223,9 +249,10 @@ export function TruckDetailPage() {
   }, [tripHistory]);
 
   const onTimeRatePct = useMemo(() => {
-    if (tripHistory.length === 0) return null;
-    const onTime = tripHistory.filter((t) => t.status === 'Completed').length;
-    return Math.round((onTime / tripHistory.length) * 100);
+    const terminal = tripHistory.filter((t) => ['Completed', 'Delayed', 'Failed'].includes(t.status));
+    if (terminal.length === 0) return null;
+    const onTime = terminal.filter((t) => t.status === 'Completed').length;
+    return Math.round((onTime / terminal.length) * 100);
   }, [tripHistory]);
 
   /** Total distance (km): live value while editing form, else saved truck odometer. */
@@ -239,6 +266,104 @@ export function TruckDetailPage() {
     }
     return truck.totalDistance;
   }, [truck, isEditing, detailForm]);
+
+  const truckTripsByDateKey = useMemo(() => {
+    const m: Record<string, TripHistoryRecord[]> = {};
+    for (const t of tripHistory) {
+      const key = t.date?.slice(0, 10) ?? '';
+      if (!key) continue;
+      if (!m[key]) m[key] = [];
+      m[key].push(t);
+    }
+    return m;
+  }, [tripHistory]);
+
+  const nextFourteenCalendarDays = useMemo(() => {
+    const out: { date: string; day: string; dayNum: number; isToday: boolean }[] = [];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayKey = localYmd(today);
+    for (let i = 0; i < 14; i++) {
+      const d = new Date(today);
+      d.setDate(today.getDate() + i);
+      const date = localYmd(d);
+      out.push({
+        date,
+        day: d.toLocaleDateString(undefined, { weekday: 'short' }),
+        dayNum: d.getDate(),
+        isToday: date === todayKey,
+      });
+    }
+    return out;
+  }, []);
+
+  const filteredSortedTrips = useMemo(() => {
+    const todayYmd = localYmd(new Date());
+    const q = tripSearchQuery.trim().toLowerCase();
+    const filtered = tripHistory.filter((trip) => {
+      const dk = (trip.date ?? '').slice(0, 10);
+      const matchesTimeframe =
+        tripRecordsTimeframe === 'all'
+          ? true
+          : !dk
+            ? false
+            : tripRecordsTimeframe === 'upcoming'
+              ? dk >= todayYmd
+              : dk < todayYmd;
+      const matchesSearch =
+        !q ||
+        trip.tripNumber.toLowerCase().includes(q) ||
+        trip.driverName.toLowerCase().includes(q) ||
+        trip.route.some((d) => d.toLowerCase().includes(q));
+      const matchesStatus =
+        filterStatus === 'All' ||
+        (trip.status === 'Completed' ? 'Complete' : trip.status) === filterStatus;
+      return matchesTimeframe && matchesSearch && matchesStatus;
+    });
+
+    const vehicleLabel = truck?.vehicleName ?? '';
+    return [...filtered].sort((a, b) => {
+      let av: string | number;
+      let bv: string | number;
+      switch (tripSortKey) {
+        case 'vehicleName':
+          av = `${vehicleLabel} ${a.driverName}`.toLowerCase();
+          bv = `${vehicleLabel} ${b.driverName}`.toLowerCase();
+          break;
+        case 'scheduledDate':
+          av = a.date || '';
+          bv = b.date || '';
+          break;
+        case 'orders':
+          av = a.ordersCount;
+          bv = b.ordersCount;
+          break;
+        case 'status':
+          av = a.status;
+          bv = b.status;
+          break;
+        default:
+          av = a.date || '';
+          bv = b.date || '';
+      }
+      if (typeof av === 'number' && typeof bv === 'number') {
+        return tripSortDir === 'asc' ? av - bv : bv - av;
+      }
+      const as = String(av);
+      const bs = String(bv);
+      if (as < bs) return tripSortDir === 'asc' ? -1 : 1;
+      if (as > bs) return tripSortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [
+    tripHistory,
+    tripSearchQuery,
+    filterStatus,
+    tripRecordsTimeframe,
+    tripSortKey,
+    tripSortDir,
+    truck?.vehicleName,
+  ]);
 
   if (loading) {
     return (
@@ -284,62 +409,74 @@ export function TruckDetailPage() {
     return 'default';
   };
 
-  // Filter trips
-  const filteredTrips = tripHistory.filter(trip => {
-    if (tripFilter === 'All') return true;
-    return trip.status === tripFilter;
-  });
-
-  // Generate calendar for current month
-  const generateCalendar = () => {
-    const today = new Date('2026-02-26');
-    const year = today.getFullYear();
-    const month = today.getMonth();
-    const firstDay = new Date(year, month, 1);
-    const lastDay = new Date(year, month + 1, 0);
-    const daysInMonth = lastDay.getDate();
-    const startingDayOfWeek = firstDay.getDay();
-
-    const calendar: (Date | null)[] = [];
-    
-    // Add empty cells for days before the first day
-    for (let i = 0; i < startingDayOfWeek; i++) {
-      calendar.push(null);
+  const handleTripSort = (key: string) => {
+    if (tripSortKey === key) setTripSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else {
+      setTripSortKey(key);
+      setTripSortDir('asc');
     }
-    
-    // Add days of the month
-    for (let day = 1; day <= daysInMonth; day++) {
-      calendar.push(new Date(year, month, day));
-    }
-    
-    return calendar;
+  };
+  const tripSortIcon = (col: string) => {
+    if (tripSortKey !== col) return <ArrowUpDown className="w-3 h-3 ml-1 inline opacity-40" />;
+    return tripSortDir === 'asc' ? (
+      <ArrowUp className="w-3 h-3 ml-1 text-red-600 inline" />
+    ) : (
+      <ArrowDown className="w-3 h-3 ml-1 text-red-600 inline" />
+    );
   };
 
-  const calendar = generateCalendar();
+  const tripHistoryStatusBadgeVariant = dispatchTableStatusBadgeVariant;
 
-  const getBookingForDate = (date: Date | null) => {
-    if (!date) return null;
-    const dateStr = date.toISOString().split('T')[0];
-    return calendarBookings.find(b => b.date === dateStr);
+  const openTripDetailFromHistory = async (rec: TripHistoryRecord) => {
+    setTripDetailLoading(true);
+    const finish = () => setTripDetailLoading(false);
+    try {
+      if (rec.tripId) {
+        const { trip, error } = await fetchTripById(rec.tripId);
+        finish();
+        if (error || !trip) {
+          window.alert(error ?? 'Could not load trip.');
+          return;
+        }
+        setTripDetailTrip(trip);
+        setTripDetailOpen(true);
+        return;
+      }
+      if (
+        vehicleId &&
+        isFleetVehicleUuid(vehicleId) &&
+        rec.tripNumber &&
+        rec.tripNumber !== '—'
+      ) {
+        const { trip, error } = await fetchTripForVehicleByTripNumber(vehicleId, rec.tripNumber);
+        finish();
+        if (!trip) {
+          window.alert(
+            error ??
+              'This row is an archived snapshot without a linked trip record, so details are not available.',
+          );
+          return;
+        }
+        setTripDetailTrip(trip);
+        setTripDetailOpen(true);
+        return;
+      }
+      finish();
+      window.alert(
+        'This row is an archived snapshot without a linked trip record, so details are not available.',
+      );
+    } catch {
+      finish();
+      window.alert('Could not load trip.');
+    }
   };
 
-  const getDateColor = (date: Date | null, booking: any) => {
-    if (!date) return '';
-    const today = new Date('2026-02-26');
-    const isPast = date < today;
-    
-    if (isPast) return 'bg-gray-100 text-gray-400';
-    if (!booking || booking.type === 'Available') return 'bg-white hover:bg-gray-50';
-    if (booking.type === 'Trip') {
-      if (booking.status === 'In Transit' || booking.status === 'Loading') return 'bg-blue-100 text-blue-800 font-semibold';
-      return 'bg-blue-50 text-blue-700';
-    }
-    if (booking.type === 'Maintenance') return 'bg-orange-100 text-orange-800';
-    return 'bg-white';
+  const closeTripDetail = () => {
+    setTripDetailOpen(false);
+    setTripDetailTrip(null);
   };
 
   const startEdit = () => {
-    if (!detailForm || !vehicleId || !isFleetVehicleUuid(vehicleId)) return;
     editSnapshotRef.current = JSON.stringify(detailForm);
     setIsEditing(true);
   };
@@ -376,8 +513,7 @@ export function TruckDetailPage() {
 
   const tabs = [
     { id: 'overview' as TabMode, label: 'Overview', icon: <FileText className="w-4 h-4" /> },
-    { id: 'trips' as TabMode, label: 'Trip History', icon: <MapPin className="w-4 h-4" /> },
-    { id: 'schedule' as TabMode, label: 'Schedule', icon: <Calendar className="w-4 h-4" /> },
+    { id: 'trips' as TabMode, label: 'Trip Records', icon: <MapPin className="w-4 h-4" /> },
     { id: 'maintenance' as TabMode, label: 'Maintenance', icon: <Wrench className="w-4 h-4" /> },
   ];
 
@@ -1090,234 +1226,326 @@ export function TruckDetailPage() {
           </div>
         )}
 
-        {/* TRIP HISTORY TAB */}
-        {activeTab === 'trips' && (
+        {/* Trip Records: dispatch strip + table */}
+        {activeTab === 'trips' && truck && (
           <div className="space-y-4">
-            {/* Filters */}
-            <Card>
-              <CardContent className="p-4">
-                <div className="flex flex-col sm:flex-row sm:items-center gap-3 md:gap-4 w-full">
-                  <select
-                    value={tripFilter}
-                    onChange={(e) => setTripFilter(e.target.value)}
-                    className="w-full sm:w-auto px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500"
-                  >
-                    <option value="All">All Status</option>
-                    <option value="Completed">Completed</option>
-                    <option value="Delayed">Delayed</option>
-                    <option value="Failed">Failed</option>
-                  </select>
-                  <div className="hidden sm:block flex-1" />
-                  <Button variant="outline" size="sm" className="w-full sm:w-auto justify-center">
-                    <Download className="w-4 h-4 mr-2" />
-                    Export
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Trip History Table */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Trip History ({filteredTrips.length} trips)</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="hidden md:block">
-                  <table className="w-full">
-                    <thead>
-                      <tr className="border-b border-gray-200">
-                        <th className="text-left py-3 px-4 text-sm font-medium text-gray-600">Trip ID</th>
-                        <th className="text-left py-3 px-4 text-sm font-medium text-gray-600">Date</th>
-                        <th className="text-left py-3 px-4 text-sm font-medium text-gray-600">Driver</th>
-                        <th className="text-left py-3 px-4 text-sm font-medium text-gray-600">Route</th>
-                        <th className="text-center py-3 px-4 text-sm font-medium text-gray-600">Orders</th>
-                        <th className="text-center py-3 px-4 text-sm font-medium text-gray-600">Distance</th>
-                        <th className="text-center py-3 px-4 text-sm font-medium text-gray-600">Duration</th>
-                        <th className="text-center py-3 px-4 text-sm font-medium text-gray-600">Fuel</th>
-                        <th className="text-right py-3 px-4 text-sm font-medium text-gray-600">Revenue</th>
-                        <th className="text-center py-3 px-4 text-sm font-medium text-gray-600">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredTrips.map((trip) => (
-                        <tr key={trip.id} className="border-b border-gray-100 hover:bg-gray-50">
-                          <td className="py-3 px-4">
-                            <button className="text-sm font-medium text-blue-600 hover:text-blue-700">
-                              {trip.tripNumber}
-                            </button>
-                          </td>
-                          <td className="py-3 px-4 text-sm text-gray-900">{trip.date}</td>
-                          <td className="py-3 px-4 text-sm text-gray-900">{trip.driverName}</td>
-                          <td className="py-3 px-4 text-sm text-gray-600">
-                            {trip.route.join(' → ')}
-                          </td>
-                          <td className="py-3 px-4 text-center text-sm text-gray-900">{trip.ordersCount}</td>
-                          <td className="py-3 px-4 text-center text-sm text-gray-900">{trip.distance} km</td>
-                          <td className="py-3 px-4 text-center text-sm text-gray-900">{trip.duration}</td>
-                          <td className="py-3 px-4 text-center text-sm text-gray-900">{trip.fuelUsed}L</td>
-                          <td className="py-3 px-4 text-right text-sm font-medium text-gray-900">
-                            ₱{trip.revenue.toLocaleString()}
-                          </td>
-                          <td className="py-3 px-4 text-center">
-                            <Badge variant={trip.status === 'Completed' ? 'success' : trip.status === 'Delayed' ? 'warning' : 'danger'}>
-                              {trip.status}
-                            </Badge>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                <div className="md:hidden divide-y divide-gray-200">
-                  {filteredTrips.map((trip) => (
-                    <div key={trip.id} className="p-4 space-y-3 w-full">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0 flex-1">
-                          <button className="text-sm font-medium text-blue-600 hover:text-blue-700 break-words text-left">
-                            {trip.tripNumber}
-                          </button>
-                          <p className="text-xs text-gray-500 mt-1 break-words">{trip.date} • {trip.driverName}</p>
-                        </div>
-                        <Badge variant={trip.status === 'Completed' ? 'success' : trip.status === 'Delayed' ? 'warning' : 'danger'} className="flex-shrink-0">
-                          {trip.status}
-                        </Badge>
+            {isFleetVehicleUuid(vehicleId ?? '') && (
+              <Card>
+                  <CardHeader>
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2">
+                        <Calendar className="w-5 h-5 text-gray-500" />
+                        <CardTitle>Dispatch schedule (14 days)</CardTitle>
                       </div>
-                      <div className="grid grid-cols-2 gap-3 text-sm">
-                        <div className="col-span-2 min-w-0">
-                          <p className="text-xs text-gray-500">Route</p>
-                          <p className="text-gray-900 break-words">{trip.route.join(' → ')}</p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-gray-500">Orders</p>
-                          <p className="text-gray-900">{trip.ordersCount}</p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-gray-500">Distance</p>
-                          <p className="text-gray-900">{trip.distance} km</p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-gray-500">Duration</p>
-                          <p className="text-gray-900">{trip.duration}</p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-gray-500">Fuel</p>
-                          <p className="text-gray-900">{trip.fuelUsed}L</p>
-                        </div>
-                        <div className="col-span-2">
-                          <p className="text-xs text-gray-500">Revenue</p>
-                          <p className="text-gray-900 font-medium">₱{trip.revenue.toLocaleString()}</p>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        )}
-
-        {/* SCHEDULE TAB */}
-        {activeTab === 'schedule' && (
-          <div className="space-y-6">
-            <Card>
-              <CardHeader>
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                  <CardTitle>February 2026</CardTitle>
-                  <div className="flex flex-wrap items-center gap-3 text-sm">
-                    <div className="flex items-center gap-2">
-                      <div className="w-4 h-4 bg-blue-100 border border-blue-300 rounded" />
-                      <span className="text-gray-600">On Trip</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <div className="w-4 h-4 bg-orange-100 border border-orange-300 rounded" />
-                      <span className="text-gray-600">Maintenance</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <div className="w-4 h-4 bg-white border border-gray-300 rounded" />
-                      <span className="text-gray-600">Available</span>
-                    </div>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-7 gap-1 sm:gap-2">
-                  {/* Day headers */}
-                  {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
-                    <div key={day} className="text-center text-sm font-medium text-gray-600 py-2">
-                      {day}
-                    </div>
-                  ))}
-                  
-                  {/* Calendar days */}
-                  {calendar.map((date, index) => {
-                    const booking = getBookingForDate(date);
-                    const colorClass = getDateColor(date, booking);
-                    
-                    return (
-                      <div
-                        key={index}
-                        className={`min-h-[72px] sm:min-h-[80px] p-1.5 sm:p-2 border rounded-lg ${colorClass} ${
-                          date ? 'cursor-pointer transition-shadow hover:shadow-md' : ''
-                        }`}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const t = new Date();
+                          setTruckCalYear(t.getFullYear());
+                          setTruckCalMonth(t.getMonth());
+                          setTruckCalSelectedKey(localYmd(t));
+                          setTruckCalOpen(true);
+                        }}
+                        className="inline-flex items-center gap-2 px-3 py-1.5 border border-gray-200 rounded-lg text-sm font-medium hover:bg-gray-50 bg-white"
                       >
-                        {date && (
-                          <>
-                            <p className="text-sm font-medium mb-1">{date.getDate()}</p>
-                            {booking && booking.type !== 'Available' && (
-                              <div className="text-xs">
-                                {booking.type === 'Trip' ? (
-                                  <>
-                                    <p className="font-medium truncate">{booking.tripNumber}</p>
-                                    <p className="text-gray-600 truncate">{booking.driver}</p>
-                                  </>
-                                ) : (
-                                  <p className="font-medium">Maintenance</p>
+                        <Calendar className="w-4 h-4 text-blue-600" />
+                        View calendar
+                      </button>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2">
+                      {nextFourteenCalendarDays.map((day) => {
+                        const dayTrips = truckTripsByDateKey[day.date] ?? [];
+                        const colors = getDispatchVehicleColor(vehicleId ?? '');
+                        return (
+                          <div
+                            key={day.date}
+                            onClick={() => {
+                              if (dayTrips.length === 0) return;
+                              if (dayTrips.length === 1) {
+                                void openTripDetailFromHistory(dayTrips[0]);
+                                return;
+                              }
+                              setTruckStripDetailKey(day.date);
+                            }}
+                            className={`min-h-28 p-2 rounded-lg border transition-all ${
+                              day.isToday
+                                ? 'bg-red-50 border-red-300 ring-2 ring-red-200'
+                                : 'bg-white border-gray-200'
+                            } ${dayTrips.length > 0 ? 'hover:shadow-md cursor-pointer' : 'opacity-60'}`}
+                          >
+                            <div className="flex flex-col h-full">
+                              <div className="flex items-center justify-between mb-2">
+                                <span className={`text-xs font-semibold ${day.isToday ? 'text-red-700' : 'text-gray-500'}`}>
+                                  {day.day}
+                                </span>
+                                <span className={`text-sm font-bold ${day.isToday ? 'text-red-700' : 'text-gray-900'}`}>
+                                  {day.dayNum}
+                                </span>
+                              </div>
+                              <div className="flex-1 space-y-1 overflow-hidden">
+                                {dayTrips.slice(0, 2).map((trip, tripIdx) => (
+                                  <div
+                                    key={trip.id + String(tripIdx)}
+                                    role="presentation"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      void openTripDetailFromHistory(trip);
+                                    }}
+                                    className="text-xs p-1.5 rounded cursor-pointer hover:opacity-90"
+                                    style={{
+                                      backgroundColor: colors.bg,
+                                      borderLeft: `3px solid ${colors.border}`,
+                                    }}
+                                    title={`${trip.tripNumber} (${trip.driverName})`}
+                                  >
+                                    <div className="flex items-center gap-1">
+                                      <Truck className="w-3 h-3 flex-shrink-0" style={{ color: colors.text }} />
+                                      <span className="font-medium truncate flex-1" style={{ color: colors.text }}>
+                                        {trip.tripNumber}
+                                      </span>
+                                    </div>
+                                    <div className="truncate text-[10px] mt-0.5" style={{ color: colors.text, opacity: 0.8 }}>
+                                      {trip.driverName || '—'}
+                                    </div>
+                                  </div>
+                                ))}
+                                {dayTrips.length > 2 && (
+                                  <div className="text-[10px] text-gray-500 text-center font-medium pt-0.5">
+                                    +{dayTrips.length - 2} more
+                                  </div>
                                 )}
                               </div>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    );
-                  })}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </CardContent>
+                </Card>
+            )}
+
+            <Card>
+              <CardContent className="p-4">
+                <div className="relative flex-1 w-full max-w-md">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <input
+                    type="text"
+                    placeholder="Search by trip #, driver, or stop…"
+                    value={tripSearchQuery}
+                    onChange={(e) => setTripSearchQuery(e.target.value)}
+                    className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
+                  />
                 </div>
               </CardContent>
             </Card>
 
-            {/* Upcoming Bookings */}
             <Card>
-              <CardHeader>
-                <CardTitle>Upcoming Bookings</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3">
-                  {calendarBookings
-                    .filter(b => new Date(b.date) >= new Date('2026-02-26'))
-                    .slice(0, 5)
-                    .map((booking, idx) => (
-                      <div key={idx} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                        <div className="flex items-center gap-3">
-                          {booking.type === 'Trip' ? (
-                            <MapPin className="w-5 h-5 text-blue-600" />
-                          ) : (
-                            <Wrench className="w-5 h-5 text-orange-600" />
-                          )}
-                          <div>
-                            <p className="text-sm font-medium text-gray-900">
-                              {booking.type === 'Trip' ? booking.tripNumber : 'Scheduled Maintenance'}
-                            </p>
-                            <p className="text-xs text-gray-600">
-                              {booking.date} {booking.driver && `• ${booking.driver}`}
-                            </p>
-                          </div>
-                        </div>
-                        <Badge variant={booking.type === 'Trip' ? 'warning' : 'danger'}>
-                          {booking.status || booking.type}
-                        </Badge>
-                      </div>
+              <CardHeader className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+                <div className="flex flex-col gap-3 min-w-0">
+                  <CardTitle className="text-lg">Trip records ({filteredSortedTrips.length})</CardTitle>
+                  <div
+                    className="inline-flex flex-wrap rounded-lg border border-gray-200 bg-gray-50 p-0.5 w-fit max-w-full"
+                    role="group"
+                    aria-label="Filter trips by schedule"
+                  >
+                    {(
+                      [
+                        ['all', 'All'],
+                        ['upcoming', 'Upcoming'],
+                        ['past', 'Past'],
+                      ] as const
+                    ).map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => setTripRecordsTimeframe(value)}
+                        className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                          tripRecordsTimeframe === value
+                            ? 'bg-red-600 text-white shadow-sm'
+                            : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+                        }`}
+                      >
+                        {label}
+                      </button>
                     ))}
+                  </div>
                 </div>
+                <div className="flex flex-wrap items-center gap-3 shrink-0">
+                  <select
+                    aria-label="Filter trip records by status"
+                    value={filterStatus === 'All' ? '' : filterStatus}
+                    onChange={(e) => setFilterStatus(e.target.value === '' ? 'All' : e.target.value)}
+                    className={`${dispatchQueueStatusSelectClass} w-[min(100%,14rem)] md:hidden`}
+                  >
+                    <option value="">Status</option>
+                    {DISPATCH_QUEUE_STATUS_OPTIONS.map((s) => (
+                      <option key={s} value={s}>
+                        {s === 'Complete' ? 'Completed' : s}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </CardHeader>
+              <CardContent className="p-0">
+                {filteredSortedTrips.length === 0 ? (
+                  <p className="text-sm text-gray-500 text-center py-10 px-4">
+                    {tripRecordsTimeframe === 'past'
+                      ? 'No past trips for this truck with the current filters.'
+                      : tripRecordsTimeframe === 'upcoming'
+                        ? 'No upcoming trips for this truck with the current filters.'
+                        : 'No trips match these filters. Assign routes on Logistics; they appear here for this truck.'}
+                  </p>
+                ) : (
+                  <>
+                    <div className="hidden md:block relative">
+                      {tripDetailLoading && (
+                        <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/60 rounded-lg">
+                          <Loader2 className="w-8 h-8 animate-spin text-red-500" aria-hidden />
+                        </div>
+                      )}
+                      <table className="w-full">
+                        <thead className="bg-gray-50 border-b border-gray-200">
+                          <tr>
+                            <th
+                              onClick={() => handleTripSort('vehicleName')}
+                              className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                            >
+                              <span className="inline-flex items-center">
+                                Vehicle & Driver{tripSortIcon('vehicleName')}
+                              </span>
+                            </th>
+                            <th
+                              onClick={() => handleTripSort('scheduledDate')}
+                              className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                            >
+                              <span className="inline-flex items-center">
+                                Schedule{tripSortIcon('scheduledDate')}
+                              </span>
+                            </th>
+                            <th
+                              onClick={() => handleTripSort('orders')}
+                              className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                            >
+                              <span className="inline-flex items-center">
+                                Orders{tripSortIcon('orders')}
+                              </span>
+                            </th>
+                            <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider align-top min-w-[10.5rem] max-w-[14rem]">
+                              <div className="normal-case">
+                                <select
+                                  aria-label="Filter trip records by status"
+                                  value={filterStatus === 'All' ? '' : filterStatus}
+                                  onChange={(e) => setFilterStatus(e.target.value === '' ? 'All' : e.target.value)}
+                                  onClick={(e) => e.stopPropagation()}
+                                  className={dispatchQueueStatusSelectClass}
+                                >
+                                  <option value="">Status</option>
+                                  {DISPATCH_QUEUE_STATUS_OPTIONS.map((s) => (
+                                    <option key={s} value={s}>
+                                      {s === 'Complete' ? 'Completed' : s}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-200">
+                          {filteredSortedTrips.map((trip) => {
+                            const cap = trip.deliverySuccessRate != null && Number.isFinite(trip.deliverySuccessRate)
+                              ? Math.round(trip.deliverySuccessRate)
+                              : 0;
+                            return (
+                              <tr
+                                key={trip.id}
+                                className="hover:bg-gray-50 cursor-pointer"
+                                onClick={() => void openTripDetailFromHistory(trip)}
+                              >
+                                <td className="px-6 py-4 whitespace-nowrap">
+                                  <div className="flex items-center gap-2">
+                                    <Truck className="w-4 h-4 text-gray-400" />
+                                    <div>
+                                      <div className="text-sm font-medium text-gray-900">{truck.vehicleName}</div>
+                                      <div className="text-xs text-gray-500">{trip.driverName || '—'}</div>
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap">
+                                  <div className="text-sm text-gray-900">{trip.date}</div>
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap">
+                                  <div className="text-sm text-gray-900">
+                                    {trip.ordersCount} order{trip.ordersCount !== 1 ? 's' : ''}
+                                  </div>
+                                  <div className="text-xs text-gray-500">{cap}% full</div>
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap">
+                                  <Badge
+                                    variant={tripHistoryStatusBadgeVariant(trip.status)}
+                                    className="min-w-[120px] justify-center"
+                                  >
+                                    {trip.status}
+                                  </Badge>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div className="md:hidden divide-y divide-gray-200 relative">
+                      {tripDetailLoading && (
+                        <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/60 rounded-lg min-h-[120px]">
+                          <Loader2 className="w-8 h-8 animate-spin text-red-500" aria-hidden />
+                        </div>
+                      )}
+                      {filteredSortedTrips.map((trip) => {
+                        const cap = trip.deliverySuccessRate != null && Number.isFinite(trip.deliverySuccessRate)
+                          ? Math.round(trip.deliverySuccessRate)
+                          : 0;
+                        return (
+                          <div
+                            key={trip.id}
+                            className="p-4 space-y-3 w-full transition-colors cursor-pointer hover:bg-gray-50 active:bg-gray-100"
+                            onClick={() => void openTripDetailFromHistory(trip)}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0 flex-1">
+                                <p className="text-sm font-medium text-gray-900 break-words">{truck.vehicleName}</p>
+                                <p className="text-xs text-gray-500 mt-1 break-words">
+                                  {trip.ordersCount} order{trip.ordersCount !== 1 ? 's' : ''} • {trip.driverName || '—'}
+                                </p>
+                              </div>
+                              <Badge
+                                variant={tripHistoryStatusBadgeVariant(trip.status)}
+                                className="flex-shrink-0"
+                              >
+                                {trip.status}
+                              </Badge>
+                            </div>
+                            <div className="grid grid-cols-2 gap-3 text-sm">
+                              <div>
+                                <p className="text-xs text-gray-500">Driver</p>
+                                <p className="text-gray-900 break-words">{trip.driverName || '—'}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-gray-500">Schedule</p>
+                                <p className="text-gray-900">{trip.date}</p>
+                              </div>
+                              <div className="col-span-2">
+                                <p className="text-xs text-gray-500">Capacity</p>
+                                <p className="text-gray-900">{cap}% full</p>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
               </CardContent>
             </Card>
           </div>
@@ -1638,6 +1866,367 @@ export function TruckDetailPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* 14-day strip: pick trip for a day */}
+      {truckStripDetailKey &&
+        (() => {
+          const [y, mo, d] = truckStripDetailKey.split('-').map(Number);
+          const dateLabel = new Date(y, mo - 1, d).toLocaleDateString('en-PH', {
+            weekday: 'long',
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+          });
+          const dayTrips = truckTripsByDateKey[truckStripDetailKey] ?? [];
+          const colors = getDispatchVehicleColor(vehicleId ?? '');
+          return (
+            <div
+              className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+              onClick={() => setTruckStripDetailKey(null)}
+            >
+              <div
+                className="bg-white rounded-xl shadow-xl w-full max-w-sm"
+                onClick={(e) => e.stopPropagation()}
+                role="dialog"
+                aria-modal="true"
+              >
+                <div className="p-4 border-b border-gray-200 flex items-start justify-between gap-3">
+                  <h3 className="font-bold text-gray-900 text-base">{dateLabel}</h3>
+                  <button
+                    type="button"
+                    onClick={() => setTruckStripDetailKey(null)}
+                    className="text-gray-400 hover:text-gray-600 shrink-0 p-1 rounded-lg hover:bg-gray-100"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="p-2">
+                  {dayTrips.map((trip) => (
+                    <button
+                      key={trip.id}
+                      type="button"
+                      className="w-full flex items-center gap-3 px-3 py-3 rounded-lg hover:bg-gray-50 transition-colors text-left"
+                      onClick={() => {
+                        void openTripDetailFromHistory(trip);
+                        setTruckStripDetailKey(null);
+                      }}
+                    >
+                      <div
+                        className="w-8 h-8 rounded-full flex items-center justify-center shrink-0"
+                        style={{ backgroundColor: colors.bg }}
+                      >
+                        <Truck className="w-4 h-4" style={{ color: colors.text }} />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold text-gray-900 truncate">{trip.tripNumber}</p>
+                        <p className="text-xs text-gray-500 truncate">
+                          {truck?.vehicleName}
+                          {trip.driverName ? ` · ${trip.driverName}` : ''}
+                        </p>
+                      </div>
+                      <span
+                        className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded border shrink-0 ${
+                          tripStatusIsCompletedUi(trip.status)
+                            ? 'bg-green-100 text-green-800 border-green-300'
+                            : trip.status === 'In Transit'
+                              ? 'bg-blue-100 text-blue-800 border-blue-300'
+                              : trip.status === 'Loading'
+                                ? 'bg-amber-100 text-amber-800 border-amber-300'
+                                : trip.status === 'Delayed'
+                                  ? 'bg-red-100 text-red-800 border-red-300'
+                                  : 'bg-gray-100 text-gray-800 border-gray-300'
+                        }`}
+                      >
+                        {tripStatusDisplay(trip.status)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+      {/* Full truck dispatch calendar */}
+      {truckCalOpen &&
+        (() => {
+          const MONTH_NAMES = [
+            'January',
+            'February',
+            'March',
+            'April',
+            'May',
+            'June',
+            'July',
+            'August',
+            'September',
+            'October',
+            'November',
+            'December',
+          ];
+          const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+          const todayKey = localYmd(new Date());
+          const firstDay = new Date(truckCalYear, truckCalMonth, 1);
+          const lastDay = new Date(truckCalYear, truckCalMonth + 1, 0);
+          const cells: (Date | null)[] = [];
+          for (let i = 0; i < firstDay.getDay(); i++) cells.push(null);
+          for (let d = 1; d <= lastDay.getDate(); d++) cells.push(new Date(truckCalYear, truckCalMonth, d));
+          const shiftMonth = (delta: number) => {
+            const d = new Date(truckCalYear, truckCalMonth + delta, 1);
+            setTruckCalYear(d.getFullYear());
+            setTruckCalMonth(d.getMonth());
+          };
+          const selectedTrips = truckCalSelectedKey ? truckTripsByDateKey[truckCalSelectedKey] ?? [] : [];
+          const colors = getDispatchVehicleColor(vehicleId ?? '');
+          return (
+            <div
+              className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+              onClick={() => setTruckCalOpen(false)}
+            >
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="truck-dispatch-cal-title"
+                className="bg-white rounded-xl shadow-xl w-full max-w-4xl max-h-[92vh] overflow-hidden flex flex-col"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-start justify-between gap-3 p-4 md:p-5 border-b border-gray-200">
+                  <div>
+                    <h2 id="truck-dispatch-cal-title" className="text-lg md:text-xl font-bold text-gray-900">
+                      Dispatch calendar
+                    </h2>
+                    <p className="text-sm text-gray-600 mt-1">{truck?.vehicleName}</p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setRefreshKey((k) => k + 1)}
+                      className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50"
+                      title="Refresh"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTruckCalOpen(false)}
+                      className="p-2 rounded-lg text-gray-500 hover:bg-gray-100"
+                      aria-label="Close"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-4 md:p-5 space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => shiftMonth(-1)}
+                        className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50"
+                        aria-label="Previous month"
+                      >
+                        <ChevronLeft className="w-5 h-5" />
+                      </button>
+                      <select
+                        value={truckCalMonth}
+                        onChange={(e) => setTruckCalMonth(Number(e.target.value))}
+                        className="border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white"
+                      >
+                        {MONTH_NAMES.map((n, i) => (
+                          <option key={n} value={i}>
+                            {n}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="number"
+                        value={truckCalYear}
+                        onChange={(e) => {
+                          const n = Number(e.target.value);
+                          if (e.target.value !== '' && Number.isFinite(n)) setTruckCalYear(Math.trunc(n));
+                        }}
+                        className="w-24 border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                        aria-label="Year"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => shiftMonth(1)}
+                        className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50"
+                        aria-label="Next month"
+                      >
+                        <ChevronRight className="w-5 h-5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-7 gap-1 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                    {DAY_NAMES.map((d) => (
+                      <div key={d} className="py-2">
+                        {d}
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="grid grid-cols-7 gap-1">
+                    {cells.map((cell, idx) => {
+                      if (!cell) return <div key={`pad-${idx}`} className="min-h-[4.5rem] rounded-lg bg-gray-50/50" />;
+                      const cellKey = localYmd(cell);
+                      const isToday = cellKey === todayKey;
+                      const isSelected = cellKey === truckCalSelectedKey;
+                      const dayTrips = truckTripsByDateKey[cellKey] ?? [];
+                      const shown = dayTrips.slice(0, 2);
+                      const overflow = dayTrips.length - shown.length;
+                      return (
+                        <button
+                          key={cellKey}
+                          type="button"
+                          onClick={() =>
+                            setTruckCalSelectedKey(cellKey === truckCalSelectedKey ? null : cellKey)
+                          }
+                          className={`min-h-[4.5rem] rounded-lg border p-1.5 text-left transition-all cursor-pointer ${
+                            isSelected
+                              ? 'ring-2 ring-blue-500 border-blue-400 bg-blue-50/60'
+                              : 'border-gray-200 bg-white hover:border-blue-300 hover:bg-blue-50/20'
+                          }`}
+                        >
+                          <div className={`text-sm font-semibold mb-0.5 ${isToday ? 'text-red-600' : 'text-gray-900'}`}>
+                            {cell.getDate()}
+                          </div>
+                          <div className="space-y-0.5">
+                            {shown.map((trip) => {
+                              const chipColor = tripStatusIsCompletedUi(trip.status)
+                                ? 'bg-green-600 text-white'
+                                : trip.status === 'In Transit'
+                                  ? 'bg-blue-600 text-white'
+                                  : trip.status === 'Loading'
+                                    ? 'bg-amber-500 text-white'
+                                    : trip.status === 'Delayed'
+                                      ? 'bg-red-500 text-white'
+                                      : 'bg-gray-500 text-white';
+                              return (
+                                <div
+                                  key={trip.id}
+                                  role="button"
+                                  tabIndex={0}
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    void openTripDetailFromHistory(trip);
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter' || e.key === ' ') {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      void openTripDetailFromHistory(trip);
+                                    }
+                                  }}
+                                  className={`truncate rounded px-0.5 py-0.5 text-[10px] leading-tight font-medium cursor-pointer ${chipColor}`}
+                                  title={`${trip.tripNumber} · ${trip.driverName}`}
+                                >
+                                  {trip.tripNumber}
+                                </div>
+                              );
+                            })}
+                            {overflow > 0 && (
+                              <div className="text-[10px] text-gray-500 font-medium text-center">+{overflow}</div>
+                            )}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {truckCalSelectedKey && (
+                    <div className="rounded-lg border border-gray-200 bg-gray-50/80 p-4">
+                      <h3 className="text-sm font-semibold text-gray-900 mb-3">
+                        {(() => {
+                          const [y, mo, d] = truckCalSelectedKey.split('-').map(Number);
+                          return new Date(y, mo - 1, d).toLocaleDateString('en-PH', {
+                            weekday: 'long',
+                            year: 'numeric',
+                            month: 'long',
+                            day: 'numeric',
+                          });
+                        })()}
+                      </h3>
+                      {selectedTrips.length === 0 ? (
+                        <p className="text-sm text-gray-500">No trips on this date.</p>
+                      ) : (
+                        <ul className="space-y-1.5">
+                          {selectedTrips.map((trip) => (
+                            <li key={trip.id}>
+                              <button
+                                type="button"
+                                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border border-gray-200 bg-white hover:border-blue-300 hover:bg-blue-50 transition-colors text-left"
+                                onClick={() => {
+                                  void openTripDetailFromHistory(trip);
+                                  setTruckCalOpen(false);
+                                }}
+                              >
+                                <div
+                                  className="w-8 h-8 rounded-full flex items-center justify-center shrink-0"
+                                  style={{ backgroundColor: colors.bg }}
+                                >
+                                  <Truck className="w-4 h-4" style={{ color: colors.text }} />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <p className="font-semibold text-gray-900 text-sm">{trip.tripNumber}</p>
+                                  <p className="text-xs text-gray-500 truncate">
+                                    {truck?.vehicleName}
+                                    {trip.driverName !== '—' ? ` · ${trip.driverName}` : ''}
+                                  </p>
+                                </div>
+                                <span
+                                  className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded border shrink-0 ${
+                                    tripStatusIsCompletedUi(trip.status)
+                                      ? 'bg-green-100 text-green-800 border-green-300'
+                                      : trip.status === 'In Transit'
+                                        ? 'bg-blue-100 text-blue-800 border-blue-300'
+                                        : trip.status === 'Loading'
+                                          ? 'bg-amber-100 text-amber-800 border-amber-300'
+                                          : trip.status === 'Delayed'
+                                            ? 'bg-red-100 text-red-800 border-red-300'
+                                            : 'bg-gray-100 text-gray-800 border-gray-300'
+                                  }`}
+                                >
+                                  {tripStatusDisplay(trip.status)}
+                                </span>
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div className="border-t border-gray-200 bg-gray-50 px-4 md:px-5 py-3 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setTruckCalOpen(false)}
+                    className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium hover:bg-gray-100"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+      {tripDetailTrip && (
+        <TripDetailsModal
+          isOpen={tripDetailOpen}
+          onClose={closeTripDetail}
+          trip={tripDetailTrip}
+          onEdit={() => {
+            closeTripDetail();
+            navigate('/logistics');
+          }}
+          onTripStatusChange={() => setRefreshKey((k) => k + 1)}
+        />
       )}
     </div>
   );

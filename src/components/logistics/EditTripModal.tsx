@@ -36,12 +36,29 @@ type OrderDetail = {
   status: string;
 };
 
-const TRIP_STATUSES = ['Scheduled', 'Loading', 'Packed', 'Ready', 'In Transit', 'Delayed', 'Delivered', 'Cancelled'] as const;
-const ORDER_STATUSES = ['Pending', 'Approved', 'Scheduled', 'Loading', 'In Transit', 'Delivered', 'Cancelled', 'On Hold'] as const;
+/** App-facing values; `Complete` is shown as "Completed" in the UI (maps to DB `trip_status` Completed). */
+const TRIP_STATUSES = ['Scheduled', 'Loading', 'Packed', 'Ready', 'In Transit', 'Delayed', 'Delivered', 'Complete', 'Cancelled'] as const;
+
+function tripStatusChipLabel(s: (typeof TRIP_STATUSES)[number]): string {
+  return s === 'Complete' ? 'Completed' : s;
+}
+/** Statuses allowed for orders already on a trip (post-queue / dispatch lifecycle). */
+const ORDER_STATUSES = [
+  'Scheduled',
+  'Loading',
+  'Packed',
+  'Ready',
+  'In Transit',
+  'Delivered',
+  'Cancelled',
+] as const;
 
 function orderStatusBadge(status: string) {
   switch (status) {
     case 'Scheduled':    return 'bg-blue-100 text-blue-700';
+    case 'Loading':      return 'bg-amber-100 text-amber-800';
+    case 'Packed':
+    case 'Ready':        return 'bg-orange-100 text-orange-800';
     case 'In Transit':   return 'bg-indigo-100 text-indigo-700';
     case 'Delivered':    return 'bg-green-100 text-green-700';
     case 'Approved':     return 'bg-emerald-100 text-emerald-700';
@@ -221,7 +238,7 @@ export function EditTripModal({
                   className={`px-3 py-1.5 rounded-lg border-2 text-sm transition-colors ${
                     status === s ? 'border-blue-600 bg-blue-50 text-blue-700 font-semibold' : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300'
                   }`}>
-                  {s}
+                  {tripStatusChipLabel(s)}
                 </button>
               ))}
             </div>

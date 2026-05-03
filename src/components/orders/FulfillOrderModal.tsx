@@ -5,10 +5,15 @@ import ImageGalleryModal from '@/src/components/ImageGalleryModal';
 
 const ORDER_DELIVERY_PROOFS_FOLDER = 'order-delivery-proofs';
 
-/** Max units in scope for this line (recorded at in transit, or order qty if not yet shipped). */
+/** Max units in scope for this line (recorded at in transit, or full line qty if none / zero shipped). */
 export function fulfillmentCap(item: OrderLineItem): number {
-  if (item.quantityShipped != null) return item.quantityShipped;
-  return item.quantity;
+  const ordered = Math.max(0, Number(item.quantity) || 0);
+  const shipped = item.quantityShipped;
+  if (shipped == null || Number.isNaN(Number(shipped))) return ordered;
+  const s = Number(shipped);
+  // DB / callers often send 0 when nothing was captured yet; cap at 0 blocks POD incorrectly.
+  if (s <= 0) return ordered;
+  return Math.min(ordered, s);
 }
 
 /** Remaining units that can be marked delivered in this and future sessions. */
@@ -18,7 +23,9 @@ export function fulfillmentRemaining(item: OrderLineItem): number {
 
 /** True when the line was not fully sent vs the original order qty (e.g. 100 ordered, 90 in transit). */
 function lineIsShortShipped(item: OrderLineItem): boolean {
-  return item.quantityShipped != null && item.quantityShipped < item.quantity;
+  const s = item.quantityShipped;
+  if (s == null || Number(s) <= 0) return false;
+  return Number(s) < item.quantity;
 }
 
 interface FulfillOrderModalProps {

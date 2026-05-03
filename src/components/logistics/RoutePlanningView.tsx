@@ -12,6 +12,7 @@ import {
   Box,
   Clock,
   Loader2,
+  ExternalLink,
 } from 'lucide-react';
 import { OrderReadyForDispatch, Vehicle, Trip, DriverOption } from '@/src/types/logistics';
 import { TripScheduleModal } from './TripScheduleModal';
@@ -28,6 +29,26 @@ import {
   formatDuration,
 } from '@/src/lib/routePlanning';
 
+/** Shown after a trip is created from route planning (banner + reset). */
+export interface TripCreatedFeedback {
+  tripNumber: string;
+  scheduledDate: string;
+  orderCount: number;
+  vehicleName: string;
+}
+
+function formatTripDateBanner(d: string): string {
+  const t = d?.trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(t)) return d;
+  const [y, mo, day] = t.split('-').map(Number);
+  return new Date(y, mo - 1, day).toLocaleDateString('en-PH', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
 interface RoutePlanningViewProps {
   ordersReady: OrderReadyForDispatch[];
   vehicles: Vehicle[];
@@ -35,7 +56,12 @@ interface RoutePlanningViewProps {
   existingTrips: Trip[];
   /** Truck drivers for this branch (employees with role Truck Driver). */
   drivers: DriverOption[];
-  onCreateTrip: (selectedOrders: string[], vehicleId: string, scheduledDate: string, driverId: string | null) => void | Promise<void>;
+  onCreateTrip: (
+    selectedOrders: string[],
+    vehicleId: string,
+    scheduledDate: string,
+    driverId: string | null,
+  ) => void | Promise<TripCreatedFeedback | void>;
   /** Deep link: pre-select orders already in `ordersReady` (order UUIDs). */
   initialSelectedOrderIds?: string[];
   /** Deep link: initial trip / departure date (YYYY-MM-DD). */
@@ -110,6 +136,16 @@ export const RoutePlanningView: React.FC<RoutePlanningViewProps> = ({
   const [routeLoading, setRouteLoading] = useState(false);
   const [routeError, setRouteError] = useState<string | null>(null);
   const routeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [tripCreatedFeedback, setTripCreatedFeedback] = useState<TripCreatedFeedback | null>(null);
+
+  useEffect(() => {
+    if (!tripCreatedFeedback) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [tripCreatedFeedback]);
 
   const filteredAndSortedOrders = useMemo(() => {
     let list =
@@ -443,8 +479,11 @@ export const RoutePlanningView: React.FC<RoutePlanningViewProps> = ({
                     {selectedOrders.length} Selected
                   </p>
                 </div>
-                <div className="flex w-full flex-col gap-3 sm:w-auto sm:min-w-[13rem]" aria-label="Order list controls">
-                  <div className="flex flex-col gap-1">
+                <div
+                  className="flex w-full flex-row flex-wrap items-end gap-3 sm:w-auto sm:justify-end sm:gap-4"
+                  aria-label="Order list controls"
+                >
+                  <div className="flex min-w-0 flex-1 flex-col gap-1 sm:w-56 sm:flex-none">
                     <label htmlFor="lamtex-route-urgency-filter" className="text-xs font-medium text-gray-600">
                       Filter by
                     </label>
@@ -452,7 +491,7 @@ export const RoutePlanningView: React.FC<RoutePlanningViewProps> = ({
                       id="lamtex-route-urgency-filter"
                       value={urgencyFilter}
                       onChange={(e) => setUrgencyFilter(e.target.value as UrgencyFilter)}
-                      className="w-full rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 sm:w-56"
+                      className="w-full rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
                       <option value="All">All urgencies</option>
                       <option value="High">High</option>
@@ -460,7 +499,7 @@ export const RoutePlanningView: React.FC<RoutePlanningViewProps> = ({
                       <option value="Low">Low</option>
                     </select>
                   </div>
-                  <div className="flex flex-col gap-1">
+                  <div className="flex min-w-0 flex-1 flex-col gap-1 sm:w-56 sm:flex-none">
                     <label htmlFor="lamtex-route-sort" className="text-xs font-medium text-gray-600">
                       Order by
                     </label>
@@ -468,7 +507,7 @@ export const RoutePlanningView: React.FC<RoutePlanningViewProps> = ({
                       id="lamtex-route-sort"
                       value={sortBy}
                       onChange={(e) => setSortBy(e.target.value as SortOption)}
-                      className="w-full rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 sm:w-56"
+                      className="w-full rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
                       <option value="urgency_desc">Urgency (high → low)</option>
                       <option value="urgency_asc">Urgency (low → high)</option>
@@ -514,8 +553,20 @@ export const RoutePlanningView: React.FC<RoutePlanningViewProps> = ({
                             <p className="text-sm text-gray-600">{order.customer}</p>
                           </div>
                         </div>
-                        <div className={`px-2 py-1 rounded text-xs font-medium border ${getUrgencyColor(order.urgency)}`}>
-                          {order.urgency}
+                        <div className="flex items-start gap-2 shrink-0">
+                          <a
+                            href={`/orders/${order.id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="inline-flex items-center gap-1 rounded-lg border border-gray-300 bg-white px-2.5 py-1 text-xs font-semibold text-gray-700 shadow-sm hover:bg-gray-50 hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5 shrink-0" aria-hidden />
+                            View order
+                          </a>
+                          <div className={`px-2 py-1 rounded text-xs font-medium border ${getUrgencyColor(order.urgency)}`}>
+                            {order.urgency}
+                          </div>
                         </div>
                       </div>
 
@@ -571,12 +622,12 @@ export const RoutePlanningView: React.FC<RoutePlanningViewProps> = ({
           {/* Vehicle Selection */}
           <Card>
             <CardHeader>
-              <CardTitle>Select truck & check date</CardTitle>
+              <CardTitle>Select Truck & Check Date</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="mb-3">
                 <label htmlFor="lamtex-route-date-hint" className="text-sm text-gray-600">
-                  Schedule date
+                  Schedule Date
                 </label>
                 <input
                   id="lamtex-route-date-hint"
@@ -616,7 +667,7 @@ export const RoutePlanningView: React.FC<RoutePlanningViewProps> = ({
               {/* Driver selection */}
               <div className="mt-4">
                 <label className="text-sm text-gray-600">
-                  Assign driver <span className="text-gray-400 font-normal">(optional)</span>
+                  Assign Driver
                 </label>
                 {selectedDriverConflict && (
                   <div className="mt-2 mb-2 flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
@@ -836,7 +887,7 @@ export const RoutePlanningView: React.FC<RoutePlanningViewProps> = ({
       <TripScheduleModal
         isOpen={showScheduleModal}
         onClose={() => setShowScheduleModal(false)}
-        onConfirm={(selectedDates) => {
+        onConfirm={async (selectedDates) => {
           const date = selectedDates[0];
           if (!selectedVehicle || !date) return;
           if (selectedVehicleMaintDates.includes(date)) {
@@ -845,17 +896,75 @@ export const RoutePlanningView: React.FC<RoutePlanningViewProps> = ({
             );
             return;
           }
-          void Promise.resolve(onCreateTrip(selectedOrders, selectedVehicle, date, selectedDriver || null)).finally(() => {
-            setShowScheduleModal(false);
-            setSelectedOrders([]);
-            setSelectedVehicle('');
-            setSelectedDriver('');
-          });
+          const created = await Promise.resolve(
+            onCreateTrip(selectedOrders, selectedVehicle, date, selectedDriver || null),
+          );
+          if (!created) return;
+          setShowScheduleModal(false);
+          setSelectedOrders([]);
+          setSelectedVehicle('');
+          setSelectedDriver('');
+          setTripCreatedFeedback(created);
         }}
         vehicleName={vehicle?.vehicleName || 'Selected Vehicle'}
         orderCount={selectedOrders.length}
         existingBookings={scheduleModalBookings}
       />
+
+      {tripCreatedFeedback && (
+        <div
+          className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+          role="presentation"
+          onClick={() => setTripCreatedFeedback(null)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="lamtex-trip-created-title"
+            aria-describedby="lamtex-trip-created-desc"
+            className="w-full max-w-md rounded-2xl border border-emerald-200 bg-white p-6 shadow-2xl ring-4 ring-emerald-100/80 sm:p-8"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex flex-col items-center text-center">
+              <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
+                <CheckCircle className="h-9 w-9" aria-hidden />
+              </div>
+              <h2 id="lamtex-trip-created-title" className="text-xl font-bold text-gray-900">
+                Trip created
+              </h2>
+              <p id="lamtex-trip-created-desc" className="mt-4 w-full space-y-3 text-left text-sm text-gray-700">
+                <span className="block rounded-lg border border-gray-100 bg-gray-50 px-3 py-2.5">
+                  <span className="text-xs font-medium uppercase tracking-wide text-gray-500">Trip number</span>
+                  <span className="mt-0.5 block font-mono text-base font-semibold text-gray-900">
+                    {tripCreatedFeedback.tripNumber}
+                  </span>
+                </span>
+                <span className="block text-gray-800">
+                  <span className="font-medium text-gray-900">Scheduled: </span>
+                  {formatTripDateBanner(tripCreatedFeedback.scheduledDate)}
+                </span>
+                <span className="flex items-start gap-2 text-gray-800">
+                  <Truck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" aria-hidden />
+                  <span>
+                    <span className="font-medium text-gray-900">
+                      {tripCreatedFeedback.orderCount} order{tripCreatedFeedback.orderCount !== 1 ? 's' : ''}
+                    </span>
+                    {' · '}
+                    {tripCreatedFeedback.vehicleName}
+                  </span>
+                </span>
+              </p>
+              <Button
+                variant="success"
+                className="mt-6 w-full justify-center sm:min-w-[12rem]"
+                onClick={() => setTripCreatedFeedback(null)}
+              >
+                Got it
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

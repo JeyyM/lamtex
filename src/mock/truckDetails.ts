@@ -45,6 +45,8 @@ export interface TruckDetails {
 
 export interface TripHistoryRecord {
   id: string;
+  /** `trips.id` when the row is linked to a live trip (opens trip detail modal). */
+  tripId: string | null;
   tripNumber: string;
   date: string;
   driverName: string;
@@ -53,11 +55,12 @@ export interface TripHistoryRecord {
   ordersCount: number;
   distance: number;
   duration: string;
-  status: 'Completed' | 'Delayed' | 'Failed';
+  /** Mirrors DB / logistics labels: includes active legs (Loading, In Transit, …) when sourced from `trips`. */
+  status: string;
   fuelUsed: number;
   fuelCost: number;
   revenue: number;
-  /** From `trip_history.delivery_success_rate` when loaded from DB */
+  /** From `trip_history.delivery_success_rate` or live `trips.capacity_used_percent` */
   deliverySuccessRate?: number;
 }
 
@@ -204,18 +207,18 @@ const TRUCK_DETAILS: Record<string, TruckDetails> = {
 // Mock trip history
 const TRIP_HISTORY: Record<string, TripHistoryRecord[]> = {
   'v1': [
-    { id: 'th1', tripNumber: 'TRIP-2026-A-001', date: '2026-02-26', driverName: 'Fernando Santos', driverId: 'DRV-001', route: ['Quezon City', 'Makati', 'Pasig'], ordersCount: 3, distance: 45, duration: '4h 30m', status: 'Completed', fuelUsed: 18, fuelCost: 1080, revenue: 12500 },
-    { id: 'th2', tripNumber: 'TRIP-2026-A-015', date: '2026-02-25', driverName: 'Marco Reyes', driverId: 'DRV-002', route: ['Quezon City', 'Manila'], ordersCount: 2, distance: 28, duration: '3h 15m', status: 'Completed', fuelUsed: 12, fuelCost: 720, revenue: 8900 },
-    { id: 'th3', tripNumber: 'TRIP-2026-A-008', date: '2026-02-24', driverName: 'Fernando Santos', driverId: 'DRV-001', route: ['Quezon City', 'Caloocan', 'Malabon'], ordersCount: 4, distance: 52, duration: '5h 10m', status: 'Delayed', fuelUsed: 22, fuelCost: 1320, revenue: 15200 },
-    { id: 'th4', tripNumber: 'TRIP-2026-A-003', date: '2026-02-23', driverName: 'Gabriel Cruz', driverId: 'DRV-003', route: ['Quezon City', 'Pasig', 'Taguig'], ordersCount: 3, distance: 38, duration: '4h 00m', status: 'Completed', fuelUsed: 16, fuelCost: 960, revenue: 11300 },
-    { id: 'th5', tripNumber: 'TRIP-2026-A-002', date: '2026-02-22', driverName: 'Fernando Santos', driverId: 'DRV-001', route: ['Quezon City', 'Makati'], ordersCount: 2, distance: 32, duration: '3h 45m', status: 'Completed', fuelUsed: 14, fuelCost: 840, revenue: 9500 },
+    { id: 'th1', tripId: null, tripNumber: 'TRIP-2026-A-001', date: '2026-02-26', driverName: 'Fernando Santos', driverId: 'DRV-001', route: ['Quezon City', 'Makati', 'Pasig'], ordersCount: 3, distance: 45, duration: '4h 30m', status: 'Completed', fuelUsed: 18, fuelCost: 1080, revenue: 12500 },
+    { id: 'th2', tripId: null, tripNumber: 'TRIP-2026-A-015', date: '2026-02-25', driverName: 'Marco Reyes', driverId: 'DRV-002', route: ['Quezon City', 'Manila'], ordersCount: 2, distance: 28, duration: '3h 15m', status: 'Completed', fuelUsed: 12, fuelCost: 720, revenue: 8900 },
+    { id: 'th3', tripId: null, tripNumber: 'TRIP-2026-A-008', date: '2026-02-24', driverName: 'Fernando Santos', driverId: 'DRV-001', route: ['Quezon City', 'Caloocan', 'Malabon'], ordersCount: 4, distance: 52, duration: '5h 10m', status: 'Delayed', fuelUsed: 22, fuelCost: 1320, revenue: 15200 },
+    { id: 'th4', tripId: null, tripNumber: 'TRIP-2026-A-003', date: '2026-02-23', driverName: 'Gabriel Cruz', driverId: 'DRV-003', route: ['Quezon City', 'Pasig', 'Taguig'], ordersCount: 3, distance: 38, duration: '4h 00m', status: 'Completed', fuelUsed: 16, fuelCost: 960, revenue: 11300 },
+    { id: 'th5', tripId: null, tripNumber: 'TRIP-2026-A-002', date: '2026-02-22', driverName: 'Fernando Santos', driverId: 'DRV-001', route: ['Quezon City', 'Makati'], ordersCount: 2, distance: 32, duration: '3h 45m', status: 'Completed', fuelUsed: 14, fuelCost: 840, revenue: 9500 },
   ],
   'v2': [
-    { id: 'th6', tripNumber: 'TRIP-2026-A-016', date: '2026-02-25', driverName: 'Rodrigo Diaz', driverId: 'DRV-004', route: ['Quezon City', 'Marikina', 'Antipolo'], ordersCount: 3, distance: 48, duration: '4h 50m', status: 'Completed', fuelUsed: 20, fuelCost: 1200, revenue: 13800 },
-    { id: 'th7', tripNumber: 'TRIP-2026-A-010', date: '2026-02-24', driverName: 'Ernesto Ramos', driverId: 'DRV-005', route: ['Quezon City', 'Paranaque'], ordersCount: 2, distance: 35, duration: '3h 30m', status: 'Completed', fuelUsed: 15, fuelCost: 900, revenue: 10200 },
+    { id: 'th6', tripId: null, tripNumber: 'TRIP-2026-A-016', date: '2026-02-25', driverName: 'Rodrigo Diaz', driverId: 'DRV-004', route: ['Quezon City', 'Marikina', 'Antipolo'], ordersCount: 3, distance: 48, duration: '4h 50m', status: 'Completed', fuelUsed: 20, fuelCost: 1200, revenue: 13800 },
+    { id: 'th7', tripId: null, tripNumber: 'TRIP-2026-A-010', date: '2026-02-24', driverName: 'Ernesto Ramos', driverId: 'DRV-005', route: ['Quezon City', 'Paranaque'], ordersCount: 2, distance: 35, duration: '3h 30m', status: 'Completed', fuelUsed: 15, fuelCost: 900, revenue: 10200 },
   ],
   'v3': [
-    { id: 'th8', tripNumber: 'TRIP-2026-A-014', date: '2026-02-25', driverName: 'Alberto Mendoza', driverId: 'DRV-006', route: ['Quezon City', 'Valenzuela', 'Malabon'], ordersCount: 4, distance: 55, duration: '5h 20m', status: 'Completed', fuelUsed: 23, fuelCost: 1380, revenue: 16500 },
+    { id: 'th8', tripId: null, tripNumber: 'TRIP-2026-A-014', date: '2026-02-25', driverName: 'Alberto Mendoza', driverId: 'DRV-006', route: ['Quezon City', 'Valenzuela', 'Malabon'], ordersCount: 4, distance: 55, duration: '5h 20m', status: 'Completed', fuelUsed: 23, fuelCost: 1380, revenue: 16500 },
   ],
 };
 

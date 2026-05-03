@@ -185,7 +185,7 @@ const logRoleMap: Record<string, string> = {
 export function PurchaseOrderDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { branch, role, session, employeeName } = useAppContext();
+  const { branch, role, session, employeeName, addAuditLog } = useAppContext();
 
   const [po, setPO]               = useState<PORow | null>(null);
   const [items, setItems]         = useState<POItemRow[]>([]);
@@ -239,6 +239,9 @@ export function PurchaseOrderDetailPage() {
   const [workflowSaving, setWorkflowSaving]            = useState(false);
   const [showAcceptModal, setShowAcceptModal]          = useState(false);
   const [showRejectModal, setShowRejectModal]          = useState(false);
+  const [showCancelPoModal, setShowCancelPoModal]      = useState(false);
+  const [cancelPoNote, setCancelPoNote]               = useState('');
+  const [cancelPoLoading, setCancelPoLoading]            = useState(false);
   const [showSubmitModal, setShowSubmitModal]          = useState(false);
   const [rejectionReason, setRejectionReason]         = useState('');
   const [approvalLoading, setApprovalLoading]          = useState(false);
@@ -850,6 +853,11 @@ export function PurchaseOrderDetailPage() {
   const showPaymentSummary =
     po && ['Confirmed', 'Partially Received', 'Completed'].includes(po.status);
 
+  const canCancelPurchaseOrder =
+    !!po &&
+    !isEditing &&
+    ['Draft', 'Requested', 'Accepted', 'Sent', 'Confirmed'].includes(po.status);
+
   const handleSubmitForApproval = async () => {
     if (!po || po.status !== 'Draft') return;
     if (items.length === 0) {
@@ -944,6 +952,40 @@ export function PurchaseOrderDetailPage() {
       alert(e.message ?? 'Failed to reject');
     } finally {
       setApprovalLoading(false);
+    }
+  };
+
+  const handleCancelPurchaseOrder = async () => {
+    if (!po) return;
+    setCancelPoLoading(true);
+    const actor = employeeName || session?.user?.email || role;
+    const now = new Date().toISOString();
+    const note = cancelPoNote.trim();
+    try {
+      const { error } = await supabase.from('purchase_orders').update({
+        status: 'Cancelled',
+        accepted_by: null,
+        accepted_at: null,
+        rejected_by: null,
+        rejection_reason: null,
+        updated_at: now,
+      }).eq('id', po.id);
+      if (error) throw error;
+      await insertPoLog(
+        'cancelled',
+        note ? `Purchase order cancelled by ${actor}. ${note}` : `Purchase order cancelled by ${actor}.`,
+        { status: po.status },
+        { status: 'Cancelled' },
+        note ? { note } : null,
+      );
+      addAuditLog('Cancelled PO', 'Purchase', note ? `${po.po_number}: ${note}` : po.po_number);
+      await fetchPO();
+      setShowCancelPoModal(false);
+      setCancelPoNote('');
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : 'Failed to cancel');
+    } finally {
+      setCancelPoLoading(false);
     }
   };
 
@@ -1099,6 +1141,17 @@ export function PurchaseOrderDetailPage() {
                   className="gap-2 border-blue-300 text-blue-700 hover:bg-blue-50"
                 >
                   <CreditCard className="w-4 h-4" /> Record Payment
+                </Button>
+              )}
+              {canCancelPurchaseOrder && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setShowCancelPoModal(true)}
+                  className="gap-2 border-red-300 text-red-700 hover:bg-red-50"
+                >
+                  <Ban className="w-4 h-4" />
+                  Cancel order
                 </Button>
               )}
               <Button variant="outline" onClick={handleStartEdit} className="gap-2">
@@ -2380,6 +2433,72 @@ export function PurchaseOrderDetailPage() {
               >
                 {approvalLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <XCircle className="w-4 h-4" />}
                 Confirm rejection
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showCancelPoModal && po && (
+        <div
+          className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
+          onClick={() => {
+            if (!cancelPoLoading) {
+              setShowCancelPoModal(false);
+              setCancelPoNote('');
+            }
+          }}
+        >
+          <div
+            className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-6 py-5 border-b border-gray-100 flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+                <Ban className="w-5 h-5 text-red-600" />
+              </div>
+              <div>
+                <h2 className="text-lg font-bold text-gray-900">Cancel purchase order</h2>
+                <p className="text-sm text-gray-500">{po.po_number}</p>
+              </div>
+            </div>
+            <div className="px-6 py-5 space-y-4">
+              <p className="text-sm text-gray-700">
+                Marks this PO as <span className="font-semibold">Cancelled</span>. Receipts already recorded are not reversed.
+              </p>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Notes <span className="text-gray-400 font-normal">(optional)</span>
+                </label>
+                <textarea
+                  rows={3}
+                  value={cancelPoNote}
+                  onChange={(e) => setCancelPoNote(e.target.value)}
+                  placeholder="Why the order is being cancelled…"
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-red-500"
+                />
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCancelPoModal(false);
+                  setCancelPoNote('');
+                }}
+                disabled={cancelPoLoading}
+                className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 transition-colors disabled:opacity-50"
+              >
+                Back
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleCancelPurchaseOrder()}
+                disabled={cancelPoLoading}
+                className="px-5 py-2 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-700 transition-colors disabled:opacity-50 flex items-center gap-2"
+              >
+                {cancelPoLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Ban className="w-4 h-4" />}
+                Confirm cancel
               </button>
             </div>
           </div>

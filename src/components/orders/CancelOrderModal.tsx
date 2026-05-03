@@ -1,18 +1,15 @@
 import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
-import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import {
   X,
   AlertTriangle,
-  FileText,
   User,
   MessageSquare,
 } from 'lucide-react';
 import { useAppContext } from '@/src/store/AppContext';
 
 interface CancelOrderModalProps {
-  orderId: string;
   orderNumber: string;
   customerName: string;
   orderAmount: number;
@@ -22,7 +19,6 @@ interface CancelOrderModalProps {
 
 export interface CancellationData {
   reason: string;
-  category: string;
   initiatedBy: string;
   refundRequired: boolean;
   refundAmount: number;
@@ -32,21 +28,7 @@ export interface CancellationData {
   cancellationDate: string;
 }
 
-const CANCELLATION_REASONS = [
-  'Customer Request',
-  'Payment Issues',
-  'Stock Unavailable',
-  'Delivery Issues',
-  'Pricing Error',
-  'Duplicate Order',
-  'Quality Concerns',
-  'Order Entry Error',
-  'Customer Not Reachable',
-  'Other',
-];
-
 export function CancelOrderModal({
-  orderId,
   orderNumber,
   customerName,
   orderAmount,
@@ -57,10 +39,9 @@ export function CancelOrderModal({
 
   const actorName = employeeName || session?.user?.email || role || 'Unknown';
 
-  const [category, setCategory] = useState('');
-  const [customReason, setCustomReason] = useState('');
   const [refundRequired, setRefundRequired] = useState(false);
-  const [refundAmount, setRefundAmount] = useState(orderAmount);
+  /** Raw input so the field can stay empty until the user enters an amount (validated on submit). */
+  const [refundAmountStr, setRefundAmountStr] = useState('');
   const [restockItems, setRestockItems] = useState(true);
   const [notifyCustomer, setNotifyCustomer] = useState(true);
   const [additionalNotes, setAdditionalNotes] = useState('');
@@ -69,31 +50,31 @@ export function CancelOrderModal({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!category) {
-      alert('Please select a cancellation reason');
-      return;
-    }
-
-    if (category === 'Other' && !customReason.trim()) {
-      alert('Please provide details for "Other" reason');
-      return;
-    }
-
-    if (refundRequired && refundAmount <= 0) {
-      alert('Please enter a valid refund amount');
-      return;
-    }
-
-    if (refundRequired && refundAmount > orderAmount) {
-      alert('Refund amount cannot exceed order amount');
-      return;
+    let refundAmount = 0;
+    if (refundRequired) {
+      const trimmed = refundAmountStr.trim();
+      if (trimmed === '') {
+        alert('Please enter a refund amount.');
+        return;
+      }
+      refundAmount = parseFloat(trimmed);
+      if (!Number.isFinite(refundAmount) || refundAmount <= 0) {
+        alert('Please enter a valid refund amount.');
+        return;
+      }
+      if (refundAmount > orderAmount) {
+        alert('Refund amount cannot exceed order amount.');
+        return;
+      }
     }
 
     setIsSubmitting(true);
 
+    const reason =
+      additionalNotes.trim() !== '' ? additionalNotes.trim() : 'Order cancelled';
+
     const cancellationData: CancellationData = {
-      reason: category === 'Other' ? customReason : category,
-      category,
+      reason,
       initiatedBy: actorName,
       refundRequired,
       refundAmount: refundRequired ? refundAmount : 0,
@@ -153,8 +134,8 @@ export function CancelOrderModal({
             {/* Order Information */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 bg-gray-50 rounded-lg">
               <div>
-                <p className="text-sm text-gray-500">Order ID</p>
-                <p className="font-semibold text-gray-900">{orderId}</p>
+                <p className="text-sm text-gray-500">Order number</p>
+                <p className="font-semibold text-gray-900">{orderNumber}</p>
               </div>
               <div>
                 <p className="text-sm text-gray-500">Customer</p>
@@ -169,44 +150,6 @@ export function CancelOrderModal({
                 <p className="font-semibold text-gray-900">{actorName}</p>
               </div>
             </div>
-
-            {/* Cancellation Reason */}
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-2">
-                <FileText className="w-4 h-4 inline mr-1" />
-                Cancellation Reason *
-              </label>
-              <select
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
-                required
-              >
-                <option value="">Select a reason...</option>
-                {CANCELLATION_REASONS.map((r) => (
-                  <option key={r} value={r}>
-                    {r}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Custom Reason (if "Other" selected) */}
-            {category === 'Other' && (
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">
-                  Please specify the reason *
-                </label>
-                <textarea
-                  value={customReason}
-                  onChange={(e) => setCustomReason(e.target.value)}
-                  rows={3}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
-                  placeholder="Provide detailed reason for cancellation..."
-                  required
-                />
-              </div>
-            )}
 
             {/* Initiated By — read-only, locked to logged-in user */}
             <div>
@@ -227,7 +170,11 @@ export function CancelOrderModal({
                   type="checkbox"
                   id="refundRequired"
                   checked={refundRequired}
-                  onChange={(e) => setRefundRequired(e.target.checked)}
+                  onChange={(e) => {
+                    const on = e.target.checked;
+                    setRefundRequired(on);
+                    if (!on) setRefundAmountStr('');
+                  }}
                   className="w-4 h-4 text-red-600 border-gray-300 rounded focus:ring-red-500"
                 />
                 <label htmlFor="refundRequired" className="text-sm font-semibold text-gray-700">
@@ -243,12 +190,11 @@ export function CancelOrderModal({
                   <div className="relative">
                     <span className="absolute left-3 top-2 text-gray-500">₱</span>
                     <input
-                      type="number"
-                      value={refundAmount}
-                      onChange={(e) => setRefundAmount(parseFloat(e.target.value) || 0)}
-                      min="0"
-                      max={orderAmount}
-                      step="0.01"
+                      type="text"
+                      inputMode="decimal"
+                      value={refundAmountStr}
+                      onChange={(e) => setRefundAmountStr(e.target.value)}
+                      placeholder="0.00"
                       className="w-full pl-8 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
                     />
                   </div>
@@ -294,14 +240,14 @@ export function CancelOrderModal({
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-2">
                 <MessageSquare className="w-4 h-4 inline mr-1" />
-                Additional Notes (Optional)
+                Notes (optional)
               </label>
               <textarea
                 value={additionalNotes}
                 onChange={(e) => setAdditionalNotes(e.target.value)}
                 rows={4}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
-                placeholder="Add any additional information about this cancellation (internal use only)..."
+                placeholder="Cancellation notes (stored as the cancellation reason if provided)…"
               />
             </div>
 

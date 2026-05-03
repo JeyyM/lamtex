@@ -922,7 +922,7 @@ function IbrRawMaterialLineCard(p: IbrRawLineCardProps) {
 export function InterBranchRequestDetailPage() {
   const { id: routeId } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { branch, employeeName, session, role } = useAppContext();
+  const { branch, employeeName, session, role, addAuditLog } = useAppContext();
 
   const [resolvedBranchId, setResolvedBranchId] = useState<string | null>(null);
   const [logisticsLoading, setLogisticsLoading] = useState(false);
@@ -997,6 +997,8 @@ export function InterBranchRequestDetailPage() {
   const [pickScheduleDate, setPickScheduleDate] = useState('');
   const [showIbrInTransitModal, setShowIbrInTransitModal] = useState(false);
   const [showIbrDeliveryModal, setShowIbrDeliveryModal] = useState(false);
+  const [showCancelIbrModal, setShowCancelIbrModal] = useState(false);
+  const [cancelIbrNote, setCancelIbrNote] = useState('');
   /** False when DB has no `quantity_shipped` / `quantity_delivered` columns (migration not applied). */
   const [ibrShipmentTrackingAvailable, setIbrShipmentTrackingAvailable] = useState<boolean | null>(null);
   const [deliveryProofs, setDeliveryProofs] = useState<IbrDeliveryProofRow[]>([]);
@@ -1892,6 +1894,42 @@ export function InterBranchRequestDetailPage() {
     }
   };
 
+  const doCancel = async () => {
+    if (!id || !ibr) return;
+    setSaving(true);
+    try {
+      const name = employeeName || session?.user?.email || 'User';
+      const prevStatus = ibr.status;
+      const note = cancelIbrNote.trim();
+      const now = new Date().toISOString();
+      const { error: e0 } = await supabase
+        .from('inter_branch_requests')
+        .update({
+          status: 'Cancelled',
+          cancelled_by: name,
+          cancelled_at: now,
+          updated_at: now,
+        })
+        .eq('id', id);
+      if (e0) throw e0;
+      await insertIbrLog(
+        'cancelled',
+        note ? `Cancelled by ${name}: ${note}` : `Cancelled by ${name}.`,
+        { status: prevStatus },
+        { status: 'Cancelled', cancelled_by: name },
+        note ? { note } : null,
+      );
+      addAuditLog('Cancelled IBR', 'Inter-branch', note ? `${ibr.ibr_number}: ${note}` : ibr.ibr_number);
+      setShowCancelIbrModal(false);
+      setCancelIbrNote('');
+      await loadRequest(id);
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : 'Cancel failed');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const advanceIbrLogistics = async (
     next: IBRStatus,
     extra?: { scheduled_departure_date?: string | null },
@@ -2252,6 +2290,10 @@ export function InterBranchRequestDetailPage() {
   const totalLineQty = items.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
   const logisticsBusy = logisticsLoading || saving;
   const ibrShipmentTrackingReady = ibrShipmentTrackingAvailable === true;
+  const canCancelIbr =
+    canUseLogisticsUi &&
+    !isEditing &&
+    !['Cancelled', 'Rejected', 'Completed', 'Fulfilled'].includes(ibr.status);
 
   return (
     <div className="space-y-6 p-3 sm:p-4 md:p-6">
@@ -2482,6 +2524,18 @@ export function InterBranchRequestDetailPage() {
                 Edit request
               </Button>
             )}
+            {canCancelIbr && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setShowCancelIbrModal(true)}
+                disabled={saving}
+                className="gap-2 border-red-300 text-red-700 hover:bg-red-50 shrink-0"
+              >
+                <Ban className="w-4 h-4" />
+                Cancel request
+              </Button>
+            )}
         </div>
       </div>
 
@@ -2557,6 +2611,66 @@ export function InterBranchRequestDetailPage() {
         submitting={logisticsLoading}
         onConfirm={handleConfirmIbrDelivery}
       />
+
+      {showCancelIbrModal &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[100] flex min-h-dvh w-full items-center justify-center overflow-y-auto bg-black/50 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="ibr-cancel-title"
+            onClick={() => !saving && setShowCancelIbrModal(false)}
+          >
+            <div
+              className="my-auto w-full max-w-md space-y-4 rounded-xl bg-white p-6 shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h2 id="ibr-cancel-title" className="text-lg font-semibold text-gray-900">
+                Cancel this inter-branch request?
+              </h2>
+              <p className="text-sm text-gray-600">
+                The request will be marked <span className="font-semibold">Cancelled</span>. If goods are already in
+                transit, resolve inventory outside this action.
+              </p>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-600" htmlFor="ibr-cancel-note">
+                  Notes <span className="font-normal text-gray-400">(optional)</span>
+                </label>
+                <textarea
+                  id="ibr-cancel-note"
+                  rows={3}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                  value={cancelIbrNote}
+                  onChange={(e) => setCancelIbrNote(e.target.value)}
+                  placeholder="Reason for cancellation…"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setShowCancelIbrModal(false);
+                    setCancelIbrNote('');
+                  }}
+                  disabled={saving}
+                >
+                  Back
+                </Button>
+                <Button
+                  type="button"
+                  className="gap-2 bg-red-600 hover:bg-red-700"
+                  onClick={() => void doCancel()}
+                  disabled={saving}
+                >
+                  {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Ban className="w-4 h-4" />}
+                  Confirm cancel
+                </Button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 items-start">
         <Card>

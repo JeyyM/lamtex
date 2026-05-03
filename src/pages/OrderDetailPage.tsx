@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
@@ -138,6 +138,7 @@ export function OrderDetailPage() {
 
   const [showInTransitModal, setShowInTransitModal] = useState(false);
   const [inTransitSubmitting, setInTransitSubmitting] = useState(false);
+  const shipQtyNextOrderStatusRef = useRef<'Packed' | 'In Transit'>('In Transit');
   const [logisticsLoading, setLogisticsLoading] = useState(false);
 
   // Supabase data state
@@ -510,6 +511,7 @@ export function OrderDetailPage() {
 
   const handleConfirmInTransit = async (rows: { itemId: string; shippedQuantity: number }[]) => {
     if (!id || !order) return;
+    const nextOrderStatus = shipQtyNextOrderStatusRef.current;
     const byLine = new Map(rows.map((r) => [r.itemId, r.shippedQuantity]));
     for (const li of order.items) {
       const ship = byLine.get(li.id);
@@ -606,7 +608,10 @@ export function OrderDetailPage() {
             movement_type: 'Out',
             quantity: ship,
             from_branch: branchCode || null,
-            reason: 'Order in transit (shipment)',
+            reason:
+              nextOrderStatus === 'Packed'
+                ? 'Order packed / loaded (shipment)'
+                : 'Order in transit (shipment)',
             performed_by: employeeName || session?.user?.email || role,
             reference_number: order.id,
             timestamp: new Date().toISOString(),
@@ -628,7 +633,7 @@ export function OrderDetailPage() {
 
       const { error: ordErr } = await supabase
         .from('orders')
-        .update({ status: 'In Transit', updated_at: new Date().toISOString() })
+        .update({ status: nextOrderStatus, updated_at: new Date().toISOString() })
         .eq('id', id);
       if (ordErr) throw ordErr;
 
@@ -643,18 +648,23 @@ export function OrderDetailPage() {
           return { label, quantity: r.shippedQuantity, unit: 'units' as const };
         });
 
+      const logSummary =
+        nextOrderStatus === 'Packed'
+          ? `Logistics: ${prev} → Packed (stock deducted, loaded)`
+          : `Logistics: ${prev} → In Transit (stock deducted)`;
+
       await insertOrderLog(
         'shipped',
-        `Logistics: ${prev} → In Transit (stock deducted)`,
+        logSummary,
         { status: prev },
-        { status: 'In Transit' },
+        { status: nextOrderStatus },
         { inTransit: rows, shipment_lines },
       );
       setOrder((o) => {
         if (!o) return o;
         return {
           ...o,
-          status: 'In Transit',
+          status: nextOrderStatus,
           items: o.items.map((li) => {
             const ship = byLine.get(li.id) ?? 0;
             const nextC = (li.quantityShipped ?? 0) + ship;
@@ -663,7 +673,12 @@ export function OrderDetailPage() {
         };
       });
       setShowInTransitModal(false);
-      addAuditLog('In transit (shipment)', 'Order', `Order ${order.id} marked in transit with stock move`);
+      shipQtyNextOrderStatusRef.current = 'In Transit';
+      addAuditLog(
+        nextOrderStatus === 'Packed' ? 'Packed / loaded (shipment)' : 'In transit (shipment)',
+        'Order',
+        `Order ${order.id} — ${nextOrderStatus} with stock move`,
+      );
     } catch (e: unknown) {
       const msg =
         e && typeof e === 'object' && 'message' in e && typeof (e as { message: unknown }).message === 'string'
@@ -1757,19 +1772,21 @@ export function OrderDetailPage() {
     'Scheduled',
     'Loading',
     'Packed',
-    'Ready',
     'In Transit',
     'Delivered',
   ];
-  const showLogisticsBadges = !isEditing && LOGISTICS_FLOW_STEPS.includes(order.status);
+  const showLogisticsBadges =
+    !isEditing && (LOGISTICS_FLOW_STEPS.includes(order.status) || order.status === 'Ready');
   const logisticsReplacesFulfill =
     canUseLogisticsUi &&
     !isEditing &&
     ['Approved', 'Scheduled', 'Loading', 'Packed', 'Ready', 'In Transit'].includes(order.status);
+  /** Ready orders (legacy) sit at the same step as Packed for the progress UI. */
+  const logisticsStepIndex =
+    order.status === 'Ready' ? LOGISTICS_FLOW_STEPS.indexOf('Packed') : LOGISTICS_FLOW_STEPS.indexOf(order.status);
   /** After partial delivery, same next step as Approved: schedule remaining shipment. */
   const showScheduleAction =
     canUseLogisticsUi && !isEditing && (order.status === 'Approved' || order.status === 'Partially Fulfilled');
-  const logisticsStepIndex = LOGISTICS_FLOW_STEPS.indexOf(order.status);
   const logisticsStepState = (i: number): 'complete' | 'current' | 'upcoming' => {
     if (order.status === 'Delivered') return 'complete';
     if (i < logisticsStepIndex) return 'complete';
@@ -1929,31 +1946,34 @@ export function OrderDetailPage() {
                   variant="primary"
                   className="gap-2"
                   disabled={logisticsLoading}
-                  onClick={() => void advanceLogisticsStatus('Packed')}
+                  onClick={() => {
+                    shipQtyNextOrderStatusRef.current = 'Packed';
+                    setShowInTransitModal(true);
+                  }}
                 >
                   {logisticsLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Package className="w-4 h-4" />}
                   Mark Packed
                 </Button>
               )}
-              {logisticsReplacesFulfill && order.status === 'Packed' && (
+              {logisticsReplacesFulfill && (order.status === 'Packed' || order.status === 'Ready') && (
                 <Button
                   variant="primary"
                   className="gap-2"
-                  disabled={logisticsLoading}
-                  onClick={() => void advanceLogisticsStatus('Ready')}
+                  disabled={logisticsLoading || inTransitSubmitting}
+                  onClick={() => {
+                    shipQtyNextOrderStatusRef.current = 'In Transit';
+                    const rows = order.items.map((li) => ({
+                      itemId: li.id,
+                      shippedQuantity: Math.max(0, li.quantity - (li.quantityShipped ?? 0)),
+                    }));
+                    void handleConfirmInTransit(rows);
+                  }}
                 >
-                  {logisticsLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-                  Mark Ready
-                </Button>
-              )}
-              {logisticsReplacesFulfill && order.status === 'Ready' && (
-                <Button
-                  variant="primary"
-                  className="gap-2"
-                  disabled={logisticsLoading}
-                  onClick={() => setShowInTransitModal(true)}
-                >
-                  {logisticsLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Truck className="w-4 h-4" />}
+                  {inTransitSubmitting || logisticsLoading ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Truck className="w-4 h-4" />
+                  )}
                   Mark in transit
                 </Button>
               )}
@@ -3393,7 +3413,6 @@ export function OrderDetailPage() {
       {/* Cancel Order Modal */}
       {showCancelModal && order && (
         <CancelOrderModal
-          orderId={order.id}
           orderNumber={order.id}
           customerName={order.customer}
           orderAmount={order.totalAmount}
@@ -3751,9 +3770,15 @@ export function OrderDetailPage() {
       {showInTransitModal && order && (
         <MarkInTransitModal
           isOpen={showInTransitModal}
-          onClose={() => !inTransitSubmitting && setShowInTransitModal(false)}
+          onClose={() => {
+            if (!inTransitSubmitting) {
+              setShowInTransitModal(false);
+              shipQtyNextOrderStatusRef.current = 'In Transit';
+            }
+          }}
           orderNumber={order.id}
           items={order.items}
+          purpose="markPacked"
           submitting={inTransitSubmitting}
           onConfirm={handleConfirmInTransit}
         />
