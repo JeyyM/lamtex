@@ -1,8 +1,7 @@
-export type EmployeeRole = 
+export type EmployeeRole =
   | 'Sales Agent'
   | 'Logistics Manager'
   | 'Warehouse Manager'
-  | 'Machine Worker'
   | 'Truck Driver';
 
 export type EmployeeStatus = 'active' | 'on-leave' | 'inactive';
@@ -27,7 +26,6 @@ export interface SalesAgent extends Employee {
   activeCustomers: number;
   totalRevenue: number;
   commission: number;
-  commissionTier: string;
   territoryCoverage: string;
 }
 
@@ -47,14 +45,6 @@ export interface WarehouseManager extends Employee {
   ordersProcessed: number;
 }
 
-export interface MachineWorker extends Employee {
-  role: 'Machine Worker';
-  machineType: string;
-  shiftsCompleted: number;
-  productionOutput: number;
-  efficiencyRate: number;
-}
-
 export interface TruckDriver extends Employee {
   role: 'Truck Driver';
   truckNumber: string;
@@ -64,9 +54,8 @@ export interface TruckDriver extends Employee {
   licensePlate: string;
 }
 
-export type EmployeeDetails = 
-  | SalesAgent 
-  | LogisticsManager 
-  | WarehouseManager 
-  | MachineWorker 
+export type EmployeeDetails =
+  | SalesAgent
+  | LogisticsManager
+  | WarehouseManager
   | TruckDriver;

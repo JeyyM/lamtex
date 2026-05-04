@@ -21,6 +21,7 @@ import AddMaterialModal, { MaterialFormData } from '../components/materials/AddM
 import StockAdjustmentModal from '../components/warehouse/StockAdjustmentModal';
 import { supabase } from '../lib/supabase';
 import { computeStockStatus } from '../lib/stockStatus';
+import { insertRawMaterialLog, mapAppRoleToLogRole } from '../lib/domainActivityLog';
 
 // ── Supabase row shape ───────────────────────────────────────────────────────
 interface MaterialStockRow {
@@ -49,7 +50,7 @@ interface RawMaterialRow {
 export default function MaterialCategoryPage() {
   const navigate = useNavigate();
   const { categoryName } = useParams<{ categoryName: string }>();
-  const { selectedBranch } = useAppContext();
+  const { selectedBranch, employeeName, role, session } = useAppContext();
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'stock' | 'usage'>('name');
 
@@ -140,9 +141,12 @@ export default function MaterialCategoryPage() {
 
   const handleSaveMaterial = async (formData: MaterialFormData) => {
     if (!categoryId) return;
+    const actorName = employeeName || session?.user?.email || 'User';
+    const actorRole = mapAppRoleToLogRole(role);
     setSaving(true);
     try {
       if (isEditMode && editingMaterialId) {
+        const oldRow = materials.find(m => m.id === editingMaterialId);
         const { error } = await supabase
           .from('raw_materials')
           .update({
@@ -159,6 +163,27 @@ export default function MaterialCategoryPage() {
           })
           .eq('id', editingMaterialId);
         if (error) throw error;
+        await insertRawMaterialLog(supabase, {
+          rawMaterialId: editingMaterialId,
+          action: 'material_updated',
+          description: `Raw material "${formData.name.trim()}" updated (${categoryTitle}).`,
+          performedBy: actorName,
+          performedByRole: actorRole,
+          oldValue: oldRow
+            ? {
+                name: oldRow.name,
+                sku: oldRow.sku,
+                cost_per_unit: oldRow.cost_per_unit,
+                reorder_point: oldRow.reorder_point,
+              }
+            : null,
+          newValue: {
+            name: formData.name.trim(),
+            sku: formData.sku.trim().toUpperCase(),
+            cost_per_unit: formData.costPerUnit,
+            reorder_point: formData.reorderPoint,
+          },
+        });
       } else {
         const { data: newMaterial, error } = await supabase
           .from('raw_materials')
@@ -194,6 +219,20 @@ export default function MaterialCategoryPage() {
             });
           }
         }
+        if (newMaterial?.id) {
+          await insertRawMaterialLog(supabase, {
+            rawMaterialId: newMaterial.id,
+            action: 'material_created',
+            description: `Raw material "${formData.name.trim()}" created in ${categoryTitle}.`,
+            performedBy: actorName,
+            performedByRole: actorRole,
+            newValue: {
+              sku: formData.sku.trim().toUpperCase(),
+              unit_of_measure: formData.unitOfMeasure,
+              cost_per_unit: formData.costPerUnit,
+            },
+          });
+        }
       }
       await fetchMaterials();
       handleCloseModal();
@@ -206,8 +245,20 @@ export default function MaterialCategoryPage() {
 
   const handleDeleteMaterial = async () => {
     if (!editingMaterialId) return;
+    const actorName = employeeName || session?.user?.email || 'User';
+    const actorRole = mapAppRoleToLogRole(role);
+    const delName = editingMaterial?.name ?? materials.find(m => m.id === editingMaterialId)?.name ?? '';
     setSaving(true);
     try {
+      await insertRawMaterialLog(supabase, {
+        rawMaterialId: editingMaterialId,
+        action: 'material_deleted',
+        description: `Raw material "${delName}" deleted.`,
+        performedBy: actorName,
+        performedByRole: actorRole,
+        oldValue: { name: delName },
+        newValue: null,
+      });
       const { error } = await supabase
         .from('raw_materials')
         .delete()
@@ -242,8 +293,11 @@ export default function MaterialCategoryPage() {
 
   const handleStockAdjustment = async (adjustment: { type: 'add' | 'subtract'; quantity: number; notes: string }) => {
     if (!selectedItemForAdjustment) return;
+    const actorName = employeeName || session?.user?.email || 'User';
+    const actorRole = mapAppRoleToLogRole(role);
     const delta = adjustment.type === 'add' ? adjustment.quantity : -adjustment.quantity;
-    const newTotal = Math.max(0, selectedItemForAdjustment.currentStock + delta);
+    const prevTotal = selectedItemForAdjustment.currentStock;
+    const newTotal = Math.max(0, prevTotal + delta);
     const newStatus = computeStockStatus(newTotal, selectedItemForAdjustment.reorderPoint ?? 0);
 
     try {
@@ -252,6 +306,18 @@ export default function MaterialCategoryPage() {
         .update({ total_stock: newTotal, status: newStatus })
         .eq('id', selectedItemForAdjustment.id);
       if (error) throw error;
+      await insertRawMaterialLog(supabase, {
+        rawMaterialId: selectedItemForAdjustment.id,
+        action: 'stock_adjusted',
+        description: `${adjustment.type === 'add' ? 'Added' : 'Removed'} ${adjustment.quantity} ${selectedItemForAdjustment.unit} — ${selectedItemForAdjustment.sku}${
+          adjustment.notes.trim() ? `. ${adjustment.notes.trim()}` : ''
+        }`,
+        performedBy: actorName,
+        performedByRole: actorRole,
+        oldValue: { total_stock: prevTotal },
+        newValue: { total_stock: newTotal, status: newStatus },
+        metadata: { source: 'material_category_page' },
+      });
       await fetchMaterials();
     } catch (err: any) {
       alert(`Failed to adjust stock: ${err.message ?? 'Unknown error'}`);

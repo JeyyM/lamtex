@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Ca
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { supabase } from '@/src/lib/supabase';
+import { insertRawMaterialLog } from '@/src/lib/domainActivityLog';
 import { addRawMaterialInboundAggregateOnly, addRawMaterialInboundAtBranch } from '@/src/lib/rawMaterialInbound';
 import {
   ArrowLeft,
@@ -520,13 +521,35 @@ export function PurchaseOrderDetailPage() {
       }
 
       // 3. Update raw_material prices for items that were received with the box ticked
+      const actorNameRm = employeeName || session?.user?.email || 'User';
       for (const item of stagedItems) {
         if (priceUpdateItems.has(item.id) && item.quantity_received > 0 && item.material_id) {
+          const { data: prevRow } = await supabase
+            .from('raw_materials')
+            .select('cost_per_unit, last_purchase_price')
+            .eq('id', item.material_id)
+            .single();
           const { error } = await supabase.from('raw_materials').update({
             cost_per_unit:       item.unit_price,
             last_purchase_price: item.unit_price,
           }).eq('id', item.material_id);
           if (error) throw error;
+          await insertRawMaterialLog(supabase, {
+            rawMaterialId: item.material_id,
+            action: 'cost_synced_from_po',
+            description: `Catalog unit cost updated to ₱${Number(item.unit_price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })} (from PO line on save).`,
+            performedBy: actorNameRm,
+            performedByRole: logRoleMap[role] ?? 'System',
+            oldValue: {
+              cost_per_unit: (prevRow as { cost_per_unit?: number } | null)?.cost_per_unit ?? null,
+              last_purchase_price: (prevRow as { last_purchase_price?: number } | null)?.last_purchase_price ?? null,
+            },
+            newValue: {
+              cost_per_unit: item.unit_price,
+              last_purchase_price: item.unit_price,
+            },
+            metadata: { po_number: po.po_number, source: 'po_edit_save' },
+          });
         }
       }
 
@@ -639,6 +662,7 @@ export function PurchaseOrderDetailPage() {
     if (!po) return;
     setReceiveSaving(true);
     try {
+      const actorNameRecv = employeeName || session?.user?.email || 'User';
       // 1. Update quantity_received for each item
       for (const item of items) {
         const addQty = parseFloat(receiveQtys[item.id] ?? '0') || 0;
@@ -652,6 +676,11 @@ export function PurchaseOrderDetailPage() {
 
         // Update catalog price if toggle is on
         if (receivePriceUpdate.has(item.id) && item.material_id) {
+          const { data: prevRow } = await supabase
+            .from('raw_materials')
+            .select('cost_per_unit, last_purchase_price')
+            .eq('id', item.material_id)
+            .single();
           const { error: priceErr } = await supabase
             .from('raw_materials')
             .update({
@@ -662,6 +691,23 @@ export function PurchaseOrderDetailPage() {
             })
             .eq('id', item.material_id);
           if (priceErr) throw priceErr;
+          await insertRawMaterialLog(supabase, {
+            rawMaterialId: item.material_id,
+            action: 'cost_synced_from_po',
+            description: `Catalog unit cost updated to ₱${Number(item.unit_price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })} (from PO receive flow).`,
+            performedBy: actorNameRecv,
+            performedByRole: logRoleMap[role] ?? 'System',
+            oldValue: {
+              cost_per_unit: (prevRow as { cost_per_unit?: number } | null)?.cost_per_unit ?? null,
+              last_purchase_price: (prevRow as { last_purchase_price?: number } | null)?.last_purchase_price ?? null,
+            },
+            newValue: {
+              cost_per_unit: item.unit_price,
+              last_purchase_price: item.unit_price,
+              price_synced_from_po: po.id,
+            },
+            metadata: { po_number: po.po_number, source: 'po_receive' },
+          });
         }
       }
 

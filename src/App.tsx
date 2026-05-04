@@ -31,6 +31,7 @@ import { InvoicePreviewPage } from './pages/InvoicePreviewPage';
 import AgentAnalyticsPage from './pages/AgentAnalyticsPage';
 import AgentProfilePage from './pages/AgentProfilePage';
 import EmployeesPage from './pages/EmployeesPage';
+import EmployeeDetailPage from './pages/EmployeeDetailPage';
 import { PurchaseRequestsPage } from './pages/PurchaseRequestsPage';
 import { PurchaseOrdersPage } from './pages/PurchaseOrdersPage';
 import { PurchaseOrderDetailPage } from './pages/PurchaseOrderDetailPage';
@@ -123,7 +124,7 @@ function AppRoutes() {
             <Route path="suppliers" element={<SuppliersPage />} />
             <Route path="finance" element={<FinancePageNew />} />
             <Route path="employees" element={<EmployeesPage />} />
-            <Route path="employees/:employeeId" element={<AgentProfilePage />} />
+            <Route path="employees/:employeeId" element={<EmployeeDetailPage />} />
             <Route path="agents" element={<AgentAnalyticsPage />} />
             <Route path="agents/:agentId" element={<AgentProfilePage />} />
             <Route path="reports" element={<ReportsPage />} />

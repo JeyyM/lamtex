@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
@@ -24,6 +24,9 @@ import {
 import { supabase } from '../lib/supabase';
 import { computeStockStatus } from '../lib/stockStatus';
 import { createDraftProductionRequestWithInitialLine } from '../lib/productionRequestDraft';
+import { insertProductLog, mapAppRoleToLogRole } from '../lib/domainActivityLog';
+import type { EntityActivityLogRow } from '../components/domain/EntityActivityLogCard';
+import { EntityActivityLogCard } from '../components/domain/EntityActivityLogCard';
 
 // â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const stringToColor = (str: string) => {
@@ -216,6 +219,21 @@ function toDisplayVariant(v: VariantRow, selectedBranch: string): DisplayVariant
 }
 
 // â”€â”€ BOM editor raw materials list â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function displayVariantLogSnapshot(v: DisplayVariant) {
+  return {
+    sku: v.sku,
+    size: v.size,
+    unit_price: v.price,
+    cost_price: v.cost,
+    total_stock: v.stock,
+    reorder_point: v.reorderPoint,
+    lead_time_days: v.leadTimeDays,
+    min_order_qty: v.minOrderQty,
+    bom_line_count: v.rawMaterials.length,
+    spec_count: v.specs.length,
+  };
+}
+
 const availablePVCMaterials = [
   { id: 'MAT-001', name: 'HDPE Resin',          unit: 'kg', avgCostPerUnit: 14.4  },
   { id: 'MAT-002', name: 'PVC Resin (K-67)',    unit: 'kg', avgCostPerUnit: 16.8  },
@@ -269,6 +287,22 @@ export default function ProductFamilyPage() {
   /** Comparison chart: one row per month, keys = variant id → units sold from order lines */
   const [usageChartData, setUsageChartData]     = useState<Record<string, string | number>[]>([]);
   const [usageChartLoading, setUsageChartLoading] = useState(false);
+  const [productLogRows, setProductLogRows] = useState<EntityActivityLogRow[]>([]);
+
+  const fetchProductLogs = useCallback(async () => {
+    if (!familyId) return;
+    const { data, error } = await supabase
+      .from('product_logs')
+      .select('id, action, description, performed_by, performed_by_role, created_at, old_value, new_value, metadata')
+      .order('created_at', { ascending: false })
+      .limit(150);
+    if (error && import.meta.env.DEV) console.warn('[product_logs]', error.message);
+    setProductLogRows((data ?? []) as EntityActivityLogRow[]);
+  }, [familyId]);
+
+  useEffect(() => {
+    void fetchProductLogs();
+  }, [fetchProductLogs]);
 
   // â”€â”€ Fetch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   useEffect(() => {
@@ -428,6 +462,10 @@ export default function ProductFamilyPage() {
       setShowImageGalleryModal(false);
       return;
     }
+    const actorName = employeeName || session?.user?.email || 'User';
+    const actorRole = mapAppRoleToLogRole(role);
+    const prevPrimary = product?.image_url ?? null;
+    const prevCount = product?.images?.length ?? 0;
     setSaving(true);
     try {
       const { error } = await supabase.from('products').update({
@@ -436,9 +474,18 @@ export default function ProductFamilyPage() {
         updated_at: new Date().toISOString(),
       }).eq('id', familyId);
       if (error) throw error;
-      // Update local state so carousel reflects immediately
       setProduct(prev => prev ? { ...prev, image_url: imageUrls[0], images: imageUrls } : prev);
       setCurrentImageIndex(0);
+      await insertProductLog(supabase, {
+        productId: familyId,
+        action: 'images_updated',
+        description: `Product images updated (${imageUrls.length} image(s)).`,
+        performedBy: actorName,
+        performedByRole: actorRole,
+        oldValue: { image_url: prevPrimary, gallery_count: prevCount },
+        newValue: { image_url: imageUrls[0], gallery_count: imageUrls.length },
+      });
+      void fetchProductLogs();
     } catch (err: any) {
       alert(`Failed to save images: ${err.message ?? 'Unknown error'}`);
     } finally {
@@ -460,85 +507,151 @@ export default function ProductFamilyPage() {
   };
 
   const handleSaveEdit = async () => {
-    if (!editedVariant) return;
+    if (!editedVariant || !familyId) return;
+    const actorName = employeeName || session?.user?.email || 'User';
+    const actorRole = mapAppRoleToLogRole(role);
+    const savedSku = editedVariant.sku;
     setSaving(true);
     const isNew = editedVariant.id.startsWith('NEW-');
+    const prevSnap = !isNew ? variants.find(v => v.id === editedVariant.id) : null;
     const payload = {
       product_id: familyId,
-      sku:              editedVariant.sku,
-      size:             editedVariant.size,
-      unit_price:       editedVariant.price,
-      cost_price:       editedVariant.cost,
-      total_stock:      editedVariant.stock,
-      reorder_point:    editedVariant.reorderPoint,
-      status:           computeStockStatus(editedVariant.stock, editedVariant.reorderPoint),
-      units_sold_ytd:   editedVariant.unitsSold,
-      weight_kg:        parseFloat(editedVariant.weight) || null,
-      length_m:         parseFloat(editedVariant.length) || null,
-      volume_cbm:       parseFloat(editedVariant.volumeCbm) || null,
+      sku: editedVariant.sku,
+      size: editedVariant.size,
+      unit_price: editedVariant.price,
+      cost_price: editedVariant.cost,
+      total_stock: editedVariant.stock,
+      reorder_point: editedVariant.reorderPoint,
+      status: computeStockStatus(editedVariant.stock, editedVariant.reorderPoint),
+      units_sold_ytd: editedVariant.unitsSold,
+      weight_kg: parseFloat(editedVariant.weight) || null,
+      length_m: parseFloat(editedVariant.length) || null,
+      volume_cbm: parseFloat(editedVariant.volumeCbm) || null,
       wall_thickness_mm: parseFloat(editedVariant.thickness) || null,
-      lead_time_days:   editedVariant.leadTimeDays || null,
-      min_order_qty:    editedVariant.minOrderQty || null,
-      specs:            editedVariant.specs,
+      lead_time_days: editedVariant.leadTimeDays || null,
+      min_order_qty: editedVariant.minOrderQty || null,
+      specs: editedVariant.specs,
     };
-    if (isNew) {
-      await supabase.from('product_variants').insert(payload);
-    } else {
-      await supabase.from('product_variants').update(payload).eq('id', editedVariant.id);
-    }
+    try {
+      let variantId: string;
+      if (isNew) {
+        const { data: inserted, error: insErr } = await supabase
+          .from('product_variants')
+          .insert(payload)
+          .select('id')
+          .single();
+        if (insErr) throw insErr;
+        if (!inserted?.id) throw new Error('Variant insert did not return an id');
+        variantId = inserted.id;
+      } else {
+        const { error: upErr } = await supabase.from('product_variants').update(payload).eq('id', editedVariant.id);
+        if (upErr) throw upErr;
+        variantId = editedVariant.id;
+      }
 
-    // Save BOM — replace all rows for this variant
-    const variantId = isNew
-      ? (await supabase.from('product_variants').select('id').eq('sku', editedVariant.sku).single()).data?.id
-      : editedVariant.id;
-    if (variantId) {
-      await supabase.from('product_variant_raw_materials').delete().eq('variant_id', variantId);
+      const { error: delBomErr } = await supabase.from('product_variant_raw_materials').delete().eq('variant_id', variantId);
+      if (delBomErr) throw delBomErr;
       if (editedVariant.rawMaterials.length > 0) {
-        await supabase.from('product_variant_raw_materials').insert(
+        const { error: bomErr } = await supabase.from('product_variant_raw_materials').insert(
           editedVariant.rawMaterials.map(m => ({
             variant_id: variantId,
             raw_material_id: m.materialId,
             quantity_needed: m.quantity,
             unit_of_measure: m.unit,
-          }))
+          })),
         );
+        if (bomErr) throw bomErr;
       }
-    }
-    setSaving(false);
-    setIsEditingVariant(false);
-    setEditedVariant(null);
-    // Refresh
-    const { data: vars } = await supabase
-      .from('product_variants')
-      .select(`id, sku, size, unit_price, cost_price, total_stock, reorder_point,
+
+      const { data: vars, error: varFetchErr } = await supabase
+        .from('product_variants')
+        .select(`id, sku, size, unit_price, cost_price, total_stock, reorder_point,
         status, units_sold_ytd, revenue_ytd, weight_kg, length_m, volume_cbm, wall_thickness_mm,
         lead_time_days, min_order_qty, specs,
         product_variant_stock(quantity, branches(code, name)),
         product_bulk_discounts(min_qty, max_qty, discount_percent),
         product_variant_raw_materials(raw_material_id, quantity_needed, raw_materials(name, unit_of_measure, cost_per_unit))`)
-      .eq('product_id', familyId)
-      .order('size');
-    if (vars) {
-      const display = (vars as unknown as VariantRow[]).map(v => toDisplayVariant(v, branchKeyForStockRef.current));
-      setVariants(display);
-      const updated = display.find(d => d.sku === editedVariant.sku) ?? display[0];
-      setSelectedVariant(updated);
-      // Keep products.total_variants in sync
-      await supabase.from('products').update({ total_variants: display.length }).eq('id', familyId);
+        .eq('product_id', familyId)
+        .order('size');
+      if (varFetchErr) throw varFetchErr;
+
+      if (vars) {
+        const display = (vars as unknown as VariantRow[]).map(v =>
+          toDisplayVariant(v, branchKeyForStockRef.current),
+        );
+        setVariants(display);
+        const updated = display.find(d => d.sku === savedSku) ?? display[0];
+        setSelectedVariant(updated);
+        const { error: tvErr } = await supabase
+          .from('products')
+          .update({ total_variants: display.length, updated_at: new Date().toISOString() })
+          .eq('id', familyId);
+        if (tvErr) throw tvErr;
+      }
+
+      const nextSnap = displayVariantLogSnapshot(editedVariant);
+      await insertProductLog(supabase, {
+        productId: familyId,
+        variantId,
+        action: isNew ? 'variant_created' : 'variant_updated',
+        description: isNew
+          ? `New variant added: ${editedVariant.size} (${editedVariant.sku}).`
+          : `Variant saved: ${editedVariant.size} (${editedVariant.sku}).`,
+        performedBy: actorName,
+        performedByRole: actorRole,
+        oldValue: prevSnap ? displayVariantLogSnapshot(prevSnap) : null,
+        newValue: nextSnap,
+        metadata: { bom_lines: editedVariant.rawMaterials.length },
+      });
+      void fetchProductLogs();
+      setIsEditingVariant(false);
+      setEditedVariant(null);
+    } catch (err: any) {
+      alert(`Failed to save variant: ${err.message ?? 'Unknown error'}`);
+    } finally {
+      setSaving(false);
     }
   };
 
   const handleDeleteVariant = async () => {
-    if (!selectedVariant) return;
+    if (!selectedVariant || !familyId) return;
     if (!window.confirm(`Delete variant "${selectedVariant.variantName}" (${selectedVariant.sku})?\n\nThis cannot be undone.`)) return;
-    await supabase.from('product_variants').delete().eq('id', selectedVariant.id);
-    const remaining = variants.filter(v => v.id !== selectedVariant.id);
-    setVariants(remaining);
-    setSelectedVariant(remaining[0] ?? null);
-    setIsEditingVariant(false);
-    setEditedVariant(null);
-    // Keep products.total_variants in sync
-    await supabase.from('products').update({ total_variants: remaining.length }).eq('id', familyId);
+    const actorName = employeeName || session?.user?.email || 'User';
+    const actorRole = mapAppRoleToLogRole(role);
+    const deletedId = selectedVariant.id;
+    const deletedSku = selectedVariant.sku;
+    const deletedLabel = selectedVariant.variantName;
+    setSaving(true);
+    try {
+      const { error: delErr } = await supabase.from('product_variants').delete().eq('id', deletedId);
+      if (delErr) throw delErr;
+      const remaining = variants.filter(v => v.id !== deletedId);
+      setVariants(remaining);
+      setSelectedVariant(remaining[0] ?? null);
+      setIsEditingVariant(false);
+      setEditedVariant(null);
+      const { error: tvErr } = await supabase
+        .from('products')
+        .update({ total_variants: remaining.length, updated_at: new Date().toISOString() })
+        .eq('id', familyId);
+      if (tvErr) throw tvErr;
+      await insertProductLog(supabase, {
+        productId: familyId,
+        variantId: null,
+        action: 'variant_deleted',
+        description: `Variant removed: ${deletedLabel} (${deletedSku}).`,
+        performedBy: actorName,
+        performedByRole: actorRole,
+        oldValue: { variant_id: deletedId, sku: deletedSku },
+        newValue: null,
+        metadata: { remaining_variants: remaining.length },
+      });
+      void fetchProductLogs();
+    } catch (err: any) {
+      alert(`Failed to delete variant: ${err.message ?? 'Unknown error'}`);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleInputChange = (field: string, value: unknown) => {
@@ -629,6 +742,7 @@ export default function ProductFamilyPage() {
           const keepId = result?.variantId ?? prev?.id ?? mapped[0]?.id;
           return mapped.find(v => v.id === keepId) ?? mapped[0] ?? null;
         });
+        void fetchProductLogs();
       }
     })();
   };
@@ -1662,6 +1776,11 @@ export default function ProductFamilyPage() {
         </CardContent>
       </Card>
 
+      <EntityActivityLogCard
+        logs={productLogRows}
+        emptyHint="No activity recorded yet. Image changes, variant saves, stock adjustments, and status roll-ups appear here."
+      />
+
       {/* Delete Variant Section */}
       {isEditingVariant && selectedVariant && !selectedVariant.id.startsWith('NEW-') && (
         <Card className="border-red-200 bg-red-50">
@@ -1711,6 +1830,8 @@ export default function ProductFamilyPage() {
           }}
           productId={familyId ?? ''}
           branch={selectedBranch}
+          performedBy={employeeName || session?.user?.email || 'User'}
+          performedByRole={mapAppRoleToLogRole(role)}
         />
       )}
     </div>

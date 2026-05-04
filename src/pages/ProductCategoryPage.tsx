@@ -10,6 +10,7 @@ import {
   Search, Filter, DollarSign, Plus, Edit, Loader2,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { insertProductLog, mapAppRoleToLogRole } from '../lib/domainActivityLog';
 
 // Local image fallbacks
 import hdpePipeImg    from '../assets/product-images/HDPE Pipe.webp';
@@ -39,7 +40,7 @@ interface ProductRow {
 export default function ProductCategoryPage() {
   const navigate = useNavigate();
   const { categoryName } = useParams<{ categoryName: string }>();
-  const { branch, setHideBranchSelector } = useAppContext();
+  const { branch, setHideBranchSelector, employeeName, role, session } = useAppContext();
 
   // Hide branch selector while on this page
   useEffect(() => {
@@ -108,9 +109,12 @@ export default function ProductCategoryPage() {
 
   const handleSaveProduct = async (formData: ProductFormData) => {
     if (!categoryId) return;
+    const actorName = employeeName || session?.user?.email || 'User';
+    const actorRole = mapAppRoleToLogRole(role);
     setSaving(true);
     try {
       if (isEditMode && editingProductId) {
+        const oldRow = products.find(p => p.id === editingProductId);
         const { error } = await supabase.from('products').update({
           name: formData.name.trim(),
           description: formData.description.trim() || null,
@@ -118,6 +122,23 @@ export default function ProductCategoryPage() {
           updated_at: new Date().toISOString(),
         }).eq('id', editingProductId);
         if (error) throw error;
+        await insertProductLog(supabase, {
+          productId: editingProductId,
+          action: 'product_updated',
+          description: `Product "${formData.name.trim()}" updated (category listing).`,
+          performedBy: actorName,
+          performedByRole: actorRole,
+          oldValue: {
+            name: oldRow?.name,
+            description: oldRow?.description ?? null,
+            image_url: oldRow?.image_url ?? null,
+          },
+          newValue: {
+            name: formData.name.trim(),
+            description: formData.description.trim() || null,
+            image_url: formData.imageUrl || null,
+          },
+        });
       } else {
         const { data: newProduct, error } = await supabase.from('products').insert({
           name: formData.name.trim(),
@@ -144,6 +165,18 @@ export default function ProductCategoryPage() {
             units_sold_ytd: 0,
             revenue_ytd: 0,
           });
+          await insertProductLog(supabase, {
+            productId: newProduct.id,
+            action: 'product_created',
+            description: `Product "${formData.name.trim()}" created with default variant in ${categoryTitle}.`,
+            performedBy: actorName,
+            performedByRole: actorRole,
+            newValue: {
+              name: formData.name.trim(),
+              category_id: categoryId,
+              branch: branch || null,
+            },
+          });
         }
       }
       await fetchData();
@@ -160,6 +193,18 @@ export default function ProductCategoryPage() {
     if (!window.confirm(`Delete "${editingProduct?.name}"?\n\nAll variants will also be deleted. Cannot be undone.`)) return;
     setSaving(true);
     try {
+      const actorName = employeeName || session?.user?.email || 'User';
+      const actorRole = mapAppRoleToLogRole(role);
+      const delName = editingProduct?.name ?? '';
+      await insertProductLog(supabase, {
+        productId: editingProductId,
+        action: 'product_deleted',
+        description: `Product "${delName}" deleted from catalog.`,
+        performedBy: actorName,
+        performedByRole: actorRole,
+        oldValue: { name: delName },
+        newValue: null,
+      });
       const { error } = await supabase.from('products').delete().eq('id', editingProductId);
       if (error) throw error;
       await fetchData();

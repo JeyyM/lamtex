@@ -23,7 +23,6 @@ import {
 import { CreateOrderModal } from '@/src/components/orders/CreateOrderModal';
 import { CustomerLocationMapPreview } from '@/src/components/maps/CustomerLocationMapPreview';
 import { clientCommissionFraction, clientCommissionPercentLabel } from '@/src/types/customers';
-import { openGoogleMapsSearch } from '@/src/lib/maps';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -181,22 +180,6 @@ export function CustomerDetailPage() {
     addAuditLog('Initiated Order Creation', 'Order', `Started creating order for ${customer?.name}`);
   };
 
-  const handleViewCustomerOnMap = () => {
-    if (!customer) return;
-    let q = '';
-    if (customer.map_lat != null && customer.map_lng != null && Number.isFinite(customer.map_lat) && Number.isFinite(customer.map_lng)) {
-      q = `${customer.map_lat},${customer.map_lng}`;
-    } else {
-      q = [customer.address, customer.city, customer.province].filter(Boolean).join(', ');
-    }
-    if (!q.trim()) {
-      window.alert('No address or map coordinates on file for this customer.');
-      return;
-    }
-    openGoogleMapsSearch(q);
-    addAuditLog('View on Map', 'Customer', `Opened map for ${customer.name}`);
-  };
-
   // ── Loading / Not Found guards ────────────────────────────────────────────
 
   if (loading) {
@@ -275,14 +258,6 @@ export function CustomerDetailPage() {
             Edit
           </Button>
         </div>
-      </div>
-
-      {/* Quick Actions */}
-      <div className="flex flex-col sm:flex-row gap-3">
-        <Button type="button" variant="outline" size="sm" className="w-full sm:w-auto" onClick={handleViewCustomerOnMap}>
-          <MapPin className="w-4 h-4 mr-2" />
-          View on Map
-        </Button>
       </div>
 
       {/* Tabs - Desktop (>420px) */}

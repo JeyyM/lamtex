@@ -1,4 +1,4 @@
-import { SalesAgent, LogisticsManager, WarehouseManager, MachineWorker, TruckDriver, EmployeeDetails } from '../types/employee';
+import { SalesAgent, LogisticsManager, WarehouseManager, TruckDriver, EmployeeDetails } from '../types/employee';
 
 // Sales Agents (from existing agent analytics)
 export const salesAgents: SalesAgent[] = [
@@ -17,7 +17,6 @@ export const salesAgents: SalesAgent[] = [
     activeCustomers: 24,
     totalRevenue: 12850000,
     commission: 1927500,
-    commissionTier: 'Platinum',
     territoryCoverage: 'Commonwealth, Fairview, Novaliches'
   },
   {
@@ -35,7 +34,6 @@ export const salesAgents: SalesAgent[] = [
     activeCustomers: 18,
     totalRevenue: 9420000,
     commission: 1130400,
-    commissionTier: 'Gold',
     territoryCoverage: 'Makati CBD, BGC, Ortigas'
   },
   {
@@ -53,7 +51,6 @@ export const salesAgents: SalesAgent[] = [
     activeCustomers: 16,
     totalRevenue: 7350000,
     commission: 735000,
-    commissionTier: 'Silver',
     territoryCoverage: 'Quezon City North'
   },
   {
@@ -71,7 +68,6 @@ export const salesAgents: SalesAgent[] = [
     activeCustomers: 22,
     totalRevenue: 8950000,
     commission: 1074000,
-    commissionTier: 'Gold',
     territoryCoverage: 'Cebu City, Mandaue, Lapu-Lapu'
   },
   {
@@ -89,7 +85,6 @@ export const salesAgents: SalesAgent[] = [
     activeCustomers: 8,
     totalRevenue: 3060000,
     commission: 244800,
-    commissionTier: 'Bronze',
     territoryCoverage: 'Pasay, Taguig, Paranaque'
   }
 ];
@@ -201,95 +196,6 @@ export const warehouseManagers: WarehouseManager[] = [
     warehouseSize: '10,000 sqm',
     staffManaged: 18,
     ordersProcessed: 2100
-  }
-];
-
-// Machine Workers
-export const machineWorkers: MachineWorker[] = [
-  {
-    employeeId: 'MW-001',
-    employeeName: 'Benjamin Aquino',
-    role: 'Machine Worker',
-    department: 'Production',
-    branchId: 'BR-001',
-    branchName: 'Quezon City',
-    status: 'active',
-    joinDate: 'Nov 2021',
-    tenure: 51,
-    email: 'benjamin.aquino@lamtex.com',
-    phone: '+63 917 777 8888',
-    machineType: 'PVC Extruder A1',
-    shiftsCompleted: 612,
-    productionOutput: 45800,
-    efficiencyRate: 95.2
-  },
-  {
-    employeeId: 'MW-002',
-    employeeName: 'Jose Mercado',
-    role: 'Machine Worker',
-    department: 'Production',
-    branchId: 'BR-001',
-    branchName: 'Quezon City',
-    status: 'active',
-    joinDate: 'Jan 2022',
-    tenure: 49,
-    email: 'jose.mercado@lamtex.com',
-    phone: '+63 917 888 9999',
-    machineType: 'PVC Extruder A2',
-    shiftsCompleted: 588,
-    productionOutput: 43200,
-    efficiencyRate: 93.8
-  },
-  {
-    employeeId: 'MW-003',
-    employeeName: 'Ramon Santiago',
-    role: 'Machine Worker',
-    department: 'Production',
-    branchId: 'BR-002',
-    branchName: 'Makati',
-    status: 'active',
-    joinDate: 'Mar 2022',
-    tenure: 47,
-    email: 'ramon.santiago@lamtex.com',
-    phone: '+63 917 999 0000',
-    machineType: 'PVC Extruder B1',
-    shiftsCompleted: 564,
-    productionOutput: 41500,
-    efficiencyRate: 94.5
-  },
-  {
-    employeeId: 'MW-004',
-    employeeName: 'Luis Bautista',
-    role: 'Machine Worker',
-    department: 'Production',
-    branchId: 'BR-003',
-    branchName: 'Cebu',
-    status: 'active',
-    joinDate: 'Jul 2022',
-    tenure: 43,
-    email: 'luis.bautista@lamtex.com',
-    phone: '+63 917 000 1111',
-    machineType: 'PVC Extruder C1',
-    shiftsCompleted: 516,
-    productionOutput: 38900,
-    efficiencyRate: 92.1
-  },
-  {
-    employeeId: 'MW-005',
-    employeeName: 'Pedro Castillo',
-    role: 'Machine Worker',
-    department: 'Production',
-    branchId: 'BR-001',
-    branchName: 'Quezon City',
-    status: 'on-leave',
-    joinDate: 'Dec 2023',
-    tenure: 14,
-    email: 'pedro.castillo@lamtex.com',
-    phone: '+63 917 111 0000',
-    machineType: 'PVC Extruder A3',
-    shiftsCompleted: 168,
-    productionOutput: 12400,
-    efficiencyRate: 90.5
   }
 ];
 
@@ -446,6 +352,5 @@ export const allEmployees: EmployeeDetails[] = [
   ...salesAgents,
   ...logisticsManagers,
   ...warehouseManagers,
-  ...machineWorkers,
   ...truckDrivers
 ];

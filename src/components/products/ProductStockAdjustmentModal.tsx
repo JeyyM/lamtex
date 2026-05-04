@@ -4,6 +4,7 @@ import { supabase } from '@/src/lib/supabase';
 import { computeStockStatus } from '@/src/lib/stockStatus';
 import { applyBomConsumptionDeductions, validateBomConsumption } from '@/src/lib/bomConsumption';
 import { refreshParentProductStatus } from '@/src/lib/productAggregateStatus';
+import { insertProductLog } from '@/src/lib/domainActivityLog';
 
 type AdjustmentType = 'add' | 'subtract';
 
@@ -25,6 +26,8 @@ interface ProductStockAdjustmentModalProps {
   };
   productId: string;
   branch: string;
+  performedBy: string;
+  performedByRole: string;
 }
 
 export default function ProductStockAdjustmentModal({
@@ -34,6 +37,8 @@ export default function ProductStockAdjustmentModal({
   variant,
   productId,
   branch,
+  performedBy,
+  performedByRole,
 }: ProductStockAdjustmentModalProps) {
   const [adjustmentType, setAdjustmentType] = useState<AdjustmentType>('add');
   const [quantity, setQuantity] = useState('');
@@ -157,7 +162,25 @@ export default function ProductStockAdjustmentModal({
         newDisplayedStock = newTotal;
       }
 
-      await refreshParentProductStatus(productId);
+      await insertProductLog(supabase, {
+        productId,
+        variantId: variant.id,
+        action: 'stock_adjusted',
+        description: `${adjustmentType === 'add' ? 'Added' : 'Removed'} ${qty} units — ${variant.sku}${
+          branchName ? ` (${branchName})` : ''
+        }${notes.trim() ? `. ${notes.trim()}` : ''}`,
+        performedBy,
+        performedByRole,
+        oldValue: { total_stock: variant.currentStock },
+        newValue: { total_stock: newDisplayedStock },
+        metadata: {
+          adjustment_type: adjustmentType,
+          branch: branchName || null,
+          consume_raw_materials: adjustmentType === 'add' ? consumeRawMaterials : false,
+        },
+      });
+
+      await refreshParentProductStatus(productId, { performedBy, performedByRole });
 
       setSavedDisplayStock(newDisplayedStock);
       onSuccess?.({ variantId: variant.id, newDisplayedStock });

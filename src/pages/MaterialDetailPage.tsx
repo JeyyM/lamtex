@@ -54,6 +54,9 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import type { MaterialStatus } from '@/src/types/materials';
+import type { EntityActivityLogRow } from '@/src/components/domain/EntityActivityLogCard';
+import { EntityActivityLogCard } from '@/src/components/domain/EntityActivityLogCard';
+import { insertRawMaterialLog, mapAppRoleToLogRole } from '@/src/lib/domainActivityLog';
 
 const poLogRoleMap: Record<string, string> = {
   Executive:  'Admin',
@@ -164,6 +167,18 @@ export function MaterialDetailPage() {
   const [material, setMaterial] = useState<RawMaterialRow | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [materialLogRows, setMaterialLogRows] = useState<EntityActivityLogRow[]>([]);
+
+  const fetchMaterialLogs = useCallback(async () => {
+    if (!id) return;
+    const { data, error: logErr } = await supabase
+      .from('raw_material_logs')
+      .select('id, action, description, performed_by, performed_by_role, created_at, old_value, new_value, metadata')
+      .order('created_at', { ascending: false })
+      .limit(150);
+    if (logErr) console.warn('[raw_material_logs] fetch failed:', logErr.message);
+    setMaterialLogRows((data ?? []) as EntityActivityLogRow[]);
+  }, [id]);
 
   const fetchMaterial = useCallback(async () => {
     if (!id) return;
@@ -197,6 +212,9 @@ export function MaterialDetailPage() {
   }, [id]);
 
   useEffect(() => { fetchMaterial(); }, [fetchMaterial]);
+  useEffect(() => {
+    void fetchMaterialLogs();
+  }, [fetchMaterialLogs]);
 
   const fetchPOHistory = useCallback(async () => {
     if (!id) return;
@@ -638,9 +656,12 @@ export function MaterialDetailPage() {
 
   const handleStockAdjustment = async (adjustment: { type: 'add' | 'subtract'; quantity: number; notes: string }) => {
     if (!material) return;
+    const actorName = employeeName || session?.user?.email || 'User';
+    const actorRole = mapAppRoleToLogRole(role);
+    const prevTotal = Number(material.total_stock);
     const newTotal = adjustment.type === 'add'
-      ? Number(material.total_stock) + adjustment.quantity
-      : Math.max(0, Number(material.total_stock) - adjustment.quantity);
+      ? prevTotal + adjustment.quantity
+      : Math.max(0, prevTotal - adjustment.quantity);
 
     try {
       // 1. Update aggregate total_stock + auto-computed status
@@ -687,16 +708,32 @@ export function MaterialDetailPage() {
         }
       }
 
+      await insertRawMaterialLog(supabase, {
+        rawMaterialId: material.id,
+        action: 'stock_adjusted',
+        description: `${adjustment.type === 'add' ? 'Added' : 'Removed'} ${adjustment.quantity} ${material.unit_of_measure} — ${material.sku}${
+          selectedBranch ? ` (branch ${selectedBranch})` : ''
+        }${adjustment.notes.trim() ? `. ${adjustment.notes.trim()}` : ''}`,
+        performedBy: actorName,
+        performedByRole: actorRole,
+        oldValue: { total_stock: prevTotal },
+        newValue: { total_stock: newTotal, status: newStatus },
+        metadata: { branch_context: selectedBranch ?? null },
+      });
+
       // 3. Refresh page data
       await fetchMaterial();
+      void fetchMaterialLogs();
     } catch (err: any) {
       alert(`Failed to adjust stock: ${err.message ?? 'Unknown error'}`);
     }
   };
 
-  // Edit material save handler
   const handleSaveEdit = async (formData: MaterialFormData) => {
+    if (!material) return;
     setSavingEdit(true);
+    const actorName = employeeName || session?.user?.email || 'User';
+    const actorRole = mapAppRoleToLogRole(role);
     try {
       const updatedStatus = computeStockStatus(material.total_stock, formData.reorderPoint);
       const { error } = await supabase
@@ -716,8 +753,30 @@ export function MaterialDetailPage() {
         })
         .eq('id', material.id);
       if (error) throw error;
+      await insertRawMaterialLog(supabase, {
+        rawMaterialId: material.id,
+        action: 'material_updated',
+        description: `Material details saved for "${formData.name.trim()}".`,
+        performedBy: actorName,
+        performedByRole: actorRole,
+        oldValue: {
+          name: material.name,
+          sku: material.sku,
+          cost_per_unit: material.cost_per_unit,
+          reorder_point: material.reorder_point,
+          unit_of_measure: material.unit_of_measure,
+        },
+        newValue: {
+          name: formData.name.trim(),
+          sku: formData.sku.trim().toUpperCase(),
+          cost_per_unit: formData.costPerUnit,
+          reorder_point: formData.reorderPoint,
+          unit_of_measure: formData.unitOfMeasure,
+        },
+      });
       setShowEditModal(false);
       await fetchMaterial();
+      void fetchMaterialLogs();
     } catch (err: any) {
       alert(`Failed to save: ${err.message ?? 'Unknown error'}`);
     } finally {
@@ -937,7 +996,8 @@ export function MaterialDetailPage() {
 
       {/* Tab Content - Overview */}
       {activeTab === 'overview' && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Specifications */}
           <Card>
             <CardHeader>
@@ -1012,6 +1072,12 @@ export function MaterialDetailPage() {
               </div>
             </CardContent>
           </Card>
+          </div>
+
+          <EntityActivityLogCard
+            logs={materialLogRows}
+            emptyHint="No activity recorded yet. Edits, stock adjustments, and PO price sync events appear here."
+          />
         </div>
       )}
 

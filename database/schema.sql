@@ -313,6 +313,8 @@ CREATE TABLE IF NOT EXISTS employee_skills (
   skill_name      VARCHAR(200) NOT NULL,
   skill_level     skill_level NOT NULL,
   years_experience NUMERIC(4,1),
+  skill_description TEXT,
+  date_started    DATE,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -356,17 +358,19 @@ CREATE TABLE IF NOT EXISTS employee_documents (
 
 -- 3m: Assets assigned to employees
 CREATE TABLE IF NOT EXISTS employee_assets (
-  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  employee_id     UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
-  asset_type      asset_type NOT NULL,
-  asset_name      VARCHAR(300) NOT NULL,
-  serial_number   VARCHAR(200),
-  model           VARCHAR(200),
-  assigned_date   DATE,
-  condition       asset_condition DEFAULT 'Good',
-  value           NUMERIC(12,2) DEFAULT 0,
-  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  employee_id       UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  asset_type        asset_type NOT NULL,
+  asset_name        VARCHAR(300) NOT NULL,
+  serial_number     VARCHAR(200),
+  model             VARCHAR(200),
+  assigned_date     DATE,
+  condition         asset_condition DEFAULT 'Good',
+  value             NUMERIC(12,2) DEFAULT 0,
+  asset_description TEXT,
+  category_label    VARCHAR(200),
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- 3n: Employee notes (HR / supervisor notes)
@@ -659,6 +663,21 @@ CREATE TABLE IF NOT EXISTS product_stock_movements (
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 5h: Product activity log (mirrors purchase_order_logs — variants/BOM/images/stock, etc.)
+CREATE TABLE IF NOT EXISTS product_logs (
+  id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  product_id          UUID        REFERENCES products(id) ON DELETE SET NULL,
+  variant_id          UUID        REFERENCES product_variants(id) ON DELETE SET NULL,
+  action              TEXT        NOT NULL,
+  performed_by        TEXT,
+  performed_by_role   TEXT,
+  description         TEXT,
+  old_value           JSONB,
+  new_value           JSONB,
+  metadata            JSONB,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 
 -- ============================================================================
 -- SECTION 6: RAW MATERIALS
@@ -729,6 +748,20 @@ CREATE TABLE IF NOT EXISTS raw_materials (
   
   created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 6b-i: Raw material activity log (catalog edits, stock adjustments, PO price sync, etc.)
+CREATE TABLE IF NOT EXISTS raw_material_logs (
+  id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  raw_material_id     UUID        REFERENCES raw_materials(id) ON DELETE SET NULL,
+  action              TEXT        NOT NULL,
+  performed_by        TEXT,
+  performed_by_role   TEXT,
+  description         TEXT,
+  old_value           JSONB,
+  new_value           JSONB,
+  metadata            JSONB,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Add FK from BOM table to raw_materials
@@ -2701,6 +2734,8 @@ CREATE INDEX IF NOT EXISTS idx_purchase_order_items_order ON purchase_order_item
 CREATE INDEX IF NOT EXISTS idx_purchase_order_items_material ON purchase_order_items(material_id);
 CREATE INDEX IF NOT EXISTS idx_po_receipts_order ON purchase_order_receipts(order_id);
 CREATE INDEX IF NOT EXISTS idx_po_logs_order ON purchase_order_logs(order_id);
+CREATE INDEX IF NOT EXISTS idx_product_logs_product_order ON product_logs(product_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_raw_material_logs_material_order ON raw_material_logs(raw_material_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_purchase_requests_branch ON purchase_requests(branch_id);
 CREATE INDEX IF NOT EXISTS idx_purchase_requests_status ON purchase_requests(status);
 CREATE INDEX IF NOT EXISTS idx_production_requests_branch ON production_requests(branch_id);
