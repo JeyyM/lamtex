@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { X, ChevronRight, ArrowLeft, Search, Package, Loader2, Building2 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
+import { useAppContext } from '@/src/store/AppContext';
 import { getMaterialIdsWithStockAtBothBranches } from '../../lib/interBranchRequest';
 
 /** Same as lib: `VITE_DEBUG_IBR=true` forces logs in production builds. */
@@ -43,7 +44,8 @@ interface Props {
     imageUrl: string | null;
     brand?: string | null;
   }) => void;
-  branch: string;
+  /** Branch name (e.g. `branches.name`) for category scope. Falls back to navbar branch when empty. */
+  branch?: string;
   alreadyAdded: string[];
   supplierId?: string | null;
   supplierName?: string | null;
@@ -91,11 +93,14 @@ function MaterialImage({ url, name }: { url: string | null; name: string }) {
 }
 
 export default function RawMaterialPickerModal({
-  isOpen, onClose, onSelect, branch, alreadyAdded,
+  isOpen, onClose, onSelect, branch: branchProp = '', alreadyAdded,
   supplierId = null, supplierName = null,
   interBranchRequestingBranchId = null,
   interBranchFulfillingBranchId = null,
 }: Props) {
+  const { branch: navbarBranchCtx } = useAppContext();
+  const effectiveBranch = (branchProp.trim() || (navbarBranchCtx ?? '').trim() || '');
+
   const useDualBranchFilter = Boolean(
     interBranchRequestingBranchId &&
       interBranchFulfillingBranchId &&
@@ -111,7 +116,8 @@ export default function RawMaterialPickerModal({
     if (!isOpen) return;
     ibrPickerLog('modal opened', {
       useDualBranchFilter,
-      branch,
+      branchProp,
+      effectiveBranch,
       interBranchRequestingBranchId,
       interBranchFulfillingBranchId,
       supplierId: supplierId ?? null,
@@ -119,7 +125,8 @@ export default function RawMaterialPickerModal({
   }, [
     isOpen,
     useDualBranchFilter,
-    branch,
+    branchProp,
+    effectiveBranch,
     interBranchRequestingBranchId,
     interBranchFulfillingBranchId,
     supplierId,
@@ -289,11 +296,11 @@ export default function RawMaterialPickerModal({
         q = q.in('branch_id', bid) as typeof q;
       } else {
         let branchId: string | null = null;
-        if (branch) {
+        if (effectiveBranch) {
           const { data: branchRow } = await supabase
             .from('branches')
             .select('id')
-            .eq('name', branch)
+            .eq('name', effectiveBranch)
             .single();
           branchId = branchRow?.id ?? null;
         }
@@ -318,7 +325,7 @@ export default function RawMaterialPickerModal({
       setCategories(list);
       setLoadingCats(false);
     })();
-  }, [isOpen, branch, useDualBranchFilter, interBranchRequestingBranchId, interBranchFulfillingBranchId]);
+  }, [isOpen, effectiveBranch, useDualBranchFilter, interBranchRequestingBranchId, interBranchFulfillingBranchId]);
 
   const handleCategoryClick = async (cat: MaterialCategory) => {
     setSelectedCategory(cat);

@@ -11,6 +11,38 @@ const QUEUE_STATUSES = ['Approved', 'Partially Fulfilled'] as const;
 /** Trips that still "hold" assigned orders on the truck/driver calendar. */
 const ACTIVE_TRIP_STATUSES = ['Scheduled', 'Loading', 'Packed', 'Ready', 'In Transit', 'Delayed'] as const;
 
+/**
+ * `trips.logistics_notes` requires `database/trips_logistics_notes.sql` on the project.
+ * If the column is missing, PostgREST returns 400; we retry without it so dispatch still loads.
+ */
+let tripsLogisticsNotesColumnAvailable = true;
+
+function isMissingLogisticsNotesColumnError(err: { message?: string } | null | undefined): boolean {
+  const m = (err?.message ?? '').toLowerCase();
+  return m.includes('logistics_notes') || (m.includes('column') && m.includes('does not exist'));
+}
+
+/** Branch trip list select — base columns without optional `logistics_notes`. */
+const TRIP_BRANCH_LIST_SELECT_BASE =
+  'id, trip_number, vehicle_id, vehicle_name, driver_id, driver_name, status, scheduled_date, departure_time, destinations, order_ids, capacity_used_percent, weight_used_kg, volume_used_cbm, max_weight_kg, max_volume_cbm, eta, actual_arrival, delay_reason';
+
+const TRIP_BRANCH_LIST_SELECT_FULL = `${TRIP_BRANCH_LIST_SELECT_BASE}, logistics_notes`;
+
+/** Single-trip fetch (detail modals) — without / with `logistics_notes`. */
+const TRIP_DETAIL_ROW_SELECT_MIN =
+  'id, trip_number, vehicle_id, vehicle_name, driver_id, driver_name, status, scheduled_date, departure_time, destinations, order_ids, capacity_used_percent, weight_used_kg, volume_used_cbm, max_weight_kg, max_volume_cbm, eta, actual_arrival, delay_reason, branches ( name )';
+
+const TRIP_DETAIL_ROW_SELECT_FULL =
+  'id, trip_number, vehicle_id, vehicle_name, driver_id, driver_name, status, scheduled_date, departure_time, destinations, order_ids, capacity_used_percent, weight_used_kg, volume_used_cbm, max_weight_kg, max_volume_cbm, eta, actual_arrival, delay_reason, logistics_notes, branches ( name )';
+
+function tripDetailSelect(): string {
+  return tripsLogisticsNotesColumnAvailable ? TRIP_DETAIL_ROW_SELECT_FULL : TRIP_DETAIL_ROW_SELECT_MIN;
+}
+
+function tripBranchListSelect(): string {
+  return tripsLogisticsNotesColumnAvailable ? TRIP_BRANCH_LIST_SELECT_FULL : TRIP_BRANCH_LIST_SELECT_BASE;
+}
+
 function num(n: unknown, fallback = 0): number {
   if (n == null || n === '') return fallback;
   const x = typeof n === 'number' ? n : parseFloat(String(n));
@@ -39,6 +71,31 @@ function mapDbTripStatus(s: string): Trip['status'] {
   if (s === 'Completed') return 'Complete';
   if (s === 'Failed') return 'Cancelled';
   return (allowed.includes(s as Trip['status']) ? s : 'Scheduled') as Trip['status'];
+}
+
+/** Tailwind classes for trip status chips (warehouse trip rows, loading modal). */
+export function tripStatusBadgeClass(status: string): string {
+  const s = String(status ?? '').trim();
+  switch (s) {
+    case 'Delayed':
+      return 'bg-red-100 text-red-900 border-red-400 ring-1 ring-red-200/80';
+    case 'Failed':
+      return 'bg-red-100 text-red-950 border-red-500 ring-1 ring-red-200/80';
+    case 'In Transit':
+      return 'bg-blue-100 text-blue-900 border-blue-400';
+    case 'Loading':
+      return 'bg-orange-100 text-orange-950 border-orange-400';
+    case 'Planned':
+    case 'Pending':
+    case 'Scheduled':
+      return 'bg-slate-100 text-slate-800 border-slate-400';
+    case 'Completed':
+    case 'Complete':
+    case 'Delivered':
+      return 'bg-emerald-100 text-emerald-900 border-emerald-400';
+    default:
+      return 'bg-amber-50 text-amber-950 border-amber-300';
+  }
 }
 
 /** Reverse of mapDbTripStatus: converts app-facing status to the DB enum value. */
@@ -179,13 +236,26 @@ export async function fetchTripsForBranch(branchName: string): Promise<{ trips: 
   const bid = await resolveBranchIdByName(branchName.trim());
   if (!bid) return { trips: [], error: 'Branch not found' };
 
-  const { data, error } = await supabase
+  let sel = tripBranchListSelect();
+  let { data, error } = await supabase
     .from('trips')
-    .select(
-      'id, trip_number, vehicle_id, vehicle_name, driver_id, driver_name, status, scheduled_date, departure_time, destinations, order_ids, capacity_used_percent, weight_used_kg, volume_used_cbm, max_weight_kg, max_volume_cbm, eta, actual_arrival, delay_reason',
-    )
+    .select(sel)
     .eq('branch_id', bid)
     .order('scheduled_date', { ascending: true });
+
+  if (error && tripsLogisticsNotesColumnAvailable && isMissingLogisticsNotesColumnError(error)) {
+    tripsLogisticsNotesColumnAvailable = false;
+    console.warn(
+      '[logistics] trips.logistics_notes missing — run database/trips_logistics_notes.sql. Retrying trip fetch without it.',
+    );
+    const retry = await supabase
+      .from('trips')
+      .select(tripBranchListSelect())
+      .eq('branch_id', bid)
+      .order('scheduled_date', { ascending: true });
+    data = retry.data;
+    error = retry.error;
+  }
 
   if (error) return { trips: [], error: error.message };
 
@@ -234,15 +304,13 @@ export async function fetchTripsForBranch(branchName: string): Promise<{ trips: 
       eta: eta ? fmtDate(eta) : undefined,
       actualArrival: arr ? new Date(arr).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) : undefined,
       delayReason: (row.delay_reason as string) ?? undefined,
+      logisticsNotes: (row.logistics_notes as string) ?? undefined,
       branch: branchName,
     };
   });
 
   return { trips };
 }
-
-const TRIP_DETAIL_ROW_SELECT =
-  'id, trip_number, vehicle_id, vehicle_name, driver_id, driver_name, status, scheduled_date, departure_time, destinations, order_ids, capacity_used_percent, weight_used_kg, volume_used_cbm, max_weight_kg, max_volume_cbm, eta, actual_arrival, delay_reason, branches ( name )';
 
 async function tripRowRecordToTrip(r: Record<string, unknown>): Promise<Trip> {
   const vehicleUuid = (r.vehicle_id as string) ?? '';
@@ -286,6 +354,7 @@ async function tripRowRecordToTrip(r: Record<string, unknown>): Promise<Trip> {
       ? new Date(arr).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })
       : undefined,
     delayReason: (r.delay_reason as string) ?? undefined,
+    logisticsNotes: (r.logistics_notes as string) ?? undefined,
     branch: branchName,
   };
 }
@@ -295,7 +364,17 @@ export async function fetchTripById(tripId: string): Promise<{ trip: Trip | null
   const id = tripId.trim();
   if (!id) return { trip: null };
 
-  const { data: row, error } = await supabase.from('trips').select(TRIP_DETAIL_ROW_SELECT).eq('id', id).maybeSingle();
+  let { data: row, error } = await supabase.from('trips').select(tripDetailSelect()).eq('id', id).maybeSingle();
+
+  if (error && tripsLogisticsNotesColumnAvailable && isMissingLogisticsNotesColumnError(error)) {
+    tripsLogisticsNotesColumnAvailable = false;
+    console.warn(
+      '[logistics] trips.logistics_notes missing — run database/trips_logistics_notes.sql. Retrying trip fetch without it.',
+    );
+    const retry = await supabase.from('trips').select(tripDetailSelect()).eq('id', id).maybeSingle();
+    row = retry.data;
+    error = retry.error;
+  }
 
   if (error) return { trip: null, error: error.message };
   if (!row) return { trip: null };
@@ -315,13 +394,29 @@ export async function fetchTripForVehicleByTripNumber(
   const tripNum = tripNumber.trim();
   if (!vid || !tripNum || tripNum === '—') return { trip: null };
 
-  const { data: rows, error } = await supabase
+  let { data: rows, error } = await supabase
     .from('trips')
-    .select(TRIP_DETAIL_ROW_SELECT)
+    .select(tripDetailSelect())
     .eq('vehicle_id', vid)
     .eq('trip_number', tripNum)
     .order('scheduled_date', { ascending: false })
     .limit(1);
+
+  if (error && tripsLogisticsNotesColumnAvailable && isMissingLogisticsNotesColumnError(error)) {
+    tripsLogisticsNotesColumnAvailable = false;
+    console.warn(
+      '[logistics] trips.logistics_notes missing — run database/trips_logistics_notes.sql. Retrying trip fetch without it.',
+    );
+    const retry = await supabase
+      .from('trips')
+      .select(tripDetailSelect())
+      .eq('vehicle_id', vid)
+      .eq('trip_number', tripNum)
+      .order('scheduled_date', { ascending: false })
+      .limit(1);
+    rows = retry.data;
+    error = retry.error;
+  }
 
   if (error) return { trip: null, error: error.message };
   const row = rows?.[0] as Record<string, unknown> | undefined;
@@ -470,7 +565,7 @@ export async function createTripFromPlanning(params: {
 }
 
 /**
- * Update an existing trip: change status, vehicle, driver, orders, and notes.
+ * Update an existing trip: change status, vehicle, driver, orders, delay text, and logistics notes.
  * Automatically resets removed orders to 'Approved' and marks added orders as 'Scheduled'.
  */
 export async function updateTrip(params: {
@@ -484,7 +579,10 @@ export async function updateTrip(params: {
   previousOrderUuids: string[];
   totalWeightKg: number;
   totalVolumeCbm: number;
-  notes?: string;
+  /** `trips.delay_reason` — delay explanation only. */
+  delayReason: string;
+  /** `trips.logistics_notes` — route / driver / dispatch notes (never delay text). */
+  logisticsNotes: string;
   orderStatuses?: Record<string, string>;
 }): Promise<{ ok: boolean; error?: string }> {
   const { data: veh, error: vErr } = await supabase
@@ -499,25 +597,46 @@ export async function updateTrip(params: {
   const wPct = maxW > 0 ? (params.totalWeightKg / maxW) * 100 : 0;
   const vPct = maxV > 0 ? (params.totalVolumeCbm / maxV) * 100 : 0;
   const capacityPct = Math.min(100, Math.round(Math.max(wPct, vPct)));
+  const now = new Date().toISOString();
 
-  const { error: updErr } = await supabase
-    .from('trips')
-    .update({
-      status: toDbTripStatus(params.status),
-      vehicle_id: params.vehicleUuid,
-      vehicle_name: params.vehicleName,
-      driver_id: params.driverUuid,
-      driver_name: params.driverName,
-      order_ids: params.orderUuids,
-      weight_used_kg: params.totalWeightKg,
-      volume_used_cbm: params.totalVolumeCbm,
-      capacity_used_percent: capacityPct,
-      max_weight_kg: maxW,
-      max_volume_cbm: maxV,
-      delay_reason: params.notes ?? null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', params.tripId);
+  const payloadCommon: Record<string, unknown> = {
+    status: toDbTripStatus(params.status),
+    vehicle_id: params.vehicleUuid,
+    vehicle_name: params.vehicleName,
+    driver_id: params.driverUuid,
+    driver_name: params.driverName,
+    order_ids: params.orderUuids,
+    weight_used_kg: params.totalWeightKg,
+    volume_used_cbm: params.totalVolumeCbm,
+    capacity_used_percent: capacityPct,
+    max_weight_kg: maxW,
+    max_volume_cbm: maxV,
+    delay_reason: params.delayReason.trim() ? params.delayReason.trim() : null,
+    updated_at: now,
+  };
+
+  let updErr;
+  if (tripsLogisticsNotesColumnAvailable) {
+    const r = await supabase
+      .from('trips')
+      .update({
+        ...payloadCommon,
+        logistics_notes: params.logisticsNotes.trim() ? params.logisticsNotes.trim() : null,
+      })
+      .eq('id', params.tripId);
+    updErr = r.error;
+    if (updErr && isMissingLogisticsNotesColumnError(updErr)) {
+      tripsLogisticsNotesColumnAvailable = false;
+      console.warn(
+        '[logistics] trips.logistics_notes missing — run database/trips_logistics_notes.sql. Saved trip without logistics_notes.',
+      );
+      const r2 = await supabase.from('trips').update(payloadCommon).eq('id', params.tripId);
+      updErr = r2.error;
+    }
+  } else {
+    const r = await supabase.from('trips').update(payloadCommon).eq('id', params.tripId);
+    updErr = r.error;
+  }
 
   if (updErr) return { ok: false, error: updErr.message };
 
@@ -531,12 +650,12 @@ export async function updateTrip(params: {
   }
 
   // Apply per-order status from the editor; fall back to 'Scheduled' for any without explicit status
-  const now = new Date().toISOString();
+  const orderNow = new Date().toISOString();
   for (const id of params.orderUuids) {
     const orderSt = params.orderStatuses?.[id] ?? 'Scheduled';
     await supabase
       .from('orders')
-      .update({ status: orderSt, updated_at: now })
+      .update({ status: orderSt, updated_at: orderNow })
       .eq('id', id);
   }
 

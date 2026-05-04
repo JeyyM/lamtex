@@ -145,7 +145,7 @@ DO $$ BEGIN CREATE TYPE commission_status AS ENUM ('Pending', 'Approved', 'Paid'
 DO $$ BEGIN CREATE TYPE notification_category AS ENUM ('Approvals', 'Inventory', 'Delivery', 'Payment', 'System'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE alert_severity AS ENUM ('Low', 'Medium', 'High', 'Critical'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE logistics_alert_type AS ENUM ('New Order Ready', 'Warehouse Not Ready', 'Truck Unavailable', 'Delivery Failed', 'Capacity Warning', 'Executive Request'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN CREATE TYPE warehouse_alert_type AS ENUM ('Low Stock', 'Shortage Impact', 'Material Delay', 'Material Arrival', 'QA Reject', 'Transfer Request'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE warehouse_alert_type AS ENUM ('Low Stock', 'Shortage Impact', 'Material Delay', 'Material Arrival', 'QA Reject', 'Transfer Request', 'Trip Loading'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- ── Calendar Enums ──────────────────────────────────────────────────────────
 DO $$ BEGIN CREATE TYPE calendar_event_type AS ENUM ('Outgoing', 'Incoming', 'Transfer'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
@@ -1898,7 +1898,8 @@ CREATE TABLE IF NOT EXISTS trips (
   eta             TIMESTAMPTZ,
   actual_arrival  TIMESTAMPTZ,
   delay_reason    TEXT,
-  
+  logistics_notes TEXT,
+
   branch_id       UUID REFERENCES branches(id) ON DELETE SET NULL,
   
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -2326,6 +2327,7 @@ CREATE TABLE IF NOT EXISTS warehouse_alerts (
   title           VARCHAR(300) NOT NULL,
   message         TEXT NOT NULL,
   item_name       VARCHAR(300),
+  related_order_id UUID REFERENCES orders(id) ON DELETE SET NULL,
   action_required BOOLEAN DEFAULT FALSE,
   branch_id       UUID REFERENCES branches(id) ON DELETE SET NULL,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()

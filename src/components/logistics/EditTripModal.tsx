@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { X, AlertCircle, Save, Weight, Box, Plus, Minus, Search, Loader2 } from 'lucide-react';
+import { X, AlertCircle, Save, Weight, Box, Plus, Minus, Search, Loader2, Clock } from 'lucide-react';
 import { Button } from '@/src/components/ui/Button';
 import { supabase } from '@/src/lib/supabase';
 import type { Trip, OrderReadyForDispatch, DriverOption, Vehicle } from '@/src/types/logistics';
@@ -21,7 +21,8 @@ interface EditTripModalProps {
     previousOrderUuids: string[];
     totalWeightKg: number;
     totalVolumeCbm: number;
-    notes: string;
+    delayReason: string;
+    logisticsNotes: string;
     orderStatuses: Record<string, string>;
   }) => Promise<void>;
 }
@@ -89,7 +90,8 @@ export function EditTripModal({
   const [driverId, setDriverId] = useState(trip.driverId ?? '');
   const [tripOrderIds, setTripOrderIds] = useState<string[]>(trip.orders ?? []);
   const [orderStatuses, setOrderStatuses] = useState<Record<string, string>>({});
-  const [notes, setNotes] = useState(trip.delayReason ?? '');
+  const [delayReason, setDelayReason] = useState(trip.delayReason ?? '');
+  const [logisticsNotes, setLogisticsNotes] = useState(trip.logisticsNotes ?? '');
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [currentOrderDetails, setCurrentOrderDetails] = useState<OrderDetail[]>([]);
@@ -106,7 +108,8 @@ export function EditTripModal({
     const init: Record<string, string> = {};
     (trip.orders ?? []).forEach((id) => { init[id] = 'Scheduled'; });
     setOrderStatuses(init);
-    setNotes(trip.delayReason ?? '');
+    setDelayReason(trip.delayReason ?? '');
+    setLogisticsNotes(trip.logisticsNotes ?? '');
     setSaveError('');
     setOrderSearch('');
     const orig = document.body.style.overflow;
@@ -202,7 +205,8 @@ export function EditTripModal({
         previousOrderUuids: trip.orders ?? [],
         totalWeightKg: Math.round(totalWeight * 100) / 100,
         totalVolumeCbm: Math.round(totalVolume * 1000) / 1000,
-        notes,
+        delayReason,
+        logisticsNotes,
         orderStatuses,
       });
     } catch (e: unknown) {
@@ -219,7 +223,7 @@ export function EditTripModal({
         <div className="sticky top-0 bg-white border-b border-gray-200 sm:rounded-t-lg px-4 sm:px-6 py-4 flex items-start justify-between gap-3 z-10">
           <div className="min-w-0 flex-1">
             <h2 className="text-lg sm:text-xl font-bold text-gray-900 break-words">Edit Trip: {trip.tripNumber}</h2>
-            <p className="text-sm text-gray-500 mt-0.5">Modify status, truck, driver, orders and notes</p>
+            <p className="text-sm text-gray-500 mt-0.5">Modify status, truck, driver, orders, delay, and logistics notes</p>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg transition-colors flex-shrink-0">
             <X className="w-5 h-5 text-gray-500" />
@@ -423,12 +427,32 @@ export function EditTripModal({
             )}
           </div>
 
-          {/* Notes */}
+          {/* Delay reason (trips.delay_reason) */}
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">Logistics Notes</label>
-            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3}
+            <label className="flex items-center gap-2 text-sm font-semibold text-red-900 mb-2">
+              <Clock className="w-4 h-4 shrink-0" />
+              Trip delay explanation
+            </label>
+            <textarea
+              value={delayReason}
+              onChange={(e) => setDelayReason(e.target.value)}
+              rows={3}
+              placeholder="e.g. Waiting on stock, customer moved dock time…"
+              className="w-full px-3 py-2 border border-red-200 rounded-lg text-sm resize-none focus:ring-2 focus:ring-red-400 focus:outline-none bg-red-50/30"
+            />
+          </div>
+
+          {/* Logistics notes (trips.logistics_notes) */}
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-2">Logistics notes</label>
+            <p className="text-xs text-gray-600 mb-2">Instructions for driver, route changes, or delivery context.</p>
+            <textarea
+              value={logisticsNotes}
+              onChange={(e) => setLogisticsNotes(e.target.value)}
+              rows={3}
               placeholder="Driver instructions, route changes, special delivery notes…"
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm resize-none focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm resize-none focus:ring-2 focus:ring-blue-500 focus:outline-none"
+            />
           </div>
 
           {saveError && (

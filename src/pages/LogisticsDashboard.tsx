@@ -59,7 +59,6 @@ export function LogisticsDashboard() {
   const { branch } = useAppContext();
   const navigate = useNavigate();
   const [showTripDetails, setShowTripDetails] = useState(false);
-
   // Get branch-specific data
   const kpis = getLogisticsKPIsByBranch(branch);
   const ordersReady = getOrdersReadyByBranch(branch);
@@ -577,7 +576,15 @@ export function LogisticsDashboard() {
               <AlertTriangle className="w-5 h-5 text-orange-500" />
               Logistics Alerts & Notifications
             </CardTitle>
-            <p className="text-sm text-gray-500 mt-1">{alerts.length} active alerts</p>
+            <p className="text-sm text-gray-500 mt-1">
+              {(() => {
+                const parts: string[] = [];
+                if (alerts.length > 0) {
+                  parts.push(`${alerts.length} scenario alert${alerts.length !== 1 ? 's' : ''}`);
+                }
+                return parts.length > 0 ? parts.join(' · ') : 'No alerts';
+              })()}
+            </p>
           </div>
           <Button variant="outline" size="sm" onClick={() => navigate('/placeholder')}>
             View All <ArrowRight className="w-4 h-4 ml-1" />

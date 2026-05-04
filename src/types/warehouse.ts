@@ -116,7 +116,14 @@ export interface MachineStatus {
 
 export interface WarehouseAlert {
   id: string;
-  type: 'Low Stock' | 'Shortage Impact' | 'Material Delay' | 'Material Arrival' | 'QA Reject' | 'Transfer Request';
+  type:
+    | 'Low Stock'
+    | 'Shortage Impact'
+    | 'Material Delay'
+    | 'Material Arrival'
+    | 'QA Reject'
+    | 'Transfer Request'
+    | 'Trip Loading';
   severity: 'Low' | 'Medium' | 'High' | 'Critical';
   title: string;
   message: string;

@@ -470,9 +470,12 @@ export function OrdersPage() {
                   <div key={order.id} className="p-4 hover:bg-gray-50 cursor-pointer transition-colors" onClick={() => handleViewOrder(order.id)}>
                     <div className="space-y-3">
                       <div className="flex items-start justify-between gap-2">
-                        <div className="flex items-center gap-2 min-w-0 flex-1">
-                          <span className="font-semibold text-gray-900 truncate">{order.customer_name ?? '—'}</span>
-                          {order.requires_approval && <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0" />}
+                        <div className="flex items-start gap-2 min-w-0 flex-1">
+                          <div className="min-w-0 flex-1">
+                            <div className="font-semibold text-gray-900 truncate">{order.customer_name ?? '—'}</div>
+                            <div className="text-xs text-gray-600 truncate tabular-nums">{order.order_number}</div>
+                          </div>
+                          {order.requires_approval && <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />}
                         </div>
                         <div className="flex flex-col items-end gap-1 flex-shrink-0">
                           <Badge variant={getStatusBadgeVariant(order.status)} className="text-xs">{order.status}</Badge>
@@ -567,7 +570,8 @@ export function OrdersPage() {
                         <td className="px-6 py-4">
                           <div className="flex items-start gap-2">
                             <div className="min-w-0">
-                              <div className="font-medium text-gray-900">{order.customer_name}</div>
+                              <div className="font-medium text-gray-900">{order.customer_name ?? '—'}</div>
+                              <div className="text-xs text-gray-600 tabular-nums">{order.order_number}</div>
                               <div className="text-xs text-gray-500">{order.agent_name}</div>
                             </div>
                             {order.requires_approval && <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />}

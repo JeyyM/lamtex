@@ -144,6 +144,10 @@ export function OrderDetailPage() {
   // Supabase data state
   const [order, setOrder] = useState<OrderDetail | null>(null);
   const [orderLogs, setOrderLogs] = useState<OrderLog[]>([]);
+  /** Trips that include this order (for trip delay banner). */
+  const [orderTripsWithDelayInfo, setOrderTripsWithDelayInfo] = useState<
+    Array<{ id: string; tripNumber: string; status: string; delayReason: string | null }>
+  >([]);
   const [loading, setLoading] = useState(true);
   const [customerList, setCustomerList] = useState<{ id: string; name: string }[]>([]);
 
@@ -151,6 +155,7 @@ export function OrderDetailPage() {
     if (!id) return;
     const fetchOrder = async () => {
       setLoading(true);
+      setOrderTripsWithDelayInfo([]);
 
       // Fetch order row + branch name via join
       const { data: row } = await supabase
@@ -169,7 +174,11 @@ export function OrderDetailPage() {
         .eq('id', id)
         .single();
 
-      if (!row) { setLoading(false); return; }
+      if (!row) {
+        setLoading(false);
+        setOrderTripsWithDelayInfo([]);
+        return;
+      }
 
       // Fetch line items
       const { data: items } = await supabase
@@ -268,6 +277,25 @@ export function OrderDetailPage() {
 
       setOrder(mappedOrder);
       setOrderLogs(mappedLogs);
+
+      const orderUuid = id as string;
+      const { data: tripRows } = await supabase
+        .from('trips')
+        .select('id, trip_number, status, order_ids, delay_reason')
+        .contains('order_ids', [orderUuid]);
+      const tripsForOrder = (tripRows ?? []).filter((t: { order_ids?: string[] | null }) => {
+        const oids = (t.order_ids ?? []) as string[];
+        return oids.includes(orderUuid);
+      });
+      setOrderTripsWithDelayInfo(
+        tripsForOrder.map((t: { id?: string; trip_number?: string; status?: string; delay_reason?: string | null }) => ({
+          id: String(t.id ?? ''),
+          tripNumber: String(t.trip_number ?? '—'),
+          status: String(t.status ?? ''),
+          delayReason: t.delay_reason != null && String(t.delay_reason).trim() !== '' ? String(t.delay_reason) : null,
+        })),
+      );
+
       setLoading(false);
     };
 
@@ -1798,6 +1826,11 @@ export function OrderDetailPage() {
     (['Approved', 'In Transit', 'Processing'].includes(order.status) ||
       (order.status === 'Partially Fulfilled' && !canUseLogisticsUi));
 
+  const delayedTripsForOrder = orderTripsWithDelayInfo.filter(
+    (t) => t.status === 'Delayed' || (Boolean(t.delayReason?.trim()) && t.status !== 'Completed'),
+  );
+  const showTripDelayBanner = delayedTripsForOrder.length > 0;
+
   return (
     <div className="p-4 md:p-6 lg:p-8 space-y-6">
       {showLogisticsBadges && (
@@ -2154,6 +2187,27 @@ export function OrderDetailPage() {
           </div>
         </CardContent>
       </Card>
+
+      {showTripDelayBanner && (
+        <Card className="border-red-200 bg-red-50/40">
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-red-950">
+              <Clock className="w-5 h-5 text-red-700" />
+              Trip delay
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 pt-0">
+            {delayedTripsForOrder.map((t) => (
+              <div key={t.id} className="rounded-lg border border-red-200/80 bg-white p-3 text-sm">
+                <p className="text-xs font-medium text-gray-600 uppercase tracking-wide">Trip {t.tripNumber}</p>
+                <p className="text-gray-900 mt-1 whitespace-pre-wrap">
+                  {t.delayReason || 'This trip is marked delayed.'}
+                </p>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {/* Customer Information */}

@@ -982,14 +982,27 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
             </div>
           </div>
 
-          {/* Logistics Notes */}
+          {/* Trip delay */}
+          <div className="border border-red-200 bg-red-50/50 rounded-lg p-4">
+            <h3 className="font-bold text-red-950 mb-3 flex items-center gap-2">
+              <Clock className="w-5 h-5 text-red-700" />
+              Trip delay
+            </h3>
+            {trip.delayReason?.trim() ? (
+              <p className="text-sm text-red-950 leading-relaxed whitespace-pre-wrap">{trip.delayReason}</p>
+            ) : (
+              <p className="text-sm text-red-900/60 italic">No delay explanation recorded.</p>
+            )}
+          </div>
+
+          {/* Logistics notes */}
           <div className="border border-gray-200 rounded-lg p-4">
             <h3 className="font-bold text-gray-900 mb-3 flex items-center gap-2">
               <FileText className="w-5 h-5 text-gray-600" />
-              Logistics Notes
+              Logistics notes
             </h3>
-            {trip.status !== 'Delayed' && trip.delayReason?.trim() ? (
-              <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{trip.delayReason}</p>
+            {trip.logisticsNotes?.trim() ? (
+              <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{trip.logisticsNotes}</p>
             ) : (
               <p className="text-sm text-gray-400 italic">No logistics notes for this trip.</p>
             )}

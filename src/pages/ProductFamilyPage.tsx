@@ -706,9 +706,6 @@ export default function ProductFamilyPage() {
   }
 
   if (!displayVariant && !isEditingVariant) {
-    const categoryTitle = categoryName
-      ? categoryName.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
-      : 'Products';
     return (
       <div className="space-y-6">
         {/* Header */}
@@ -719,7 +716,6 @@ export default function ProductFamilyPage() {
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 md:gap-3 flex-wrap">
               <h1 className="text-xl md:text-2xl font-bold text-gray-900 truncate">{product?.name ?? 'Product Family'}</h1>
-              <Badge variant="default" size="sm">{categoryTitle}</Badge>
             </div>
             <p className="text-xs md:text-sm text-gray-500 mt-1">0 size variants available</p>
           </div>
@@ -805,7 +801,6 @@ export default function ProductFamilyPage() {
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 md:gap-3 flex-wrap">
               <h1 className="text-xl md:text-2xl font-bold text-gray-900 truncate">{product?.name ?? 'Product Family'}</h1>
-              <Badge variant="default" size="sm">{categoryTitle}</Badge>
             </div>
             <p className="text-xs md:text-sm text-gray-500 mt-1 truncate">
               {variants.length} size variant{variants.length !== 1 ? 's' : ''} available

@@ -1,19 +1,102 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { Package, FileText, Truck, Calendar, History, Search, AlertTriangle, CheckCircle, X, Factory, ShoppingCart, Clock, MapPin, TrendingUp, Activity, Brain, Target, RefreshCw, GitBranch, Loader2, ArrowUp, ArrowDown, ArrowUpDown, ChevronLeft, ChevronRight, Camera, CheckCircle2 } from 'lucide-react';
+import { Package, FileText, Truck, Calendar, History, Search, AlertTriangle, CheckCircle, X, Factory, ShoppingCart, Clock, TrendingUp, Activity, RefreshCw, GitBranch, Loader2, ArrowUp, ArrowDown, ArrowUpDown, ChevronLeft, ChevronRight, Camera, CheckCircle2, Box, DollarSign } from 'lucide-react';
 import { FulfillOrderModal, type FulfillmentData } from '@/src/components/orders/FulfillOrderModal';
+import { MarkInTransitModal } from '@/src/components/orders/MarkInTransitModal';
 import type { OrderLineItem } from '@/src/types/orders';
 import { Button } from '@/src/components/ui/Button';
 import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagination';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine, Area, ComposedChart } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import OrderDetailModal from '../components/logistics/OrderDetailModal';
+import {
+  WarehouseTripLoadingModal,
+  type WarehouseTripSummary,
+  type WarehouseOrderRowLite,
+} from '@/src/components/warehouse/WarehouseTripLoadingModal';
+import { EditTripModal } from '@/src/components/logistics/EditTripModal';
+import type { Trip, Vehicle, OrderReadyForDispatch, DriverOption } from '@/src/types/logistics';
+import {
+  tripStatusBadgeClass,
+  fetchTripById,
+  updateTrip,
+  fetchLogisticsOrderQueue,
+  fetchDriversForBranch,
+} from '@/src/lib/logisticsScheduling';
+import { fetchFleetTrucksForBranch } from '@/src/lib/fleetTrucks';
 import { supabase } from '@/src/lib/supabase';
 import { useAppContext } from '@/src/store/AppContext';
 import { computeStockStatus } from '@/src/lib/stockStatus';
+import { finishedGoodProductHref } from '@/src/lib/productRoutes';
+import {
+  OrderProductSelectionModal,
+  type OrderProductSelectionConfirm,
+} from '@/src/components/orders/OrderProductSelectionModal';
+import RawMaterialPickerModal from '@/src/components/products/RawMaterialPickerModal';
+import {
+  fetchVariantMonthlyOrderMetrics,
+  fetchMaterialMonthlyUsageFromConsumption,
+  fetchVariantInvolvedOrders,
+  fetchMaterialUsageRows,
+  resolveBranchCode,
+  fetchVariantStockAtBranch,
+  fetchMaterialStockAtBranch,
+  type MonthlyMovementChartRow,
+  type MonthlyRevenueChartRow,
+  type VariantInvolvedOrderRow,
+  type MaterialUsageRow,
+} from '@/src/lib/warehouseMovementsData';
 
 type TabType = 'inventory' | 'requests' | 'orders' | 'movements';
 type StockStatus = 'healthy' | 'warning' | 'critical';
 type RequestType = 'production' | 'purchase';
+
+type MovementsTabSelection =
+  | {
+      kind: 'variant';
+      variantId: string;
+      productId: string;
+      productName: string;
+      variantLabel: string;
+      sku: string;
+      productImageUrl: string | null;
+    }
+  | {
+      kind: 'material';
+      materialId: string;
+      name: string;
+      sku: string;
+      unit: string;
+      imageUrl: string | null;
+    };
+
+function MovementsCatalogThumb({
+  imageUrl,
+  label,
+  kind,
+}: {
+  imageUrl: string | null | undefined;
+  label: string;
+  kind: 'variant' | 'material';
+}) {
+  const [broken, setBroken] = useState(false);
+  const show = Boolean(imageUrl && !broken);
+  const PlaceholderIcon = kind === 'variant' ? Package : Factory;
+  return show ? (
+    <img
+      src={imageUrl!}
+      alt={label}
+      className="w-14 h-14 rounded-lg object-cover border border-gray-200 shrink-0 bg-white"
+      onError={() => setBroken(true)}
+    />
+  ) : (
+    <div
+      className="w-14 h-14 rounded-lg bg-gray-100 border border-gray-200 flex items-center justify-center shrink-0"
+      aria-hidden
+    >
+      <PlaceholderIcon className="w-7 h-7 text-gray-400" />
+    </div>
+  );
+}
 
 interface FinishedGood {
   /** Variant id (unique per inventory row). */
@@ -225,6 +308,7 @@ const WAREHOUSE_LOADING_TAB_STATUSES = [
   'Packed',
   'Ready',
   'In Transit',
+  'Partially Fulfilled',
 ] as const;
 
 interface WarehouseOrderRow {
@@ -240,6 +324,22 @@ interface WarehouseOrderRow {
   items: OrderLineItem[];
   /** True when branch stock cannot cover remaining qty to ship for any line. */
   hasShortage: boolean;
+  /** Trip linked in `trips.order_ids` for this branch, if any. */
+  tripId: string | null;
+}
+
+function warehouseOrderToLite(o: WarehouseOrderRow): WarehouseOrderRowLite {
+  return {
+    id: o.id,
+    orderNumber: o.orderNumber,
+    customerName: o.customerName,
+    deliveryAddress: o.deliveryAddress,
+    requiredDate: o.requiredDate,
+    status: o.status,
+    urgency: o.urgency,
+    items: o.items,
+    hasShortage: o.hasShortage,
+  };
 }
 
 function warehouseOrderHasShortage(order: WarehouseOrderRow, onHandByVariant: Map<string, number>): boolean {
@@ -248,6 +348,156 @@ function warehouseOrderHasShortage(order: WarehouseOrderRow, onHandByVariant: Ma
     const rem = Math.max(0, li.quantity - (li.quantityShipped ?? 0));
     if (rem <= 0) return false;
     return (onHandByVariant.get(li.variantId) ?? 0) < rem;
+  });
+}
+
+/**
+ * Use line-level `quantity_delivered` when `orders.status` is stale (e.g. trip marked completed
+ * in Logistics but the order row was not updated).
+ */
+function warehouseOrderStatusResolved(dbStatus: string, items: OrderLineItem[]): string {
+  if (
+    dbStatus === 'Cancelled' ||
+    dbStatus === 'Rejected' ||
+    dbStatus === 'Delivered' ||
+    dbStatus === 'Partially Fulfilled' ||
+    dbStatus === 'Completed'
+  ) {
+    return dbStatus;
+  }
+  if (items.length === 0) return dbStatus;
+  const allDelivered = items.every((l) => (l.quantityDelivered ?? 0) >= l.quantity);
+  const anyDelivered = items.some((l) => (l.quantityDelivered ?? 0) > 0);
+  if (anyDelivered && allDelivered) return 'Delivered';
+  if (anyDelivered && !allDelivered) return 'Partially Fulfilled';
+  return dbStatus;
+}
+
+/** Load full `WarehouseOrderRow` lists for arbitrary order IDs (any status). */
+async function loadWarehouseOrderRowsByIds(
+  orderIds: string[],
+  bid: string | null,
+  bcode: string,
+  tripIdByOrderId: Map<string, string>,
+): Promise<WarehouseOrderRow[]> {
+  const uniq = [...new Set(orderIds)].filter(Boolean);
+  if (uniq.length === 0) return [];
+
+  let oq = supabase
+    .from('orders')
+    .select('id, order_number, customer_name, delivery_address, required_date, status, urgency, branch_id')
+    .in('id', uniq);
+  if (bid) oq = (oq as typeof oq).eq('branch_id', bid);
+
+  const { data: orderRows, error } = await oq;
+  if (error) throw error;
+  if (!orderRows?.length) return [];
+
+  const ids = (orderRows as any[]).map((o) => o.id as string);
+  const { data: lineRows } = await supabase
+    .from('order_line_items')
+    .select(
+      'id, order_id, product_name, variant_description, quantity, unit_price, quantity_shipped, quantity_delivered, variant_id, sku, line_total, discount_percent, discount_amount',
+    )
+    .in('order_id', ids);
+
+  const linesByOrder: Record<string, OrderLineItem[]> = {};
+  for (const lr of (lineRows ?? []) as any[]) {
+    const oid = lr.order_id as string;
+    if (!linesByOrder[oid]) linesByOrder[oid] = [];
+    linesByOrder[oid].push({
+      id: lr.id,
+      sku: lr.sku ?? '',
+      variantId: lr.variant_id ?? undefined,
+      productName: lr.product_name ?? '',
+      variantDescription: lr.variant_description ?? '',
+      quantity: Number(lr.quantity ?? 0),
+      unitPrice: Number(lr.unit_price ?? 0),
+      discountPercent: Number(lr.discount_percent ?? 0),
+      discountAmount: Number(lr.discount_amount ?? 0),
+      lineTotal: Number(lr.line_total ?? 0),
+      stockHint: 'Available',
+      quantityShipped: Number(lr.quantity_shipped ?? 0),
+      quantityDelivered: Number(lr.quantity_delivered ?? 0),
+    });
+  }
+
+  const variantIds = new Set<string>();
+  for (const oid of ids) {
+    for (const li of linesByOrder[oid] ?? []) {
+      if (li.variantId) variantIds.add(li.variantId);
+    }
+  }
+
+  const imageByVariant = new Map<string, string>();
+  const productLinkByVariant = new Map<string, { productId: string; categorySlug: string }>();
+  if (variantIds.size > 0) {
+    const { data: vimgs } = await supabase
+      .from('product_variants')
+      .select('id, product_id, products(image_url, product_categories(slug))')
+      .in('id', [...variantIds]);
+    for (const raw of (vimgs ?? []) as any[]) {
+      const rowId = String(raw.id);
+      const pid = raw.product_id != null ? String(raw.product_id) : null;
+      const prod = Array.isArray(raw.products) ? raw.products[0] : raw.products;
+      const u = prod?.image_url;
+      if (typeof u === 'string' && u) imageByVariant.set(rowId, u);
+      if (pid) {
+        const cat = prod?.product_categories;
+        const catRow = Array.isArray(cat) ? cat[0] : cat;
+        const slug = catRow?.slug;
+        productLinkByVariant.set(rowId, {
+          productId: pid,
+          categorySlug: typeof slug === 'string' ? slug : '',
+        });
+      }
+    }
+  }
+
+  for (const oid of ids) {
+    const list = linesByOrder[oid];
+    if (!list?.length) continue;
+    linesByOrder[oid] = list.map((li) => {
+      const link = li.variantId ? productLinkByVariant.get(li.variantId) : undefined;
+      return {
+        ...li,
+        imageUrl: li.variantId ? imageByVariant.get(li.variantId) : undefined,
+        productId: link?.productId,
+        categorySlug: link?.categorySlug || undefined,
+      };
+    });
+  }
+
+  const onHandByVariant = new Map<string, number>();
+  if (bid && variantIds.size > 0) {
+    const { data: pvsData } = await supabase
+      .from('product_variant_stock')
+      .select('variant_id, quantity')
+      .eq('branch_id', bid)
+      .in('variant_id', [...variantIds]);
+    for (const row of (pvsData ?? []) as { variant_id: string; quantity: unknown }[]) {
+      onHandByVariant.set(row.variant_id, Number(row.quantity ?? 0));
+    }
+  }
+
+  return (orderRows as any[]).map((o) => {
+    const items = linesByOrder[o.id] ?? [];
+    const resolvedStatus = warehouseOrderStatusResolved(String(o.status ?? ''), items);
+    const base: WarehouseOrderRow = {
+      id: o.id,
+      orderNumber: o.order_number ?? '—',
+      customerName: o.customer_name ?? '—',
+      deliveryAddress: o.delivery_address ?? null,
+      requiredDate: o.required_date ?? null,
+      status: resolvedStatus,
+      urgency: o.urgency ?? '',
+      branchId: o.branch_id ?? null,
+      branchCode: bcode,
+      items,
+      hasShortage: false,
+      tripId: tripIdByOrderId.get(o.id) ?? null,
+    };
+    return { ...base, hasShortage: warehouseOrderHasShortage(base, onHandByVariant) };
   });
 }
 
@@ -435,7 +685,7 @@ function buildMonthGrid(year: number, month: number): (Date | null)[] {
   return cells;
 }
 
-// Movements & Demand Forecast Types and Data
+/* ── Legacy mock demand forecast (disabled — Movements tab uses live DB data; see warehouseMovementsData.ts)
 interface DemandDataPoint {
   date: string;
   actual?: number;
@@ -444,7 +694,6 @@ interface DemandDataPoint {
   confidenceHigh?: number;
   isForecast: boolean;
 }
-
 interface ForecastItem {
   id: string;
   name: string;
@@ -459,174 +708,15 @@ interface ForecastItem {
   recommendedReorderDate: string;
   recommendedQuantity: number;
 }
-
-// Mock forecast items for selector
-const mockForecastItems: ForecastItem[] = [
-  {
-    id: 'FG001',
-    name: 'PVC Pressure Pipe 4" x 10ft',
-    type: 'product',
-    category: 'PVC Pipes',
-    currentStock: 450,
-    unit: 'pcs',
-    avgDailyDemand: 38,
-    forecastedDailyDemand: 40,
-    daysOfCover: 11,
-    predictedStockoutDate: 'Mar 11',
-    recommendedReorderDate: 'Mar 4',
-    recommendedQuantity: 300
-  },
-  {
-    id: 'FG002',
-    name: 'PVC Sanitary Pipe 4" x 10ft',
-    type: 'product',
-    category: 'PVC Pipes',
-    currentStock: 380,
-    unit: 'pcs',
-    avgDailyDemand: 32,
-    forecastedDailyDemand: 35,
-    daysOfCover: 10,
-    predictedStockoutDate: 'Mar 9',
-    recommendedReorderDate: 'Mar 3',
-    recommendedQuantity: 250
-  },
-  {
-    id: 'RM001',
-    name: 'PVC Resin Powder - K67',
-    type: 'material',
-    category: 'Raw Materials',
-    currentStock: 3200,
-    unit: 'kg',
-    avgDailyDemand: 285,
-    forecastedDailyDemand: 305,
-    daysOfCover: 10,
-    predictedStockoutDate: 'Mar 16',
-    recommendedReorderDate: 'Feb 28',
-    recommendedQuantity: 5000
-  },
-  {
-    id: 'RM002',
-    name: 'Plasticizer DOP',
-    type: 'material',
-    category: 'Raw Materials',
-    currentStock: 850,
-    unit: 'liters',
-    avgDailyDemand: 48,
-    forecastedDailyDemand: 52,
-    daysOfCover: 16,
-    predictedStockoutDate: 'Mar 18',
-    recommendedReorderDate: 'Mar 8',
-    recommendedQuantity: 800
-  },
-  {
-    id: 'FG003',
-    name: 'PVC Elbow 4" - 90 degree',
-    type: 'product',
-    category: 'PVC Fittings',
-    currentStock: 620,
-    unit: 'pcs',
-    avgDailyDemand: 45,
-    forecastedDailyDemand: 48,
-    daysOfCover: 12,
-    predictedStockoutDate: 'Mar 13',
-    recommendedReorderDate: 'Mar 5',
-    recommendedQuantity: 400
-  }
-];
-
-// Generate demand data for selected item
-const generateDemandData = (itemId: string): DemandDataPoint[] => {
-  const data: DemandDataPoint[] = [];
-  const today = new Date('2026-02-27');
-  
-  // Generate 14 days historical data (Feb 13-27)
-  for (let i = -14; i < 0; i++) {
-    const date = new Date(today);
-    date.setDate(date.getDate() + i);
-    const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-    
-    // Simulate realistic patterns
-    const dayOfWeek = date.getDay();
-    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-    const isMonday = dayOfWeek === 1;
-    
-    let baseQuantity = 38;
-    if (itemId === 'RM001') baseQuantity = 285;
-    
-    let actual = baseQuantity;
-    if (isWeekend) actual *= 0.75; // Lower on weekends
-    if (isMonday) actual *= 1.2; // Monday surge
-    actual += (Math.random() - 0.5) * 10; // Random variation
-    actual = Math.round(actual);
-    
-    // For materials, make it batch-based (0 on non-production days)
-    if (itemId === 'RM001' && Math.random() > 0.4) {
-      actual = 0;
-    } else if (itemId === 'RM001') {
-      actual = Math.round(actual * 2.2); // Higher quantity when used
-    }
-    
-    data.push({
-      date: dateStr,
-      actual,
-      isForecast: false
-    });
-  }
-  
-  // Generate 14 days forecast data (Feb 28-Mar 13)
-  for (let i = 1; i <= 14; i++) {
-    const date = new Date(today);
-    date.setDate(date.getDate() + i);
-    const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-    
-    const dayOfWeek = date.getDay();
-    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-    const isMonday = dayOfWeek === 1;
-    
-    let baseQuantity = 40;
-    if (itemId === 'RM001') baseQuantity = 305;
-    
-    let forecast = baseQuantity;
-    if (isWeekend) forecast *= 0.75;
-    if (isMonday) forecast *= 1.25;
-    if (i === 8) forecast *= 1.3; // Peak on Mar 8
-    forecast += (Math.random() - 0.5) * 8;
-    forecast = Math.round(forecast);
-    
-    // For materials, make it batch-based
-    if (itemId === 'RM001' && Math.random() > 0.4) {
-      forecast = 0;
-    } else if (itemId === 'RM001') {
-      forecast = Math.round(forecast * 2.1);
-    }
-    
-    const confidenceMargin = forecast * 0.15;
-    
-    data.push({
-      date: dateStr,
-      forecast,
-      confidenceLow: Math.round(forecast - confidenceMargin),
-      confidenceHigh: Math.round(forecast + confidenceMargin),
-      isForecast: true
-    });
-  }
-  
-  return data;
-};
+const mockForecastItems: ForecastItem[] = [];
+const generateDemandData = (_itemId: string): DemandDataPoint[] => [];
+*/
 
 function stockComputeToUi(computed: string): StockStatus {
   if (computed === 'Critical' || computed === 'Out of Stock') return 'critical';
   if (computed === 'Low Stock') return 'warning';
   return 'healthy';
 }
-
-/** Matches ProductCategoryPage navigation: `family` id is the product row id. */
-function finishedGoodProductHref(productId: string, categorySlug: string): string {
-  const slug = categorySlug.trim();
-  if (!slug) return `/products/${productId}`;
-  return `/products/category/${encodeURIComponent(slug)}/family/${productId}`;
-}
-
 
 export default function WarehousePage() {
   const navigate = useNavigate();
@@ -672,31 +762,109 @@ export default function WarehousePage() {
 
   // Orders & Loading tab — live order rows + modals
   const [warehouseOrders, setWarehouseOrders] = useState<WarehouseOrderRow[]>([]);
+  const [warehouseTrips, setWarehouseTrips] = useState<WarehouseTripSummary[]>([]);
+  /** On-hand qty by variant for the active warehouse branch (loading pipeline). */
+  const [warehouseStockByVariant, setWarehouseStockByVariant] = useState<Record<string, number>>({});
   const [warehouseOrdersLoading, setWarehouseOrdersLoading] = useState(false);
-  const [inTransitSubmitting, setInTransitSubmitting] = useState(false);
-  /** Order id while advancing Loading → Packed → Ready (or Start loading). */
+  const [pastTripGroups, setPastTripGroups] = useState<Array<{ trip: WarehouseTripSummary; orders: WarehouseOrderRow[] }>>(
+    [],
+  );
+  const [pastTripsTotal, setPastTripsTotal] = useState(0);
+  const [pastTripsPage, setPastTripsPage] = useState(1);
+  const [pastTripsLoading, setPastTripsLoading] = useState(false);
+  const [tripLoadingModalOpen, setTripLoadingModalOpen] = useState(false);
+  const tripLoadingModalOpenRef = useRef(false);
+  tripLoadingModalOpenRef.current = tripLoadingModalOpen;
+  const [tripLoadingModalTrip, setTripLoadingModalTrip] = useState<WarehouseTripSummary | null>(null);
+  const [tripLoadingModalOrderIds, setTripLoadingModalOrderIds] = useState<string[]>([]);
+  const pastTripOrderById = useMemo(() => {
+    const m = new Map<string, WarehouseOrderRow>();
+    for (const g of pastTripGroups) {
+      for (const o of g.orders) m.set(o.id, o);
+    }
+    return m;
+  }, [pastTripGroups]);
+  const tripLoadingModalOrders = useMemo(() => {
+    if (!tripLoadingModalOpen || tripLoadingModalOrderIds.length === 0) return [];
+    return tripLoadingModalOrderIds
+      .map((id) => warehouseOrders.find((o) => o.id === id) ?? pastTripOrderById.get(id))
+      .filter((o): o is WarehouseOrderRow => Boolean(o));
+  }, [tripLoadingModalOpen, tripLoadingModalOrderIds, warehouseOrders, pastTripOrderById]);
+  /** Order id while advancing Scheduled→Loading or Packed→Ready (Loading→Packed uses shipment modal). */
   const [warehouseStatusOrderId, setWarehouseStatusOrderId] = useState<string | null>(null);
+  const [inTransitSubmitting, setInTransitSubmitting] = useState(false);
+  const [warehouseFleetVehicles, setWarehouseFleetVehicles] = useState<Vehicle[]>([]);
+  const [warehousePlanningDrivers, setWarehousePlanningDrivers] = useState<DriverOption[]>([]);
+  const [warehousePlanningOrders, setWarehousePlanningOrders] = useState<OrderReadyForDispatch[]>([]);
+  const [warehouseEditTrip, setWarehouseEditTrip] = useState<Trip | null>(null);
+  const [showWarehouseEditTrip, setShowWarehouseEditTrip] = useState(false);
+  const [warehouseEditTripOpening, setWarehouseEditTripOpening] = useState(false);
+
+  const warehouseOrdersOnOngoingTrips = useMemo(() => {
+    const tripIds = new Set(warehouseTrips.map((t) => t.id));
+    return warehouseOrders.filter((o) => o.tripId != null && tripIds.has(o.tripId));
+  }, [warehouseOrders, warehouseTrips]);
 
   const warehouseLoadingStats = useMemo(() => {
-    const rows = warehouseOrders;
+    const rows = warehouseOrdersOnOngoingTrips;
     return {
       readyToLoad: rows.filter((o) => o.status === 'Scheduled').length,
-      loadingInProgress: rows.filter((o) => o.status === 'Loading' || o.status === 'Packed').length,
       readyToDepart: rows.filter((o) => o.status === 'Ready').length,
       stockIssues: rows.filter((o) => o.hasShortage).length,
       awaitingSchedule: rows.filter((o) => o.status === 'Approved').length,
     };
-  }, [warehouseOrders]);
+  }, [warehouseOrdersOnOngoingTrips]);
+
+  /** Approved pipeline orders not linked to any trip yet (banner — not the trip-scoped cards). */
+  const approvedAwaitingTripAssignment = useMemo(
+    () => warehouseOrders.filter((o) => o.status === 'Approved' && !o.tripId).length,
+    [warehouseOrders],
+  );
+
+  const warehouseTripGroups = useMemo(() => {
+    const byTrip = new Map<string, WarehouseOrderRow[]>();
+    for (const t of warehouseTrips) byTrip.set(t.id, []);
+    for (const o of warehouseOrders) {
+      if (o.tripId && byTrip.has(o.tripId)) {
+        byTrip.get(o.tripId)!.push(o);
+      }
+    }
+    return warehouseTrips
+      .map((trip) => ({ trip, orders: byTrip.get(trip.id) ?? [] }))
+      .filter((g) => g.orders.length > 0)
+      .sort((a, b) => {
+        const da = a.trip.scheduledDate ?? '';
+        const db = b.trip.scheduledDate ?? '';
+        if (da !== db) return da.localeCompare(db);
+        return a.trip.tripNumber.localeCompare(b.trip.tripNumber);
+      });
+  }, [warehouseOrders, warehouseTrips]);
+  const resolveWarehouseOrderRow = useCallback(
+    (id: string) => warehouseOrders.find((o) => o.id === id) ?? pastTripOrderById.get(id),
+    [warehouseOrders, pastTripOrderById],
+  );
   const [showProofModal, setShowProofModal] = useState(false);
   const [proofOrder, setProofOrder] = useState<WarehouseOrderRow | null>(null);
+  /** Loading→Packed: same per-line qty flow as Order detail / trip logistics (`MarkInTransitModal`). */
+  const [warehouseMarkPackedOpen, setWarehouseMarkPackedOpen] = useState(false);
+  const [warehouseMarkPackedOrder, setWarehouseMarkPackedOrder] = useState<WarehouseOrderRow | null>(null);
 
   const [finishedGoodsRows, setFinishedGoodsRows] = useState<FinishedGood[]>([]);
   const [rawMaterialsRows, setRawMaterialsRows] = useState<RawMaterial[]>([]);
   const [inventoryLoading, setInventoryLoading] = useState(true);
   
-  // Movements tab state
-  const [selectedForecastItem, setSelectedForecastItem] = useState<ForecastItem>(mockForecastItems[0]);
-  const [demandData, setDemandData] = useState<DemandDataPoint[]>(generateDemandData(mockForecastItems[0].id));
+  // Movements tab — live stock movements & same data sources as Product analytics / Material analytics
+  const [movementsSelected, setMovementsSelected] = useState<MovementsTabSelection | null>(null);
+  const [movementsShowVariantPicker, setMovementsShowVariantPicker] = useState(false);
+  const [movementsShowMaterialPicker, setMovementsShowMaterialPicker] = useState(false);
+  const [movementsChartData, setMovementsChartData] = useState<MonthlyMovementChartRow[]>([]);
+  const [movementsRevenueChartData, setMovementsRevenueChartData] = useState<MonthlyRevenueChartRow[]>([]);
+  const [movementsChartLoading, setMovementsChartLoading] = useState(false);
+  const [movementsStockQty, setMovementsStockQty] = useState<number | null>(null);
+  const [movementsVariantOrderRows, setMovementsVariantOrderRows] = useState<VariantInvolvedOrderRow[]>([]);
+  const [movementsMaterialUsageRows, setMovementsMaterialUsageRows] = useState<MaterialUsageRow[]>([]);
+  const [movementsHistoryLoading, setMovementsHistoryLoading] = useState(false);
+  const [movementsLoadTick, setMovementsLoadTick] = useState(0);
 
   const getStatusColor = (status: StockStatus) => {
     switch (status) {
@@ -1399,8 +1567,9 @@ export default function WarehousePage() {
     }
   }, [branch]);
 
-  const fetchWarehouseOrders = useCallback(async () => {
-    setWarehouseOrdersLoading(true);
+  const fetchWarehouseOrders = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = opts?.silent ?? false;
+    if (!silent) setWarehouseOrdersLoading(true);
     try {
       const branchResult = branch
         ? await supabase.from('branches').select('id, code').eq('name', branch).maybeSingle()
@@ -1417,9 +1586,15 @@ export default function WarehousePage() {
 
       const { data: orderRows, error } = await q;
       if (error) throw error;
-      if (!orderRows?.length) { setWarehouseOrders([]); return; }
+      if (!orderRows?.length) {
+        setWarehouseOrders([]);
+        setWarehouseTrips([]);
+        setWarehouseStockByVariant({});
+        return;
+      }
 
       const orderIds = (orderRows as any[]).map((o) => o.id as string);
+      const orderIdSet = new Set(orderIds);
       const { data: lineRows } = await supabase
         .from('order_line_items')
         .select('id, order_id, product_name, variant_description, quantity, unit_price, quantity_shipped, quantity_delivered, variant_id, sku, line_total, discount_percent, discount_amount')
@@ -1453,6 +1628,45 @@ export default function WarehousePage() {
         }
       }
 
+      const imageByVariant = new Map<string, string>();
+      const productLinkByVariant = new Map<string, { productId: string; categorySlug: string }>();
+      if (variantIds.size > 0) {
+        const { data: vimgs } = await supabase
+          .from('product_variants')
+          .select('id, product_id, products(image_url, product_categories(slug))')
+          .in('id', [...variantIds]);
+        for (const raw of (vimgs ?? []) as any[]) {
+          const rowId = String(raw.id);
+          const pid = raw.product_id != null ? String(raw.product_id) : null;
+          const prod = Array.isArray(raw.products) ? raw.products[0] : raw.products;
+          const u = prod?.image_url;
+          if (typeof u === 'string' && u) imageByVariant.set(rowId, u);
+          if (pid) {
+            const cat = prod?.product_categories;
+            const catRow = Array.isArray(cat) ? cat[0] : cat;
+            const slug = catRow?.slug;
+            productLinkByVariant.set(rowId, {
+              productId: pid,
+              categorySlug: typeof slug === 'string' ? slug : '',
+            });
+          }
+        }
+      }
+
+      for (const oid of orderIds) {
+        const list = linesByOrder[oid];
+        if (!list?.length) continue;
+        linesByOrder[oid] = list.map((li) => {
+          const link = li.variantId ? productLinkByVariant.get(li.variantId) : undefined;
+          return {
+            ...li,
+            imageUrl: li.variantId ? imageByVariant.get(li.variantId) : undefined,
+            productId: link?.productId,
+            categorySlug: link?.categorySlug || undefined,
+          };
+        });
+      }
+
       const onHandByVariant = new Map<string, number>();
       if (bid && variantIds.size > 0) {
         const { data: pvsData } = await supabase
@@ -1465,32 +1679,159 @@ export default function WarehousePage() {
         }
       }
 
+      const orderIdToTripId = new Map<string, string>();
+      const tripSummaries: WarehouseTripSummary[] = [];
+
+      if (bid) {
+        const { data: tripRows, error: tripErr } = await supabase
+          .from('trips')
+          .select('id, trip_number, vehicle_name, driver_name, status, scheduled_date, order_ids, delay_reason')
+          .eq('branch_id', bid);
+        if (tripErr) console.warn('Warehouse: could not load trips for grouping:', tripErr.message);
+        for (const t of (tripRows ?? []) as any[]) {
+          const tripStatus = String(t.status ?? '');
+          if (tripStatus === 'Completed') continue;
+          const oids = (t.order_ids as string[] | null) ?? [];
+          if (!oids.some((id) => orderIdSet.has(id))) continue;
+          tripSummaries.push({
+            id: t.id,
+            tripNumber: t.trip_number ?? '—',
+            vehicleName: t.vehicle_name ?? '—',
+            driverName: t.driver_name ?? '—',
+            scheduledDate: t.scheduled_date ?? null,
+            status: String(t.status ?? ''),
+            delayReason:
+              t.delay_reason != null && String(t.delay_reason).trim() !== ''
+                ? String(t.delay_reason)
+                : null,
+          });
+          for (const oid of oids) {
+            if (orderIdSet.has(oid)) orderIdToTripId.set(oid, t.id as string);
+          }
+        }
+        tripSummaries.sort((a, b) => {
+          const da = a.scheduledDate ?? '';
+          const db = b.scheduledDate ?? '';
+          if (da !== db) return da.localeCompare(db);
+          return a.tripNumber.localeCompare(b.tripNumber);
+        });
+      }
+
+      setWarehouseStockByVariant(Object.fromEntries(onHandByVariant));
+      setWarehouseTrips(tripSummaries);
+
       const rows: WarehouseOrderRow[] = (orderRows as any[]).map((o) => {
         const items = linesByOrder[o.id] ?? [];
+        const resolvedStatus = warehouseOrderStatusResolved(String(o.status ?? ''), items);
         const base: WarehouseOrderRow = {
           id: o.id,
           orderNumber: o.order_number ?? '—',
           customerName: o.customer_name ?? '—',
           deliveryAddress: o.delivery_address ?? null,
           requiredDate: o.required_date ?? null,
-          status: o.status ?? '',
+          status: resolvedStatus,
           urgency: o.urgency ?? '',
           branchId: o.branch_id ?? null,
           branchCode: bcode,
           items,
           hasShortage: false,
+          tripId: orderIdToTripId.get(o.id) ?? null,
         };
         return { ...base, hasShortage: warehouseOrderHasShortage(base, onHandByVariant) };
       });
 
       setWarehouseOrders(rows);
+
+      setTripLoadingModalOrderIds((prev) => {
+        if (!tripLoadingModalOpenRef.current || prev.length === 0) return prev;
+        const idSet = new Set(rows.map((r) => r.id));
+        const next = prev.filter((id) => idSet.has(id));
+        return next.length > 0 ? next : prev;
+      });
     } catch (e: unknown) {
       console.error('Failed to load warehouse orders:', e);
       setWarehouseOrders([]);
+      setWarehouseTrips([]);
+      setWarehouseStockByVariant({});
     } finally {
-      setWarehouseOrdersLoading(false);
+      if (!silent) setWarehouseOrdersLoading(false);
     }
   }, [branch]);
+
+  const fetchPastTrips = useCallback(async () => {
+    setPastTripsLoading(true);
+    try {
+      const branchResult = branch
+        ? await supabase.from('branches').select('id, code').eq('name', branch).maybeSingle()
+        : null;
+      const bid = branchResult?.data?.id ?? null;
+      const bcode = (branchResult?.data as { code?: string } | null)?.code ?? '';
+
+      if (!bid) {
+        setPastTripGroups([]);
+        setPastTripsTotal(0);
+        return;
+      }
+
+      const pageSize = TABLE_PAGE_SIZE;
+      const from = (pastTripsPage - 1) * pageSize;
+      const to = from + pageSize - 1;
+
+      const { data: tripRows, count, error } = await supabase
+        .from('trips')
+        .select('id, trip_number, vehicle_name, driver_name, status, scheduled_date, order_ids, delay_reason', {
+          count: 'exact',
+        })
+        .eq('branch_id', bid)
+        .eq('status', 'Completed')
+        .order('scheduled_date', { ascending: false })
+        .range(from, to);
+
+      if (error) throw error;
+
+      setPastTripsTotal(count ?? 0);
+
+      const trips = (tripRows ?? []) as any[];
+      const orderIdToTripId = new Map<string, string>();
+      const orderIdSet = new Set<string>();
+      for (const t of trips) {
+        const oids = (t.order_ids as string[] | null) ?? [];
+        for (const oid of oids) {
+          orderIdToTripId.set(oid, t.id);
+          orderIdSet.add(oid);
+        }
+      }
+
+      const rows = await loadWarehouseOrderRowsByIds([...orderIdSet], bid, bcode, orderIdToTripId);
+      const rowById = new Map(rows.map((r) => [r.id, r]));
+
+      const groups = trips.map((t) => {
+        const trip: WarehouseTripSummary = {
+          id: t.id,
+          tripNumber: t.trip_number ?? '—',
+          vehicleName: t.vehicle_name ?? '—',
+          driverName: t.driver_name ?? '—',
+          scheduledDate: t.scheduled_date ?? null,
+          status: String(t.status ?? ''),
+          delayReason:
+            t.delay_reason != null && String(t.delay_reason).trim() !== ''
+              ? String(t.delay_reason)
+              : null,
+        };
+        const oids = (t.order_ids as string[] | null) ?? [];
+        const orders = oids.map((oid) => rowById.get(oid)).filter((o): o is WarehouseOrderRow => Boolean(o));
+        return { trip, orders };
+      });
+
+      setPastTripGroups(groups);
+    } catch (e: unknown) {
+      console.error('Failed to load past warehouse trips:', e);
+      setPastTripGroups([]);
+      setPastTripsTotal(0);
+    } finally {
+      setPastTripsLoading(false);
+    }
+  }, [branch, pastTripsPage]);
 
   useEffect(() => {
     if (activeTab === 'requests') void fetchSchedule();
@@ -1506,6 +1847,38 @@ export default function WarehousePage() {
   }, [activeTab, branch, fetchOrdersCalendarEvents, fetchWarehouseOrders]);
 
   useEffect(() => {
+    if (activeTab !== 'orders' || !branch?.trim()) {
+      setWarehouseFleetVehicles([]);
+      setWarehousePlanningDrivers([]);
+      setWarehousePlanningOrders([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const [fleet, drv, oq] = await Promise.all([
+        fetchFleetTrucksForBranch(branch),
+        fetchDriversForBranch(branch),
+        fetchLogisticsOrderQueue(branch),
+      ]);
+      if (cancelled) return;
+      setWarehouseFleetVehicles(fleet.vehicles);
+      setWarehousePlanningDrivers(drv.drivers);
+      setWarehousePlanningOrders(oq.orders);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, branch]);
+
+  useEffect(() => {
+    if (activeTab === 'orders') void fetchPastTrips();
+  }, [activeTab, fetchPastTrips]);
+
+  useEffect(() => {
+    setPastTripsPage(1);
+  }, [branch]);
+
+  useEffect(() => {
     setScheduleSearch('');
     setScheduleStatusFilter('');
     setPrSchedulePage(1);
@@ -1516,139 +1889,216 @@ export default function WarehousePage() {
     void fetchWarehouseInventory();
   }, [fetchWarehouseInventory]);
 
+  useEffect(() => {
+    if (activeTab !== 'movements' || !movementsSelected) return;
+    let cancelled = false;
+    void (async () => {
+      setMovementsChartLoading(true);
+      setMovementsHistoryLoading(true);
+      setMovementsChartData([]);
+      setMovementsRevenueChartData([]);
+      setMovementsVariantOrderRows([]);
+      setMovementsMaterialUsageRows([]);
+      setMovementsStockQty(null);
+      try {
+        if (movementsSelected.kind === 'variant') {
+          const [metrics, stock, orders] = await Promise.all([
+            fetchVariantMonthlyOrderMetrics(movementsSelected.variantId, branch),
+            fetchVariantStockAtBranch(movementsSelected.variantId, branch),
+            fetchVariantInvolvedOrders(movementsSelected.variantId, branch),
+          ]);
+          if (cancelled) return;
+          setMovementsChartData(metrics.units);
+          setMovementsRevenueChartData(metrics.revenue);
+          setMovementsStockQty(stock);
+          setMovementsVariantOrderRows(orders);
+        } else {
+          const bCode = await resolveBranchCode(branch);
+          if (cancelled) return;
+          const [chart, stock, usage] = await Promise.all([
+            fetchMaterialMonthlyUsageFromConsumption(movementsSelected.materialId, bCode),
+            fetchMaterialStockAtBranch(movementsSelected.materialId, branch),
+            fetchMaterialUsageRows(movementsSelected.materialId, bCode),
+          ]);
+          if (cancelled) return;
+          setMovementsChartData(chart);
+          setMovementsRevenueChartData([]);
+          setMovementsStockQty(stock);
+          setMovementsMaterialUsageRows(usage);
+        }
+      } finally {
+        if (!cancelled) {
+          setMovementsChartLoading(false);
+          setMovementsHistoryLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, movementsSelected, branch, movementsLoadTick]);
+
   // ── Orders & Loading tab handlers ────────────────────────────────────────
+  const applyWarehouseShipment = useCallback(
+    async (
+      rows: { itemId: string; shippedQuantity: number }[],
+      order: WarehouseOrderRow,
+      nextOrderStatus: 'Packed' | 'In Transit',
+    ): Promise<boolean> => {
+      const byLine = new Map(rows.map((r) => [r.itemId, r.shippedQuantity]));
+
+      for (const li of order.items) {
+        const ship = byLine.get(li.id);
+        if (ship === undefined) continue;
+        if (ship < 0) {
+          alert('Each sent quantity must be 0 or more.');
+          return false;
+        }
+        const prevCum = li.quantityShipped ?? 0;
+        if (prevCum + ship > li.quantity) {
+          alert(
+            `"${li.productName}": cannot send more than the remaining to fulfill this line (ordered ${li.quantity}, already ${prevCum} recorded for this line, this shipment: ${ship}).`,
+          );
+          return false;
+        }
+      }
+
+      if (!order.branchId) {
+        alert('This order has no branch assigned.');
+        return false;
+      }
+
+      const branchId = order.branchId;
+      const branchCode = order.branchCode;
+      const lineWithShip = order.items.map((li) => ({ line: li, ship: byLine.get(li.id) ?? 0 }));
+
+      for (const { line: l, ship } of lineWithShip) {
+        if (!l.variantId || ship <= 0) continue;
+        const { data: pvs, error: pErr } = await supabase
+          .from('product_variant_stock')
+          .select('id, quantity')
+          .eq('variant_id', l.variantId)
+          .eq('branch_id', branchId)
+          .maybeSingle();
+        if (pErr) {
+          alert(pErr.message);
+          return false;
+        }
+        const onHand = pvs ? Number((pvs as { quantity?: unknown }).quantity) : 0;
+        if (onHand < ship) {
+          alert(`Not enough stock for "${l.productName}" at this branch. On hand: ${onHand}, sending: ${ship}.`);
+          return false;
+        }
+      }
+
+      const movementReason =
+        nextOrderStatus === 'Packed' ? 'Order packed / loaded (shipment)' : 'Order in transit (shipment)';
+
+      setInTransitSubmitting(true);
+      try {
+        for (const { line: l, ship } of lineWithShip) {
+          if (l.variantId && ship > 0) {
+            const { data: pvs } = await supabase
+              .from('product_variant_stock')
+              .select('id, quantity')
+              .eq('variant_id', l.variantId)
+              .eq('branch_id', branchId)
+              .single();
+            if (!pvs) throw new Error(`No inventory row for "${l.productName}" at this branch.`);
+            const newBranch = Math.max(0, Number((pvs as { quantity?: unknown }).quantity) - ship);
+            const { error: u1 } = await supabase
+              .from('product_variant_stock')
+              .update({ quantity: newBranch, updated_at: new Date().toISOString() })
+              .eq('id', (pvs as { id: string }).id);
+            if (u1) throw u1;
+
+            const { data: vrow } = await supabase
+              .from('product_variants')
+              .select('total_stock, sku')
+              .eq('id', l.variantId)
+              .single();
+            if (vrow) {
+              const newTotal = Math.max(0, Number((vrow as { total_stock?: unknown }).total_stock ?? 0) - ship);
+              const { error: u2 } = await supabase
+                .from('product_variants')
+                .update({ total_stock: newTotal, updated_at: new Date().toISOString() })
+                .eq('id', l.variantId);
+              if (u2) throw u2;
+            }
+
+            const { error: mErr } = await supabase.from('product_stock_movements').insert({
+              variant_id: l.variantId,
+              variant_sku: (vrow as { sku?: string } | null)?.sku ?? l.sku,
+              product_name: l.productName,
+              movement_type: 'Out',
+              quantity: ship,
+              from_branch: branchCode || null,
+              reason: movementReason,
+              performed_by: employeeName || session?.user?.email || role,
+              reference_number: order.id,
+              timestamp: new Date().toISOString(),
+            });
+            if (mErr) throw mErr;
+          }
+
+          const prevCum = l.quantityShipped ?? 0;
+          const add = byLine.get(l.id) ?? 0;
+          const { error: lineErr } = await supabase
+            .from('order_line_items')
+            .update({ quantity_shipped: prevCum + add, updated_at: new Date().toISOString() })
+            .eq('id', l.id);
+          if (lineErr) throw lineErr;
+        }
+
+        const { error: ordErr } = await supabase
+          .from('orders')
+          .update({ status: nextOrderStatus, updated_at: new Date().toISOString() })
+          .eq('id', order.id);
+        if (ordErr) throw ordErr;
+
+        setWarehouseOrders((prev) =>
+          prev.map((o) =>
+            o.id !== order.id
+              ? o
+              : {
+                  ...o,
+                  status: nextOrderStatus,
+                  hasShortage: nextOrderStatus === 'In Transit' ? false : o.hasShortage,
+                  items: o.items.map((li) => {
+                    const ship = byLine.get(li.id) ?? 0;
+                    return { ...li, quantityShipped: (li.quantityShipped ?? 0) + ship };
+                  }),
+                },
+          ),
+        );
+        addAuditLog(
+          nextOrderStatus === 'Packed' ? 'Packed / loaded (shipment)' : 'In transit (shipment)',
+          'Order',
+          `Order ${order.orderNumber} → ${nextOrderStatus} from Warehouse`,
+        );
+        void fetchWarehouseOrders({ silent: true });
+        return true;
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : 'Failed to update shipment';
+        alert(msg);
+        return false;
+      } finally {
+        setInTransitSubmitting(false);
+      }
+    },
+    [addAuditLog, employeeName, fetchWarehouseOrders, role, session?.user?.email],
+  );
+
   const handleConfirmInTransit = async (
     rows: { itemId: string; shippedQuantity: number }[],
     order: WarehouseOrderRow,
   ) => {
-    const byLine = new Map(rows.map((r) => [r.itemId, r.shippedQuantity]));
-
-    for (const li of order.items) {
-      const ship = byLine.get(li.id);
-      if (ship === undefined) continue;
-      if (ship < 0) { alert('Each sent quantity must be 0 or more.'); return; }
-      const prevCum = li.quantityShipped ?? 0;
-      if (prevCum + ship > li.quantity) {
-        alert(`"${li.productName}": cannot send more than the remaining to fulfill this line (ordered ${li.quantity}, already ${prevCum} in transit, this shipment: ${ship}).`);
-        return;
-      }
-    }
-    if (!order.branchId) {
-      alert('This order has no branch assigned.');
-      return;
-    }
-    setInTransitSubmitting(true);
-    const branchId = order.branchId;
-    const branchCode = order.branchCode;
-    const lineWithShip = order.items.map((li) => ({ line: li, ship: byLine.get(li.id) ?? 0 }));
-
-    // Stock validation
-    for (const { line: l, ship } of lineWithShip) {
-      if (!l.variantId || ship <= 0) continue;
-      const { data: pvs, error: pErr } = await supabase
-        .from('product_variant_stock')
-        .select('id, quantity')
-        .eq('variant_id', l.variantId)
-        .eq('branch_id', branchId)
-        .maybeSingle();
-      if (pErr) { setInTransitSubmitting(false); alert(pErr.message); return; }
-      const onHand = pvs ? Number((pvs as any).quantity) : 0;
-      if (onHand < ship) {
-        setInTransitSubmitting(false);
-        alert(`Not enough stock for "${l.productName}" at this branch. On hand: ${onHand}, sending: ${ship}.`);
-        return;
-      }
-    }
-
-    try {
-      for (const { line: l, ship } of lineWithShip) {
-        if (l.variantId && ship > 0) {
-          const { data: pvs } = await supabase
-            .from('product_variant_stock')
-            .select('id, quantity')
-            .eq('variant_id', l.variantId)
-            .eq('branch_id', branchId)
-            .single();
-          if (!pvs) throw new Error(`No inventory row for "${l.productName}" at this branch.`);
-          const newBranch = Math.max(0, Number((pvs as any).quantity) - ship);
-          const { error: u1 } = await supabase
-            .from('product_variant_stock')
-            .update({ quantity: newBranch, updated_at: new Date().toISOString() })
-            .eq('id', (pvs as any).id);
-          if (u1) throw u1;
-
-          const { data: vrow } = await supabase
-            .from('product_variants')
-            .select('total_stock, sku')
-            .eq('id', l.variantId)
-            .single();
-          if (vrow) {
-            const newTotal = Math.max(0, Number((vrow as any).total_stock ?? 0) - ship);
-            const { error: u2 } = await supabase
-              .from('product_variants')
-              .update({ total_stock: newTotal, updated_at: new Date().toISOString() })
-              .eq('id', l.variantId);
-            if (u2) throw u2;
-          }
-
-          const { error: mErr } = await supabase.from('product_stock_movements').insert({
-            variant_id: l.variantId,
-            variant_sku: (vrow as any)?.sku ?? l.sku,
-            product_name: l.productName,
-            movement_type: 'Out',
-            quantity: ship,
-            from_branch: branchCode || null,
-            reason: 'Order in transit (shipment)',
-            performed_by: employeeName || session?.user?.email || role,
-            reference_number: order.id,
-            timestamp: new Date().toISOString(),
-          });
-          if (mErr) throw mErr;
-        }
-
-        const prevCum = l.quantityShipped ?? 0;
-        const { error: lineErr } = await supabase
-          .from('order_line_items')
-          .update({ quantity_shipped: prevCum + (byLine.get(l.id) ?? 0), updated_at: new Date().toISOString() })
-          .eq('id', l.id);
-        if (lineErr) throw lineErr;
-      }
-
-      const { error: ordErr } = await supabase
-        .from('orders')
-        .update({ status: 'In Transit', updated_at: new Date().toISOString() })
-        .eq('id', order.id);
-      if (ordErr) throw ordErr;
-
-      // Update local state
-      setWarehouseOrders((prev) =>
-        prev.map((o) =>
-          o.id !== order.id
-            ? o
-            : {
-                ...o,
-                status: 'In Transit',
-                hasShortage: false,
-                items: o.items.map((li) => {
-                  const ship = byLine.get(li.id) ?? 0;
-                  return { ...li, quantityShipped: (li.quantityShipped ?? 0) + ship };
-                }),
-              }
-        )
-      );
-      addAuditLog('In transit (shipment)', 'Order', `Order ${order.orderNumber} marked in transit from Warehouse`);
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : 'Failed to confirm in transit';
-      alert(msg);
-    } finally {
-      setInTransitSubmitting(false);
-    }
+    await applyWarehouseShipment(rows, order, 'In Transit');
   };
 
   const advanceWarehouseOrderStatus = async (order: WarehouseOrderRow, nextStatus: string) => {
     const allowed: Record<string, string> = {
       Scheduled: 'Loading',
-      Loading: 'Packed',
       Packed: 'Ready',
     };
     if (allowed[order.status] !== nextStatus) {
@@ -1663,12 +2113,7 @@ export default function WarehousePage() {
         .eq('id', order.id);
       if (error) throw error;
       setWarehouseOrders((prev) => prev.map((o) => (o.id === order.id ? { ...o, status: nextStatus } : o)));
-      const label =
-        nextStatus === 'Loading'
-          ? 'Start loading'
-          : nextStatus === 'Packed'
-            ? 'Mark packed'
-            : 'mark ready to depart';
+      const label = nextStatus === 'Loading' ? 'Start loading' : 'Mark ready to depart';
       addAuditLog(
         `Order ${label}`,
         'Order',
@@ -1686,6 +2131,61 @@ export default function WarehousePage() {
     setProofOrder(ord);
     setShowProofModal(true);
   };
+
+  const openTripLoadingModal = (trip: WarehouseTripSummary | null, orders: WarehouseOrderRow[]) => {
+    setTripLoadingModalTrip(trip);
+    setTripLoadingModalOrderIds(orders.map((o) => o.id));
+    setTripLoadingModalOpen(true);
+  };
+
+  const openWarehouseEditTrip = useCallback(async (summary: WarehouseTripSummary) => {
+    setWarehouseEditTripOpening(true);
+    try {
+      const { trip, error } = await fetchTripById(summary.id);
+      if (error || !trip) {
+        alert(error ?? 'Could not load trip for editing.');
+        return;
+      }
+      setWarehouseEditTrip(trip);
+      setShowWarehouseEditTrip(true);
+    } finally {
+      setWarehouseEditTripOpening(false);
+    }
+  }, []);
+
+  const handleReportWarehouseTripDelay = useCallback(
+    async (payload: { message: string }) => {
+      const trip = tripLoadingModalTrip;
+      if (!trip?.id) {
+        alert('No trip in this session; open loading from an ongoing trip to report a delay.');
+        throw new Error('No trip');
+      }
+      const delayReason = payload.message.trim();
+      if (!delayReason) {
+        alert('Enter a delay explanation.');
+        throw new Error('Empty message');
+      }
+      const now = new Date().toISOString();
+      const { error } = await supabase
+        .from('trips')
+        .update({
+          status: 'Delayed',
+          delay_reason: delayReason,
+          updated_at: now,
+        })
+        .eq('id', trip.id);
+      if (error) {
+        alert(error.message);
+        throw error;
+      }
+      addAuditLog('Reported trip delay', 'Warehouse', `${trip.tripNumber}: ${delayReason.slice(0, 200)}`);
+      setTripLoadingModalTrip((t) =>
+        t?.id === trip.id ? { ...t, status: 'Delayed', delayReason } : t,
+      );
+      void fetchWarehouseOrders({ silent: true });
+    },
+    [tripLoadingModalTrip, addAuditLog, fetchWarehouseOrders],
+  );
 
   const handleFulfillOrder = useCallback(async (fulfillmentData: FulfillmentData[], _proofImageUrls: string[]) => {
     if (!proofOrder) return;
@@ -3385,19 +3885,25 @@ export default function WarehousePage() {
 
         {activeTab === 'orders' && (
           <div className="space-y-6">
-            {/* Tab heading + calendar button */}
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h2 className="text-xl font-bold text-gray-900">Orders &amp; Loading</h2>
-                <p className="text-sm text-gray-600 mt-1 max-w-2xl">
-                  Logistics schedules routes and assigns trips; warehouse moves each order through{' '}
-                  <span className="font-medium text-gray-800">loading → packed → ready</span>, then releases stock when the truck departs (in transit).
-                </p>
-              </div>
+            <div
+              className={`flex flex-wrap items-center gap-3 w-full ${
+                approvedAwaitingTripAssignment > 0 ? '' : 'justify-end'
+              }`}
+            >
+              {approvedAwaitingTripAssignment > 0 && (
+                <div
+                  role="status"
+                  className="m-0 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 min-h-10 min-w-0 mr-auto max-w-xl flex items-center"
+                >
+                  {approvedAwaitingTripAssignment === 1
+                    ? '1 order is approved and waiting for a scheduled trip.'
+                    : `${approvedAwaitingTripAssignment} orders are approved and waiting for a scheduled trip.`}
+                </div>
+              )}
               <button
                 type="button"
                 onClick={openOrdersCalendar}
-                className="inline-flex items-center gap-2 px-4 py-2 border border-gray-200 rounded-lg text-sm font-medium hover:bg-gray-50 bg-white shadow-sm"
+                className="inline-flex items-center justify-center gap-2 px-4 min-h-10 border border-gray-200 rounded-lg text-sm font-medium hover:bg-gray-50 bg-white shadow-sm shrink-0"
               >
                 <Calendar className="w-4 h-4 text-blue-600" />
                 View Delivery Calendar
@@ -3405,28 +3911,17 @@ export default function WarehousePage() {
               </button>
             </div>
 
-            {warehouseLoadingStats.awaitingSchedule > 0 && (
-              <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                {warehouseLoadingStats.awaitingSchedule} order
-                {warehouseLoadingStats.awaitingSchedule !== 1 ? 's are' : ' is'} still <strong>Approved</strong> — waiting for logistics to schedule a trip. Assign trucks on{' '}
-                <Link to="/logistics" className="text-blue-700 font-medium hover:underline">
-                  Logistics
-                </Link>
-                .
-              </p>
-            )}
-
             {/* Header with Stats */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
+              <div className="bg-white rounded-lg border border-gray-200 p-4">
+                <p className="text-sm text-gray-600">Waiting to be scheduled</p>
+                <p className="text-2xl font-bold text-amber-600">{warehouseLoadingStats.awaitingSchedule}</p>
+                <p className="text-xs text-gray-500 mt-1">On a trip below — approved, not yet scheduled to load</p>
+              </div>
               <div className="bg-white rounded-lg border border-gray-200 p-4">
                 <p className="text-sm text-gray-600">Ready to load</p>
                 <p className="text-2xl font-bold text-blue-600">{warehouseLoadingStats.readyToLoad}</p>
                 <p className="text-xs text-gray-500 mt-1">Scheduled — not yet loading</p>
-              </div>
-              <div className="bg-white rounded-lg border border-gray-200 p-4">
-                <p className="text-sm text-gray-600">Loading / packing</p>
-                <p className="text-2xl font-bold text-yellow-600">{warehouseLoadingStats.loadingInProgress}</p>
-                <p className="text-xs text-gray-500 mt-1">Loading or packed (staging)</p>
               </div>
               <div className="bg-white rounded-lg border border-gray-200 p-4">
                 <p className="text-sm text-gray-600">Ready to depart</p>
@@ -3443,12 +3938,18 @@ export default function WarehousePage() {
             {/* Orders — live from DB */}
             <div className="bg-white rounded-lg border border-gray-200">
               <div className="p-4 border-b border-gray-200 flex items-center justify-between gap-3">
-                <h3 className="text-lg font-semibold text-gray-900">Orders</h3>
+                <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                  <Truck className="w-5 h-5 text-blue-600 shrink-0" aria-hidden />
+                  Ongoing Trips
+                </h3>
                 <div className="flex items-center gap-2">
                   {warehouseOrdersLoading && <Loader2 className="w-4 h-4 animate-spin text-gray-400" />}
                   <button
                     type="button"
-                    onClick={() => void fetchWarehouseOrders()}
+                    onClick={() => {
+                      void fetchWarehouseOrders();
+                      void fetchPastTrips();
+                    }}
                     className="inline-flex items-center gap-1 px-2 py-1 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded hover:bg-gray-50 transition-colors"
                   >
                     <RefreshCw className="w-3 h-3" />
@@ -3470,797 +3971,994 @@ export default function WarehousePage() {
                     After logistics schedules a trip, orders move to <strong>Scheduled</strong> and show up here for loading, packing, and ready-to-depart steps.
                   </p>
                 </div>
+              ) : warehouseTripGroups.length === 0 ? (
+                <div className="py-12 text-center text-gray-500 px-4">
+                  <Package className="w-10 h-10 mx-auto mb-2 text-gray-300" />
+                  <p className="text-sm font-medium text-gray-700">No orders linked to a trip yet</p>
+                  <p className="text-xs mt-2 text-gray-500 max-w-lg mx-auto">
+                    This list only shows orders assigned to a logistics trip. Use <strong>Logistics</strong> to plan trips and attach orders—they will appear here under each trip.
+                  </p>
+                </div>
               ) : (
                 <>
-                  {/* Desktop table */}
-                  <div className="hidden md:block overflow-x-auto">
-                    <table className="w-full">
-                      <thead className="bg-gray-50 border-b border-gray-200">
-                        <tr>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase">Order</th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase">Customer</th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase">Destination</th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase">Status</th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase">Required</th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase">Urgency</th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-200">
-                        {warehouseOrders.map((ord) => (
-                          <tr key={ord.id} className="hover:bg-gray-50">
-                            <td className="px-4 py-3">
-                              <div className="flex items-center gap-2">
-                                <span className="font-medium text-gray-900">{ord.orderNumber}</span>
-                                {ord.hasShortage && (
-                                  <span className="inline-flex" title="Not enough stock at this branch for remaining qty to ship">
-                                    <AlertTriangle className="w-4 h-4 text-red-500" />
+                  <WarehouseTripLoadingModal
+                    isOpen={tripLoadingModalOpen}
+                    onClose={() => {
+                      setTripLoadingModalOpen(false);
+                      setTripLoadingModalTrip(null);
+                      setTripLoadingModalOrderIds([]);
+                    }}
+                    trip={tripLoadingModalTrip}
+                    orders={tripLoadingModalOrders.map(warehouseOrderToLite)}
+                    stockByVariant={warehouseStockByVariant}
+                    onReportTripDelay={handleReportWarehouseTripDelay}
+                    warehouseStatusOrderId={warehouseStatusOrderId}
+                    inTransitSubmitting={inTransitSubmitting}
+                    advanceWarehouseOrderStatus={(lite, next) => {
+                      const full =
+                        tripLoadingModalOrders.find((o) => o.id === lite.id) ?? resolveWarehouseOrderRow(lite.id);
+                      if (!full) {
+                        alert('Could not load this order. Close the trip window and open it again, then retry.');
+                        return;
+                      }
+                      if (next === 'Packed') {
+                        setWarehouseMarkPackedOrder(full);
+                        setWarehouseMarkPackedOpen(true);
+                        return;
+                      }
+                      void advanceWarehouseOrderStatus(full, next);
+                    }}
+                    confirmInTransit={(lite) => {
+                      const full = resolveWarehouseOrderRow(lite.id);
+                      if (!full) return;
+                      const rows = full.items.map((li) => ({
+                        itemId: li.id,
+                        shippedQuantity: Math.max(0, li.quantity - (li.quantityShipped ?? 0)),
+                      }));
+                      void handleConfirmInTransit(rows, full);
+                    }}
+                    onRecordDelivery={(lite) => {
+                      const full = resolveWarehouseOrderRow(lite.id);
+                      if (full) handleSendProof(full);
+                    }}
+                    onEditTrip={
+                      tripLoadingModalTrip ? () => void openWarehouseEditTrip(tripLoadingModalTrip) : undefined
+                    }
+                    editTripOpening={warehouseEditTripOpening}
+                  />
+
+                  {warehouseEditTrip && (
+                    <EditTripModal
+                      isOpen={showWarehouseEditTrip}
+                      onClose={() => {
+                        setShowWarehouseEditTrip(false);
+                        setWarehouseEditTrip(null);
+                      }}
+                      trip={warehouseEditTrip}
+                      drivers={warehousePlanningDrivers}
+                      vehicles={warehouseFleetVehicles}
+                      availableOrders={warehousePlanningOrders}
+                      onSave={async (params) => {
+                        const tid = warehouseEditTrip.id;
+                        const result = await updateTrip({ tripId: tid, ...params });
+                        if (!result.ok) throw new Error(result.error ?? 'Failed to save trip');
+                        setShowWarehouseEditTrip(false);
+                        setWarehouseEditTrip(null);
+                        void fetchWarehouseOrders({ silent: true });
+                        void fetchPastTrips();
+                      }}
+                    />
+                  )}
+
+                  <div className="hidden md:block divide-y divide-gray-200">
+                    {warehouseTripGroups.map(({ trip, orders }) => {
+                      const tripShortage = orders.some((o) => o.hasShortage);
+                      return (
+                        <div key={trip.id} className="p-4 space-y-3">
+                          <button
+                            type="button"
+                            className="w-full flex flex-wrap items-center gap-3 text-left rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 hover:bg-gray-100 transition-colors"
+                            onClick={() => openTripLoadingModal(trip, orders)}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-semibold text-gray-900">Trip {trip.tripNumber}</span>
+                                <span className="text-sm text-gray-600">
+                                  {trip.vehicleName} · {trip.driverName}
+                                </span>
+                                {trip.scheduledDate && (
+                                  <span className="text-sm text-gray-500">
+                                    {new Date(trip.scheduledDate).toLocaleDateString('en-PH', {
+                                      month: 'short',
+                                      day: 'numeric',
+                                      year: 'numeric',
+                                    })}
+                                  </span>
+                                )}
+                                <span
+                                  className={`inline-block text-[10px] font-semibold uppercase px-2 py-0.5 rounded border ${tripStatusBadgeClass(trip.status)}`}
+                                >
+                                  {trip.status}
+                                </span>
+                                {tripShortage && (
+                                  <span
+                                    className="inline-flex items-center gap-1 text-xs font-medium text-red-600"
+                                    title="At least one order line is short on hand for remaining qty to ship"
+                                  >
+                                    <AlertTriangle className="w-3.5 h-3.5" />
+                                    Stock issue
                                   </span>
                                 )}
                               </div>
-                            </td>
-                            <td className="px-4 py-3">
-                              <div className="text-sm text-gray-900">{ord.customerName}</div>
-                            </td>
-                            <td className="px-4 py-3">
-                              <div className="flex items-center gap-1">
-                                <MapPin className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                                <span className="text-sm">{ord.deliveryAddress ?? '—'}</span>
-                              </div>
-                            </td>
-                            <td className="px-4 py-3">
-                              <span className={`inline-block text-xs font-semibold uppercase px-2 py-0.5 rounded border ${orderDeliveryStatusBadge(ord.status)}`}>
-                                {ord.status}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3">
-                              <div className="flex items-center gap-1">
-                                <Calendar className="w-4 h-4 text-gray-400" />
-                                <span className="text-sm">
-                                  {ord.requiredDate
-                                    ? new Date(ord.requiredDate).toLocaleDateString('en-PH', { month: 'short', day: 'numeric' })
-                                    : '—'}
-                                </span>
-                              </div>
-                            </td>
-                            <td className="px-4 py-3">
-                              {ord.urgency ? (
-                                <span className={`px-2 py-1 rounded text-xs font-medium ${
-                                  ord.urgency === 'High' || ord.urgency === 'Critical'
-                                    ? 'bg-red-50 text-red-700'
-                                    : ord.urgency === 'Medium'
-                                      ? 'bg-yellow-50 text-yellow-700'
-                                      : 'bg-gray-100 text-gray-700'
-                                }`}>{ord.urgency}</span>
-                              ) : <span className="text-gray-400 text-xs">—</span>}
-                            </td>
-                            <td className="px-4 py-3">
-                              <div className="flex flex-wrap items-center gap-2">
-                                {ord.status === 'Approved' && (
-                                  <span className="text-xs text-gray-500 italic">Awaiting logistics schedule</span>
-                                )}
-                                {ord.status === 'Scheduled' && (
-                                  <button
-                                    type="button"
-                                    disabled={warehouseStatusOrderId === ord.id || inTransitSubmitting}
-                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
-                                    onClick={() => void advanceWarehouseOrderStatus(ord, 'Loading')}
-                                  >
-                                    {warehouseStatusOrderId === ord.id ? (
-                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                    ) : (
-                                      <Package className="w-3.5 h-3.5" />
-                                    )}
-                                    Start loading
-                                  </button>
-                                )}
-                                {ord.status === 'Loading' && (
-                                  <button
-                                    type="button"
-                                    disabled={warehouseStatusOrderId === ord.id || inTransitSubmitting}
-                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-violet-600 text-white rounded-lg text-xs font-medium hover:bg-violet-700 disabled:opacity-50 transition-colors"
-                                    onClick={() => void advanceWarehouseOrderStatus(ord, 'Packed')}
-                                  >
-                                    {warehouseStatusOrderId === ord.id ? (
-                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                    ) : (
-                                      <CheckCircle className="w-3.5 h-3.5" />
-                                    )}
-                                    Mark packed
-                                  </button>
-                                )}
-                                {ord.status === 'Packed' && (
-                                  <button
-                                    type="button"
-                                    disabled={warehouseStatusOrderId === ord.id || inTransitSubmitting}
-                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-medium hover:bg-emerald-700 disabled:opacity-50 transition-colors"
-                                    onClick={() => void advanceWarehouseOrderStatus(ord, 'Ready')}
-                                  >
-                                    {warehouseStatusOrderId === ord.id ? (
-                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                    ) : (
-                                      <CheckCircle2 className="w-3.5 h-3.5" />
-                                    )}
-                                    Ready to depart
-                                  </button>
-                                )}
-                                {ord.status === 'Ready' && (
-                                  <button
-                                    type="button"
-                                    disabled={inTransitSubmitting}
-                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 text-white rounded-lg text-xs font-medium hover:bg-amber-700 disabled:opacity-50 transition-colors"
-                                    onClick={() => {
-                                      const rows = ord.items.map((li) => ({
-                                        itemId: li.id,
-                                        shippedQuantity: Math.max(0, li.quantity - (li.quantityShipped ?? 0)),
-                                      }));
-                                      void handleConfirmInTransit(rows, ord);
+                            </div>
+                            <span className="inline-flex items-center gap-1 text-sm font-medium text-blue-700 shrink-0">
+                              Loading & stock
+                              <ChevronRight className="w-4 h-4" />
+                            </span>
+                          </button>
+                          <div className="overflow-x-auto rounded-lg border border-gray-100">
+                            <table className="w-full">
+                              <thead className="bg-white border-b border-gray-100">
+                                <tr>
+                                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-600 uppercase">Order</th>
+                                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-600 uppercase">Customer</th>
+                                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-600 uppercase">Status</th>
+                                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-600 uppercase">Required</th>
+                                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-600 uppercase">Urgency</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-100 bg-white">
+                                {orders.map((ord) => (
+                                  <tr
+                                    key={ord.id}
+                                    role="button"
+                                    tabIndex={0}
+                                    className="hover:bg-blue-50/60 cursor-pointer"
+                                    onClick={() => openTripLoadingModal(trip, orders)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter' || e.key === ' ') {
+                                        e.preventDefault();
+                                        openTripLoadingModal(trip, orders);
+                                      }
                                     }}
                                   >
-                                    {inTransitSubmitting ? (
-                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                    ) : (
-                                      <Truck className="w-3.5 h-3.5" />
-                                    )}
-                                    Release (in transit)
-                                  </button>
-                                )}
-                                {ord.status === 'In Transit' && (
-                                  <button
-                                    type="button"
-                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-medium hover:bg-emerald-700 transition-colors"
-                                    onClick={() => handleSendProof(ord)}
-                                  >
-                                    <CheckCircle2 className="w-3.5 h-3.5" />
-                                    Record delivery
-                                  </button>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                                    <td className="px-4 py-2">
+                                      <div className="flex items-center gap-2">
+                                        <span className="font-medium text-gray-900 text-sm">{ord.orderNumber}</span>
+                                        {ord.hasShortage && (
+                                          <span className="inline-flex" title="Not enough stock at this branch for remaining qty to ship">
+                                            <AlertTriangle className="w-4 h-4 text-red-500" />
+                                          </span>
+                                        )}
+                                      </div>
+                                    </td>
+                                    <td className="px-4 py-2 text-sm text-gray-900">{ord.customerName}</td>
+                                    <td className="px-4 py-2">
+                                      <span className={`inline-block text-xs font-semibold uppercase px-2 py-0.5 rounded border ${orderDeliveryStatusBadge(ord.status)}`}>
+                                        {ord.status}
+                                      </span>
+                                    </td>
+                                    <td className="px-4 py-2">
+                                      <div className="flex items-center gap-1">
+                                        <Calendar className="w-4 h-4 text-gray-400" />
+                                        <span className="text-sm">
+                                          {ord.requiredDate
+                                            ? new Date(ord.requiredDate).toLocaleDateString('en-PH', { month: 'short', day: 'numeric' })
+                                            : '—'}
+                                        </span>
+                                      </div>
+                                    </td>
+                                    <td className="px-4 py-2">
+                                      {ord.urgency ? (
+                                        <span
+                                          className={`px-2 py-1 rounded text-xs font-medium ${
+                                            ord.urgency === 'High' || ord.urgency === 'Critical'
+                                              ? 'bg-red-50 text-red-700'
+                                              : ord.urgency === 'Medium'
+                                                ? 'bg-yellow-50 text-yellow-700'
+                                                : 'bg-gray-100 text-gray-700'
+                                          }`}
+                                        >
+                                          {ord.urgency}
+                                        </span>
+                                      ) : (
+                                        <span className="text-gray-400 text-xs">—</span>
+                                      )}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      );
+                    })}
+
                   </div>
 
-                  {/* Mobile cards */}
                   <div className="md:hidden divide-y divide-gray-200">
-                    {warehouseOrders.map((ord) => (
-                      <div key={ord.id} className="p-4 space-y-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0 flex-1">
-                            <p className="font-medium text-gray-900 break-words flex items-center gap-2">
-                              {ord.orderNumber}
-                              {ord.hasShortage && (
-                                <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0" title="Stock shortage" />
-                              )}
-                            </p>
-                            <p className="text-xs text-gray-600 mt-1">{ord.customerName}</p>
-                          </div>
-                          <span className={`inline-block text-[10px] font-semibold uppercase px-2 py-0.5 rounded border flex-shrink-0 ${orderDeliveryStatusBadge(ord.status)}`}>
-                            {ord.status}
-                          </span>
-                        </div>
-                        <div className="grid grid-cols-2 gap-3 text-sm">
-                          <div>
-                            <p className="text-xs text-gray-500">Destination</p>
-                            <p className="text-gray-900">{ord.deliveryAddress ?? '—'}</p>
-                          </div>
-                          <div>
-                            <p className="text-xs text-gray-500">Required</p>
-                            <p className="text-gray-900">
-                              {ord.requiredDate
-                                ? new Date(ord.requiredDate).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })
-                                : '—'}
-                            </p>
-                          </div>
-                          {ord.urgency && (
-                            <div>
-                              <p className="text-xs text-gray-500">Urgency</p>
-                              <p className={`font-medium ${
-                                ord.urgency === 'High' || ord.urgency === 'Critical' ? 'text-red-600' : ord.urgency === 'Medium' ? 'text-yellow-600' : 'text-gray-700'
-                              }`}>{ord.urgency}</p>
+                    {warehouseTripGroups.map(({ trip, orders }) => {
+                      const tripShortage = orders.some((o) => o.hasShortage);
+                      return (
+                        <div key={trip.id} className="p-4 space-y-3">
+                          <button
+                            type="button"
+                            className="w-full text-left rounded-lg border border-gray-200 bg-gray-50 px-3 py-3 hover:bg-gray-100 transition-colors"
+                            onClick={() => openTripLoadingModal(trip, orders)}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <p className="font-semibold text-gray-900">Trip {trip.tripNumber}</p>
+                                <p className="text-xs text-gray-600 mt-1">
+                                  {trip.vehicleName} · {trip.driverName}
+                                  {trip.scheduledDate
+                                    ? ` · ${new Date(trip.scheduledDate).toLocaleDateString('en-PH', { month: 'short', day: 'numeric' })}`
+                                    : ''}
+                                </p>
+                                <p className="text-xs text-gray-500 mt-1">
+                                  {orders.length} order{orders.length !== 1 ? 's' : ''}
+                                  {tripShortage ? ' · stock issue' : ''}
+                                </p>
+                              </div>
+                              <ChevronRight className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
                             </div>
-                          )}
+                          </button>
+                          {orders.map((ord) => (
+                            <button
+                              key={ord.id}
+                              type="button"
+                              className="w-full text-left rounded-lg border border-gray-100 bg-white px-3 py-2.5 hover:bg-blue-50/50 transition-colors"
+                              onClick={() => openTripLoadingModal(trip, orders)}
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div>
+                                  <p className="font-medium text-gray-900 text-sm flex items-center gap-2">
+                                    {ord.orderNumber}
+                                    {ord.hasShortage && <AlertTriangle className="w-4 h-4 text-red-500" />}
+                                  </p>
+                                  <p className="text-xs text-gray-600">{ord.customerName}</p>
+                                </div>
+                                <span className={`inline-block text-[10px] font-semibold uppercase px-2 py-0.5 rounded border flex-shrink-0 ${orderDeliveryStatusBadge(ord.status)}`}>
+                                  {ord.status}
+                                </span>
+                              </div>
+                            </button>
+                          ))}
                         </div>
-                        <div className="flex flex-wrap gap-2 pt-1">
-                          {ord.status === 'Approved' && (
-                            <span className="text-xs text-gray-500 italic">Awaiting logistics schedule</span>
-                          )}
-                          {ord.status === 'Scheduled' && (
-                            <button
-                              type="button"
-                              disabled={warehouseStatusOrderId === ord.id || inTransitSubmitting}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
-                              onClick={() => void advanceWarehouseOrderStatus(ord, 'Loading')}
-                            >
-                              {warehouseStatusOrderId === ord.id ? (
-                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              ) : (
-                                <Package className="w-3.5 h-3.5" />
-                              )}
-                              Start loading
-                            </button>
-                          )}
-                          {ord.status === 'Loading' && (
-                            <button
-                              type="button"
-                              disabled={warehouseStatusOrderId === ord.id || inTransitSubmitting}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-violet-600 text-white rounded-lg text-xs font-medium hover:bg-violet-700 disabled:opacity-50 transition-colors"
-                              onClick={() => void advanceWarehouseOrderStatus(ord, 'Packed')}
-                            >
-                              {warehouseStatusOrderId === ord.id ? (
-                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              ) : (
-                                <CheckCircle className="w-3.5 h-3.5" />
-                              )}
-                              Mark packed
-                            </button>
-                          )}
-                          {ord.status === 'Packed' && (
-                            <button
-                              type="button"
-                              disabled={warehouseStatusOrderId === ord.id || inTransitSubmitting}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-medium hover:bg-emerald-700 disabled:opacity-50 transition-colors"
-                              onClick={() => void advanceWarehouseOrderStatus(ord, 'Ready')}
-                            >
-                              {warehouseStatusOrderId === ord.id ? (
-                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              ) : (
-                                <CheckCircle2 className="w-3.5 h-3.5" />
-                              )}
-                              Ready to depart
-                            </button>
-                          )}
-                          {ord.status === 'Ready' && (
-                            <button
-                              type="button"
-                              disabled={inTransitSubmitting}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 text-white rounded-lg text-xs font-medium hover:bg-amber-700 disabled:opacity-50 transition-colors"
-                              onClick={() => {
-                                const rows = ord.items.map((li) => ({
-                                  itemId: li.id,
-                                  shippedQuantity: Math.max(0, li.quantity - (li.quantityShipped ?? 0)),
-                                }));
-                                void handleConfirmInTransit(rows, ord);
-                              }}
-                            >
-                              {inTransitSubmitting ? (
-                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              ) : (
-                                <Truck className="w-3.5 h-3.5" />
-                              )}
-                              Release (in transit)
-                            </button>
-                          )}
-                          {ord.status === 'In Transit' && (
-                            <button
-                              type="button"
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-medium hover:bg-emerald-700 transition-colors"
-                              onClick={() => handleSendProof(ord)}
-                            >
-                              <CheckCircle2 className="w-3.5 h-3.5" />
-                              Record delivery
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
+
                   </div>
                 </>
               )}
             </div>
 
-            <div className="bg-gray-50 rounded-lg border border-gray-200 p-4 text-sm text-gray-700">
-              <p>
-                <span className="font-semibold text-gray-900">Trucks and routes</span> are scheduled in{' '}
-                <Link to="/logistics" className="text-blue-700 font-medium hover:underline">
-                  Logistics
-                </Link>
-                . This tab only tracks <span className="font-medium text-gray-900">order-level loading progress</span> at the warehouse.
-              </p>
+            <div className="bg-white rounded-lg border border-gray-200">
+              <div className="p-4 border-b border-gray-200 flex items-center justify-between gap-3">
+                <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                  <History className="w-5 h-5 text-slate-500" />
+                  Past trips (completed)
+                </h3>
+                <div className="flex items-center gap-2">
+                  {pastTripsLoading && <Loader2 className="w-4 h-4 animate-spin text-gray-400" />}
+                  <button
+                    type="button"
+                    onClick={() => void fetchPastTrips()}
+                    className="inline-flex items-center gap-1 px-2 py-1 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded hover:bg-gray-50 transition-colors"
+                  >
+                    <RefreshCw className="w-3 h-3" />
+                    Refresh
+                  </button>
+                </div>
+              </div>
+
+              {pastTripsLoading && pastTripGroups.length === 0 ? (
+                <div className="py-12 text-center text-gray-500">
+                  <Loader2 className="w-8 h-8 mx-auto mb-2 animate-spin text-gray-400" />
+                  <p className="text-sm">Loading past trips…</p>
+                </div>
+              ) : pastTripsTotal === 0 ? (
+                <div className="py-10 text-center text-gray-500 px-4">
+                  <p className="text-sm font-medium text-gray-700">No completed trips for this branch</p>
+                  <p className="text-xs mt-2 text-gray-500 max-w-md mx-auto">
+                    Completed trips are listed here, newest first, {TABLE_PAGE_SIZE} trips per page.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <div className="hidden md:block divide-y divide-gray-200">
+                    {pastTripGroups.map(({ trip, orders }) => {
+                      const tripShortage = orders.some((o) => o.hasShortage);
+                      return (
+                        <div key={`past-${trip.id}`} className="p-4 space-y-3">
+                          <button
+                            type="button"
+                            className="w-full flex flex-wrap items-center gap-3 text-left rounded-lg border border-slate-200 bg-slate-50/80 px-4 py-3 hover:bg-slate-50 transition-colors"
+                            onClick={() => openTripLoadingModal(trip, orders)}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-semibold text-gray-900">Trip {trip.tripNumber}</span>
+                                <span className="text-sm text-gray-600">
+                                  {trip.vehicleName} · {trip.driverName}
+                                </span>
+                                {trip.scheduledDate && (
+                                  <span className="text-sm text-gray-500">
+                                    {new Date(trip.scheduledDate).toLocaleDateString('en-PH', {
+                                      month: 'short',
+                                      day: 'numeric',
+                                      year: 'numeric',
+                                    })}
+                                  </span>
+                                )}
+                                <span
+                                  className={`inline-block text-[10px] font-semibold uppercase px-2 py-0.5 rounded border ${tripStatusBadgeClass(trip.status)}`}
+                                >
+                                  {trip.status}
+                                </span>
+                                {tripShortage && (
+                                  <span className="inline-flex items-center gap-1 text-xs font-medium text-red-600">
+                                    <AlertTriangle className="w-3.5 h-3.5" />
+                                    Had stock issue
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <span className="inline-flex items-center gap-1 text-sm font-medium text-slate-700 shrink-0">
+                              Details
+                              <ChevronRight className="w-4 h-4" />
+                            </span>
+                          </button>
+                          <div className="overflow-x-auto rounded-lg border border-gray-100">
+                            <table className="w-full">
+                              <thead className="bg-white border-b border-gray-100">
+                                <tr>
+                                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-600 uppercase">Order</th>
+                                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-600 uppercase">Customer</th>
+                                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-600 uppercase">Status</th>
+                                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-600 uppercase">Required</th>
+                                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-600 uppercase">Urgency</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-100 bg-white">
+                                {orders.map((ord) => (
+                                  <tr
+                                    key={ord.id}
+                                    role="button"
+                                    tabIndex={0}
+                                    className="hover:bg-slate-50/80 cursor-pointer"
+                                    onClick={() => openTripLoadingModal(trip, orders)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter' || e.key === ' ') {
+                                        e.preventDefault();
+                                        openTripLoadingModal(trip, orders);
+                                      }
+                                    }}
+                                  >
+                                    <td className="px-4 py-2">
+                                      <div className="flex items-center gap-2">
+                                        <span className="font-medium text-gray-900 text-sm">{ord.orderNumber}</span>
+                                        {ord.hasShortage && (
+                                          <span className="inline-flex" title="Stock was short vs remaining at snapshot">
+                                            <AlertTriangle className="w-4 h-4 text-red-500" />
+                                          </span>
+                                        )}
+                                      </div>
+                                    </td>
+                                    <td className="px-4 py-2 text-sm text-gray-900">{ord.customerName}</td>
+                                    <td className="px-4 py-2">
+                                      <span className={`inline-block text-xs font-semibold uppercase px-2 py-0.5 rounded border ${orderDeliveryStatusBadge(ord.status)}`}>
+                                        {ord.status}
+                                      </span>
+                                    </td>
+                                    <td className="px-4 py-2">
+                                      <div className="flex items-center gap-1">
+                                        <Calendar className="w-4 h-4 text-gray-400" />
+                                        <span className="text-sm">
+                                          {ord.requiredDate
+                                            ? new Date(ord.requiredDate).toLocaleDateString('en-PH', { month: 'short', day: 'numeric' })
+                                            : '—'}
+                                        </span>
+                                      </div>
+                                    </td>
+                                    <td className="px-4 py-2">
+                                      {ord.urgency ? (
+                                        <span
+                                          className={`px-2 py-1 rounded text-xs font-medium ${
+                                            ord.urgency === 'High' || ord.urgency === 'Critical'
+                                              ? 'bg-red-50 text-red-700'
+                                              : ord.urgency === 'Medium'
+                                                ? 'bg-yellow-50 text-yellow-700'
+                                                : 'bg-gray-100 text-gray-700'
+                                          }`}
+                                        >
+                                          {ord.urgency}
+                                        </span>
+                                      ) : (
+                                        <span className="text-gray-400 text-xs">—</span>
+                                      )}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="md:hidden divide-y divide-gray-200">
+                    {pastTripGroups.map(({ trip, orders }) => {
+                      const tripShortage = orders.some((o) => o.hasShortage);
+                      return (
+                        <div key={`past-m-${trip.id}`} className="p-4 space-y-3">
+                          <button
+                            type="button"
+                            className="w-full text-left rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-3 hover:bg-slate-50 transition-colors"
+                            onClick={() => openTripLoadingModal(trip, orders)}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <p className="font-semibold text-gray-900">Trip {trip.tripNumber}</p>
+                                <p className="text-xs text-gray-600 mt-1">
+                                  {trip.vehicleName} · {trip.driverName}
+                                  {trip.scheduledDate
+                                    ? ` · ${new Date(trip.scheduledDate).toLocaleDateString('en-PH', { month: 'short', day: 'numeric' })}`
+                                    : ''}
+                                </p>
+                                <p className="text-xs text-slate-600 mt-1">
+                                  {orders.length} order{orders.length !== 1 ? 's' : ''}
+                                  {tripShortage ? ' · stock' : ''}
+                                  <span className="text-gray-500"> · completed</span>
+                                </p>
+                              </div>
+                              <ChevronRight className="w-5 h-5 text-slate-600 shrink-0 mt-0.5" />
+                            </div>
+                          </button>
+                          {orders.map((ord) => (
+                            <button
+                              key={ord.id}
+                              type="button"
+                              className="w-full text-left rounded-lg border border-gray-100 bg-white px-3 py-2.5 hover:bg-slate-50/80 transition-colors"
+                              onClick={() => openTripLoadingModal(trip, orders)}
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div>
+                                  <p className="font-medium text-gray-900 text-sm flex items-center gap-2">
+                                    {ord.orderNumber}
+                                    {ord.hasShortage && <AlertTriangle className="w-4 h-4 text-red-500" />}
+                                  </p>
+                                  <p className="text-xs text-gray-600">{ord.customerName}</p>
+                                </div>
+                                <span className={`inline-block text-[10px] font-semibold uppercase px-2 py-0.5 rounded border flex-shrink-0 ${orderDeliveryStatusBadge(ord.status)}`}>
+                                  {ord.status}
+                                </span>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <TablePagination
+                    page={pastTripsPage}
+                    pageSize={TABLE_PAGE_SIZE}
+                    total={pastTripsTotal}
+                    onPageChange={setPastTripsPage}
+                  />
+                </>
+              )}
             </div>
+
           </div>
         )}
 
         {activeTab === 'movements' && (
           <div className="space-y-6">
-            {/* Header with Item Selector */}
             <div className="bg-white rounded-lg border border-gray-200 p-6">
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between mb-6">
-                <div>
-                  <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-3">
-                    <Activity className="w-7 h-7 text-blue-600" />
-                    Demand Forecast & Movement Analysis
-                  </h2>
-                  <p className="text-sm text-gray-600 mt-1">AI-powered demand prediction using historical data and machine learning</p>
-                </div>
-                <div className="flex items-start sm:items-center gap-2 text-sm">
-                  <Brain className="w-5 h-5 text-purple-600" />
-                  <div>
-                    <div className="font-semibold text-gray-900">Model Accuracy: 87.3%</div>
-                    <div className="text-xs text-gray-500">Last updated: Today, 6:00 AM</div>
-                  </div>
-                </div>
+              <div className="mb-4">
+                <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-3">
+                  <Activity className="w-7 h-7 text-blue-600" />
+                  Movements
+                </h2>
+                <p className="text-sm text-gray-600 mt-1">
+                  Real stock movements and order activity from your database. Pick a finished-good variant or raw material using the catalogue buttons below.
+                </p>
+                {branch ? (
+                  <p className="text-xs text-gray-500 mt-2">
+                    Branch context: <span className="font-medium text-gray-700">{branch}</span>
+                  </p>
+                ) : (
+                  <p className="text-xs text-amber-800 mt-2 bg-amber-50 border border-amber-100 rounded-lg px-2 py-1.5 inline-block">
+                    Select a branch in the header to load on-hand stock and apply movement filters.
+                  </p>
+                )}
               </div>
 
-              {/* Item Selector */}
-              <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-end">
-                <div className="flex-1">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Select Item to Forecast
-                  </label>
-                  <select
-                    value={selectedForecastItem.id}
-                    onChange={(e) => {
-                      const item = mockForecastItems.find(i => i.id === e.target.value);
-                      if (item) {
-                        setSelectedForecastItem(item);
-                        setDemandData(generateDemandData(item.id));
-                      }
-                    }}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-base"
-                  >
-                    <optgroup label="Finished Products">
-                      {mockForecastItems.filter(i => i.type === 'product').map(item => (
-                        <option key={item.id} value={item.id}>
-                          {item.name} - {item.currentStock} {item.unit}
-                        </option>
-                      ))}
-                    </optgroup>
-                    <optgroup label="Raw Materials">
-                      {mockForecastItems.filter(i => i.type === 'material').map(item => (
-                        <option key={item.id} value={item.id}>
-                          {item.name} - {item.currentStock} {item.unit}
-                        </option>
-                      ))}
-                    </optgroup>
-                  </select>
-                </div>
-                <button 
-                  onClick={() => setDemandData(generateDemandData(selectedForecastItem.id))}
-                  className="w-full sm:w-auto px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
+              <div className="flex flex-col sm:flex-row flex-wrap gap-3 items-stretch sm:items-center">
+                <Button type="button" variant="primary" onClick={() => setMovementsShowVariantPicker(true)} className="inline-flex items-center justify-center gap-2">
+                  <Package className="w-4 h-4" />
+                  Select product variant
+                </Button>
+                <Button type="button" variant="outline" onClick={() => setMovementsShowMaterialPicker(true)} className="inline-flex items-center justify-center gap-2">
+                  <Factory className="w-4 h-4" />
+                  Select raw material
+                </Button>
+                <button
+                  type="button"
+                  disabled={!movementsSelected}
+                  onClick={() => setMovementsLoadTick((t) => t + 1)}
+                  className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50"
                 >
                   <RefreshCw className="w-4 h-4" />
                   Refresh
                 </button>
               </div>
+
+              {movementsSelected && (
+                <div className="mt-4 p-3 rounded-lg border border-gray-100 bg-gray-50 flex gap-3 items-center">
+                  <MovementsCatalogThumb
+                    imageUrl={movementsSelected.kind === 'variant' ? movementsSelected.productImageUrl : movementsSelected.imageUrl}
+                    label={movementsSelected.kind === 'variant' ? movementsSelected.productName : movementsSelected.name}
+                    kind={movementsSelected.kind === 'variant' ? 'variant' : 'material'}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      {movementsSelected.kind === 'variant' ? 'Finished good' : 'Raw material'}
+                    </p>
+                    {movementsSelected.kind === 'variant' ? (
+                      <a
+                        href={finishedGoodProductHref(movementsSelected.productId)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sm font-semibold text-blue-700 hover:underline truncate block"
+                      >
+                        {movementsSelected.productName} — {movementsSelected.variantLabel}
+                      </a>
+                    ) : (
+                      <a
+                        href={`/materials/${encodeURIComponent(movementsSelected.materialId)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sm font-semibold text-blue-700 hover:underline truncate block"
+                      >
+                        {movementsSelected.name}
+                      </a>
+                    )}
+                    <p className="text-xs text-gray-600 font-mono mt-0.5">{movementsSelected.sku}</p>
+                  </div>
+                </div>
+              )}
             </div>
 
-            {/* Key Metrics Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="bg-white rounded-lg border border-gray-200 p-5">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="text-sm font-medium text-gray-600">Current Stock</div>
-                  <Package className="w-5 h-5 text-blue-600" />
-                </div>
-                <div className="text-3xl font-bold text-gray-900 mb-1">
-                  {selectedForecastItem.currentStock.toLocaleString()}
-                </div>
-                <div className="text-sm text-gray-500">{selectedForecastItem.unit}</div>
-              </div>
-
-              <div className="bg-white rounded-lg border border-gray-200 p-5">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="text-sm font-medium text-gray-600">Days of Cover</div>
-                  <Clock className="w-5 h-5 text-green-600" />
-                </div>
-                <div className="text-3xl font-bold text-gray-900 mb-1">
-                  {selectedForecastItem.daysOfCover}
-                </div>
-                <div className="text-sm text-gray-500">days remaining</div>
-              </div>
-
-              <div className="bg-white rounded-lg border border-gray-200 p-5">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="text-sm font-medium text-gray-600">Predicted Stockout</div>
-                  <AlertTriangle className="w-5 h-5 text-orange-600" />
-                </div>
-                <div className="text-3xl font-bold text-gray-900 mb-1">
-                  {selectedForecastItem.predictedStockoutDate}
-                </div>
-                <div className="text-sm text-gray-500">if no replenishment</div>
-              </div>
-
-              <div className="bg-white rounded-lg border border-gray-200 p-5">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="text-sm font-medium text-gray-600">Recommended Reorder</div>
-                  <Target className="w-5 h-5 text-purple-600" />
-                </div>
-                <div className="text-3xl font-bold text-gray-900 mb-1">
-                  {selectedForecastItem.recommendedQuantity}
-                </div>
-                <div className="text-sm text-gray-500">by {selectedForecastItem.recommendedReorderDate}</div>
-              </div>
-            </div>
-
-            {/* Demand Forecast Chart */}
-            <div className="bg-white rounded-lg border border-gray-200 p-6">
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between mb-6">
-                <div>
-                  <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-                    <TrendingUp className="w-5 h-5 text-blue-600" />
-                    28-Day Demand Forecast
-                  </h3>
-                  <p className="text-sm text-gray-600 mt-1">
-                    Historical consumption (14 days) + AI-predicted demand (14 days)
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center gap-4 text-sm">
-                  <div className="flex items-center gap-2">
-                    <div className="w-8 h-1 bg-blue-600 rounded"></div>
-                    <span className="text-gray-600">Historical (Actual)</span>
+            {movementsSelected && (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="bg-white rounded-lg border border-gray-200 p-5">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="text-sm font-medium text-gray-600">On hand (this branch)</div>
+                      <Box className="w-5 h-5 text-blue-600" />
+                    </div>
+                    <div className="text-3xl font-bold text-gray-900 mb-1">
+                      {movementsStockQty == null ? '—' : movementsStockQty.toLocaleString()}
+                    </div>
+                    <div className="text-sm text-gray-500">
+                      {movementsSelected.kind === 'material' ? movementsSelected.unit : 'Units at branch'}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-8 h-1 bg-orange-500 rounded" style={{ borderTop: '2px dashed orange' }}></div>
-                    <span className="text-gray-600">Forecast (Predicted)</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-8 h-4 bg-orange-100 rounded border border-orange-300"></div>
-                    <span className="text-gray-600">Confidence Range</span>
+                  <div className="bg-white rounded-lg border border-gray-200 p-5">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="text-sm font-medium text-gray-600">
+                        {movementsSelected.kind === 'variant' ? 'Orders' : 'Usage records'}
+                      </div>
+                      {movementsSelected.kind === 'variant' ? (
+                        <ShoppingCart className="w-5 h-5 text-blue-600" />
+                      ) : (
+                        <Factory className="w-5 h-5 text-amber-600" />
+                      )}
+                    </div>
+                    <div className="text-3xl font-bold text-gray-900 mb-1">
+                      {movementsHistoryLoading
+                        ? '…'
+                        : movementsSelected.kind === 'variant'
+                          ? movementsVariantOrderRows.length
+                          : movementsMaterialUsageRows.length}
+                    </div>
+                    <div className="text-sm text-gray-500">
+                      {movementsSelected.kind === 'variant'
+                        ? 'With this variant (newest first)'
+                        : 'Consumption events (newest first)'}
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              <ResponsiveContainer width="100%" height={400}>
-                <ComposedChart data={demandData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                  <XAxis 
-                    dataKey="date" 
-                    tick={{ fontSize: 12 }}
-                    angle={-45}
-                    textAnchor="end"
-                    height={80}
-                  />
-                  <YAxis 
-                    label={{ value: `Quantity (${selectedForecastItem.unit})`, angle: -90, position: 'insideLeft', style: { fontSize: 12 } }}
-                    tick={{ fontSize: 12 }}
-                  />
-                  <Tooltip 
-                    contentStyle={{ backgroundColor: 'white', border: '1px solid #e5e7eb', borderRadius: '8px' }}
-                    labelStyle={{ fontWeight: 'bold', marginBottom: '8px' }}
-                  />
-                  <Legend wrapperStyle={{ paddingTop: '20px' }} />
-                  
-                  {/* Confidence interval (shaded area) */}
-                  <Area
-                    type="monotone"
-                    dataKey="confidenceHigh"
-                    stroke="none"
-                    fill="#fed7aa"
-                    fillOpacity={0.3}
-                    name="Confidence High"
-                    dot={false}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="confidenceLow"
-                    stroke="none"
-                    fill="#ffffff"
-                    fillOpacity={1}
-                    name="Confidence Low"
-                    dot={false}
-                  />
-                  
-                  {/* Actual historical line */}
-                  <Line
-                    type="monotone"
-                    dataKey="actual"
-                    stroke="#2563eb"
-                    strokeWidth={3}
-                    dot={{ fill: '#2563eb', r: 4 }}
-                    name="Historical Actual"
-                    connectNulls={false}
-                  />
-                  
-                  {/* Forecasted line */}
-                  <Line
-                    type="monotone"
-                    dataKey="forecast"
-                    stroke="#f97316"
-                    strokeWidth={3}
-                    strokeDasharray="8 4"
-                    dot={{ fill: '#f97316', r: 4 }}
-                    name="Forecasted Demand"
-                    connectNulls={false}
-                  />
-                  
-                  {/* Today marker */}
-                  <ReferenceLine 
-                    x="Feb 27" 
-                    stroke="#dc2626" 
-                    strokeWidth={2}
-                    strokeDasharray="5 5"
-                    label={{ 
-                      value: 'Today', 
-                      position: 'top',
-                      fill: '#dc2626',
-                      fontWeight: 'bold',
-                      fontSize: 12
-                    }}
-                  />
-                </ComposedChart>
-              </ResponsiveContainer>
-            </div>
+                {movementsSelected.kind === 'variant' ? (
+                  <div className="space-y-6">
+                    <div className="bg-white rounded-lg border border-gray-200 p-6">
+                      <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                        <TrendingUp className="w-5 h-5 text-blue-600" />
+                        Units sold by month
+                      </h3>
+                      <p className="text-sm text-gray-600 mt-1">
+                        Units per month from customer orders (uses your selected branch when set).
+                      </p>
+                      <div className="h-[360px] mt-4">
+                        {movementsChartLoading ? (
+                          <div className="flex h-full items-center justify-center gap-2 text-gray-500">
+                            <Loader2 className="w-7 h-7 animate-spin" />
+                            <span className="text-sm">Loading chart…</span>
+                          </div>
+                        ) : movementsChartData.length === 0 ? (
+                          <div className="flex h-full min-h-[240px] items-center justify-center rounded-lg border border-dashed border-gray-200 bg-gray-50/50 px-4 text-center text-sm text-gray-500">
+                            No monthly points in the last 12 months for this selection (with current filters).
+                          </div>
+                        ) : (
+                          <ResponsiveContainer width="100%" height="100%">
+                            <LineChart data={movementsChartData} margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                              <XAxis dataKey="month" tick={{ fontSize: 11 }} minTickGap={24} />
+                              <YAxis
+                                tick={{ fontSize: 11 }}
+                                width={56}
+                                tickFormatter={(n) => (Number(n) >= 1000 ? Number(n).toLocaleString() : String(n))}
+                                label={{
+                                  value: 'Units (orders)',
+                                  angle: -90,
+                                  position: 'insideLeft',
+                                  style: { fontSize: 11 },
+                                }}
+                              />
+                              <Tooltip
+                                contentStyle={{ backgroundColor: 'white', border: '1px solid #e5e7eb', borderRadius: '8px' }}
+                                formatter={(v) => {
+                                  const n = typeof v === 'number' ? v : parseFloat(String(v));
+                                  if (Number.isNaN(n)) return ['—', ''];
+                                  return [n.toLocaleString(), ''];
+                                }}
+                              />
+                              <Legend wrapperStyle={{ fontSize: '12px' }} />
+                              <Line type="linear" dataKey="qty" name="Units" stroke="#2563eb" strokeWidth={2} dot={{ r: 3 }} />
+                            </LineChart>
+                          </ResponsiveContainer>
+                        )}
+                      </div>
+                    </div>
 
-            {/* ML Insights & Alerts */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* ML Insights Panel */}
-              <div className="bg-gradient-to-br from-purple-50 to-blue-50 rounded-lg border border-purple-200 p-6">
-                <div className="flex items-center gap-2 mb-4">
-                  <Brain className="w-6 h-6 text-purple-600" />
-                  <h3 className="text-lg font-semibold text-gray-900">AI Model Insights</h3>
-                </div>
-                
-                <div className="space-y-3">
-                  <div className="flex items-start gap-3">
-                    <div className="w-2 h-2 bg-purple-600 rounded-full mt-2"></div>
-                    <div>
-                      <div className="font-medium text-gray-900">Trend Analysis</div>
-                      <div className="text-sm text-gray-600">
-                        {selectedForecastItem.forecastedDailyDemand > selectedForecastItem.avgDailyDemand 
-                          ? `Demand increasing by ${Math.round(((selectedForecastItem.forecastedDailyDemand - selectedForecastItem.avgDailyDemand) / selectedForecastItem.avgDailyDemand) * 100)}% - growth trend detected`
-                          : 'Stable demand pattern with seasonal variation'}
+                    <div className="bg-white rounded-lg border border-gray-200 p-6">
+                      <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                        <DollarSign className="w-5 h-5 text-emerald-600" />
+                        Revenue by month
+                      </h3>
+                      <p className="text-sm text-gray-600 mt-1">
+                        PHP per month from each order line at the price recorded on the order.
+                      </p>
+                      <div className="h-[360px] mt-4">
+                        {movementsChartLoading ? (
+                          <div className="flex h-full items-center justify-center gap-2 text-gray-500">
+                            <Loader2 className="w-7 h-7 animate-spin" />
+                            <span className="text-sm">Loading chart…</span>
+                          </div>
+                        ) : movementsRevenueChartData.length === 0 ? (
+                          <div className="flex h-full min-h-[240px] items-center justify-center rounded-lg border border-dashed border-gray-200 bg-gray-50/50 px-4 text-center text-sm text-gray-500">
+                            No revenue in the last 12 months for this selection (with current filters).
+                          </div>
+                        ) : (
+                          <ResponsiveContainer width="100%" height="100%">
+                            <LineChart data={movementsRevenueChartData} margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                              <XAxis dataKey="month" tick={{ fontSize: 11 }} minTickGap={24} />
+                              <YAxis
+                                tick={{ fontSize: 11 }}
+                                width={64}
+                                tickFormatter={(n) =>
+                                  Number(n) >= 1000 ? `₱${Number(n).toLocaleString()}` : `₱${n}`
+                                }
+                                label={{
+                                  value: 'Revenue (PHP)',
+                                  angle: -90,
+                                  position: 'insideLeft',
+                                  style: { fontSize: 11 },
+                                }}
+                              />
+                              <Tooltip
+                                contentStyle={{ backgroundColor: 'white', border: '1px solid #e5e7eb', borderRadius: '8px' }}
+                                formatter={(v) => {
+                                  const n = typeof v === 'number' ? v : parseFloat(String(v));
+                                  if (Number.isNaN(n)) return ['—', ''];
+                                  return [`₱${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, ''];
+                                }}
+                              />
+                              <Legend wrapperStyle={{ fontSize: '12px' }} />
+                              <Line
+                                type="linear"
+                                dataKey="revenue"
+                                name="Revenue"
+                                stroke="#059669"
+                                strokeWidth={2}
+                                dot={{ r: 3 }}
+                              />
+                            </LineChart>
+                          </ResponsiveContainer>
+                        )}
                       </div>
                     </div>
                   </div>
-
-                  <div className="flex items-start gap-3">
-                    <div className="w-2 h-2 bg-purple-600 rounded-full mt-2"></div>
-                    <div>
-                      <div className="font-medium text-gray-900">Pattern Recognition</div>
-                      <div className="text-sm text-gray-600">
-                        Weekly cycle detected: Higher demand on weekdays (Mon-Fri), 25% drop on weekends
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex items-start gap-3">
-                    <div className="w-2 h-2 bg-purple-600 rounded-full mt-2"></div>
-                    <div>
-                      <div className="font-medium text-gray-900">Peak Forecast</div>
-                      <div className="text-sm text-gray-600">
-                        Expected demand spike on Mar 8 (+30%) due to scheduled orders and historical patterns
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex items-start gap-3">
-                    <div className="w-2 h-2 bg-purple-600 rounded-full mt-2"></div>
-                    <div>
-                      <div className="font-medium text-gray-900">Recommendation</div>
-                      <div className="text-sm text-gray-600">
-                        {selectedForecastItem.daysOfCover < 10 
-                          ? `🚨 Urgent: Reorder ${selectedForecastItem.recommendedQuantity} ${selectedForecastItem.unit} by ${selectedForecastItem.recommendedReorderDate}`
-                          : `Maintain current stock levels. Reorder ${selectedForecastItem.recommendedQuantity} ${selectedForecastItem.unit} by ${selectedForecastItem.recommendedReorderDate}`
-                        }
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="mt-4 pt-4 border-t border-purple-200">
-                    <div className="text-xs text-gray-500 space-y-1">
-                      <div>📊 Data Points Used: 90 days historical + production schedule</div>
-                      <div>🎯 Confidence Level: High (87.3% accuracy on validation set)</div>
-                      <div>⏱️ Model Last Trained: Today, 6:00 AM</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Smart Alerts Panel */}
-              <div className="bg-white rounded-lg border border-gray-200 p-6">
-                <div className="flex items-center gap-2 mb-4">
-                  <AlertTriangle className="w-6 h-6 text-orange-600" />
-                  <h3 className="text-lg font-semibold text-gray-900">Smart Alerts</h3>
-                </div>
-                
-                <div className="space-y-3">
-                  {selectedForecastItem.daysOfCover <= 10 && (
-                    <div className="flex items-start gap-3 p-3 bg-red-50 border border-red-200 rounded-lg">
-                      <AlertTriangle className="w-5 h-5 text-red-600 mt-0.5" />
-                      <div className="flex-1">
-                        <div className="font-medium text-red-900 mb-1">Low Stock Warning</div>
-                        <div className="text-sm text-red-700">
-                          Only {selectedForecastItem.daysOfCover} days of stock remaining. Stockout predicted on {selectedForecastItem.predictedStockoutDate}.
+                ) : (
+                  <div className="bg-white rounded-lg border border-gray-200 p-6">
+                    <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                      <TrendingUp className="w-5 h-5 text-amber-600" />
+                      Usage by month
+                    </h3>
+                    <p className="text-sm text-gray-600 mt-1">
+                      Quantity consumed in production per month.
+                    </p>
+                    <div className="h-[360px] mt-4">
+                      {movementsChartLoading ? (
+                        <div className="flex h-full items-center justify-center gap-2 text-gray-500">
+                          <Loader2 className="w-7 h-7 animate-spin" />
+                          <span className="text-sm">Loading chart…</span>
                         </div>
-                        <button className="mt-2 text-xs font-medium text-red-600 hover:text-red-700 underline">
-                          Create {selectedForecastItem.type === 'product' ? 'Production' : 'Purchase'} Request
-                        </button>
-                      </div>
+                      ) : movementsChartData.length === 0 ? (
+                        <div className="flex h-full min-h-[240px] items-center justify-center rounded-lg border border-dashed border-gray-200 bg-gray-50/50 px-4 text-center text-sm text-gray-500">
+                          No monthly points in the last 12 months for this selection (with current filters).
+                        </div>
+                      ) : (
+                        <ResponsiveContainer width="100%" height="100%">
+                          <LineChart data={movementsChartData} margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                            <XAxis dataKey="month" tick={{ fontSize: 11 }} minTickGap={24} />
+                            <YAxis
+                              tick={{ fontSize: 11 }}
+                              width={56}
+                              tickFormatter={(n) => (Number(n) >= 1000 ? Number(n).toLocaleString() : String(n))}
+                              label={{
+                                value: `Qty (${movementsSelected.unit})`,
+                                angle: -90,
+                                position: 'insideLeft',
+                                style: { fontSize: 11 },
+                              }}
+                            />
+                            <Tooltip
+                              contentStyle={{ backgroundColor: 'white', border: '1px solid #e5e7eb', borderRadius: '8px' }}
+                              formatter={(v) => {
+                                const n = typeof v === 'number' ? v : parseFloat(String(v));
+                                if (Number.isNaN(n)) return ['—', ''];
+                                return [n.toLocaleString(), ''];
+                              }}
+                            />
+                            <Legend wrapperStyle={{ fontSize: '12px' }} />
+                            <Line type="linear" dataKey="qty" name="Consumed" stroke="#d97706" strokeWidth={2} dot={{ r: 3 }} />
+                          </LineChart>
+                        </ResponsiveContainer>
+                      )}
                     </div>
+                  </div>
+                )}
+
+                <div className="bg-white rounded-lg border border-gray-200">
+                  <div className="p-4 border-b border-gray-200">
+                    <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                      {movementsSelected.kind === 'variant' ? (
+                        <ShoppingCart className="w-5 h-5 text-gray-600" />
+                      ) : (
+                        <Factory className="w-5 h-5 text-gray-600" />
+                      )}
+                      {movementsSelected.kind === 'variant' ? 'Orders with this variant' : 'Usage history'}
+                    </h3>
+                    <p className="text-sm text-gray-600 mt-1">
+                      {movementsSelected.kind === 'variant'
+                        ? 'Customer orders that include this SKU (same branch and status filters as the charts above).'
+                        : 'Production consumption rows for this material.'}
+                    </p>
+                  </div>
+                  {movementsHistoryLoading ? (
+                    <div className="py-16 flex justify-center text-gray-500 gap-2">
+                      <Loader2 className="w-6 h-6 animate-spin" />
+                      Loading…
+                    </div>
+                  ) : movementsSelected.kind === 'variant' ? (
+                    movementsVariantOrderRows.length === 0 ? (
+                      <p className="p-6 text-sm text-gray-500">No matching orders for this variant yet.</p>
+                    ) : (
+                      <>
+                        <div className="hidden md:block overflow-x-auto">
+                          <table className="w-full">
+                            <thead className="bg-gray-50 border-b border-gray-200">
+                              <tr>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Order</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Customer</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Qty (line)</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Order date</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Required</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-200">
+                              {movementsVariantOrderRows.map((row) => (
+                                <tr key={row.orderId} className="hover:bg-gray-50">
+                                  <td className="px-6 py-3 text-sm">
+                                    <Link
+                                      to={`/orders/${encodeURIComponent(row.orderId)}`}
+                                      className="font-medium text-blue-700 hover:underline"
+                                    >
+                                      {row.orderNumber}
+                                    </Link>
+                                  </td>
+                                  <td className="px-6 py-3 text-sm text-gray-700 max-w-[200px] truncate" title={row.customerName ?? ''}>
+                                    {row.customerName ?? '—'}
+                                  </td>
+                                  <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-700">{row.status}</td>
+                                  <td className="px-6 py-3 whitespace-nowrap text-sm font-medium tabular-nums text-right">
+                                    {row.lineQuantity.toLocaleString()}
+                                  </td>
+                                  <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                    {row.orderDate
+                                      ? new Date(row.orderDate).toLocaleDateString('en-PH', { dateStyle: 'medium' })
+                                      : '—'}
+                                  </td>
+                                  <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-600">
+                                    {row.requiredDate
+                                      ? new Date(row.requiredDate).toLocaleDateString('en-PH', { dateStyle: 'medium' })
+                                      : '—'}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        <div className="md:hidden divide-y divide-gray-200">
+                          {movementsVariantOrderRows.map((row) => (
+                            <div key={row.orderId} className="p-4 space-y-1">
+                              <div className="flex justify-between gap-2 items-start">
+                                <Link
+                                  to={`/orders/${encodeURIComponent(row.orderId)}`}
+                                  className="text-sm font-semibold text-blue-700 hover:underline"
+                                >
+                                  {row.orderNumber}
+                                </Link>
+                                <span className="text-xs text-gray-600 shrink-0">{row.status}</span>
+                              </div>
+                              {row.customerName ? (
+                                <p className="text-sm text-gray-700">{row.customerName}</p>
+                              ) : null}
+                              <p className="text-sm tabular-nums text-gray-900">
+                                Qty (line): <span className="font-semibold">{row.lineQuantity.toLocaleString()}</span>
+                              </p>
+                              {row.orderDate || row.requiredDate ? (
+                                <p className="text-xs text-gray-500">
+                                  {[
+                                    row.orderDate
+                                      ? `Ordered ${new Date(row.orderDate).toLocaleDateString('en-PH', { dateStyle: 'medium' })}`
+                                      : null,
+                                    row.requiredDate
+                                      ? `Required ${new Date(row.requiredDate).toLocaleDateString('en-PH', {
+                                          dateStyle: 'medium',
+                                        })}`
+                                      : null,
+                                  ]
+                                    .filter(Boolean)
+                                    .join(' · ')}
+                                </p>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )
+                  ) : movementsMaterialUsageRows.length === 0 ? (
+                    <p className="p-6 text-sm text-gray-500">No production usage recorded for this material yet.</p>
+                  ) : (
+                    <>
+                      <div className="hidden md:block overflow-x-auto">
+                        <table className="w-full">
+                          <thead className="bg-gray-50 border-b border-gray-200">
+                            <tr>
+                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Product</th>
+                              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Qty consumed</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-200">
+                            {movementsMaterialUsageRows.map((row) => (
+                              <tr key={row.id} className="hover:bg-gray-50">
+                                <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-900">
+                                  {row.consumption_date
+                                    ? new Date(row.consumption_date).toLocaleDateString('en-PH', { dateStyle: 'medium' })
+                                    : '—'}
+                                </td>
+                                <td className="px-6 py-3 text-sm text-gray-700 max-w-[200px]">
+                                  {row.product_id ? (
+                                    <a
+                                      href={finishedGoodProductHref(row.product_id)}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-blue-700 hover:underline font-medium truncate block"
+                                      title={row.product_name ?? undefined}
+                                    >
+                                      {row.product_name ?? row.product_id.slice(0, 8)}
+                                    </a>
+                                  ) : (
+                                    <span className="text-gray-500">—</span>
+                                  )}
+                                </td>
+                                <td className="px-6 py-3 whitespace-nowrap text-sm font-medium tabular-nums text-right">
+                                  {row.quantity_consumed.toLocaleString()}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      <div className="md:hidden divide-y divide-gray-200">
+                        {movementsMaterialUsageRows.map((row) => (
+                          <div key={row.id} className="p-4 space-y-2">
+                            <p className="text-sm font-medium text-gray-900">
+                              {row.consumption_date
+                                ? new Date(row.consumption_date).toLocaleDateString('en-PH', { dateStyle: 'medium' })
+                                : '—'}
+                            </p>
+                            {row.product_id ? (
+                              <a
+                                href={finishedGoodProductHref(row.product_id)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-sm text-blue-700 hover:underline block truncate"
+                              >
+                                {row.product_name ?? 'Product'}
+                              </a>
+                            ) : (
+                              <span className="text-sm text-gray-500">—</span>
+                            )}
+                            <p className="text-sm tabular-nums text-gray-900">
+                              Qty consumed: <span className="font-semibold">{row.quantity_consumed.toLocaleString()}</span>
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </>
                   )}
-
-                  <div className="flex items-start gap-3 p-3 bg-orange-50 border border-orange-200 rounded-lg">
-                    <TrendingUp className="w-5 h-5 text-orange-600 mt-0.5" />
-                    <div className="flex-1">
-                      <div className="font-medium text-orange-900 mb-1">Demand Spike Predicted</div>
-                      <div className="text-sm text-orange-700">
-                        +30% increase expected on Mar 8 (Peak: ~{Math.round(selectedForecastItem.forecastedDailyDemand * 1.3)} {selectedForecastItem.unit})
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex items-start gap-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                    <Target className="w-5 h-5 text-blue-600 mt-0.5" />
-                    <div className="flex-1">
-                      <div className="font-medium text-blue-900 mb-1">Reorder Point Approaching</div>
-                      <div className="text-sm text-blue-700">
-                        Recommended to reorder {selectedForecastItem.recommendedQuantity} {selectedForecastItem.unit} by {selectedForecastItem.recommendedReorderDate}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex items-start gap-3 p-3 bg-green-50 border border-green-200 rounded-lg">
-                    <Activity className="w-5 h-5 text-green-600 mt-0.5" />
-                    <div className="flex-1">
-                      <div className="font-medium text-green-900 mb-1">Seasonal Pattern Detected</div>
-                      <div className="text-sm text-green-700">
-                        Weekly cycle confirmed: 25% lower demand on weekends, Monday surge pattern
-                      </div>
-                    </div>
-                  </div>
                 </div>
-              </div>
-            </div>
+              </>
+            )}
 
-            {/* Movement History Table */}
-            <div className="bg-white rounded-lg border border-gray-200">
-              <div className="p-4 border-b border-gray-200">
-                <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-                  <History className="w-5 h-5 text-gray-600" />
-                  Recent Movement History (Last 30 Days)
-                </h3>
-                <p className="text-sm text-gray-600 mt-1">Actual stock movements for {selectedForecastItem.name}</p>
-              </div>
+            <OrderProductSelectionModal
+              open={movementsShowVariantPicker}
+              onClose={() => setMovementsShowVariantPicker(false)}
+              purpose="movements"
+              excludeVariantIds={new Set()}
+              onConfirm={(p: OrderProductSelectionConfirm) => {
+                setMovementsSelected({
+                  kind: 'variant',
+                  variantId: p.variantId,
+                  productId: p.productId,
+                  productName: p.productName,
+                  variantLabel: p.variantSizeLabel,
+                  sku: p.sku,
+                  productImageUrl: p.productImageUrl ?? null,
+                });
+                setMovementsShowVariantPicker(false);
+              }}
+            />
 
-              {/* Desktop Table */}
-              <div className="hidden md:block overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-gray-50 border-b border-gray-200">
-                    <tr>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date & Time</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Quantity</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Reference</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">User</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Notes</th>
-                    </tr>
-                  </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
-                    <tr className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">Feb 27, 2:45 PM</td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className="px-2 py-1 bg-red-100 text-red-800 rounded text-xs font-medium">Out</span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-red-600">-35 {selectedForecastItem.unit}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">ORD-2026-045</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">J. Santos</td>
-                      <td className="px-6 py-4 text-sm text-gray-500">Customer delivery</td>
-                    </tr>
-                    <tr className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">Feb 27, 10:30 AM</td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className="px-2 py-1 bg-green-100 text-green-800 rounded text-xs font-medium">Production</span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-green-600">+100 {selectedForecastItem.unit}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">BATCH-2026-027</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">System</td>
-                      <td className="px-6 py-4 text-sm text-gray-500">Production completion</td>
-                    </tr>
-                    <tr className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">Feb 26, 4:15 PM</td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className="px-2 py-1 bg-red-100 text-red-800 rounded text-xs font-medium">Out</span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-red-600">-42 {selectedForecastItem.unit}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">ORD-2026-044</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">M. Cruz</td>
-                      <td className="px-6 py-4 text-sm text-gray-500">Manila delivery</td>
-                    </tr>
-                    <tr className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">Feb 26, 11:00 AM</td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs font-medium">Transfer</span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-blue-600">+25 {selectedForecastItem.unit}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">TRF-2026-012</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">P. Garcia</td>
-                      <td className="px-6 py-4 text-sm text-gray-500">From Branch B</td>
-                    </tr>
-                    <tr className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">Feb 25, 3:20 PM</td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className="px-2 py-1 bg-red-100 text-red-800 rounded text-xs font-medium">Out</span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-red-600">-38 {selectedForecastItem.unit}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">ORD-2026-043</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">R. Santos</td>
-                      <td className="px-6 py-4 text-sm text-gray-500">Urgent order</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-
-              {/* Mobile Card View */}
-              <div className="md:hidden divide-y divide-gray-200">
-                <div className="p-4 space-y-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex-1">
-                      <p className="text-sm text-gray-900 font-medium">Feb 27, 2:45 PM</p>
-                      <p className="text-xs text-gray-500 mt-1">ORD-2026-045 • J. Santos</p>
-                    </div>
-                    <span className="px-2 py-1 bg-red-100 text-red-800 rounded text-xs font-medium flex-shrink-0">Out</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-semibold text-red-600">-35 {selectedForecastItem.unit}</span>
-                    <span className="text-xs text-gray-600">Customer delivery</span>
-                  </div>
-                </div>
-
-                <div className="p-4 space-y-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex-1">
-                      <p className="text-sm text-gray-900 font-medium">Feb 27, 10:30 AM</p>
-                      <p className="text-xs text-gray-500 mt-1">BATCH-2026-027 • System</p>
-                    </div>
-                    <span className="px-2 py-1 bg-green-100 text-green-800 rounded text-xs font-medium flex-shrink-0">Production</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-semibold text-green-600">+100 {selectedForecastItem.unit}</span>
-                    <span className="text-xs text-gray-600">Production completion</span>
-                  </div>
-                </div>
-
-                <div className="p-4 space-y-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex-1">
-                      <p className="text-sm text-gray-900 font-medium">Feb 26, 4:15 PM</p>
-                      <p className="text-xs text-gray-500 mt-1">ORD-2026-044 • M. Cruz</p>
-                    </div>
-                    <span className="px-2 py-1 bg-red-100 text-red-800 rounded text-xs font-medium flex-shrink-0">Out</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-semibold text-red-600">-42 {selectedForecastItem.unit}</span>
-                    <span className="text-xs text-gray-600">Manila delivery</span>
-                  </div>
-                </div>
-
-                <div className="p-4 space-y-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex-1">
-                      <p className="text-sm text-gray-900 font-medium">Feb 26, 11:00 AM</p>
-                      <p className="text-xs text-gray-500 mt-1">TRF-2026-012 • P. Garcia</p>
-                    </div>
-                    <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs font-medium flex-shrink-0">Transfer</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-semibold text-blue-600">+25 {selectedForecastItem.unit}</span>
-                    <span className="text-xs text-gray-600">From Branch B</span>
-                  </div>
-                </div>
-
-                <div className="p-4 space-y-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex-1">
-                      <p className="text-sm text-gray-900 font-medium">Feb 25, 3:20 PM</p>
-                      <p className="text-xs text-gray-500 mt-1">ORD-2026-043 • R. Santos</p>
-                    </div>
-                    <span className="px-2 py-1 bg-red-100 text-red-800 rounded text-xs font-medium flex-shrink-0">Out</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-semibold text-red-600">-38 {selectedForecastItem.unit}</span>
-                    <span className="text-xs text-gray-600">Urgent order</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="p-4 border-t border-gray-200 text-center">
-                <button className="text-sm text-blue-600 hover:text-blue-700 font-medium">
-                  View Full History (90 days) →
-                </button>
-              </div>
-            </div>
+            <RawMaterialPickerModal
+              isOpen={movementsShowMaterialPicker}
+              onClose={() => setMovementsShowMaterialPicker(false)}
+              branch={branch ?? ''}
+              alreadyAdded={[]}
+              onSelect={(m) => {
+                setMovementsSelected({
+                  kind: 'material',
+                  materialId: m.materialId,
+                  name: m.name,
+                  sku: m.sku,
+                  unit: m.unit,
+                  imageUrl: m.imageUrl,
+                });
+                setMovementsShowMaterialPicker(false);
+              }}
+            />
           </div>
         )}
       </div>
@@ -4880,6 +5578,30 @@ export default function WarehousePage() {
           orderNumber={proofOrder.orderNumber}
           items={proofOrder.items}
           onFulfill={handleFulfillOrder}
+        />
+      )}
+
+      {warehouseMarkPackedOpen && warehouseMarkPackedOrder && (
+        <MarkInTransitModal
+          key={warehouseMarkPackedOrder.id}
+          isOpen={warehouseMarkPackedOpen}
+          onClose={() => {
+            if (!inTransitSubmitting) {
+              setWarehouseMarkPackedOpen(false);
+              setWarehouseMarkPackedOrder(null);
+            }
+          }}
+          orderNumber={warehouseMarkPackedOrder.orderNumber}
+          items={warehouseMarkPackedOrder.items}
+          purpose="markPacked"
+          submitting={inTransitSubmitting}
+          onConfirm={async (rows) => {
+            const ok = await applyWarehouseShipment(rows, warehouseMarkPackedOrder, 'Packed');
+            if (ok) {
+              setWarehouseMarkPackedOpen(false);
+              setWarehouseMarkPackedOrder(null);
+            }
+          }}
         />
       )}
     </div>

@@ -54,6 +54,8 @@ export interface Trip {
   eta?: string;
   actualArrival?: string;
   delayReason?: string;
+  /** Dispatch / route notes (`trips.logistics_notes`), not delay text. */
+  logisticsNotes?: string;
   branch?: string;
 }
 

@@ -8,6 +8,11 @@ import { useAppContext } from '@/src/store/AppContext';
 import StockAdjustmentModal from '@/src/components/warehouse/StockAdjustmentModal';
 import AddMaterialModal, { MaterialFormData } from '@/src/components/materials/AddMaterialModal';
 import { supabase } from '@/src/lib/supabase';
+import {
+  fetchMaterialMonthlyUsageFromConsumption,
+  resolveBranchCode,
+  type MonthlyMovementChartRow,
+} from '@/src/lib/warehouseMovementsData';
 import { computeStockStatus } from '@/src/lib/stockStatus';
 import {
   Package,
@@ -49,9 +54,6 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import type { MaterialStatus } from '@/src/types/materials';
-
-/** Set to true to show the next-3-month usage forecast line again. */
-const USAGE_FORECAST_ENABLED = false;
 
 const poLogRoleMap: Record<string, string> = {
   Executive:  'Admin',
@@ -319,20 +321,66 @@ export function MaterialDetailPage() {
     if (activeTab === 'analytics' && id) fetchAnalyticsLinks();
   }, [activeTab, id, fetchAnalyticsLinks]);
 
-  /** Usage = monthly qty received from PO lines; forecast from recent trend or monthly_consumption. Price = monthly avg unit price. */
-  const { usageForecastData, priceHistoryData, usageHasPoData, priceHasPoData } = useMemo(() => {
+  /** Monthly series from `material_consumption` (BOM / production), for Analytics usage chart. */
+  const [consumptionMonthlySeries, setConsumptionMonthlySeries] = useState<MonthlyMovementChartRow[]>([]);
+  const [consumptionSeriesLoading, setConsumptionSeriesLoading] = useState(false);
+
+  useEffect(() => {
+    if (activeTab !== 'analytics' || !id) return;
+    let cancelled = false;
+    void (async () => {
+      setConsumptionSeriesLoading(true);
+      const bCode = await resolveBranchCode(selectedBranch ?? null);
+      if (cancelled) return;
+      const rows = await fetchMaterialMonthlyUsageFromConsumption(id, bCode);
+      if (!cancelled) {
+        setConsumptionMonthlySeries(rows);
+        setConsumptionSeriesLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, id, selectedBranch]);
+
+  const usageForecastData = useMemo(() => {
     if (!material) {
-      return { usageForecastData: [] as { month: string; actual: number | null; forecast: number | null }[], priceHistoryData: [] as { month: string; price: number | null }[], usageHasPoData: false, priceHasPoData: false };
+      return [] as { month: string; actual: number | null; forecast: number | null }[];
+    }
+    const y = new Date().getFullYear();
+    const m0 = new Date().getMonth();
+    const mLab = (d: Date) => d.toLocaleDateString('en-PH', { month: 'short', year: '2-digit' });
+
+    if (consumptionMonthlySeries.length > 0) {
+      return consumptionMonthlySeries.map((r) => ({
+        month: r.month,
+        actual: r.qty,
+        forecast: null as number | null,
+      }));
     }
 
-    const uMap = new Map<string, number>();
+    const uRows: { month: string; actual: number | null; forecast: number | null }[] = [];
+    for (let i = 0; i < 12; i++) {
+      const d = new Date(y, m0 - 11 + i, 1);
+      const t = 0.72 + 0.02 * (i % 5) + 0.01 * i;
+      uRows.push({ month: mLab(d), actual: material.monthly_consumption * t, forecast: null });
+    }
+    return uRows;
+  }, [material, consumptionMonthlySeries]);
+
+  const usageHasConsumptionData = consumptionMonthlySeries.length > 0;
+
+  /** Price = monthly avg unit price from PO lines (unchanged). */
+  const { priceHistoryData, priceHasPoData } = useMemo(() => {
+    if (!material) {
+      return { priceHistoryData: [] as { month: string; price: number | null }[], priceHasPoData: false };
+    }
+
     const pAgg = new Map<string, { sum: number; n: number }>();
     for (const row of poHistory) {
       const od = row.purchase_orders?.order_date;
       if (!od) continue;
       const key = od.slice(0, 7);
-      const rec = Number(row.quantity_received) || 0;
-      if (rec > 0) uMap.set(key, (uMap.get(key) || 0) + rec);
       const up = Number(row.unit_price) || 0;
       if (up > 0) {
         const cur = pAgg.get(key) || { sum: 0, n: 0 };
@@ -341,103 +389,11 @@ export function MaterialDetailPage() {
         pAgg.set(key, cur);
       }
     }
-    const usageHasData = uMap.size > 0;
 
     const y = new Date().getFullYear();
     const m0 = new Date().getMonth();
     const mKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     const mLab = (d: Date) => d.toLocaleDateString('en-PH', { month: 'short', year: '2-digit' });
-
-    const keys12: string[] = [];
-    for (let k = 11; k >= 0; k--) {
-      const d = new Date(y, m0 - k, 1);
-      keys12.push(mKey(d));
-    }
-
-    const last3: number[] = [];
-    for (let k = 0; k < 3; k++) {
-      const d = new Date(y, m0 - k, 1);
-      const v = uMap.get(mKey(d));
-      if (v != null && v > 0) last3.push(v);
-    }
-    const histVals = keys12.map(ym => uMap.get(ym) ?? 0);
-    const nz = histVals.filter(x => x > 0);
-    const histAvg = nz.length > 0 ? nz.reduce((a, b) => a + b, 0) / nz.length : material.monthly_consumption;
-    const trendBase = last3.length > 0 ? last3.reduce((a, b) => a + b, 0) / last3.length : histAvg;
-
-    const endK = mKey(new Date(y, m0, 1));
-    /** Inclusive YYYY-MM…YYYY-MM, ascending. */
-    const monthKeysFromTo = (a: string, b: string) => {
-      const out: string[] = [];
-      const [as, am] = a.split('-').map(Number);
-      const [bs, bm] = b.split('-').map(Number);
-      let d = new Date(as, am - 1, 1);
-      const endD = new Date(bs, bm - 1, 1);
-      while (d <= endD) {
-        out.push(mKey(d));
-        d = new Date(d.getFullYear(), d.getMonth() + 1, 1);
-      }
-      return out;
-    };
-
-    const uRows: { month: string; actual: number | null; forecast: number | null }[] = [];
-    if (usageHasData) {
-      const withReceipts = [...uMap.keys()].filter(k => (uMap.get(k) || 0) > 0).sort();
-      const capFrom = mKey(new Date(y, m0 - 35, 1));
-      let startK = withReceipts[0] ?? endK;
-      if (startK < capFrom) startK = capFrom;
-      if (startK > endK) {
-        for (let i = 0; i < 12; i++) {
-          const d = new Date(y, m0 - 11 + i, 1);
-          const k = mKey(d);
-          uRows.push({ month: mLab(d), actual: uMap.get(k) ?? 0, forecast: null });
-        }
-      } else {
-        for (const k of monthKeysFromTo(startK, endK)) {
-          const [Y, M] = k.split('-').map(Number);
-          const d = new Date(Y, M - 1, 1);
-          uRows.push({ month: mLab(d), actual: uMap.get(k) ?? 0, forecast: null });
-        }
-      }
-      if (USAGE_FORECAST_ENABLED) {
-        for (let f = 0; f < 3; f++) {
-          const d = new Date(y, m0 + 1 + f, 1);
-          uRows.push({
-            month: mLab(d),
-            actual: null,
-            forecast: Math.max(0, trendBase * (1 + 0.03 * (f + 1))),
-          });
-        }
-        for (let i = uRows.length - 1; i >= 0; i--) {
-          if (uRows[i].actual != null) {
-            uRows[i].forecast = uRows[i].actual;
-            break;
-          }
-        }
-      }
-    } else {
-      for (let i = 0; i < 12; i++) {
-        const d = new Date(y, m0 - 11 + i, 1);
-        const t = 0.72 + 0.02 * (i % 5) + 0.01 * i;
-        uRows.push({ month: mLab(d), actual: material.monthly_consumption * t, forecast: null });
-      }
-      if (USAGE_FORECAST_ENABLED) {
-        for (let f = 0; f < 3; f++) {
-          const d = new Date(y, m0 + 1 + f, 1);
-          uRows.push({
-            month: mLab(d),
-            actual: null,
-            forecast: Math.max(0, trendBase * (1 + 0.03 * (f + 1))),
-          });
-        }
-        for (let i = uRows.length - 1; i >= 0; i--) {
-          if (uRows[i].actual != null) {
-            uRows[i].forecast = uRows[i].actual;
-            break;
-          }
-        }
-      }
-    }
 
     const pRows: { month: string; price: number | null }[] = [];
     for (let k = 17; k >= 0; k--) {
@@ -463,9 +419,7 @@ export function MaterialDetailPage() {
     }
 
     return {
-      usageForecastData: uRows,
       priceHistoryData: pRows,
-      usageHasPoData: usageHasData,
       priceHasPoData: priceFromPo,
     };
   }, [material, poHistory]);
@@ -1297,25 +1251,28 @@ export function MaterialDetailPage() {
       {/* Tab Content - Analytics */}
       {activeTab === 'analytics' && (
         <div className="space-y-6">
-          {/* Usage history (forecast hidden: USAGE_FORECAST_ENABLED) */}
+          {/* Usage history: BOM consumption (material_consumption); fallback model from monthly_consumption */}
           <Card>
             <CardHeader>
               <CardTitle className="text-base flex items-center gap-2">
                 <Activity className="w-4 h-4" />
                 Usage History
               </CardTitle>
-              {usageHasPoData ? (
+              {usageHasConsumptionData ? (
                 <p className="text-xs text-gray-500 font-normal mt-1">
-                  Monthly <strong>quantity received</strong> on PO lines (receipts), summed by calendar month.
+                  Monthly <strong>BOM consumption</strong> (production and finished-good stock adds).{' '}
+                  {selectedBranch ? 'Uses the selected branch only.' : null}
                 </p>
               ) : (
                 <p className="text-xs text-amber-800/90 font-normal mt-1 bg-amber-50/80 border border-amber-100 rounded-lg px-2 py-1.5">
-                  No purchase receipts yet for this material — showing a <strong>model trend</strong> from monthly consumption. PO history will replace this when available.
+                  No BOM consumption logged yet for this material — showing a <strong>model trend</strong> from the
+                  material&apos;s monthly consumption field. Usage appears after production runs or finished-good stock
+                  adds that apply BOM deductions.
                 </p>
               )}
             </CardHeader>
             <CardContent>
-              {historyLoading ? (
+              {consumptionSeriesLoading ? (
                 <div className="flex h-[350px] items-center justify-center text-gray-400">
                   <Loader2 className="w-8 h-8 animate-spin" />
                 </div>
@@ -1337,10 +1294,10 @@ export function MaterialDetailPage() {
                       <Line
                         type="linear"
                         dataKey="actual"
-                        stroke="#EF4444"
+                        stroke="#d97706"
                         strokeWidth={2}
-                        name="Usage (receipts)"
-                        dot={{ fill: '#EF4444', r: 2 }}
+                        name="Consumed (BOM)"
+                        dot={{ fill: '#d97706', r: 2 }}
                         activeDot={{ r: 4 }}
                         connectNulls={false}
                       />
@@ -1348,8 +1305,8 @@ export function MaterialDetailPage() {
                   </ResponsiveContainer>
                   <div className="mt-1 flex flex-wrap items-center justify-center gap-6 text-xs text-gray-500">
                     <div className="flex items-center gap-2">
-                      <div className="w-8 h-0.5 bg-red-500" />
-                      <span>Usage (receipts)</span>
+                      <div className="w-8 h-0.5 bg-amber-600" />
+                      <span>Consumed (BOM / production)</span>
                     </div>
                   </div>
                 </>
@@ -1370,7 +1327,7 @@ export function MaterialDetailPage() {
                 </p>
               ) : (
                 <p className="text-xs text-gray-500 font-normal mt-1">
-                  Flat line shows current <strong>cost per unit</strong> on the material — add PO lines with unit prices to see a real trend.
+                  <strong>Unit cost</strong> from this record until PO line prices fill in the chart.
                 </p>
               )}
             </CardHeader>

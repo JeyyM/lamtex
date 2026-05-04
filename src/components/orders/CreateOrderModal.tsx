@@ -152,12 +152,15 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
   useEffect(() => {
     const fetchCategories = async () => {
       setCategoriesLoading(true);
-      const { data } = await supabase
+      let cq = supabase
         .from('product_categories')
         .select('id, name, image_url')
-        .or(`branch.eq.${branch},branch.is.null`)
-        .eq('is_active', true)
-        .order('sort_order');
+        .eq('is_active', true);
+      const b = (branch ?? '').trim();
+      if (b) {
+        cq = cq.or(`branch.eq.${b},branch.is.null`);
+      }
+      const { data } = await cq.order('sort_order');
       setCategories(data ?? []);
       setCategoriesLoading(false);
     };
@@ -174,12 +177,16 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
     const { data: branchRow } = await supabase
       .from('branches').select('id').eq('name', branch).single();
 
-    const { data: productsData } = await supabase
+    const b = (branch ?? '').trim();
+    let pQuery = supabase
       .from('products')
       .select('id, name, image_url, product_variants(id, size, description, unit_price, total_stock, product_bulk_discounts(min_qty, max_qty, discount_percent, is_active))')
       .eq('category_id', cat.id)
-      .eq('status', 'Active')
-      .order('name');
+      .eq('status', 'Active');
+    if (b) {
+      pQuery = pQuery.or(`branch.eq.${b},branch.is.null`);
+    }
+    const { data: productsData } = await pQuery.order('name');
 
     if (!productsData) { setProductsLoading(false); return; }
 

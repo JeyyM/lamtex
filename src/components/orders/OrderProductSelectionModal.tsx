@@ -217,7 +217,7 @@ function ProductionStockBar({
   );
 }
 
-export type OrderProductSelectionPurpose = 'order' | 'production' | 'interBranch';
+export type OrderProductSelectionPurpose = 'order' | 'production' | 'interBranch' | 'movements';
 
 export interface OrderProductSelectionConfirm {
   productId: string;
@@ -227,6 +227,8 @@ export interface OrderProductSelectionConfirm {
   variantSizeLabel: string;
   /** Catalogue SKU (for logging) */
   sku: string;
+  /** Product hero image when parent needs display after pick (e.g. warehouse movements). */
+  productImageUrl?: string | null;
   quantity: number;
   /** @deprecated use quantity; kept for order flows that use integer */
   /** Order mode: negotiated unit price and discounts (same semantics as order edit) */
@@ -252,7 +254,7 @@ export type OrderProductInitialEdit = {
 interface OrderProductSelectionModalProps {
   open: boolean;
   onClose: () => void;
-  /** 'production' = quantity to produce. 'interBranch' = same qty rules as production, IBR wording. 'order' = full order line. */
+  /** 'production' = quantity to produce. 'interBranch' = same qty rules as production, IBR wording. 'order' = full order line. 'movements' = pick variant only (warehouse movements tab). */
   purpose: OrderProductSelectionPurpose;
   /** Variants that are already on the request/order and cannot be added again. */
   excludeVariantIds: Set<string>;
@@ -285,6 +287,7 @@ export function OrderProductSelectionModal({
   confirmBusy = false,
 }: OrderProductSelectionModalProps) {
   const { branch } = useAppContext();
+  const navbarBranch = (branch ?? '').trim();
 
   const useDualBranchFilter = Boolean(
     interBranchRequestingBranchId &&
@@ -315,6 +318,7 @@ export function OrderProductSelectionModal({
   const [variantDiscounts, setVariantDiscounts] = useState<Array<{ name: string; percentage: string }>>([]);
 
   const isProductionLike = purpose === 'production' || purpose === 'interBranch';
+  const showProductionStockPanel = isProductionLike || purpose === 'movements';
   const [initializingEdit, setInitializingEdit] = useState(false);
 
   const resetBrowser = useCallback(() => {
@@ -386,9 +390,10 @@ export function OrderProductSelectionModal({
   }, [open, useDualBranchFilter, interBranchRequestingBranchId, interBranchFulfillingBranchId]);
 
   const branchIdPromise = useCallback(async () => {
-    const { data } = await supabase.from('branches').select('id').eq('name', branch).single();
+    if (!navbarBranch) return null;
+    const { data } = await supabase.from('branches').select('id').eq('name', navbarBranch).maybeSingle();
     return data?.id ?? null;
-  }, [branch]);
+  }, [navbarBranch]);
 
   const fetchStockMap = useCallback(
     async (variantIds: string[], branchId: string | null) => {
@@ -518,12 +523,14 @@ export function OrderProductSelectionModal({
     let cancelled = false;
     (async () => {
       setCategoriesLoading(true);
-      const { data } = await supabase
+      let cq = supabase
         .from('product_categories')
         .select('id, name, image_url')
-        .or(`branch.eq.${branch},branch.is.null`)
-        .eq('is_active', true)
-        .order('sort_order');
+        .eq('is_active', true);
+      if (navbarBranch) {
+        cq = cq.or(`branch.eq.${navbarBranch},branch.is.null`);
+      }
+      const { data } = await cq.order('sort_order');
       if (!cancelled) {
         setCategories(data ?? []);
         setCategoriesLoading(false);
@@ -532,7 +539,7 @@ export function OrderProductSelectionModal({
     return () => {
       cancelled = true;
     };
-  }, [open, branch]);
+  }, [open, navbarBranch]);
 
   const applyDualVariantFilter = useCallback(
     (list: DBProduct[]): DBProduct[] => {
@@ -554,12 +561,15 @@ export function OrderProductSelectionModal({
       setCategoryProducts([]);
 
       const branchId = await branchIdPromise();
-      const { data: productsData } = await supabase
+      let pQuery = supabase
         .from('products')
         .select(`id, name, image_url, product_variants(${VARIANT_SELECT})`)
         .eq('category_id', cat.id)
-        .eq('status', 'Active')
-        .order('name');
+        .eq('status', 'Active');
+      if (navbarBranch) {
+        pQuery = pQuery.or(`branch.eq.${navbarBranch},branch.is.null`);
+      }
+      const { data: productsData } = await pQuery.order('name');
 
       if (!productsData) {
         setProductsLoading(false);
@@ -586,6 +596,7 @@ export function OrderProductSelectionModal({
       dualVariantIds,
       interBranchRequestingBranchId,
       interBranchFulfillingBranchId,
+      navbarBranch,
     ],
   );
 
@@ -606,10 +617,14 @@ export function OrderProductSelectionModal({
       void (async () => {
         setSearchLoading(true);
         const branchId = await branchIdPromise();
-        const { data: productsData } = await supabase
+        let searchQ = supabase
           .from('products')
           .select(`id, name, image_url, product_variants(${VARIANT_SELECT})`)
-          .eq('status', 'Active')
+          .eq('status', 'Active');
+        if (navbarBranch) {
+          searchQ = searchQ.or(`branch.eq.${navbarBranch},branch.is.null`);
+        }
+        const { data: productsData } = await searchQ
           .ilike('name', `%${q}%`)
           .order('name')
           .limit(50);
@@ -642,6 +657,7 @@ export function OrderProductSelectionModal({
     dualVariantIds,
     interBranchRequestingBranchId,
     interBranchFulfillingBranchId,
+    navbarBranch,
   ]);
 
   const filteredLocal = useMemo(() => {
@@ -710,6 +726,22 @@ export function OrderProductSelectionModal({
     if (!selectedProduct || !selectedVariant) return;
     if (!visibleVariants.some((v) => v.id === selectedVariant.id)) return;
 
+    if (purpose === 'movements') {
+      const desc = [selectedVariant.size, selectedVariant.description].filter(Boolean).join(' — ');
+      onConfirm({
+        productId: selectedProduct.id,
+        variantId: selectedVariant.id,
+        productName: selectedProduct.name,
+        variantSizeLabel: desc,
+        sku: selectedVariant.sku,
+        productImageUrl: selectedProduct.image_url ?? null,
+        quantity: 1,
+        stock: selectedVariant.stock,
+      });
+      resetDetail();
+      return;
+    }
+
     const raw = variantQtyInput.trim();
     if (raw === '') {
       alert(
@@ -750,6 +782,7 @@ export function OrderProductSelectionModal({
       productName: selectedProduct.name,
       variantSizeLabel: desc,
       sku: selectedVariant.sku,
+      productImageUrl: selectedProduct.image_url ?? null,
       quantity: qty,
       stock: selectedVariant.stock,
     };
@@ -798,6 +831,8 @@ export function OrderProductSelectionModal({
                 <ShoppingCart className="w-6 h-6 text-red-600" />
               ) : purpose === 'interBranch' ? (
                 <Package className="w-6 h-6 text-red-600" />
+              ) : purpose === 'movements' ? (
+                <Package className="w-6 h-6 text-blue-600" />
               ) : (
                 <Factory className="w-6 h-6 text-red-600" />
               )}
@@ -809,7 +844,9 @@ export function OrderProductSelectionModal({
                       ? 'Add product to request'
                       : purpose === 'production'
                         ? 'Add product to produce'
-                        : 'Add products to order'}
+                        : purpose === 'movements'
+                          ? 'Select finished good'
+                          : 'Add products to order'}
                 </h2>
                 <p className="text-sm text-gray-500 mt-0.5">
                   {initialEdit
@@ -818,7 +855,9 @@ export function OrderProductSelectionModal({
                       ? 'Category or search, then pick a variant and quantity to send.'
                       : purpose === 'production'
                         ? 'Category or search, then a size'
-                        : 'Browse categories and select a product'}
+                        : purpose === 'movements'
+                          ? 'Browse or search, pick a variant, then use Select product.'
+                          : 'Browse categories and select a product'}
                 </p>
               </div>
             </div>
@@ -1022,7 +1061,7 @@ export function OrderProductSelectionModal({
                       <Package className="w-32 h-32 text-gray-300" />
                     )}
                   </div>
-                  {!isProductionLike && (
+                  {purpose === 'order' && (
                     <div className="bg-gray-50 rounded-lg p-4">
                       <div className="text-sm text-gray-600 mb-2">Price per unit</div>
                       <div className="flex items-center gap-2 min-w-0">
@@ -1055,7 +1094,7 @@ export function OrderProductSelectionModal({
                       <p className="text-xs text-gray-500 mt-2">Base price: ₱{selectedVariant.unit_price.toLocaleString()}</p>
                     </div>
                   )}
-                  {isProductionLike && (
+                  {(isProductionLike) && (
                     <div className="bg-gray-50 rounded-lg p-4 text-sm text-gray-600">
                       List: <span className="font-bold text-gray-900">₱{selectedVariant.unit_price.toLocaleString()}</span>/unit
                     </div>
@@ -1065,12 +1104,12 @@ export function OrderProductSelectionModal({
                 <div className="space-y-6">
                   <div>
                     <h2 className="text-2xl md:text-3xl font-bold text-gray-900 mb-2">{selectedProduct.name}</h2>
-                    {(purpose === 'order' || purpose === 'interBranch') && (
+                    {(purpose === 'order' || purpose === 'interBranch' || purpose === 'movements') && (
                       <p className="text-sm text-gray-500 font-mono">SKU: {selectedVariant.sku || '—'}</p>
                     )}
                     {selectedVariant.description && <p className="text-gray-600 mt-2">{selectedVariant.description}</p>}
                   </div>
-                  {isProductionLike
+                  {showProductionStockPanel
                     ? (() => {
                         const s = selectedVariant.stock;
                         const ro = selectedVariant.reorderPoint;
@@ -1150,11 +1189,11 @@ export function OrderProductSelectionModal({
                           }`}
                         >
                           <div className="font-semibold leading-tight">{v.size}</div>
-                          {(purpose === 'order' || purpose === 'interBranch') && (
+                          {(purpose === 'order' || purpose === 'interBranch' || purpose === 'movements') && (
                             <div className="text-xs text-gray-500 font-mono mt-0.5">{v.sku}</div>
                           )}
                           <div className="text-sm font-bold mt-1">₱{v.unit_price.toLocaleString()}</div>
-                          {isProductionLike
+                          {showProductionStockPanel
                             ? (() => {
                                 const vst = getStockLevelInfo(v.stock);
                                 const vro = v.reorderPoint;
@@ -1185,6 +1224,7 @@ export function OrderProductSelectionModal({
                     )}
                   </div>
 
+                  {purpose !== 'movements' && (
                   <div>
                     <label className="block text-sm font-semibold text-gray-900 mb-3">
                       {purpose === 'interBranch'
@@ -1251,6 +1291,7 @@ export function OrderProductSelectionModal({
                         <p className="text-sm text-amber-700 mt-2">Quantity exceeds current branch stock (allowed for order entry).</p>
                       )}
                   </div>
+                  )}
 
                   {purpose === 'order' && (
                     <>
@@ -1309,10 +1350,16 @@ export function OrderProductSelectionModal({
                     type="button"
                     onClick={handleConfirm}
                     disabled={confirmBusy || visibleVariants.length === 0}
-                    className="w-full py-4 bg-red-600 text-white text-lg font-semibold rounded-lg hover:bg-red-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:pointer-events-none"
+                    className={`w-full py-4 text-lg font-semibold rounded-lg transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:pointer-events-none ${
+                      purpose === 'movements'
+                        ? 'bg-blue-600 text-white hover:bg-blue-700'
+                        : 'bg-red-600 text-white hover:bg-red-700'
+                    }`}
                   >
                     {confirmBusy ? (
                       <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : purpose === 'movements' ? (
+                      <Package className="w-5 h-5" />
                     ) : purpose === 'order' ? (
                       <ShoppingCart className="w-5 h-5" />
                     ) : purpose === 'interBranch' ? (
@@ -1322,11 +1369,13 @@ export function OrderProductSelectionModal({
                     )}
                     {confirmBusy
                       ? 'Please wait…'
-                      : purpose === 'order'
-                        ? 'Add to order'
-                        : purpose === 'interBranch'
-                          ? 'Add to request'
-                          : 'Add to production request'}
+                      : purpose === 'movements'
+                        ? 'Select product'
+                        : purpose === 'order'
+                          ? 'Add to order'
+                          : purpose === 'interBranch'
+                            ? 'Add to request'
+                            : 'Add to production request'}
                   </button>
                 </div>
               </div>

@@ -112,6 +112,12 @@ export interface OrderLineItem {
   quantityShipped?: number;
   /** Cumulative units recorded as delivered (partial or full). */
   quantityDelivered?: number;
+  /** Product card image (from `products.image_url` via variant). */
+  imageUrl?: string;
+  /** Catalog product id (from `product_variants.product_id`) for deep links. */
+  productId?: string;
+  /** `product_categories.slug` for `/products/category/.../family/...` routing. */
+  categorySlug?: string;
   batchDiscount?: number; // Batch/bulk pricing discount percentage
   discountsBreakdown?: Array<{ name: string; percentage: number }>; // Individual discount entries
 }
