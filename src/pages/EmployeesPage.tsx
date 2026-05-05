@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import {
   Users, Search, Filter, ChevronDown,
   UserCheck, Truck, Package, Briefcase,
   MapPin, Calendar, Loader2, AlertCircle,
+  Plus,
 } from 'lucide-react';
 import type { EmployeeRole } from '@/src/types/employee';
 import {
@@ -36,8 +37,18 @@ function formatNumberCompact(value: number | null | undefined, suffix = ''): str
   return suffix ? `${value.toLocaleString()} ${suffix}` : value.toLocaleString();
 }
 
+/** Strip leading "Branch - name" when branch matches (avoids repeating territory on cards). */
+function directoryCardDisplayName(emp: EmployeePerfRow): string {
+  const raw = emp.employeeName?.trim() ?? '';
+  const br = emp.branchName?.trim();
+  if (!br || !raw) return raw;
+  const escaped = br.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`^${escaped}\\s*[-–—]\\s*`, 'i');
+  const stripped = raw.replace(re, '').trim();
+  return stripped || raw;
+}
+
 const EmployeesPage: React.FC = () => {
-  const navigate = useNavigate();
   const { branch: navbarBranch } = useAppContext();
 
   const [employees, setEmployees] = useState<EmployeePerfRow[]>([]);
@@ -59,6 +70,19 @@ const EmployeesPage: React.FC = () => {
     const hit = branches.find((b) => b.name.trim().toLowerCase() === nav.toLowerCase());
     return hit?.id ?? 'all';
   }, [selectedBranchId, navbarBranch, branches]);
+
+  /** Branch UUID passed to Add employee: explicit filter, else top-bar branch, else empty (user picks on form). */
+  const branchIdForNewEmployee = useMemo(() => {
+    if (effectiveBranchId !== 'all') return effectiveBranchId;
+    const nav = navbarBranch?.trim();
+    if (!nav) return '';
+    const hit = branches.find((b) => b.name.trim().toLowerCase() === nav.toLowerCase());
+    return hit?.id ?? '';
+  }, [effectiveBranchId, navbarBranch, branches]);
+
+  const newEmployeeHref = branchIdForNewEmployee
+    ? `/employees/new?branchId=${encodeURIComponent(branchIdForNewEmployee)}`
+    : '/employees/new';
 
   useEffect(() => {
     let cancelled = false;
@@ -167,10 +191,6 @@ const EmployeesPage: React.FC = () => {
               <span className="text-gray-600">Commission</span>
               <p className="font-semibold text-gray-900">{formatPesoCompact(employee.commission)}</p>
             </div>
-            <div>
-              <span className="text-gray-600">Territory</span>
-              <p className="font-semibold text-gray-900">{employee.territoryCoverage ?? '—'}</p>
-            </div>
           </>
         );
       case 'Logistics Manager':
@@ -248,9 +268,18 @@ const EmployeesPage: React.FC = () => {
   return (
     <div className="p-3 sm:p-4 md:p-6 space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Employees</h1>
-        <p className="text-gray-600 mt-1">Manage all company employees across departments</p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Employees</h1>
+          <p className="text-gray-600 mt-1">Manage all company employees across departments</p>
+        </div>
+        <Link
+          to={newEmployeeHref}
+          className="inline-flex items-center justify-center gap-2 rounded-lg bg-gray-900 text-white hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-900 focus:ring-offset-2 px-4 py-2.5 text-sm font-medium transition-colors w-full sm:w-auto"
+        >
+          <Plus className="w-4 h-4 flex-shrink-0" />
+          Add employee
+        </Link>
       </div>
 
       {/* Stats Cards */}
@@ -389,10 +418,10 @@ const EmployeesPage: React.FC = () => {
                   {/* Employee Cards */}
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                     {list.map((employee) => (
-                      <div
+                      <Link
                         key={employee.id}
-                        onClick={() => navigate(`/employees/${employee.employeeId}`)}
-                        className="bg-white rounded-lg border-2 border-gray-200 p-5 hover:shadow-lg hover:border-blue-300 transition-all cursor-pointer group"
+                        to={`/employees/${encodeURIComponent(employee.employeeId)}`}
+                        className="bg-white rounded-lg border-2 border-gray-200 p-5 hover:shadow-lg hover:border-blue-300 transition-all cursor-pointer group block no-underline text-inherit focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
                       >
                         {/* Header */}
                         <div className="flex items-start justify-between mb-4">
@@ -402,7 +431,7 @@ const EmployeesPage: React.FC = () => {
                             </div>
                             <div>
                               <h3 className="font-bold text-gray-900 group-hover:text-blue-600 transition-colors">
-                                {employee.employeeName}
+                                {directoryCardDisplayName(employee)}
                               </h3>
                               <p className="text-xs text-gray-600">{employee.employeeId}</p>
                             </div>
@@ -424,10 +453,6 @@ const EmployeesPage: React.FC = () => {
                         {/* Info */}
                         <div className="space-y-2 mb-4 text-sm">
                           <div className="flex items-center gap-2 text-gray-600">
-                            <MapPin className="w-4 h-4" />
-                            <span>{employee.branchName ?? 'No branch'}</span>
-                          </div>
-                          <div className="flex items-center gap-2 text-gray-600">
                             <Calendar className="w-4 h-4" />
                             <span>{employee.tenure} months</span>
                           </div>
@@ -437,14 +462,7 @@ const EmployeesPage: React.FC = () => {
                         <div className="pt-4 border-t border-gray-200">
                           <div className="grid grid-cols-2 gap-3 text-sm">{renderEmployeeDetails(employee)}</div>
                         </div>
-
-                        {/* Action hint */}
-                        <div className="mt-4 pt-4 border-t border-gray-200 text-center">
-                          <span className="text-xs text-blue-600 font-medium group-hover:text-blue-700">
-                            Click to view profile →
-                          </span>
-                        </div>
-                      </div>
+                      </Link>
                     ))}
                   </div>
                 </div>

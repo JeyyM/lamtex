@@ -2397,6 +2397,7 @@ CREATE TABLE IF NOT EXISTS company_settings (
   tax_id          VARCHAR(100),
   registration_number VARCHAR(100),
   founded_year    INTEGER,
+  date_established DATE,
   employee_count  VARCHAR(80),
   company_description TEXT,
   
@@ -2450,6 +2451,8 @@ CREATE TABLE IF NOT EXISTS company_addresses (
   province        VARCHAR(200),
   postal_code     VARCHAR(20),
   country         VARCHAR(100) DEFAULT 'Philippines',
+  latitude        NUMERIC(10,7),
+  longitude       NUMERIC(10,7),
   is_primary      BOOLEAN DEFAULT FALSE,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -2472,6 +2475,7 @@ CREATE TABLE IF NOT EXISTS company_social_media (
   settings_id     UUID REFERENCES company_settings(id) ON DELETE CASCADE,
   platform        VARCHAR(100) NOT NULL,
   url             TEXT NOT NULL,
+  is_active       BOOLEAN DEFAULT TRUE,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

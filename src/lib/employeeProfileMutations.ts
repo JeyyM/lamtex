@@ -7,7 +7,7 @@ function ts() {
   return new Date().toISOString();
 }
 
-function tenureMonthsFromJoinDate(isoDate: string): number {
+export function tenureMonthsFromJoinDate(isoDate: string): number {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(isoDate.trim());
   if (!m) return 0;
   const y = Number(m[1]);
@@ -18,6 +18,58 @@ function tenureMonthsFromJoinDate(isoDate: string): number {
   let months = (now.getFullYear() - start.getFullYear()) * 12 + (now.getMonth() - start.getMonth());
   if (now.getDate() < start.getDate()) months -= 1;
   return Math.max(0, months);
+}
+
+type EmployeeDirectoryRole =
+  | 'Sales Agent'
+  | 'Logistics Manager'
+  | 'Warehouse Manager'
+  | 'Truck Driver';
+
+type UserRoleDashboard = 'Executive' | 'Warehouse' | 'Logistics' | 'Agent' | 'Driver';
+
+/** Inserts a new row in `employees` (directory / HR). */
+export async function insertEmployeeDirectoryRow(values: {
+  employee_id: string;
+  employee_name: string;
+  email: string;
+  role: EmployeeDirectoryRole;
+  branch_id: string | null;
+  join_date: string;
+  phone?: string | null;
+  department?: string | null;
+  user_role?: UserRoleDashboard | null;
+}): Promise<{ id: string }> {
+  const code = values.employee_id.trim();
+  const name = values.employee_name.trim();
+  const em = values.email.trim().toLowerCase();
+  const jd = values.join_date.trim();
+  if (!code) throw new Error('Employee ID is required.');
+  if (!name) throw new Error('Name is required.');
+  if (!em) throw new Error('Email is required.');
+  if (!jd) throw new Error('Join date is required.');
+
+  const { data, error } = await supabase
+    .from('employees')
+    .insert({
+      employee_id: code,
+      employee_name: name,
+      email: em,
+      role: values.role,
+      branch_id: values.branch_id,
+      join_date: jd,
+      status: 'active',
+      tenure_months: tenureMonthsFromJoinDate(jd),
+      phone: values.phone?.trim() || null,
+      department: values.department?.trim() || null,
+      user_role: values.user_role ?? null,
+      updated_at: ts(),
+    })
+    .select('id')
+    .single();
+
+  if (error) throw error;
+  return { id: String(data.id) };
 }
 
 /** Updates directory row: employee code, hire date, and derived tenure. */
@@ -367,4 +419,32 @@ export async function updateEmployeeTrainingRow(
     .eq('id', trainingId)
     .eq('employee_id', employeeId);
   if (error) throw error;
+}
+
+/** Executive-only RPC: creates Auth user + sets employees.auth_user_id. Requires DB function. */
+export async function createEmployeeAuthAccount(
+  employeeId: string,
+  password: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { data, error } = await supabase.rpc('create_employee_auth_account', {
+    p_employee_id: employeeId,
+    p_password: password,
+  });
+  if (error) {
+    return { ok: false, error: error.message };
+  }
+  let payload: unknown = data;
+  if (typeof payload === 'string') {
+    try {
+      payload = JSON.parse(payload) as unknown;
+    } catch {
+      return { ok: false, error: 'invalid_response' };
+    }
+  }
+  if (payload && typeof payload === 'object' && payload !== null && 'ok' in payload) {
+    const d = payload as { ok?: boolean; error?: string };
+    if (d.ok === true) return { ok: true };
+    return { ok: false, error: d.error ?? 'unknown' };
+  }
+  return { ok: false, error: 'invalid_response' };
 }

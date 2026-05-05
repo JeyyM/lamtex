@@ -6,6 +6,7 @@ import { NotificationsDrawer } from '../dashboard/NotificationsDrawer';
 import { getNotificationsByBranch } from '@/src/mock/executiveDashboard';
 import lamtexLogo from '../../assets/Lamtex Logo.png';
 import { supabase } from '@/src/lib/supabase';
+import { LAMTEX_BRANCHES_CHANGED_EVENT } from '@/src/lib/branches';
 
 export function Topbar() {
   const { role, setRole, branch, setBranch, isMobileMenuOpen, setIsMobileMenuOpen, hideBranchSelector } = useAppContext();
@@ -20,24 +21,35 @@ export function Topbar() {
   const roles: UserRole[] = ['Executive', 'Warehouse', 'Logistics', 'Agent', 'Driver'];
   const [branches, setBranches] = useState<Branch[]>([]);
 
-  // Fetch active branches from Supabase and default to the first one
+  // Fetch active branches from Supabase; default branch when none selected
   useEffect(() => {
-    supabase
-      .from('branches')
-      .select('name')
-      .eq('is_active', true)
-      .order('name')
-      .then(({ data }) => {
-        if (data && data.length > 0) {
-          const names = data.map(b => b.name as Branch);
+    let cancelled = false;
+    const loadBranches = () => {
+      supabase
+        .from('branches')
+        .select('name')
+        .eq('is_active', true)
+        .order('name')
+        .then(({ data }) => {
+          if (cancelled || !data?.length) return;
+          const names = data.map((b) => b.name as Branch);
           setBranches(names);
-          // Default to the first branch if nothing is selected yet
-          if (!branch) {
-            setBranch(names[0]);
-          }
-        }
-      });
+        });
+    };
+    loadBranches();
+    const onRefresh = () => loadBranches();
+    window.addEventListener(LAMTEX_BRANCHES_CHANGED_EVENT, onRefresh);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(LAMTEX_BRANCHES_CHANGED_EVENT, onRefresh);
+    };
   }, []);
+
+  useEffect(() => {
+    if (branches.length > 0 && !branch) {
+      setBranch(branches[0]);
+    }
+  }, [branches, branch, setBranch]);
 
   // Get today's date in YYYY-MM-DD format
   const getTodayDate = () => {

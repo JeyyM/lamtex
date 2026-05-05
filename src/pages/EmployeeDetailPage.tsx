@@ -32,6 +32,7 @@ import {
   Users,
   Upload,
   Edit2,
+  X,
 } from 'lucide-react';
 import { Button } from '@/src/components/ui/Button';
 import { Badge } from '@/src/components/ui/Badge';
@@ -426,6 +427,7 @@ function emptyProfileState(): EmployeeFullProfile {
     activityFeed: [],
     notes: [],
     customerPortfolio: [],
+    loginAccount: { linked: false, authUserId: null, userRole: null },
   };
 }
 
@@ -456,6 +458,7 @@ export default function EmployeeDetailPage() {
   const [newAssetDescription, setNewAssetDescription] = useState('');
   const [newAssetCategory, setNewAssetCategory] = useState('');
   const [newAssetDate, setNewAssetDate] = useState('');
+  const [assetAddOpen, setAssetAddOpen] = useState(false);
   const [assetSaving, setAssetSaving] = useState(false);
 
   const [savingSection, setSavingSection] = useState<string | null>(null);
@@ -590,6 +593,7 @@ export default function EmployeeDetailPage() {
     setNewAssetDescription('');
     setNewAssetCategory('');
     setNewAssetDate('');
+    setAssetAddOpen(false);
     setEditOverview(false);
     setEditContact(false);
     setEditEmployment(false);
@@ -786,6 +790,7 @@ export default function EmployeeDetailPage() {
       setNewAssetDescription('');
       setNewAssetCategory('');
       setNewAssetDate('');
+      setAssetAddOpen(false);
       await refreshProfileFromServer();
     } finally {
       setAssetSaving(false);
@@ -932,6 +937,7 @@ export default function EmployeeDetailPage() {
                     {overviewField('Date of Birth', dobDisplay)}
                     {overviewField('Civil Status', per?.civil_status)}
                     {overviewField('Religion', per?.religion)}
+                    {overviewField('Job title', p.employment?.position)}
                   </div>
                   <div className="space-y-5">
                     {overviewField('Gender', per?.gender)}
@@ -2838,134 +2844,159 @@ export default function EmployeeDetailPage() {
           </div>
         );
 
-      case 'assets':
+      case 'assets': {
+        const cancelAssetAdd = () => {
+          setAssetAddOpen(false);
+          setNewAssetTitle('');
+          setNewAssetDescription('');
+          setNewAssetCategory('');
+          setNewAssetDate('');
+        };
         return (
           <div className="space-y-6">
-            <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm space-y-4">
-              <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-                <Package className="w-5 h-5 text-purple-600" />
-                Add company asset
-              </h2>
-              <div className="grid grid-cols-1 gap-4 max-w-2xl">
-                <div className="space-y-1">
-                  <label htmlFor="emp-asset-title" className="text-xs font-medium text-gray-600">
-                    Title
-                  </label>
-                  <input
-                    id="emp-asset-title"
-                    type="text"
-                    value={newAssetTitle}
-                    onChange={(e) => setNewAssetTitle(e.target.value)}
-                    placeholder="e.g. Dell Latitude 5420"
-                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
-                  />
+            <div className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+              <div className="p-4 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                  <Package className="w-5 h-5 text-purple-600" />
+                  Company assets
+                </h2>
+                <div className="flex flex-wrap gap-2">
+                  {assetAddOpen ? (
+                    <Button type="button" variant="outline" size="sm" onClick={cancelAssetAdd}>
+                      Cancel
+                    </Button>
+                  ) : (
+                    <Button type="button" variant="outline" size="sm" className="gap-2" onClick={() => setAssetAddOpen(true)}>
+                      <Plus className="w-4 h-4" />
+                      Add asset
+                    </Button>
+                  )}
                 </div>
-                <div className="space-y-1">
-                  <label htmlFor="emp-asset-desc" className="text-xs font-medium text-gray-600">
-                    What it is
-                  </label>
-                  <textarea
-                    id="emp-asset-desc"
-                    value={newAssetDescription}
-                    onChange={(e) => setNewAssetDescription(e.target.value)}
-                    rows={4}
-                    placeholder="Brief description of the asset…"
-                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none resize-y min-h-[100px]"
-                  />
+              </div>
+
+              {assetAddOpen ? (
+                <div className="p-6 border-b border-gray-100 bg-gray-50/50 space-y-4">
+                  <h3 className="text-sm font-semibold text-gray-800">New company asset</h3>
+                  <div className="grid grid-cols-1 gap-4 max-w-2xl">
+                    <div className="space-y-1">
+                      <label htmlFor="emp-asset-title" className="text-xs font-medium text-gray-600">
+                        Title
+                      </label>
+                      <input
+                        id="emp-asset-title"
+                        type="text"
+                        value={newAssetTitle}
+                        onChange={(e) => setNewAssetTitle(e.target.value)}
+                        placeholder="e.g. Dell Latitude 5420"
+                        className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label htmlFor="emp-asset-desc" className="text-xs font-medium text-gray-600">
+                        What it is
+                      </label>
+                      <textarea
+                        id="emp-asset-desc"
+                        value={newAssetDescription}
+                        onChange={(e) => setNewAssetDescription(e.target.value)}
+                        rows={4}
+                        placeholder="Brief description of the asset…"
+                        className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none resize-y min-h-[100px]"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label htmlFor="emp-asset-category" className="text-xs font-medium text-gray-600">
+                        Item type
+                      </label>
+                      <input
+                        id="emp-asset-category"
+                        type="text"
+                        value={newAssetCategory}
+                        onChange={(e) => setNewAssetCategory(e.target.value)}
+                        placeholder="e.g. Laptop, Mobile phone, Equipment"
+                        className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label htmlFor="emp-asset-date" className="text-xs font-medium text-gray-600">
+                        Date given
+                      </label>
+                      <input
+                        id="emp-asset-date"
+                        type="date"
+                        value={newAssetDate}
+                        onChange={(e) => setNewAssetDate(e.target.value)}
+                        className="w-full max-w-xs rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
+                      />
+                    </div>
+                    <div>
+                      <Button
+                        type="button"
+                        variant="primary"
+                        size="sm"
+                        className="gap-2"
+                        disabled={assetSaving}
+                        onClick={() => void handleAddEmployeeAsset()}
+                      >
+                        {assetSaving ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            Saving…
+                          </>
+                        ) : (
+                          <>
+                            <Package className="w-4 h-4" />
+                            Save asset
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </div>
                 </div>
-                <div className="space-y-1">
-                  <label htmlFor="emp-asset-category" className="text-xs font-medium text-gray-600">
-                    Item type
-                  </label>
-                  <input
-                    id="emp-asset-category"
-                    type="text"
-                    value={newAssetCategory}
-                    onChange={(e) => setNewAssetCategory(e.target.value)}
-                    placeholder="e.g. Laptop, Mobile phone, Equipment"
-                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label htmlFor="emp-asset-date" className="text-xs font-medium text-gray-600">
-                    Date given
-                  </label>
-                  <input
-                    id="emp-asset-date"
-                    type="date"
-                    value={newAssetDate}
-                    onChange={(e) => setNewAssetDate(e.target.value)}
-                    className="w-full max-w-xs rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
-                  />
-                </div>
-                <div>
-                  <Button
-                    type="button"
-                    variant="primary"
-                    size="sm"
-                    className="gap-2"
-                    disabled={assetSaving}
-                    onClick={() => void handleAddEmployeeAsset()}
-                  >
-                    {assetSaving ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        Saving…
-                      </>
-                    ) : (
-                      <>
-                        <Package className="w-4 h-4" />
-                        Add asset
-                      </>
-                    )}
+              ) : null}
+
+              {p.assets.length === 0 && !assetAddOpen ? (
+                <div className="p-10 text-center">
+                  <Package className="w-10 h-10 text-gray-300 mx-auto mb-3" aria-hidden />
+                  <p className="text-sm text-gray-600 mb-4">No assets on file yet.</p>
+                  <Button type="button" variant="primary" size="sm" className="gap-2" onClick={() => setAssetAddOpen(true)}>
+                    <Plus className="w-4 h-4" />
+                    Add first asset
                   </Button>
                 </div>
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
-              <div className="p-4 border-b border-gray-100">
-                <h2 className="text-lg font-semibold text-gray-900">Company assets assigned</h2>
-              </div>
-              {p.assets.length === 0 ? (
-                <p className="p-6 text-sm text-gray-500">No assets on file yet.</p>
+              ) : p.assets.length === 0 ? (
+                <p className="p-6 text-sm text-gray-500">Save the form above to add this employee&apos;s first asset.</p>
               ) : (
                 <ul className="divide-y divide-gray-100 p-4 space-y-4">
                   {p.assets.map((a) => {
                     const given = formatProfileDate(a.assigned_date);
                     const typeDisplay = a.category_label?.trim() || a.asset_type || '—';
+                    const desc = a.asset_description?.trim();
                     return (
-                      <li
-                        key={a.id}
-                        className="rounded-xl border border-gray-100 bg-gray-50/50 p-4 space-y-3"
-                      >
+                      <li key={a.id} className="rounded-lg border border-gray-100 bg-white p-4">
                         <div className="flex items-start gap-3">
                           <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-purple-100 text-purple-700 border border-purple-200">
                             <Package className="w-5 h-5" aria-hidden />
                           </div>
                           <div className="min-w-0 flex-1 space-y-3">
-                            <div className="space-y-1">
-                              <p className="text-xs font-medium text-gray-500">Title</p>
-                              <p className="font-semibold text-gray-900">{a.asset_name}</p>
+                            <div>
+                              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Title</p>
+                              <p className="text-base font-semibold text-gray-900 mt-0.5">{a.asset_name}</p>
                             </div>
-                            <div className="space-y-1">
-                              <p className="text-xs font-medium text-gray-500">What it is</p>
-                              <p className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 whitespace-pre-wrap min-h-[2.75rem]">
-                                {a.asset_description?.trim() || '—'}
+                            <div>
+                              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">What it is</p>
+                              <p className={`text-sm mt-1 whitespace-pre-wrap leading-relaxed ${desc ? 'text-gray-800' : 'text-gray-400'}`}>
+                                {desc || '—'}
                               </p>
                             </div>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                              <div className="space-y-1">
-                                <p className="text-xs font-medium text-gray-500">Item type</p>
-                                <p className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800">
-                                  {typeDisplay}
-                                </p>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                              <div>
+                                <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Item type</p>
+                                <p className="text-sm text-gray-800 mt-1">{typeDisplay}</p>
                               </div>
-                              <div className="space-y-1">
-                                <p className="text-xs font-medium text-gray-500">Date given</p>
-                                <p className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800">
-                                  {given ?? '—'}
-                                </p>
+                              <div>
+                                <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Date given</p>
+                                <p className="text-sm text-gray-800 mt-1">{given ?? '—'}</p>
                               </div>
                             </div>
                           </div>
@@ -2978,6 +3009,7 @@ export default function EmployeeDetailPage() {
             </div>
           </div>
         );
+      }
 
       case 'activity':
         return (
@@ -3181,6 +3213,7 @@ export default function EmployeeDetailPage() {
           }}
         />
       ) : null}
+
     </div>
   );
 }

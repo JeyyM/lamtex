@@ -3,7 +3,7 @@
  * **Approved** and **Partially Fulfilled** orders (not on an active trip) appear for scheduling.
  */
 import { supabase } from '@/src/lib/supabase';
-import { resolveBranchIdByName } from '@/src/lib/branchCompanySettings';
+import { fetchBranchDepotPinByBranchName } from '@/src/lib/companyAddressesSettings';
 import type { OrderReadyForDispatch, Trip, DriverOption } from '@/src/types/logistics';
 
 const QUEUE_STATUSES = ['Approved', 'Partially Fulfilled'] as const;
@@ -109,20 +109,9 @@ function toDbTripStatus(s: string): string {
   return s;
 }
 
-/** Branch depot / HQ pin from company_settings (for route map origin). */
+/** Branch depot / HQ pin from company addresses (fallback: company_settings HQ columns). */
 export async function fetchBranchHqCoords(branchName: string): Promise<{ lat: number; lng: number } | null> {
-  const bid = await resolveBranchIdByName(branchName.trim());
-  if (!bid) return null;
-  const { data, error } = await supabase
-    .from('company_settings')
-    .select('hq_latitude, hq_longitude')
-    .eq('branch_id', bid)
-    .maybeSingle();
-  if (error || !data) return null;
-  const la = data.hq_latitude != null ? Number(data.hq_latitude) : NaN;
-  const ln = data.hq_longitude != null ? Number(data.hq_longitude) : NaN;
-  if (!Number.isFinite(la) || !Number.isFinite(ln)) return null;
-  return { lat: la, lng: ln };
+  return fetchBranchDepotPinByBranchName(branchName.trim());
 }
 
 /** Orders eligible for new trip assignment: Approved or Partially Fulfilled, not already on an active trip. */

@@ -11,12 +11,6 @@ import {
   Mail,
   Globe,
   CreditCard,
-  Facebook,
-  Twitter,
-  Instagram,
-  Linkedin,
-  Youtube,
-  Users,
   Shield,
   Bell,
   Save,
@@ -37,40 +31,9 @@ import {
   saveCompanyInfoForBranch,
   type CompanyInfoFields,
 } from '@/src/lib/branchCompanySettings';
-import {
-  hydrateCompanyHqSettingsFromSupabase,
-  loadCompanyHqSettingsFromStorage,
-  saveCompanyHqSettingsToStorage,
-  saveCompanyHqLocationToSupabase,
-  emptyCompanyHqAddress,
-  buildCompanyHqMapsSearchQuery,
-  type CompanyHqMapPin,
-  type CompanyHqAddress,
-} from '@/src/lib/companyMapSettings';
-import { openGoogleMapsSearch } from '@/src/lib/maps';
-import { CompanyMapPicker } from '@/src/components/maps/CompanyMapPicker';
-
-interface Contact {
-  id: string;
-  name: string;
-  role: string;
-  department: string;
-  phone: string;
-  email: string;
-  isPrimary: boolean;
-}
-
-interface Address {
-  id: string;
-  type: 'Head Office' | 'Branch' | 'Warehouse' | 'Factory';
-  label: string;
-  street: string;
-  city: string;
-  province: string;
-  postalCode: string;
-  country: string;
-  isPrimary: boolean;
-}
+import { SettingsCompanyLocationsTab } from '@/src/components/settings/SettingsCompanyLocationsTab';
+import { SettingsSocialMediaTab } from '@/src/components/settings/SettingsSocialMediaTab';
+import { createBranchRecord, notifyBranchesChanged } from '@/src/lib/branches';
 
 interface PaymentProfile {
   id: string;
@@ -83,129 +46,31 @@ interface PaymentProfile {
   isActive: boolean;
 }
 
-interface SocialMedia {
-  platform: 'Facebook' | 'Twitter' | 'Instagram' | 'LinkedIn' | 'YouTube' | 'Website';
-  url: string;
-  followers?: number;
-  isActive: boolean;
-}
+type ViewMode = 'company' | 'addresses' | 'payment' | 'social' | 'notifications' | 'security';
 
-type ViewMode = 'company' | 'contacts' | 'addresses' | 'payment' | 'social' | 'notifications' | 'security';
+/** Set to `true` to show the Security tab and panel again. */
+const SHOW_SETTINGS_SECURITY_TAB = false;
 
 type CompanyTabSnapshot = {
   company: CompanyInfoFields;
-  hqMapPin: CompanyHqMapPin | null;
-  hqLabel: string;
-  hqAddress: CompanyHqAddress;
 };
 
+function displayCompanyField(value: string | null | undefined): string {
+  const t = (value ?? '').trim();
+  return t.length > 0 ? t : '—';
+}
+
+/** `YYYY-MM-DD` from DB / `<input type="date">` */
+function displayCompanyDate(iso: string | null | undefined): string {
+  const t = (iso ?? '').trim();
+  if (!t) return '—';
+  const parsed =
+    t.length === 10 && /^\d{4}-\d{2}-\d{2}$/.test(t) ? new Date(`${t}T12:00:00`) : new Date(t);
+  if (Number.isNaN(parsed.getTime())) return '—';
+  return parsed.toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' });
+}
+
 // Mock Data
-const MOCK_CONTACTS: Contact[] = [
-  {
-    id: '1',
-    name: 'Maria Santos',
-    role: 'Chief Executive Officer',
-    department: 'Executive',
-    phone: '+63 917 123 4567',
-    email: 'maria.santos@lamtex.ph',
-    isPrimary: true,
-  },
-  {
-    id: '2',
-    name: 'Roberto Cruz',
-    role: 'Chief Financial Officer',
-    department: 'Finance',
-    phone: '+63 917 234 5678',
-    email: 'roberto.cruz@lamtex.ph',
-    isPrimary: false,
-  },
-  {
-    id: '3',
-    name: 'Angela Reyes',
-    role: 'Operations Manager',
-    department: 'Operations',
-    phone: '+63 917 345 6789',
-    email: 'angela.reyes@lamtex.ph',
-    isPrimary: false,
-  },
-  {
-    id: '4',
-    name: 'Carlos Mendoza',
-    role: 'Sales Director',
-    department: 'Sales',
-    phone: '+63 917 456 7890',
-    email: 'carlos.mendoza@lamtex.ph',
-    isPrimary: false,
-  },
-  {
-    id: '5',
-    name: 'Jennifer Tan',
-    role: 'Customer Service Manager',
-    department: 'Customer Service',
-    phone: '+63 917 567 8901',
-    email: 'jennifer.tan@lamtex.ph',
-    isPrimary: false,
-  },
-];
-
-const MOCK_ADDRESSES: Address[] = [
-  {
-    id: '1',
-    type: 'Head Office',
-    label: 'Lamtex Corporate Headquarters',
-    street: '1234 Ayala Avenue, Makati Business District',
-    city: 'Makati',
-    province: 'Metro Manila',
-    postalCode: '1226',
-    country: 'Philippines',
-    isPrimary: true,
-  },
-  {
-    id: '2',
-    type: 'Branch',
-    label: 'Branch A - Quezon City',
-    street: '456 Commonwealth Avenue, Diliman',
-    city: 'Quezon City',
-    province: 'Metro Manila',
-    postalCode: '1101',
-    country: 'Philippines',
-    isPrimary: false,
-  },
-  {
-    id: '3',
-    type: 'Branch',
-    label: 'Branch B - Cebu',
-    street: '789 Osmena Boulevard, Cebu Business Park',
-    city: 'Cebu City',
-    province: 'Cebu',
-    postalCode: '6000',
-    country: 'Philippines',
-    isPrimary: false,
-  },
-  {
-    id: '4',
-    type: 'Factory',
-    label: 'Manufacturing Plant - Laguna',
-    street: 'Calamba Industrial Estate, PEZA Zone 1',
-    city: 'Calamba',
-    province: 'Laguna',
-    postalCode: '4027',
-    country: 'Philippines',
-    isPrimary: false,
-  },
-  {
-    id: '5',
-    type: 'Warehouse',
-    label: 'Distribution Center - Bulacan',
-    street: 'North Luzon Expressway Business Park',
-    city: 'Meycauayan',
-    province: 'Bulacan',
-    postalCode: '3020',
-    country: 'Philippines',
-    isPrimary: false,
-  },
-];
-
 const MOCK_PAYMENT_PROFILES: PaymentProfile[] = [
   {
     id: '1',
@@ -254,94 +119,30 @@ const MOCK_PAYMENT_PROFILES: PaymentProfile[] = [
   },
 ];
 
-const MOCK_SOCIAL_MEDIA: SocialMedia[] = [
-  {
-    platform: 'Facebook',
-    url: 'https://facebook.com/lamtexph',
-    followers: 45200,
-    isActive: true,
-  },
-  {
-    platform: 'Twitter',
-    url: 'https://twitter.com/lamtexph',
-    followers: 12800,
-    isActive: true,
-  },
-  {
-    platform: 'Instagram',
-    url: 'https://instagram.com/lamtexph',
-    followers: 28500,
-    isActive: true,
-  },
-  {
-    platform: 'LinkedIn',
-    url: 'https://linkedin.com/company/lamtex',
-    followers: 8600,
-    isActive: true,
-  },
-  {
-    platform: 'YouTube',
-    url: 'https://youtube.com/@lamtexph',
-    followers: 5400,
-    isActive: true,
-  },
-  {
-    platform: 'Website',
-    url: 'https://www.lamtex.ph',
-    isActive: true,
-  },
-];
-
 export default function SettingsPage() {
-  const { selectedBranch } = useAppContext();
+  const { selectedBranch, setBranch, addAuditLog } = useAppContext();
   const [viewMode, setViewMode] = useState<ViewMode>('company');
-  const [showPassword, setShowPassword] = useState(false);
   const [resolvedBranchId, setResolvedBranchId] = useState<string | null>(null);
   const [branchSettingsLoading, setBranchSettingsLoading] = useState(true);
   const [companyInfo, setCompanyInfo] = useState<CompanyInfoFields>(() => emptyCompanyInfo());
+  const [editingCompanyProfile, setEditingCompanyProfile] = useState(false);
   const [profileSaving, setProfileSaving] = useState(false);
-  const [locationSaving, setLocationSaving] = useState(false);
+  const [newBranchName, setNewBranchName] = useState('');
+  const [newBranchCode, setNewBranchCode] = useState('');
+  const [newBranchSaving, setNewBranchSaving] = useState(false);
   const companyTabSnapshotRef = useRef<CompanyTabSnapshot | null>(null);
-  const [hqMapPin, setHqMapPin] = useState<CompanyHqMapPin | null>(null);
-  const [hqLabelStr, setHqLabelStr] = useState('');
-  const [hqAddress, setHqAddress] = useState<CompanyHqAddress>(() => emptyCompanyHqAddress());
-  const [contacts] = useState<Contact[]>(MOCK_CONTACTS);
-  const [addresses] = useState<Address[]>(MOCK_ADDRESSES);
   const [paymentProfiles] = useState<PaymentProfile[]>(MOCK_PAYMENT_PROFILES);
-  const [socialMedia] = useState<SocialMedia[]>(MOCK_SOCIAL_MEDIA);
-  const settingsTabs: Array<{ id: ViewMode; label: string; icon: React.ReactNode }> = [
+  const allSettingsTabs: Array<{ id: ViewMode; label: string; icon: React.ReactNode }> = [
     { id: 'company', label: 'Company Info', icon: <Building2 className="w-4 h-4" /> },
-    { id: 'contacts', label: 'Contacts', icon: <Users className="w-4 h-4" /> },
     { id: 'addresses', label: 'Addresses', icon: <MapPin className="w-4 h-4" /> },
     { id: 'payment', label: 'Payment Profiles', icon: <CreditCard className="w-4 h-4" /> },
     { id: 'social', label: 'Social Media', icon: <Globe className="w-4 h-4" /> },
     { id: 'notifications', label: 'Notifications', icon: <Bell className="w-4 h-4" /> },
     { id: 'security', label: 'Security', icon: <Shield className="w-4 h-4" /> },
   ];
-
-  const getSocialIcon = (platform: string) => {
-    switch (platform) {
-      case 'Facebook': return <Facebook className="w-5 h-5" />;
-      case 'Twitter': return <Twitter className="w-5 h-5" />;
-      case 'Instagram': return <Instagram className="w-5 h-5" />;
-      case 'LinkedIn': return <Linkedin className="w-5 h-5" />;
-      case 'YouTube': return <Youtube className="w-5 h-5" />;
-      case 'Website': return <Globe className="w-5 h-5" />;
-      default: return <Globe className="w-5 h-5" />;
-    }
-  };
-
-  const getSocialColor = (platform: string) => {
-    switch (platform) {
-      case 'Facebook': return 'text-blue-600 bg-blue-100';
-      case 'Twitter': return 'text-sky-600 bg-sky-100';
-      case 'Instagram': return 'text-pink-600 bg-pink-100';
-      case 'LinkedIn': return 'text-blue-700 bg-blue-100';
-      case 'YouTube': return 'text-red-600 bg-red-100';
-      case 'Website': return 'text-gray-600 bg-gray-100';
-      default: return 'text-gray-600 bg-gray-100';
-    }
-  };
+  const settingsTabs = SHOW_SETTINGS_SECURITY_TAB
+    ? allSettingsTabs
+    : allSettingsTabs.filter((t) => t.id !== 'security');
 
   const getPaymentIcon = (type: string) => {
     switch (type) {
@@ -363,48 +164,19 @@ export default function SettingsPage() {
 
       if (!bid) {
         setCompanyInfo(emptyCompanyInfo());
-        setHqMapPin(null);
-        setHqLabelStr('');
-        setHqAddress(emptyCompanyHqAddress());
+        setEditingCompanyProfile(false);
         companyTabSnapshotRef.current = null;
         setBranchSettingsLoading(false);
         return;
       }
 
-      const info = await loadCompanyInfoForBranch(bid);
+      const co = await loadCompanyInfoForBranch(bid);
       if (cancelled) return;
-      const co = info ?? emptyCompanyInfo();
       setCompanyInfo(co);
-
-      const hqRemote = await hydrateCompanyHqSettingsFromSupabase(bid);
-      if (cancelled) return;
-
-      let pin: CompanyHqMapPin | null = null;
-      let label = '';
-      let addr = emptyCompanyHqAddress();
-
-      if (hqRemote) {
-        pin = hqRemote.mapPin;
-        label = hqRemote.locationLabel;
-        addr = hqRemote.address;
-      } else {
-        const loc = loadCompanyHqSettingsFromStorage(bid);
-        if (loc) {
-          pin = loc.mapPin;
-          label = loc.locationLabel;
-          addr = loc.address;
-        }
-      }
-
-      setHqMapPin(pin);
-      setHqLabelStr(label);
-      setHqAddress(addr);
+      setEditingCompanyProfile(false);
 
       companyTabSnapshotRef.current = {
         company: { ...co },
-        hqMapPin: pin,
-        hqLabel: label,
-        hqAddress: { ...addr },
       };
       setBranchSettingsLoading(false);
     };
@@ -414,16 +186,31 @@ export default function SettingsPage() {
     };
   }, [selectedBranch]);
 
-  const previewLat = hqMapPin?.lat;
-  const previewLng = hqMapPin?.lng;
-  const previewOk =
-    hqMapPin != null && Number.isFinite(previewLat) && Number.isFinite(previewLng);
+  useEffect(() => {
+    if (viewMode !== 'company') setEditingCompanyProfile(false);
+  }, [viewMode]);
 
-  const companyTabSaving = profileSaving || locationSaving;
+  useEffect(() => {
+    if (!SHOW_SETTINGS_SECURITY_TAB && viewMode === 'security') {
+      setViewMode('company');
+    }
+  }, [viewMode]);
+
+  const companyTabSaving = profileSaving;
+
+  const handleCancelCompanyProfileEdit = () => {
+    const snap = companyTabSnapshotRef.current?.company;
+    if (snap) setCompanyInfo({ ...snap });
+    setEditingCompanyProfile(false);
+  };
 
   const handleSaveCompanyProfile = async () => {
     if (!resolvedBranchId) {
       window.alert('Could not resolve this branch. Check the branch name in the header.');
+      return;
+    }
+    if (!companyInfo.companyName.trim()) {
+      window.alert('Company name is required.');
       return;
     }
     setProfileSaving(true);
@@ -439,64 +226,37 @@ export default function SettingsPage() {
           company: { ...companyInfo },
         };
       }
+      addAuditLog(
+        'Settings',
+        'Company',
+        `Saved company profile for branch ${selectedBranch.trim() || resolvedBranchId}`,
+      );
+      setEditingCompanyProfile(false);
       window.alert('Profile saved.');
     } finally {
       setProfileSaving(false);
     }
   };
 
-  const handleSaveCompanyLocation = async () => {
-    if (!resolvedBranchId) {
-      window.alert('Could not resolve this branch. Check the branch name in the header.');
-      return;
-    }
-    setLocationSaving(true);
+  const handleCreateBranch = async () => {
+    setNewBranchSaving(true);
     try {
-      const fallbackName = companyInfo.companyName.trim() || selectedBranch.trim() || 'Branch';
-      const hqState = {
-        mapPin: hqMapPin,
-        locationLabel: hqLabelStr,
-        address: hqAddress,
-      };
-      saveCompanyHqSettingsToStorage(resolvedBranchId, hqState);
-      const remoteHq = await saveCompanyHqLocationToSupabase(resolvedBranchId, hqState, fallbackName);
-
-      if (remoteHq.ok) {
-        if (companyTabSnapshotRef.current) {
-          companyTabSnapshotRef.current = {
-            ...companyTabSnapshotRef.current,
-            hqMapPin: hqMapPin,
-            hqLabel: hqLabelStr,
-            hqAddress: { ...hqAddress },
-          };
-        }
-        window.alert('Location saved.');
-      } else {
-        window.alert(remoteHq.error ?? 'Could not save location to the database.');
+      const res = await createBranchRecord({ name: newBranchName, code: newBranchCode });
+      if (!res.ok) {
+        window.alert(res.error ?? 'Could not create branch.');
+        return;
       }
+      const label = newBranchName.trim();
+      const codeUpper = newBranchCode.trim().toUpperCase();
+      notifyBranchesChanged();
+      setBranch(label);
+      setNewBranchName('');
+      setNewBranchCode('');
+      addAuditLog('Settings', 'Branch', `Created branch "${label}" (${codeUpper})`);
+      window.alert('Branch created. The header now uses this branch; add company details or addresses as needed.');
     } finally {
-      setLocationSaving(false);
+      setNewBranchSaving(false);
     }
-  };
-
-  const handleCancelCompanyInfo = () => {
-    const s = companyTabSnapshotRef.current;
-    if (s) {
-      setCompanyInfo({ ...s.company });
-      setHqMapPin(s.hqMapPin);
-      setHqLabelStr(s.hqLabel);
-      setHqAddress({ ...s.hqAddress });
-    }
-  };
-
-  const handleOpenCompanyMapExternal = () => {
-    const q = buildCompanyHqMapsSearchQuery({
-      mapPin: hqMapPin,
-      locationLabel: hqLabelStr,
-      address: hqAddress,
-    });
-    if (q) openGoogleMapsSearch(q);
-    else window.alert('Nothing to open in Maps yet.');
   };
 
   return (
@@ -509,8 +269,8 @@ export default function SettingsPage() {
             Settings
           </h1>
           <p className="text-sm text-gray-500 mt-1">
-            Manage company information, contacts, payment methods, and preferences. Company Info and Company location are
-            stored per branch.
+            Manage company information, payment methods, and preferences. Use{' '}
+            <strong>Addresses</strong> for company locations and map pins (all branches).
           </p>
           {!branchSettingsLoading && selectedBranch && !resolvedBranchId && (
             <p className="text-sm text-amber-700 mt-2">
@@ -563,12 +323,36 @@ export default function SettingsPage() {
         <div className="space-y-6">
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Building2 className="w-5 h-5 text-red-600" />
-                Company Information
-              </CardTitle>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <CardTitle className="flex items-center gap-2">
+                  <Building2 className="w-5 h-5 text-red-600" />
+                  Company Information
+                </CardTitle>
+                {!branchSettingsLoading && resolvedBranchId && !editingCompanyProfile ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5 shrink-0"
+                    onClick={() => setEditingCompanyProfile(true)}
+                  >
+                    <Edit2 className="w-4 h-4" />
+                    Edit
+                  </Button>
+                ) : null}
+              </div>
             </CardHeader>
             <CardContent className="space-y-4">
+              {!branchSettingsLoading && !resolvedBranchId ? (
+                <p className="text-sm text-gray-600">
+                  Choose a branch in the header that matches your database to view or edit company details.
+                </p>
+              ) : null}
+
+              {branchSettingsLoading ? (
+                <p className="text-sm text-gray-500">Loading company profile…</p>
+              ) : editingCompanyProfile ? (
+                <>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Company Name</label>
@@ -611,12 +395,11 @@ export default function SettingsPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Year Established</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Date established</label>
                   <input
-                    type="text"
-                    inputMode="numeric"
-                    value={companyInfo.foundedYear}
-                    onChange={(e) => setCompanyInfo((c) => ({ ...c, foundedYear: e.target.value }))}
+                    type="date"
+                    value={companyInfo.dateEstablished}
+                    onChange={(e) => setCompanyInfo((c) => ({ ...c, dateEstablished: e.target.value }))}
                     disabled={branchSettingsLoading || !resolvedBranchId || companyTabSaving}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 disabled:bg-gray-100"
                   />
@@ -643,278 +426,125 @@ export default function SettingsPage() {
                 </div>
               </div>
 
-              <div className="flex justify-end pt-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="w-full sm:w-auto border-red-200 text-red-700 hover:bg-red-50"
-                  disabled={branchSettingsLoading || !resolvedBranchId || companyTabSaving}
-                  onClick={handleSaveCompanyProfile}
-                >
-                  <Save className="w-4 h-4 mr-2" />
-                  {profileSaving ? 'Saving…' : 'Save profile'}
-                </Button>
-              </div>
-
-              <div
-                id="settings-company-location"
-                className="border-t border-gray-100 pt-8 mt-8 space-y-4 scroll-mt-4"
-              >
-                <div className="flex items-center gap-2">
-                  <MapPin className="w-5 h-5 text-red-600" />
-                  <h3 className="text-lg font-semibold text-gray-900">Company location</h3>
-                </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="md:col-span-2">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Location name</label>
-                  <input
-                    type="text"
-                    value={hqLabelStr}
-                    onChange={(e) => setHqLabelStr(e.target.value)}
-                    placeholder="Head office"
-                    disabled={branchSettingsLoading || !resolvedBranchId || companyTabSaving}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 disabled:bg-gray-100"
-                  />
-                </div>
-                <div className="md:col-span-2">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Street</label>
-                  <input
-                    type="text"
-                    value={hqAddress.street}
-                    onChange={(e) => setHqAddress((a) => ({ ...a, street: e.target.value }))}
-                    disabled={branchSettingsLoading || !resolvedBranchId || companyTabSaving}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 disabled:bg-gray-100"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">City</label>
-                  <input
-                    type="text"
-                    value={hqAddress.city}
-                    onChange={(e) => setHqAddress((a) => ({ ...a, city: e.target.value }))}
-                    disabled={branchSettingsLoading || !resolvedBranchId || companyTabSaving}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 disabled:bg-gray-100"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Province</label>
-                  <input
-                    type="text"
-                    value={hqAddress.province}
-                    onChange={(e) => setHqAddress((a) => ({ ...a, province: e.target.value }))}
-                    disabled={branchSettingsLoading || !resolvedBranchId || companyTabSaving}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 disabled:bg-gray-100"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">ZIP</label>
-                  <input
-                    type="text"
-                    value={hqAddress.postal_code}
-                    onChange={(e) => setHqAddress((a) => ({ ...a, postal_code: e.target.value }))}
-                    disabled={branchSettingsLoading || !resolvedBranchId || companyTabSaving}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 disabled:bg-gray-100"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Country</label>
-                  <input
-                    type="text"
-                    value={hqAddress.country}
-                    onChange={(e) => setHqAddress((a) => ({ ...a, country: e.target.value }))}
-                    placeholder="Philippines"
-                    disabled={branchSettingsLoading || !resolvedBranchId || companyTabSaving}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 disabled:bg-gray-100"
-                  />
-                </div>
-              </div>
-              <div
-                className={
-                  branchSettingsLoading || !resolvedBranchId || companyTabSaving
-                    ? 'pointer-events-none opacity-50'
-                    : undefined
-                }
-              >
-                <CompanyMapPicker
-                  lat={previewOk && previewLat != null && previewLng != null ? previewLat : null}
-                  lng={previewOk && previewLat != null && previewLng != null ? previewLng : null}
-                  onPositionChange={(la, ln) => {
-                    setHqMapPin({ lat: la, lng: ln });
-                  }}
-                />
-              </div>
-              <div className="flex flex-col-reverse gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
+              <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end pt-2">
                 <Button
                   type="button"
                   variant="outline"
                   className="w-full sm:w-auto"
-                  disabled={!hqMapPin || companyTabSaving || branchSettingsLoading || !resolvedBranchId}
-                  onClick={() => setHqMapPin(null)}
+                  disabled={branchSettingsLoading || !resolvedBranchId || profileSaving}
+                  onClick={handleCancelCompanyProfileEdit}
                 >
-                  Clear pin
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="w-full sm:w-auto"
-                  disabled={companyTabSaving || branchSettingsLoading || !resolvedBranchId}
-                  onClick={handleOpenCompanyMapExternal}
-                >
-                  <ExternalLink className="w-4 h-4 mr-2" />
-                  Google Maps
-                </Button>
-              </div>
-              </div>
-
-              <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-4 border-t border-gray-100 mt-8">
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="w-full sm:w-auto"
-                  disabled={branchSettingsLoading || !resolvedBranchId || companyTabSaving}
-                  onClick={handleCancelCompanyInfo}
-                >
-                  <XCircle className="w-4 h-4 mr-2" />
                   Cancel
                 </Button>
                 <Button
                   type="button"
-                  className="bg-red-600 hover:bg-red-700 w-full sm:w-auto"
+                  variant="primary"
+                  className="w-full sm:w-auto gap-2"
                   disabled={branchSettingsLoading || !resolvedBranchId || companyTabSaving}
-                  onClick={handleSaveCompanyLocation}
+                  onClick={() => void handleSaveCompanyProfile()}
                 >
-                  <Save className="w-4 h-4 mr-2" />
-                  {locationSaving ? 'Saving…' : 'Save location'}
+                  <Save className="w-4 h-4" />
+                  {profileSaving ? 'Saving…' : 'Save profile'}
                 </Button>
               </div>
+                </>
+              ) : resolvedBranchId ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-10 gap-y-5 text-sm">
+                  <div className="space-y-5">
+                    <div>
+                      <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Company name</p>
+                      <p className="text-gray-900">{displayCompanyField(companyInfo.companyName)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">
+                        Business registration number
+                      </p>
+                      <p className="text-gray-900">{displayCompanyField(companyInfo.registrationNumber)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">
+                        Tax identification number (TIN)
+                      </p>
+                      <p className="text-gray-900">{displayCompanyField(companyInfo.taxId)}</p>
+                    </div>
+                  </div>
+                  <div className="space-y-5">
+                    <div>
+                      <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Industry</p>
+                      <p className="text-gray-900">{displayCompanyField(companyInfo.industry)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Date established</p>
+                      <p className="text-gray-900">{displayCompanyDate(companyInfo.dateEstablished)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Number of employees</p>
+                      <p className="text-gray-900">{displayCompanyField(companyInfo.employeeCount)}</p>
+                    </div>
+                  </div>
+                  <div className="md:col-span-2">
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Company description</p>
+                    <p className="text-gray-900 whitespace-pre-wrap">{displayCompanyField(companyInfo.companyDescription)}</p>
+                  </div>
+                </div>
+              ) : null}
+
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Plus className="w-5 h-5 text-red-600" />
+                New branch
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-gray-600">
+                Add another branch to the system. Use a short unique code (e.g. MNL, CEB) and a display
+                name that will appear in the header selector.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Branch name</label>
+                  <input
+                    type="text"
+                    value={newBranchName}
+                    onChange={(e) => setNewBranchName(e.target.value)}
+                    disabled={newBranchSaving}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-500 disabled:bg-gray-100"
+                    placeholder="e.g. Cebu"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Branch code</label>
+                  <input
+                    type="text"
+                    value={newBranchCode}
+                    onChange={(e) => setNewBranchCode(e.target.value.toUpperCase())}
+                    disabled={newBranchSaving}
+                    maxLength={10}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-500 disabled:bg-gray-100 uppercase"
+                    placeholder="e.g. CEB"
+                  />
+                </div>
+              </div>
+              <Button
+                type="button"
+                className="bg-red-600 hover:bg-red-700 w-full sm:w-auto gap-2"
+                disabled={newBranchSaving || !newBranchName.trim() || !newBranchCode.trim()}
+                onClick={() => void handleCreateBranch()}
+              >
+                <Plus className="w-4 h-4" />
+                {newBranchSaving ? 'Creating…' : 'Create branch'}
+              </Button>
             </CardContent>
           </Card>
         </div>
       )}
 
-      {/* CONTACTS */}
-      {viewMode === 'contacts' && (
-        <div className="space-y-6">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <h2 className="text-lg font-bold text-gray-900">Contact Directory</h2>
-            <Button className="bg-red-600 hover:bg-red-700 w-full sm:w-auto">
-              <Plus className="w-4 h-4 mr-2" />
-              Add Contact
-            </Button>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {contacts.map((contact) => (
-              <Card key={contact.id}>
-                <CardContent className="p-6">
-                  <div className="flex items-start justify-between mb-4">
-                    <div className="flex items-center gap-3">
-                      <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center">
-                        <Users className="w-6 h-6 text-red-600" />
-                      </div>
-                      <div>
-                        <h3 className="font-bold text-gray-900">{contact.name}</h3>
-                        <p className="text-sm text-gray-500">{contact.role}</p>
-                      </div>
-                    </div>
-                    {contact.isPrimary && (
-                      <Badge className="bg-red-100 text-red-600">Primary</Badge>
-                    )}
-                  </div>
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2 text-sm">
-                      <Building2 className="w-4 h-4 text-gray-400" />
-                      <span className="text-gray-600">{contact.department}</span>
-                    </div>
-                    <div className="flex items-center gap-2 text-sm">
-                      <Phone className="w-4 h-4 text-gray-400" />
-                      <span className="text-gray-600">{contact.phone}</span>
-                    </div>
-                    <div className="flex items-center gap-2 text-sm">
-                      <Mail className="w-4 h-4 text-gray-400" />
-                      <span className="text-gray-600">{contact.email}</span>
-                    </div>
-                  </div>
-                  <div className="flex gap-2 mt-4 pt-4 border-t">
-                    <Button variant="outline" size="sm" className="flex-1">
-                      <Edit2 className="w-3 h-3 mr-1" />
-                      Edit
-                    </Button>
-                    <Button variant="outline" size="sm" className="flex-1 text-red-600 hover:bg-red-50">
-                      <Trash2 className="w-3 h-3 mr-1" />
-                      Delete
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* ADDRESSES */}
-      {viewMode === 'addresses' && (
-        <div className="space-y-6">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <h2 className="text-lg font-bold text-gray-900">Business Locations</h2>
-            <Button className="bg-red-600 hover:bg-red-700 w-full sm:w-auto">
-              <Plus className="w-4 h-4 mr-2" />
-              Add Address
-            </Button>
-          </div>
-
-          <div className="grid grid-cols-1 gap-4">
-            {addresses.map((address) => (
-              <Card key={address.id}>
-                <CardContent className="p-6">
-                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-3 mb-3">
-                        <div className={`p-2 rounded-lg ${
-                          address.type === 'Head Office' ? 'bg-red-100' :
-                          address.type === 'Branch' ? 'bg-blue-100' :
-                          address.type === 'Factory' ? 'bg-orange-100' :
-                          'bg-green-100'
-                        }`}>
-                          <MapPin className={`w-5 h-5 ${
-                            address.type === 'Head Office' ? 'text-red-600' :
-                            address.type === 'Branch' ? 'text-blue-600' :
-                            address.type === 'Factory' ? 'text-orange-600' :
-                            'text-green-600'
-                          }`} />
-                        </div>
-                        <div>
-                          <h3 className="font-bold text-gray-900">{address.label}</h3>
-                          <Badge variant="outline" className="mt-1">{address.type}</Badge>
-                        </div>
-                        {address.isPrimary && (
-                          <Badge className="bg-red-100 text-red-600 ml-2">Primary</Badge>
-                        )}
-                      </div>
-                      <div className="ml-14 space-y-1 text-sm text-gray-600">
-                        <p>{address.street}</p>
-                        <p>{address.city}, {address.province} {address.postalCode}</p>
-                        <p>{address.country}</p>
-                      </div>
-                    </div>
-                    <div className="flex gap-2 w-full sm:w-auto">
-                      <Button variant="outline" size="sm" className="flex-1 sm:flex-none">
-                        <Edit2 className="w-3 h-3 mr-1" />
-                        Edit
-                      </Button>
-                      <Button variant="outline" size="sm" className="flex-1 sm:flex-none text-red-600 hover:bg-red-50">
-                        <Trash2 className="w-3 h-3 mr-1" />
-                        Delete
-                      </Button>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* ADDRESSES — company locations (all branches, map + mailing lines) */}
+      {viewMode === 'addresses' && <SettingsCompanyLocationsTab addAuditLog={addAuditLog} />}
 
       {/* PAYMENT PROFILES */}
       {viewMode === 'payment' && (
@@ -990,68 +620,13 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {/* SOCIAL MEDIA */}
+      {/* SOCIAL MEDIA — per selected branch */}
       {viewMode === 'social' && (
-        <div className="space-y-6">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <h2 className="text-lg font-bold text-gray-900">Social Media Profiles</h2>
-            <Button className="bg-red-600 hover:bg-red-700 w-full sm:w-auto">
-              <Plus className="w-4 h-4 mr-2" />
-              Add Platform
-            </Button>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {socialMedia.map((social, index) => (
-              <Card key={index}>
-                <CardContent className="p-6">
-                  <div className="flex items-start justify-between mb-4">
-                    <div className="flex items-center gap-3">
-                      <div className={`p-3 rounded-lg ${getSocialColor(social.platform)}`}>
-                        {getSocialIcon(social.platform)}
-                      </div>
-                      <div>
-                        <h3 className="font-bold text-gray-900">{social.platform}</h3>
-                        {social.followers && (
-                          <p className="text-sm text-gray-500">{social.followers.toLocaleString()} followers</p>
-                        )}
-                      </div>
-                    </div>
-                    {social.isActive ? (
-                      <Badge className="bg-green-100 text-green-600">Active</Badge>
-                    ) : (
-                      <Badge variant="outline">Inactive</Badge>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2 mb-4">
-                    <Globe className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                    <a
-                      href={social.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-sm text-blue-600 hover:underline truncate"
-                    >
-                      {social.url}
-                    </a>
-                    <button className="ml-auto text-gray-400 hover:text-gray-600">
-                      <ExternalLink className="w-3 h-3" />
-                    </button>
-                  </div>
-                  <div className="flex gap-2 pt-4 border-t">
-                    <Button variant="outline" size="sm" className="flex-1">
-                      <Edit2 className="w-3 h-3 mr-1" />
-                      Edit
-                    </Button>
-                    <Button variant="outline" size="sm" className="flex-1">
-                      <Copy className="w-3 h-3 mr-1" />
-                      Copy URL
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </div>
+        <SettingsSocialMediaTab
+          branchId={resolvedBranchId}
+          branchLabel={selectedBranch}
+          addAuditLog={addAuditLog}
+        />
       )}
 
       {/* NOTIFICATIONS */}
@@ -1121,102 +696,108 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {/* SECURITY */}
-      {viewMode === 'security' && (
-        <div className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Shield className="w-5 h-5 text-red-600" />
-                Security Settings
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="space-y-4">
-                <h3 className="font-semibold text-gray-900">Change Password</h3>
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Current Password</label>
-                    <div className="relative">
-                      <input
-                        type={showPassword ? 'text' : 'password'}
-                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
-                      />
-                      <button
-                        onClick={() => setShowPassword(!showPassword)}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                      >
-                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                      </button>
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">New Password</label>
-                    <input
-                      type="password"
-                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Confirm New Password</label>
-                    <input
-                      type="password"
-                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
-                    />
-                  </div>
-                </div>
-                <Button className="bg-red-600 hover:bg-red-700">
-                  Update Password
-                </Button>
-              </div>
+      {/* SECURITY — gated by SHOW_SETTINGS_SECURITY_TAB */}
+      {SHOW_SETTINGS_SECURITY_TAB && viewMode === 'security' && <SettingsSecurityPanel />}
+    </div>
+  );
+}
 
-              <div className="space-y-4 pt-4 border-t">
-                <h3 className="font-semibold text-gray-900">Two-Factor Authentication</h3>
-                <div className="p-4 bg-gray-50 rounded-lg">
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1">
-                      <p className="font-medium text-gray-900">Enable 2FA</p>
-                      <p className="text-sm text-gray-500 mt-1">Add an extra layer of security to your account</p>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer ml-4">
-                      <input type="checkbox" className="sr-only peer" />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-red-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-600"></div>
-                    </label>
-                  </div>
-                </div>
-              </div>
+function SettingsSecurityPanel() {
+  const [showPassword, setShowPassword] = useState(false);
 
-              <div className="space-y-4 pt-4 border-t">
-                <h3 className="font-semibold text-gray-900">Active Sessions</h3>
-                <div className="space-y-3">
-                  {[
-                    { device: 'Windows PC - Chrome', location: 'Makati, Philippines', lastActive: '2 minutes ago', current: true },
-                    { device: 'iPhone 13 - Safari', location: 'Quezon City, Philippines', lastActive: '2 hours ago', current: false },
-                  ].map((session, index) => (
-                    <div key={index} className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between p-4 bg-gray-50 rounded-lg">
-                      <div>
-                        <p className="font-medium text-gray-900 flex items-center gap-2">
-                          {session.device}
-                          {session.current && (
-                            <Badge className="bg-green-100 text-green-600">Current</Badge>
-                          )}
-                        </p>
-                        <p className="text-sm text-gray-500 mt-1">{session.location}</p>
-                        <p className="text-xs text-gray-400 mt-1">Last active: {session.lastActive}</p>
-                      </div>
-                      {!session.current && (
-                        <Button variant="outline" size="sm" className="text-red-600 hover:bg-red-50">
-                          Revoke
-                        </Button>
-                      )}
-                    </div>
-                  ))}
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Shield className="w-5 h-5 text-red-600" />
+            Security Settings
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="space-y-4">
+            <h3 className="font-semibold text-gray-900">Change Password</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Current Password</label>
+                <div className="relative">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
                 </div>
               </div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">New Password</label>
+                <input
+                  type="password"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Confirm New Password</label>
+                <input
+                  type="password"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                />
+              </div>
+            </div>
+            <Button className="bg-red-600 hover:bg-red-700">Update Password</Button>
+          </div>
+
+          <div className="space-y-4 pt-4 border-t">
+            <h3 className="font-semibold text-gray-900">Two-Factor Authentication</h3>
+            <div className="p-4 bg-gray-50 rounded-lg">
+              <div className="flex items-start justify-between">
+                <div className="flex-1">
+                  <p className="font-medium text-gray-900">Enable 2FA</p>
+                  <p className="text-sm text-gray-500 mt-1">Add an extra layer of security to your account</p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer ml-4">
+                  <input type="checkbox" className="sr-only peer" />
+                  <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-red-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-600" />
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-4 pt-4 border-t">
+            <h3 className="font-semibold text-gray-900">Active Sessions</h3>
+            <div className="space-y-3">
+              {[
+                { device: 'Windows PC - Chrome', location: 'Makati, Philippines', lastActive: '2 minutes ago', current: true },
+                { device: 'iPhone 13 - Safari', location: 'Quezon City, Philippines', lastActive: '2 hours ago', current: false },
+              ].map((session, index) => (
+                <div
+                  key={index}
+                  className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between p-4 bg-gray-50 rounded-lg"
+                >
+                  <div>
+                    <p className="font-medium text-gray-900 flex items-center gap-2">
+                      {session.device}
+                      {session.current ? <Badge className="bg-green-100 text-green-600">Current</Badge> : null}
+                    </p>
+                    <p className="text-sm text-gray-500 mt-1">{session.location}</p>
+                    <p className="text-xs text-gray-400 mt-1">Last active: {session.lastActive}</p>
+                  </div>
+                  {!session.current ? (
+                    <Button variant="outline" size="sm" className="text-red-600 hover:bg-red-50">
+                      Revoke
+                    </Button>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

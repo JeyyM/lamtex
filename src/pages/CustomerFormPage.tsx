@@ -21,6 +21,7 @@ import { supabase } from '@/src/lib/supabase';
 import { useAppContext } from '@/src/store/AppContext';
 import { CompanyMapPicker } from '@/src/components/maps/CompanyMapPicker';
 import { openGoogleMapsSearch } from '@/src/lib/maps';
+import { fetchBranchDepotPinByBranchId } from '@/src/lib/companyAddressesSettings';
 import type { ClientType } from '@/src/types/customers';
 
 interface Agent {
@@ -218,19 +219,9 @@ export function CustomerFormPage() {
         setBranchStorePin(null);
         return;
       }
-      const { data: cs } = await supabase
-        .from('company_settings')
-        .select('hq_latitude, hq_longitude')
-        .eq('branch_id', branchRow.id)
-        .maybeSingle();
+      const pin = await fetchBranchDepotPinByBranchId(branchRow.id as string);
       if (cancelled) return;
-      const la = cs?.hq_latitude != null ? Number(cs.hq_latitude) : NaN;
-      const ln = cs?.hq_longitude != null ? Number(cs.hq_longitude) : NaN;
-      if (Number.isFinite(la) && Number.isFinite(ln)) {
-        setBranchStorePin({ lat: la, lng: ln });
-      } else {
-        setBranchStorePin(null);
-      }
+      setBranchStorePin(pin);
     })();
     return () => {
       cancelled = true;

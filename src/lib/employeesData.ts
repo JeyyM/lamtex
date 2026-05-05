@@ -274,6 +274,12 @@ export type EmployeeFullProfile = {
   activityFeed: EmployeeActivityFeedItem[];
   notes: EmployeeNoteRow[];
   customerPortfolio: CustomerPortfolioRow[];
+  /** Supabase Auth link for app login (from `employees.auth_user_id` / `user_role`). */
+  loginAccount: {
+    linked: boolean;
+    authUserId: string | null;
+    userRole: string | null;
+  };
 };
 
 const ORDER_FULFILLED_STATUSES = ['Packed', 'In Transit', 'Delivered', 'Completed'];
@@ -571,6 +577,7 @@ function emptyEmployeeFullProfile(): EmployeeFullProfile {
     activityFeed: [],
     notes: [],
     customerPortfolio: [],
+    loginAccount: { linked: false, authUserId: null, userRole: null },
   };
 }
 
@@ -992,7 +999,7 @@ export async function fetchEmployeeFullProfile(employeeUuid: string): Promise<Em
     customersRes,
     assignmentsRes,
   ] = await Promise.all([
-    supabase.from('employees').select('employee_name, email').eq('id', id).maybeSingle(),
+    supabase.from('employees').select('employee_name, email, auth_user_id, user_role').eq('id', id).maybeSingle(),
     supabase.from('employee_personal_info').select('*').eq('employee_id', id).maybeSingle(),
     supabase.from('employee_contact_info').select('*').eq('employee_id', id).maybeSingle(),
     supabase.from('employee_addresses').select('*').eq('employee_id', id).order('is_current', { ascending: false }),
@@ -1084,7 +1091,12 @@ export async function fetchEmployeeFullProfile(employeeUuid: string): Promise<Em
 
   const customerPortfolio = buildCustomerPortfolio(customers, assignments, fullOrderAgg);
 
-  const empCore = empCoreRes.data as { employee_name?: string; email?: string } | null;
+  const empCore = empCoreRes.data as {
+    employee_name?: string;
+    email?: string;
+    auth_user_id?: string | null;
+    user_role?: string | null;
+  } | null;
   const performedBy = performedByMatchList(empCore?.employee_name, empCore?.email);
   const hrRaw = (activitiesRes.data ?? []) as Record<string, unknown>[];
   const crossLogs = await fetchCrossModuleLogsPerformedBy(performedBy);
@@ -1250,6 +1262,8 @@ export async function fetchEmployeeFullProfile(employeeUuid: string): Promise<Em
     created_at: String(r.created_at ?? ''),
   }));
 
+  const authUid = empCore?.auth_user_id != null ? String(empCore.auth_user_id) : null;
+
   return {
     personal,
     contact,
@@ -1266,6 +1280,11 @@ export async function fetchEmployeeFullProfile(employeeUuid: string): Promise<Em
     activityFeed,
     notes,
     customerPortfolio,
+    loginAccount: {
+      linked: !!authUid,
+      authUserId: authUid,
+      userRole: empCore?.user_role != null ? String(empCore.user_role) : null,
+    },
   };
 }
 

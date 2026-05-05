@@ -2736,30 +2736,6 @@ export function OrderDetailPage() {
               Documents & Proofs
             </CardTitle>
             <div className="flex gap-2 flex-wrap">
-              {/* Show all buttons for illustration */}
-              {order.invoiceId ? (
-                <Button 
-                  variant="outline" 
-                  size="sm" 
-                  onClick={() => window.open(`/invoice/${order.id}`, '_blank')}
-                  className="gap-2 flex-1 sm:flex-none"
-                >
-                  <FileText className="w-4 h-4" />
-                  <span className="hidden sm:inline">View Invoice</span>
-                  <span className="sm:hidden">Invoice</span>
-                </Button>
-              ) : (
-                <Button 
-                  variant="primary" 
-                  size="sm" 
-                  onClick={() => window.open(`/invoice/${order.id}`, '_blank')}
-                  className="gap-2 flex-1 sm:flex-none"
-                >
-                  <FileText className="w-4 h-4" />
-                  <span className="hidden sm:inline">Generate Invoice</span>
-                  <span className="sm:hidden">Invoice</span>
-                </Button>
-              )}
               <Button variant="outline" size="sm" onClick={openProofDocumentModal} className="gap-2 flex-1 sm:flex-none">
                 <Upload className="w-4 h-4" />
                 <span className="hidden sm:inline">Upload Proof</span>

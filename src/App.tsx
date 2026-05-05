@@ -27,10 +27,10 @@ import { PlaceholderPage } from './pages/PlaceholderPage';
 import { PaymentPage } from './pages/PaymentPage';
 import { PaymentSuccessPage } from './pages/PaymentSuccessPage';
 import { ReceiptPage } from './pages/ReceiptPage';
-import { InvoicePreviewPage } from './pages/InvoicePreviewPage';
 import AgentAnalyticsPage from './pages/AgentAnalyticsPage';
 import AgentProfilePage from './pages/AgentProfilePage';
 import EmployeesPage from './pages/EmployeesPage';
+import EmployeeNewPage from './pages/EmployeeNewPage';
 import EmployeeDetailPage from './pages/EmployeeDetailPage';
 import { PurchaseRequestsPage } from './pages/PurchaseRequestsPage';
 import { PurchaseOrdersPage } from './pages/PurchaseOrdersPage';
@@ -93,7 +93,6 @@ function AppRoutes() {
       <Route path="/pay/:token" element={<PaymentPage />} />
       <Route path="/payment-success/:token" element={<PaymentSuccessPage />} />
       <Route path="/receipt/:id" element={<ReceiptPage />} />
-      <Route path="/invoice/:orderId" element={<InvoicePreviewPage />} />
       
       {/* Protected Routes - Require Auth */}
       <Route path="/" element={<RequireAuth><AppLayout /></RequireAuth>}>
@@ -124,6 +123,7 @@ function AppRoutes() {
             <Route path="suppliers" element={<SuppliersPage />} />
             <Route path="finance" element={<FinancePageNew />} />
             <Route path="employees" element={<EmployeesPage />} />
+            <Route path="employees/new" element={<EmployeeNewPage />} />
             <Route path="employees/:employeeId" element={<EmployeeDetailPage />} />
             <Route path="agents" element={<AgentAnalyticsPage />} />
             <Route path="agents/:agentId" element={<AgentProfilePage />} />

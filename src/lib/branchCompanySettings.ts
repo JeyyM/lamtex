@@ -5,7 +5,8 @@ export type CompanyInfoFields = {
   registrationNumber: string;
   taxId: string;
   industry: string;
-  foundedYear: string;
+  /** ISO `YYYY-MM-DD` for `<input type="date">` */
+  dateEstablished: string;
   employeeCount: string;
   companyDescription: string;
 };
@@ -16,47 +17,67 @@ export function emptyCompanyInfo(): CompanyInfoFields {
     registrationNumber: '',
     taxId: '',
     industry: '',
-    foundedYear: '',
+    dateEstablished: '',
     employeeCount: '',
     companyDescription: '',
   };
 }
 
-/** Resolve Supabase branch id from Topbar branch name. */
+/** Resolve Supabase branch id from Topbar branch name (exact or first segment before " -"). */
 export async function resolveBranchIdByName(branchName: string): Promise<string | null> {
-  const name = branchName.trim();
-  if (!name) return null;
-  const { data, error } = await supabase.from('branches').select('id').eq('name', name).maybeSingle();
-  if (error || !data?.id) return null;
-  return data.id;
+  const raw = branchName.trim();
+  if (!raw) return null;
+
+  const { data: rows, error } = await supabase.from('branches').select('id, name').eq('is_active', true);
+  if (error || !rows?.length) return null;
+
+  const lower = raw.toLowerCase();
+
+  const exact = rows.find((r) => (r.name ?? '').trim().toLowerCase() === lower);
+  if (exact?.id) return exact.id;
+
+  const firstSegment = (s: string) => s.split(/\s*-\s*/)[0]?.trim().toLowerCase() ?? '';
+  const byFirst = rows.find((r) => firstSegment(r.name ?? '') === lower);
+  if (byFirst?.id) return byFirst.id;
+
+  return null;
 }
 
-export async function loadCompanyInfoForBranch(branchId: string): Promise<CompanyInfoFields | null> {
+export async function loadCompanyInfoForBranch(branchId: string): Promise<CompanyInfoFields> {
   const { data, error } = await supabase
     .from('company_settings')
     .select(
-      'company_name, registration_number, tax_id, industry, founded_year, employee_count, company_description',
+      'company_name, registration_number, tax_id, industry, founded_year, date_established, employee_count, company_description',
     )
     .eq('branch_id', branchId)
     .maybeSingle();
-  if (error || !data) return null;
+  if (error) return emptyCompanyInfo();
+  if (!data) return emptyCompanyInfo();
   return {
     companyName: data.company_name ?? '',
     registrationNumber: data.registration_number ?? '',
     taxId: data.tax_id ?? '',
     industry: data.industry ?? '',
-    foundedYear: data.founded_year != null ? String(data.founded_year) : '',
+    dateEstablished: (() => {
+      const rawDe = data.date_established;
+      if (rawDe != null && String(rawDe).trim() !== '') {
+        return String(rawDe).slice(0, 10);
+      }
+      if (data.founded_year != null && Number.isFinite(Number(data.founded_year))) {
+        return `${data.founded_year}-01-01`;
+      }
+      return '';
+    })(),
     employeeCount: data.employee_count ?? '',
     companyDescription: data.company_description ?? '',
   };
 }
 
-function parseFoundedYear(s: string): number | null {
-  const t = s.trim();
-  if (!t) return null;
-  const n = parseInt(t, 10);
-  if (!Number.isFinite(n)) return null;
-  return n;
+function yearFromIsoDate(iso: string): number | null {
+  const t = iso.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(t)) return null;
+  const y = parseInt(t.slice(0, 4), 10);
+  return Number.isFinite(y) ? y : null;
 }
 
 /** Save company profile fields for the branch (insert or update). */
@@ -66,12 +87,15 @@ export async function saveCompanyInfoForBranch(
 ): Promise<{ ok: boolean; error?: string }> {
   try {
     const company_name = info.companyName.trim() || 'Branch';
+    const dateEstablished = info.dateEstablished.trim();
+    const foundedYear = dateEstablished ? yearFromIsoDate(dateEstablished) : null;
     const payload = {
       company_name,
       registration_number: info.registrationNumber.trim() || null,
       tax_id: info.taxId.trim() || null,
       industry: info.industry.trim() || null,
-      founded_year: parseFoundedYear(info.foundedYear),
+      date_established: dateEstablished || null,
+      founded_year: foundedYear,
       employee_count: info.employeeCount.trim() || null,
       company_description: info.companyDescription.trim() || null,
       updated_at: new Date().toISOString(),
