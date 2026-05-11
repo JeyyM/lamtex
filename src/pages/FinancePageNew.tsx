@@ -14,6 +14,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   ArrowUpRight,
   CheckCircle2,
   CircleDollarSign,
@@ -56,6 +59,7 @@ import {
 } from '@/src/lib/financeData';
 import {
   adjustCustomerCreditLimit,
+  chargeToCredit,
   rejectPaymentProof,
   releaseCommission,
   uploadPaymentProof,
@@ -102,6 +106,8 @@ function paymentStatusVariant(status: string): 'success' | 'warning' | 'info' | 
   switch (status) {
     case 'Paid':
       return 'success';
+    case 'On Credit':
+      return 'info';
     case 'Partially Paid':
       return 'warning';
     case 'Invoiced':
@@ -139,6 +145,15 @@ export function FinancePageNew() {
   const [period, setPeriod] = useState<string>(periodKeyForDate(new Date()));
   const [proofFilter, setProofFilter] = useState<'pending' | 'verified' | 'rejected' | 'all'>('pending');
   const [search, setSearch] = useState('');
+
+  // Outstanding orders — column sort & status dropdown filter
+  const [sortKey, setSortKey] = useState<string>('dueDate');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [headerPaymentFilter, setHeaderPaymentFilter] = useState('');
+
+  // Receipts — column sort
+  const [receiptSortKey, setReceiptSortKey] = useState<string>('paidAt');
+  const [receiptSortDir, setReceiptSortDir] = useState<'asc' | 'desc'>('desc');
 
   const [loading, setLoading] = useState({
     metrics: true,
@@ -255,13 +270,83 @@ export function FinancePageNew() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [period]);
 
+  const distinctPaymentStatuses = useMemo(() => {
+    const s = new Set<string>(outstanding.map((r) => r.paymentStatus).filter(Boolean));
+    return Array.from(s).sort((a, b) => a.localeCompare(b));
+  }, [outstanding]);
+
+  const handleSort = (key: string) => {
+    if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(key); setSortDir('asc'); }
+  };
+
+  const sortIcon = (col: string) => {
+    if (sortKey !== col) return <ArrowUpDown className="w-3 h-3 ml-1 opacity-40" />;
+    return sortDir === 'asc'
+      ? <ArrowUp className="w-3 h-3 ml-1 text-blue-600" />
+      : <ArrowDown className="w-3 h-3 ml-1 text-blue-600" />;
+  };
+
+  const handleReceiptSort = (key: string) => {
+    if (receiptSortKey === key) setReceiptSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setReceiptSortKey(key); setReceiptSortDir('asc'); }
+  };
+
+  const receiptSortIcon = (col: string) => {
+    if (receiptSortKey !== col) return <ArrowUpDown className="w-3 h-3 ml-1 opacity-40" />;
+    return receiptSortDir === 'asc'
+      ? <ArrowUp className="w-3 h-3 ml-1 text-blue-600" />
+      : <ArrowDown className="w-3 h-3 ml-1 text-blue-600" />;
+  };
+
   const filteredOutstanding = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return outstanding;
-    return outstanding.filter((r) =>
-      [r.orderNumber, r.customerName, r.agentName].some((v) => v?.toLowerCase().includes(q)),
-    );
-  }, [outstanding, search]);
+    let rows = outstanding;
+    if (q) rows = rows.filter((r) => [r.orderNumber, r.customerName, r.agentName].some((v) => v?.toLowerCase().includes(q)));
+    if (headerPaymentFilter) rows = rows.filter((r) => r.paymentStatus === headerPaymentFilter);
+    return [...rows].sort((a, b) => {
+      let av: string | number;
+      let bv: string | number;
+      switch (sortKey) {
+        case 'orderNumber': av = a.orderNumber ?? ''; bv = b.orderNumber ?? ''; break;
+        case 'customer': av = (a.customerName ?? '').toLowerCase(); bv = (b.customerName ?? '').toLowerCase(); break;
+        case 'agent': av = (a.agentName ?? '').toLowerCase(); bv = (b.agentName ?? '').toLowerCase(); break;
+        case 'terms': av = a.paymentTerms ?? ''; bv = b.paymentTerms ?? ''; break;
+        case 'total': av = a.totalAmount; bv = b.totalAmount; break;
+        case 'paid': av = a.amountPaid; bv = b.amountPaid; break;
+        case 'balance': av = a.balanceDue; bv = b.balanceDue; break;
+        case 'dueDate': av = a.dueDate ?? ''; bv = b.dueDate ?? ''; break;
+        case 'status': av = a.paymentStatus; bv = b.paymentStatus; break;
+        default: av = a.dueDate ?? ''; bv = b.dueDate ?? '';
+      }
+      if (typeof av === 'number' && typeof bv === 'number') return sortDir === 'asc' ? av - bv : bv - av;
+      const as = String(av); const bs = String(bv);
+      if (as < bs) return sortDir === 'asc' ? -1 : 1;
+      if (as > bs) return sortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [outstanding, search, headerPaymentFilter, sortKey, sortDir]);
+
+  const sortedReceipts = useMemo(() => {
+    return [...receipts].sort((a, b) => {
+      let av: string | number;
+      let bv: string | number;
+      switch (receiptSortKey) {
+        case 'receiptNumber': av = a.receiptNumber ?? ''; bv = b.receiptNumber ?? ''; break;
+        case 'order': av = (a.orderNumber ?? '').toLowerCase(); bv = (b.orderNumber ?? '').toLowerCase(); break;
+        case 'customer': av = (a.customerName ?? '').toLowerCase(); bv = (b.customerName ?? '').toLowerCase(); break;
+        case 'method': av = a.paymentMethod ?? ''; bv = b.paymentMethod ?? ''; break;
+        case 'amount': av = a.totalPaid; bv = b.totalPaid; break;
+        case 'paidAt': av = a.paidAt ?? ''; bv = b.paidAt ?? ''; break;
+        default: av = a.paidAt ?? ''; bv = b.paidAt ?? '';
+      }
+      if (typeof av === 'number' && typeof bv === 'number') return receiptSortDir === 'asc' ? av - bv : bv - av;
+      const as = String(av); const bs = String(bv);
+      if (as < bs) return receiptSortDir === 'asc' ? -1 : 1;
+      if (as > bs) return receiptSortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [receipts, receiptSortKey, receiptSortDir]);
 
   const reviewer = (employeeName || 'User').trim();
 
@@ -271,31 +356,54 @@ export function FinancePageNew() {
   };
 
   const handleProofUpload = async (input: {
-    file: File;
-    amount: number;
-    method: string;
-    reference: string;
-    notes: string;
+    batches: Array<{ file: File | null; amount: number; method: string; reference: string; notes: string }>;
+    creditAmount: number;
+    creditNotes: string;
   }) => {
     if (!proofModalOrder) return;
+    const uploaderRole = role === 'Agent' ? 'Agent' : role === 'Executive' ? 'Executive' : 'Cashier';
     try {
-      await uploadPaymentProof({
-        orderId: proofModalOrder.id,
-        file: input.file,
-        amount: input.amount,
-        paymentMethod: input.method,
-        referenceNumber: input.reference || null,
-        notes: input.notes || null,
-        uploadedBy: reviewer,
-        uploadedByRole: role === 'Agent' ? 'Agent' : role === 'Executive' ? 'Executive' : 'Cashier',
-      });
-      addAuditLog(
-        'Payment proof uploaded',
-        'Order',
-        `${proofModalOrder.orderNumber} · ${formatPeso(input.amount)} via ${input.method}`,
-      );
+      // Upload each proof batch sequentially (file is optional)
+      for (const batch of input.batches) {
+        await uploadPaymentProof({
+          orderId: proofModalOrder.id,
+          file: batch.file,
+          amount: batch.amount,
+          paymentMethod: batch.method,
+          referenceNumber: batch.reference || null,
+          notes: batch.notes || null,
+          uploadedBy: reviewer,
+          uploadedByRole: uploaderRole,
+        });
+        addAuditLog(
+          'Payment recorded',
+          'Order',
+          `${proofModalOrder.orderNumber} · ${formatPeso(batch.amount)} via ${batch.method}${batch.file ? '' : ' (no proof attached)'}`,
+        );
+      }
+
+      // Apply credit charge immediately (no proof needed)
+      if (input.creditAmount > 0) {
+        await chargeToCredit({
+          orderId: proofModalOrder.id,
+          amount: input.creditAmount,
+          notes: input.creditNotes || null,
+          chargedBy: reviewer,
+        });
+        addAuditLog(
+          'Credit charge applied',
+          'Order',
+          `${proofModalOrder.orderNumber} · ${formatPeso(input.creditAmount)} charged to credit`,
+        );
+      }
+
       setProofModalOrder(null);
-      setToast({ kind: 'success', message: 'Payment proof uploaded — pending verification.' });
+      const batchCount = input.batches.length;
+      const hasCredit = input.creditAmount > 0;
+      const parts: string[] = [];
+      if (batchCount > 0) parts.push(`${batchCount} proof${batchCount > 1 ? 's' : ''} uploaded — pending verification`);
+      if (hasCredit) parts.push(`${formatPeso(input.creditAmount)} charged to credit`);
+      setToast({ kind: 'success', message: parts.join(' · ') + '.' });
       await Promise.all([loadOutstanding(), loadMetrics(), tab === 'proofs' ? loadProofs() : Promise.resolve()]);
     } catch (e) {
       setToast({ kind: 'error', message: e instanceof Error ? e.message : 'Upload failed' });
@@ -473,17 +581,46 @@ export function FinancePageNew() {
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
-                  <thead className="bg-gray-50 text-gray-600">
+                  <thead className="bg-gray-50 text-xs text-gray-500 uppercase border-b border-gray-200">
                     <tr>
-                      <th className="text-left py-2.5 px-3 font-semibold">Order</th>
-                      <th className="text-left py-2.5 px-3 font-semibold">Customer</th>
-                      <th className="text-left py-2.5 px-3 font-semibold hidden md:table-cell">Agent</th>
-                      <th className="text-left py-2.5 px-3 font-semibold hidden lg:table-cell">Terms</th>
-                      <th className="text-right py-2.5 px-3 font-semibold">Total</th>
-                      <th className="text-right py-2.5 px-3 font-semibold">Paid</th>
-                      <th className="text-right py-2.5 px-3 font-semibold">Balance</th>
-                      <th className="text-center py-2.5 px-3 font-semibold">Due</th>
-                      <th className="text-center py-2.5 px-3 font-semibold">Status</th>
+                      <th onClick={() => handleSort('orderNumber')} className="text-left py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                        <span className="flex items-center">Order{sortIcon('orderNumber')}</span>
+                      </th>
+                      <th onClick={() => handleSort('customer')} className="text-left py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                        <span className="flex items-center">Customer{sortIcon('customer')}</span>
+                      </th>
+                      <th onClick={() => handleSort('agent')} className="text-left py-2.5 px-3 font-semibold hidden md:table-cell cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                        <span className="flex items-center">Agent{sortIcon('agent')}</span>
+                      </th>
+                      <th onClick={() => handleSort('terms')} className="text-left py-2.5 px-3 font-semibold hidden lg:table-cell cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                        <span className="flex items-center">Terms{sortIcon('terms')}</span>
+                      </th>
+                      <th onClick={() => handleSort('total')} className="text-right py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                        <span className="flex items-center justify-end">Total{sortIcon('total')}</span>
+                      </th>
+                      <th onClick={() => handleSort('paid')} className="text-right py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                        <span className="flex items-center justify-end">Paid{sortIcon('paid')}</span>
+                      </th>
+                      <th onClick={() => handleSort('balance')} className="text-right py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                        <span className="flex items-center justify-end">Balance{sortIcon('balance')}</span>
+                      </th>
+                      <th onClick={() => handleSort('dueDate')} className="text-center py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                        <span className="flex items-center justify-center">Due{sortIcon('dueDate')}</span>
+                      </th>
+                      <th className="py-2.5 px-3 font-semibold text-left align-top min-w-[9rem] normal-case">
+                        <select
+                          aria-label="Filter by payment status"
+                          value={headerPaymentFilter}
+                          onChange={(e) => setHeaderPaymentFilter(e.target.value)}
+                          onClick={(e) => e.stopPropagation()}
+                          className="w-full text-xs font-semibold text-gray-600 border border-gray-200 rounded-md px-2 py-1.5 bg-white hover:border-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                        >
+                          <option value="">Status</option>
+                          {distinctPaymentStatuses.map((s) => (
+                            <option key={s} value={s}>{s}</option>
+                          ))}
+                        </select>
+                      </th>
                       <th className="text-right py-2.5 px-3 font-semibold">Actions</th>
                     </tr>
                   </thead>
@@ -500,7 +637,15 @@ export function FinancePageNew() {
                               <p className="text-[11px] text-amber-700 mt-0.5">{row.pendingProofs} proof pending</p>
                             ) : null}
                           </td>
-                          <td className="py-3 px-3 text-gray-800">{row.customerName ?? '—'}</td>
+                          <td className="py-3 px-3">
+                            {row.customerId ? (
+                              <Link to={`/customers/${row.customerId}`} className="text-blue-600 hover:underline font-medium">
+                                {row.customerName ?? '—'}
+                              </Link>
+                            ) : (
+                              <span className="text-gray-800">{row.customerName ?? '—'}</span>
+                            )}
+                          </td>
                           <td className="py-3 px-3 text-gray-700 hidden md:table-cell">{row.agentName ?? '—'}</td>
                           <td className="py-3 px-3 text-gray-700 hidden lg:table-cell">{row.paymentTerms ?? '—'}</td>
                           <td className="py-3 px-3 text-right tabular-nums">{formatPeso(row.totalAmount)}</td>
@@ -619,19 +764,31 @@ export function FinancePageNew() {
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
-                  <thead className="bg-gray-50 text-gray-600">
+                  <thead className="bg-gray-50 text-xs text-gray-500 uppercase border-b border-gray-200">
                     <tr>
-                      <th className="text-left py-2.5 px-3 font-semibold">Receipt #</th>
-                      <th className="text-left py-2.5 px-3 font-semibold">Order</th>
-                      <th className="text-left py-2.5 px-3 font-semibold">Customer</th>
-                      <th className="text-left py-2.5 px-3 font-semibold">Method</th>
-                      <th className="text-right py-2.5 px-3 font-semibold">Amount</th>
-                      <th className="text-left py-2.5 px-3 font-semibold">Paid at</th>
+                      <th onClick={() => handleReceiptSort('receiptNumber')} className="text-left py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                        <span className="flex items-center">Receipt #{receiptSortIcon('receiptNumber')}</span>
+                      </th>
+                      <th onClick={() => handleReceiptSort('order')} className="text-left py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                        <span className="flex items-center">Order{receiptSortIcon('order')}</span>
+                      </th>
+                      <th onClick={() => handleReceiptSort('customer')} className="text-left py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                        <span className="flex items-center">Customer{receiptSortIcon('customer')}</span>
+                      </th>
+                      <th onClick={() => handleReceiptSort('method')} className="text-left py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                        <span className="flex items-center">Method{receiptSortIcon('method')}</span>
+                      </th>
+                      <th onClick={() => handleReceiptSort('amount')} className="text-right py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                        <span className="flex items-center justify-end">Amount{receiptSortIcon('amount')}</span>
+                      </th>
+                      <th onClick={() => handleReceiptSort('paidAt')} className="text-left py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                        <span className="flex items-center">Paid at{receiptSortIcon('paidAt')}</span>
+                      </th>
                       <th className="text-right py-2.5 px-3 font-semibold">Link</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {receipts.map((r) => (
+                    {sortedReceipts.map((r) => (
                       <tr key={r.id} className="hover:bg-gray-50/80">
                         <td className="py-3 px-3 font-medium text-gray-900">{r.receiptNumber}</td>
                         <td className="py-3 px-3">
@@ -727,7 +884,7 @@ export function FinancePageNew() {
         <RecordPaymentModal
           order={proofModalOrder}
           onClose={() => setProofModalOrder(null)}
-          onSubmit={handleProofUpload}
+          onSubmit={(input) => handleProofUpload(input)}
         />
       )}
 
@@ -1005,45 +1162,160 @@ function CommissionRowCard(props: { row: AgentCommissionRow; canRelease: boolean
 
 /* ------------------------------- Modals --------------------------------- */
 
-function RecordPaymentModal(props: {
-  order: OutstandingOrderRow;
-  onClose: () => void;
-  onSubmit: (input: { file: File; amount: number; method: string; reference: string; notes: string }) => void;
+type PaymentBatch = {
+  id: number;
+  file: File | null;
+  preview: string | null;
+  amount: string;
+  method: typeof PAYMENT_METHODS[number];
+  reference: string;
+  notes: string;
+};
+
+function BatchUploadRow(props: {
+  batch: PaymentBatch;
+  index: number;
+  canRemove: boolean;
+  onChange: (updated: Partial<PaymentBatch>) => void;
+  onRemove: () => void;
 }) {
-  const [file, setFile] = useState<File | null>(null);
-  const [preview, setPreview] = useState<string | null>(null);
-  const [amount, setAmount] = useState(String(props.order.balanceDue || 0));
-  const [method, setMethod] = useState<typeof PAYMENT_METHODS[number]>('Bank Transfer');
-  const [reference, setReference] = useState('');
-  const [notes, setNotes] = useState('');
-  const [submitting, setSubmitting] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const { batch, index } = props;
 
   const handleFile = (f: File | null | undefined) => {
     if (!f) return;
-    setFile(f);
     if (f.type.startsWith('image/')) {
       const reader = new FileReader();
-      reader.onloadend = () => setPreview(reader.result as string);
+      reader.onloadend = () => props.onChange({ file: f, preview: reader.result as string });
       reader.readAsDataURL(f);
     } else {
-      setPreview(null);
+      props.onChange({ file: f, preview: null });
     }
   };
 
+  return (
+    <div className="border border-gray-200 rounded-lg p-3 space-y-3 bg-gray-50/50">
+      <div className="flex items-center justify-between mb-1">
+        <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Batch {index + 1}</p>
+        {props.canRemove && (
+          <button type="button" onClick={props.onRemove} className="text-gray-400 hover:text-red-500 transition-colors">
+            <X className="w-4 h-4" />
+          </button>
+        )}
+      </div>
+
+      {/* Proof upload */}
+      <div
+        onClick={() => inputRef.current?.click()}
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => { e.preventDefault(); handleFile(e.dataTransfer.files?.[0]); }}
+        className="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50/50 transition-colors"
+      >
+        {batch.preview ? (
+          <img src={batch.preview} alt="proof" className="max-h-28 mx-auto rounded" />
+        ) : batch.file ? (
+          <p className="text-sm text-gray-700 truncate">{batch.file.name}</p>
+        ) : (
+          <>
+            <Upload className="w-6 h-6 text-gray-400 mx-auto mb-1" />
+            <p className="text-xs text-gray-600">Click or drop proof image / PDF</p>
+            <p className="text-[11px] text-gray-400 mt-0.5">Optional</p>
+          </>
+        )}
+        <input ref={inputRef} type="file" accept="image/*,application/pdf" className="hidden"
+          onChange={(e) => handleFile(e.target.files?.[0])} />
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <Field label="Amount">
+          <input type="number" value={batch.amount} onChange={(e) => props.onChange({ amount: e.target.value })}
+            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" />
+        </Field>
+        <Field label="Method">
+          <select value={batch.method} onChange={(e) => props.onChange({ method: e.target.value as typeof PAYMENT_METHODS[number] })}
+            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none bg-white">
+            {PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
+          </select>
+        </Field>
+        <Field label="Reference #">
+          <input value={batch.reference} onChange={(e) => props.onChange({ reference: e.target.value })}
+            placeholder="OR #, Tx #, Check #"
+            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" />
+        </Field>
+        <Field label="Notes">
+          <input value={batch.notes} onChange={(e) => props.onChange({ notes: e.target.value })}
+            placeholder="Optional"
+            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" />
+        </Field>
+      </div>
+    </div>
+  );
+}
+
+function RecordPaymentModal(props: {
+  order: OutstandingOrderRow;
+  onClose: () => void;
+  onSubmit: (input: {
+    batches: Array<{ file: File | null; amount: number; method: string; reference: string; notes: string }>;
+    creditAmount: number;
+    creditNotes: string;
+  }) => Promise<void>;
+}) {
+  const [batches, setBatches] = useState<PaymentBatch[]>([
+    { id: 1, file: null, preview: null, amount: '', method: 'Bank Transfer', reference: '', notes: '' },
+  ]);
+  const [creditAmount, setCreditAmount] = useState('');
+  const [creditNotes, setCreditNotes] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  let nextId = useRef(2);
+
+  const updateBatch = (id: number, patch: Partial<PaymentBatch>) => {
+    setBatches((prev) => prev.map((b) => (b.id === id ? { ...b, ...patch } : b)));
+  };
+
+  const addBatch = () => {
+    setBatches((prev) => [
+      ...prev,
+      { id: nextId.current++, file: null, preview: null, amount: '', method: 'Bank Transfer', reference: '', notes: '' },
+    ]);
+  };
+
+  const removeBatch = (id: number) => setBatches((prev) => prev.filter((b) => b.id !== id));
+
+  const batchTotal = batches.reduce((sum, b) => sum + (Number(b.amount) || 0), 0);
+  const creditNum = Number(creditAmount) || 0;
+  const combinedTotal = batchTotal + creditNum;
+  const remaining = props.order.balanceDue - combinedTotal;
+
   const submit = async () => {
-    const n = Number(amount);
-    if (!file) return;
-    if (!Number.isFinite(n) || n <= 0) {
-      window.alert('Enter a valid payment amount.');
+    // Active = any batch that has an amount entered (file is optional)
+    const activeBatches = batches.filter((b) => (Number(b.amount) || 0) > 0);
+    for (const b of activeBatches) {
+      const n = Number(b.amount);
+      if (!Number.isFinite(n) || n <= 0) { window.alert('Each batch needs a valid amount greater than zero.'); return; }
+    }
+    if (activeBatches.length === 0 && creditNum <= 0) {
+      window.alert('Add at least one payment batch or a credit charge.');
       return;
     }
-    if (n > props.order.balanceDue) {
-      if (!window.confirm(`Amount exceeds the order balance of ${formatPeso(props.order.balanceDue)}. Submit anyway?`)) return;
+    if (creditNum < 0) { window.alert('Credit amount cannot be negative.'); return; }
+    if (remaining < -0.01) {
+      if (!window.confirm(`Combined amount (${formatPeso(combinedTotal)}) exceeds the balance (${formatPeso(props.order.balanceDue)}). Submit anyway?`)) return;
     }
+
     setSubmitting(true);
     try {
-      await props.onSubmit({ file, amount: n, method, reference, notes });
+      await props.onSubmit({
+        batches: activeBatches.map((b) => ({
+          file: b.file ?? null,
+          amount: Number(b.amount),
+          method: b.method,
+          reference: b.reference,
+          notes: b.notes,
+        })),
+        creditAmount: creditNum,
+        creditNotes,
+      });
     } finally {
       setSubmitting(false);
     }
@@ -1051,95 +1323,75 @@ function RecordPaymentModal(props: {
 
   return (
     <Modal title="Record payment" onClose={props.onClose}>
+      {/* Order summary */}
       <div className="bg-blue-50 border border-blue-200 rounded-md p-3 text-sm mb-4">
-        <p className="text-blue-900 font-medium">{props.order.orderNumber}</p>
-        <p className="text-blue-800">{props.order.customerName ?? '—'}</p>
+        <p className="text-blue-900 font-semibold">{props.order.orderNumber}</p>
+        <p className="text-blue-800 text-xs">{props.order.customerName ?? '—'} · {props.order.paymentTerms ?? '—'}</p>
         <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
-          <div>
-            <p className="text-blue-700">Total</p>
-            <p className="font-semibold text-blue-900">{formatPeso(props.order.totalAmount)}</p>
-          </div>
-          <div>
-            <p className="text-blue-700">Paid</p>
-            <p className="font-semibold text-blue-900">{formatPeso(props.order.amountPaid)}</p>
-          </div>
-          <div>
-            <p className="text-blue-700">Balance</p>
-            <p className="font-semibold text-blue-900">{formatPeso(props.order.balanceDue)}</p>
-          </div>
+          <div><p className="text-blue-700">Total</p><p className="font-semibold text-blue-900">{formatPeso(props.order.totalAmount)}</p></div>
+          <div><p className="text-blue-700">Paid</p><p className="font-semibold text-blue-900">{formatPeso(props.order.amountPaid)}</p></div>
+          <div><p className="text-blue-700">Balance</p><p className="font-semibold text-blue-900">{formatPeso(props.order.balanceDue)}</p></div>
         </div>
       </div>
-      <div
-        onClick={() => inputRef.current?.click()}
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => {
-          e.preventDefault();
-          handleFile(e.dataTransfer.files?.[0]);
-        }}
-        className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50/50 transition-colors mb-4"
-      >
-        {preview ? (
-          <img src={preview} alt="proof" className="max-h-44 mx-auto rounded" />
-        ) : file ? (
-          <p className="text-sm text-gray-700 truncate">{file.name}</p>
-        ) : (
-          <>
-            <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
-            <p className="text-sm text-gray-700">Click or drop a payment proof image</p>
-            <p className="text-xs text-gray-500">PNG, JPG, PDF up to 10MB</p>
-          </>
-        )}
-        <input
-          ref={inputRef}
-          type="file"
-          accept="image/*,application/pdf"
-          className="hidden"
-          onChange={(e) => handleFile(e.target.files?.[0])}
-        />
+
+      {/* Proof batches */}
+      <div className="space-y-3 mb-4">
+        <div className="flex items-center justify-between">
+          <p className="text-sm font-semibold text-gray-700">Payment Batches</p>
+          <button type="button" onClick={addBatch}
+            className="text-xs font-medium text-blue-600 hover:text-blue-800 flex items-center gap-1">
+            + Add batch
+          </button>
+        </div>
+        {batches.map((b, i) => (
+          <BatchUploadRow
+            key={b.id}
+            batch={b}
+            index={i}
+            canRemove={batches.length > 1}
+            onChange={(patch) => updateBatch(b.id, patch)}
+            onRemove={() => removeBatch(b.id)}
+          />
+        ))}
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
-        <Field label="Amount paid">
-          <input
-            type="number"
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none"
-          />
-        </Field>
-        <Field label="Method">
-          <select
-            value={method}
-            onChange={(e) => setMethod(e.target.value as typeof PAYMENT_METHODS[number])}
-            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none bg-white"
-          >
-            {PAYMENT_METHODS.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Reference number">
-          <input
-            value={reference}
-            onChange={(e) => setReference(e.target.value)}
-            placeholder="OR #, Tx #, Check #"
-            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none"
-          />
-        </Field>
-        <Field label="Notes">
-          <input
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            placeholder="Optional"
-            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none"
-          />
-        </Field>
+
+      {/* Credit charge section */}
+      <div className="border border-purple-200 bg-purple-50 rounded-lg p-3 mb-4 space-y-2">
+        <p className="text-sm font-semibold text-purple-800 flex items-center gap-1.5">
+          <CreditCard className="w-4 h-4" /> Charge to Credit
+        </p>
+        <p className="text-xs text-purple-700">
+          Charges against the customer's credit limit are applied immediately without requiring proof verification.
+          The order will be marked <strong>On Credit</strong> if the balance is fully covered.
+        </p>
+        <div className="grid grid-cols-2 gap-2">
+          <Field label="Credit amount">
+            <input type="number" value={creditAmount} onChange={(e) => setCreditAmount(e.target.value)}
+              placeholder="0"
+              className="w-full px-3 py-2 text-sm border border-purple-300 rounded-md focus:ring-2 focus:ring-purple-500 outline-none" />
+          </Field>
+          <Field label="Notes">
+            <input value={creditNotes} onChange={(e) => setCreditNotes(e.target.value)}
+              placeholder="Optional"
+              className="w-full px-3 py-2 text-sm border border-purple-300 rounded-md focus:ring-2 focus:ring-purple-500 outline-none" />
+          </Field>
+        </div>
       </div>
+
+      {/* Running total */}
+      <div className="rounded-md bg-gray-100 px-3 py-2 text-xs text-gray-700 flex flex-wrap gap-x-4 gap-y-1 mb-4">
+        <span>Batches: <strong>{formatPeso(batchTotal)}</strong></span>
+        {creditNum > 0 && <span>Credit: <strong className="text-purple-700">{formatPeso(creditNum)}</strong></span>}
+        <span>Combined: <strong>{formatPeso(combinedTotal)}</strong></span>
+        <span className={remaining < -0.01 ? 'text-orange-600 font-semibold' : remaining <= 0.01 ? 'text-green-700 font-semibold' : ''}>
+          Remaining: <strong>{formatPeso(Math.max(0, remaining))}</strong>
+        </span>
+      </div>
+
       <ModalFooter onClose={props.onClose}>
-        <Button variant="primary" onClick={submit} disabled={!file || submitting} className="gap-2">
+        <Button variant="primary" onClick={submit} disabled={submitting} className="gap-2">
           {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-          Upload for verification
+          Submit
         </Button>
       </ModalFooter>
     </Modal>

@@ -195,6 +195,20 @@ export function PurchaseOrderDetailPage() {
 
   const [isEditing, setIsEditing]       = useState(false);
   const [saving, setSaving]             = useState(false);
+  /** Inline received-qty drafts keyed by item id. */
+  const [receivedDrafts, setReceivedDrafts] = useState<Record<string, string>>({});
+
+  const saveReceivedInline = async (itemId: string, raw: string, max: number) => {
+    const val = Math.max(0, Math.min(Math.round(Number(raw) || 0), max));
+    const { error } = await supabase
+      .from('purchase_order_items')
+      .update({ quantity_received: val })
+      .eq('id', itemId);
+    if (error) { console.error(error); return; }
+    const updater = (prev: POItemRow[]) => prev.map((i) => i.id === itemId ? { ...i, quantity_received: val } : i);
+    setItems(updater);
+    setStagedItems(updater);
+  };
   const [editForm, setEditForm]         = useState<Partial<PORow>>({});
   // Supplier list for the dropdown
   const [supplierList, setSupplierList] = useState<{ id: string; name: string; payment_terms: string | null; preferred_supplier: boolean }[]>([]);
@@ -1603,10 +1617,28 @@ export function PurchaseOrderDetailPage() {
                             <div className="text-xs text-gray-400 font-mono">{mat?.sku}</div>
                             <div className="text-xs text-gray-500 mt-0.5">
                               Ordered: <span className="font-medium text-gray-700">{item.quantity_ordered.toLocaleString()} {item.unit_of_measure}</span>
-                              {item.quantity_received > 0 && (
-                                <> · Received: <span className="font-medium text-green-700">{item.quantity_received.toLocaleString()}</span></>
-                              )}
                             </div>
+                            {isEditing ? (
+                              <div className="flex items-center gap-1.5 mt-1" onClick={(e) => e.stopPropagation()}>
+                                <span className="text-xs text-gray-500">Received:</span>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={item.quantity_ordered}
+                                  value={receivedDrafts[item.id] ?? item.quantity_received}
+                                  onChange={(e) => setReceivedDrafts((p) => ({ ...p, [item.id]: e.target.value }))}
+                                  onBlur={(e) => saveReceivedInline(item.id, e.target.value, item.quantity_ordered)}
+                                  onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                                  className="w-16 text-xs border border-gray-300 rounded px-1.5 py-0.5 focus:ring-1 focus:ring-blue-500"
+                                />
+                                <span className="text-xs text-gray-400">/ {item.quantity_ordered.toLocaleString()}</span>
+                              </div>
+                            ) : item.quantity_received > 0 ? (
+                              <div className="text-xs text-gray-500 mt-0.5">
+                                Received: <span className="font-medium text-green-700">{item.quantity_received.toLocaleString()}</span>
+                                <span className="text-gray-400"> / {item.quantity_ordered.toLocaleString()}</span>
+                              </div>
+                            ) : null}
                           </div>
                           <div className="text-right shrink-0">
                             <div className="text-sm font-bold text-gray-900">₱{item.unit_price.toLocaleString()}/{item.unit_of_measure ?? 'unit'}</div>

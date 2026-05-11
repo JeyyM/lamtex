@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, Link } from 'react-router-dom';
 import { Card, CardContent } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
@@ -544,9 +544,9 @@ export default function MaterialCategoryPage() {
                       <Edit className="w-4 h-4" />
                     </button>
 
+                    <Link to={`/materials/category/${categoryName}/details/${m.id}`} className="block">
                     <Card
                       className="group-hover:shadow-xl transition-all duration-200 border-2 group-hover:border-red-500 cursor-pointer"
-                      onClick={() => handleMaterialClick(m)}
                     >
                       <CardContent className="p-0">
                         {/* Image */}
@@ -652,6 +652,7 @@ export default function MaterialCategoryPage() {
                         </div>
                       </CardContent>
                     </Card>
+                    </Link>
                   </div>
                 );
               })}

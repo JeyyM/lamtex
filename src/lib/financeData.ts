@@ -131,6 +131,9 @@ const ACTIVE_ORDER_STATUSES = [
   'Completed',
 ];
 
+/** Statuses that should be checked for overdue (excludes already-Paid). */
+const OVERDUEABLE_STATUSES = ['Unbilled', 'Invoiced', 'Partially Paid', 'On Credit'];
+
 function diffDaysFromToday(iso: string | null | undefined): number {
   if (!iso) return 0;
   const t = new Date(iso).getTime();
@@ -138,6 +141,69 @@ function diffDaysFromToday(iso: string | null | undefined): number {
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   return Math.floor((today - t) / 86_400_000);
+}
+
+/**
+ * Compute the due date for an order given its payment terms and order date.
+ * COD is due the next calendar day; all other term formats (Net 15, Net 30, …)
+ * extract the day count from the string.
+ */
+function computeDueDate(orderDate: string | null, paymentTerms: string | null): Date | null {
+  if (!orderDate) return null;
+  const base = new Date(orderDate);
+  if (!Number.isFinite(base.getTime())) return null;
+  const terms = (paymentTerms ?? '').trim().toUpperCase();
+  if (terms === 'COD' || terms === 'CASH ON DELIVERY') {
+    const d = new Date(base);
+    d.setDate(d.getDate() + 1);
+    return d;
+  }
+  const match = terms.match(/\d+/);
+  if (match) {
+    const days = parseInt(match[0], 10);
+    const d = new Date(base);
+    d.setDate(d.getDate() + days);
+    return d;
+  }
+  return null;
+}
+
+/**
+ * For every order in the list that should be overdue (due_date < today and
+ * payment_status is still an unpaid/credit status), update the DB row to Overdue
+ * in a single batch upsert. Fire-and-forget; does not throw on partial failure.
+ */
+async function syncOverdueStatuses(
+  rows: Array<{ id: string; dueDate: string | null; orderDate: string | null; paymentTerms: string | null; paymentStatus: string }>,
+): Promise<Set<string>> {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const overdueIds: string[] = [];
+  for (const r of rows) {
+    if (!OVERDUEABLE_STATUSES.includes(r.paymentStatus)) continue;
+    // Use stored due_date if present; otherwise derive from order_date + terms
+    let due: Date | null = null;
+    if (r.dueDate) {
+      due = new Date(r.dueDate);
+      if (!Number.isFinite(due.getTime())) due = null;
+    }
+    if (!due) due = computeDueDate(r.orderDate, r.paymentTerms);
+    if (due && due < today) overdueIds.push(r.id);
+  }
+
+  if (overdueIds.length === 0) return new Set();
+
+  try {
+    await supabase
+      .from('orders')
+      .update({ payment_status: 'Overdue' })
+      .in('id', overdueIds);
+  } catch {
+    // best-effort
+  }
+
+  return new Set(overdueIds);
 }
 
 function num(value: unknown): number {
@@ -162,7 +228,8 @@ function nestedName(value: unknown): string | null {
 
 /**
  * Outstanding orders: every active order with balance_due > 0.
- * Joined with customer + agent names for display.
+ * Also includes On Credit orders (balance_due may be 0 but still tracked).
+ * Auto-syncs overdue statuses on fetch (best-effort, fire-and-forget).
  */
 export async function fetchOutstandingOrders(branchId?: string | null): Promise<OutstandingOrderRow[]> {
   let q = supabase
@@ -174,8 +241,8 @@ export async function fetchOutstandingOrders(branchId?: string | null): Promise<
        branches(name),
        customers(name)`,
     )
-    .gt('balance_due', 0)
     .in('status', ACTIVE_ORDER_STATUSES)
+    .or('balance_due.gt.0,payment_status.eq.On Credit')
     .order('due_date', { ascending: true, nullsFirst: false });
 
   if (branchId) q = q.eq('branch_id', branchId);
@@ -185,6 +252,17 @@ export async function fetchOutstandingOrders(branchId?: string | null): Promise<
 
   const rows = (data ?? []) as Array<Record<string, unknown>>;
   if (rows.length === 0) return [];
+
+  // Auto-mark overdue orders in the DB before mapping rows for display
+  const overdueIds = await syncOverdueStatuses(
+    rows.map((r) => ({
+      id: String(r.id),
+      dueDate: asString(r.due_date),
+      orderDate: asString(r.order_date),
+      paymentTerms: asString(r.payment_terms),
+      paymentStatus: asString(r.payment_status) ?? 'Unbilled',
+    })),
+  );
 
   const orderIds = rows.map((r) => String(r.id));
   const { data: proofs } = await supabase
@@ -203,6 +281,9 @@ export async function fetchOutstandingOrders(branchId?: string | null): Promise<
     const branch = nestedName(r.branches);
     const cust = nestedName(r.customers) ?? asString(r.customer_name);
     const due = asString(r.due_date);
+    const rawStatus = asString(r.payment_status) ?? 'Unbilled';
+    // Reflect the overdue sync locally so the UI doesn't need a second fetch
+    const paymentStatus = overdueIds.has(String(r.id)) ? 'Overdue' : rawStatus;
     return {
       id: String(r.id),
       orderNumber: asString(r.order_number) ?? String(r.id),
@@ -217,7 +298,7 @@ export async function fetchOutstandingOrders(branchId?: string | null): Promise<
       paymentTerms: asString(r.payment_terms),
       paymentMethod: asString(r.payment_method),
       status: asString(r.status) ?? '—',
-      paymentStatus: asString(r.payment_status) ?? 'Unbilled',
+      paymentStatus,
       totalAmount: num(r.total_amount),
       amountPaid: num(r.amount_paid),
       balanceDue: num(r.balance_due),

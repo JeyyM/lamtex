@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { Card, CardContent, CardHeader } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
@@ -467,7 +467,7 @@ export function OrdersPage() {
               {/* Mobile Card View */}
               <div className="md:hidden divide-y divide-gray-200">
                 {pagedOrders.map((order) => (
-                  <div key={order.id} className="p-4 hover:bg-gray-50 cursor-pointer transition-colors" onClick={() => handleViewOrder(order.id)}>
+                  <Link key={order.id} to={`/orders/${order.id}`} onClick={() => addAuditLog('Viewed Order', 'Order', `Viewed order ${order.id}`)} className="block p-4 hover:bg-gray-50 cursor-pointer transition-colors">
                     <div className="space-y-3">
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex items-start gap-2 min-w-0 flex-1">
@@ -499,7 +499,7 @@ export function OrdersPage() {
                         <Badge variant={getPaymentBadgeVariant(order.payment_status)} className="text-xs flex-shrink-0">{order.payment_status}</Badge>
                       </div>
                     </div>
-                  </div>
+                  </Link>
                 ))}
                 {sortedOrders.length === 0 && (
                   <div className="px-4 py-12 text-center text-gray-500">
@@ -566,33 +566,45 @@ export function OrdersPage() {
                   </thead>
                   <tbody className="divide-y divide-gray-200">
                     {pagedOrders.map((order) => (
-                      <tr key={order.id} className="hover:bg-gray-50 cursor-pointer transition-colors" onClick={() => handleViewOrder(order.id)}>
+                      <tr key={order.id} className="hover:bg-gray-50 transition-colors">
                         <td className="px-6 py-4">
-                          <div className="flex items-start gap-2">
+                          <Link to={`/orders/${order.id}`} onClick={() => addAuditLog('Viewed Order', 'Order', `Viewed order ${order.id}`)} className="flex items-start gap-2 w-full">
                             <div className="min-w-0">
                               <div className="font-medium text-gray-900">{order.customer_name ?? '—'}</div>
                               <div className="text-xs text-gray-600 tabular-nums">{order.order_number}</div>
                               <div className="text-xs text-gray-500">{order.agent_name}</div>
                             </div>
                             {order.requires_approval && <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />}
-                          </div>
+                          </Link>
                         </td>
-                        <td className="px-6 py-4 text-gray-600">{order.order_date ?? '—'}</td>
-                        <td className="px-6 py-4 text-gray-600">{order.required_date ?? '—'}</td>
-                        <td className="px-6 py-4">
-                          <div className="font-medium text-gray-900">₱{order.total_amount.toLocaleString()}</div>
-                          {order.discount_percent > 0 && <div className="text-xs text-gray-500">-{order.discount_percent.toFixed(1)}% discount</div>}
+                        <td className="px-6 py-4 text-gray-600">
+                          <Link to={`/orders/${order.id}`} className="block w-full">{order.order_date ?? '—'}</Link>
                         </td>
-                        <td className="px-6 py-4">
-                          <Badge variant={getStatusBadgeVariant(order.status)} className="min-w-[120px] justify-center">{order.status}</Badge>
+                        <td className="px-6 py-4 text-gray-600">
+                          <Link to={`/orders/${order.id}`} className="block w-full">{order.required_date ?? '—'}</Link>
                         </td>
                         <td className="px-6 py-4">
-                          <Badge variant={getUrgencyBadgeVariant(order.urgency)} className="min-w-[100px] justify-center">
-                            {displayUrgency(order.urgency)}
-                          </Badge>
+                          <Link to={`/orders/${order.id}`} className="block w-full">
+                            <div className="font-medium text-gray-900">₱{order.total_amount.toLocaleString()}</div>
+                            {order.discount_percent > 0 && <div className="text-xs text-gray-500">-{order.discount_percent.toFixed(1)}% discount</div>}
+                          </Link>
                         </td>
                         <td className="px-6 py-4">
-                          <Badge variant={getPaymentBadgeVariant(order.payment_status)} className="min-w-[100px] justify-center">{order.payment_status}</Badge>
+                          <Link to={`/orders/${order.id}`} className="block w-full">
+                            <Badge variant={getStatusBadgeVariant(order.status)} className="min-w-[120px] justify-center">{order.status}</Badge>
+                          </Link>
+                        </td>
+                        <td className="px-6 py-4">
+                          <Link to={`/orders/${order.id}`} className="block w-full">
+                            <Badge variant={getUrgencyBadgeVariant(order.urgency)} className="min-w-[100px] justify-center">
+                              {displayUrgency(order.urgency)}
+                            </Badge>
+                          </Link>
+                        </td>
+                        <td className="px-6 py-4">
+                          <Link to={`/orders/${order.id}`} className="block w-full">
+                            <Badge variant={getPaymentBadgeVariant(order.payment_status)} className="min-w-[100px] justify-center">{order.payment_status}</Badge>
+                          </Link>
                         </td>
                       </tr>
                     ))}

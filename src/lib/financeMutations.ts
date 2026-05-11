@@ -32,7 +32,9 @@ function safeFileName(name: string): string {
 
 export type ProofUploadInput = {
   orderId: string;
-  file: File;
+  /** Proof file is optional. When omitted the record is still created (pending verification)
+   *  but without a file attachment. */
+  file: File | null;
   amount: number;
   paymentMethod: string;
   referenceNumber: string | null;
@@ -43,34 +45,42 @@ export type ProofUploadInput = {
 
 export type ProofUploadResult = {
   proofId: string;
-  fileUrl: string;
+  fileUrl: string | null;
 };
 
-/** Upload a payment proof image and queue it for executive verification. */
+/** Record a payment proof (file is optional) and queue it for executive verification. */
 export async function uploadPaymentProof(input: ProofUploadInput): Promise<ProofUploadResult> {
   if (input.amount <= 0) throw new Error('Payment amount must be greater than zero.');
   if (!input.paymentMethod.trim()) throw new Error('Payment method is required.');
 
-  const path = `${PROOF_FOLDER}/${input.orderId}/${Date.now()}-${Math.random()
-    .toString(36)
-    .slice(2, 9)}_${safeFileName(input.file.name)}`;
+  let fileUrl: string | null = null;
+  let fileName: string | null = null;
+  let fileSize: number | null = null;
 
-  const { error: upErr } = await supabase.storage
-    .from(STORAGE_BUCKET)
-    .upload(path, input.file, { cacheControl: '3600', upsert: false });
-  if (upErr) throw new Error(`Upload failed: ${upErr.message}`);
+  if (input.file) {
+    const path = `${PROOF_FOLDER}/${input.orderId}/${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 9)}_${safeFileName(input.file.name)}`;
 
-  const { data: pub } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(path);
-  const fileUrl = pub.publicUrl;
+    const { error: upErr } = await supabase.storage
+      .from(STORAGE_BUCKET)
+      .upload(path, input.file, { cacheControl: '3600', upsert: false });
+    if (upErr) throw new Error(`Upload failed: ${upErr.message}`);
+
+    const { data: pub } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(path);
+    fileUrl = pub.publicUrl;
+    fileName = input.file.name;
+    fileSize = input.file.size;
+  }
 
   const { data, error } = await supabase
     .from('order_proof_documents')
     .insert({
       order_id: input.orderId,
       type: 'payment',
-      file_name: input.file.name,
-      file_url: fileUrl,
-      file_size: input.file.size,
+      file_name: fileName,
+      file_url: fileUrl ?? '',
+      file_size: fileSize,
       uploaded_by: input.uploadedBy,
       uploaded_by_role: input.uploadedByRole,
       status: 'pending',
@@ -317,6 +327,90 @@ async function accrueAgentCommission(input: {
   }
 }
 
+export type CreditChargeInput = {
+  orderId: string;
+  amount: number;
+  notes: string | null;
+  chargedBy: string;
+};
+
+/**
+ * Charge an amount against the customer's available credit limit.
+ *
+ *  - Reduces `customers.available_credit` (increases `outstanding_balance`).
+ *  - Applies the amount to the order's `amount_paid` / `balance_due`.
+ *  - Sets `payment_status` to `'On Credit'` when balance reaches zero via credit,
+ *    or `'Partially Paid'` if a balance remains. Overdue takes priority at fetch time.
+ *  - Writes an `order_logs` entry for traceability.
+ */
+export async function chargeToCredit(input: CreditChargeInput): Promise<void> {
+  if (input.amount <= 0) throw new Error('Credit charge amount must be greater than zero.');
+
+  const { data: order, error: oErr } = await supabase
+    .from('orders')
+    .select('id, order_number, customer_id, customer_name, agent_id, agent_name, total_amount, amount_paid, balance_due, payment_status')
+    .eq('id', input.orderId)
+    .maybeSingle();
+  if (oErr) throw oErr;
+  if (!order) throw new Error('Order not found.');
+
+  const customerId = order.customer_id as string | null;
+  if (!customerId) throw new Error('Order has no associated customer.');
+
+  const { data: customer, error: cErr } = await supabase
+    .from('customers')
+    .select('id, credit_limit, available_credit, outstanding_balance')
+    .eq('id', customerId)
+    .maybeSingle();
+  if (cErr) throw cErr;
+  if (!customer) throw new Error('Customer not found.');
+
+  const availableCredit = Number(customer.available_credit) || 0;
+  if (input.amount > availableCredit) {
+    throw new Error(
+      `Insufficient credit. Available: ₱${availableCredit.toLocaleString()}, requested: ₱${input.amount.toLocaleString()}.`,
+    );
+  }
+
+  const total = Number(order.total_amount) || 0;
+  const previouslyPaid = Number(order.amount_paid) || 0;
+  const newPaid = Math.min(total, previouslyPaid + input.amount);
+  const balanceDue = Math.max(0, total - newPaid);
+  const currentStatus = (order.payment_status as string) ?? 'Unbilled';
+  let paymentStatus: string;
+  if (currentStatus === 'Overdue') {
+    paymentStatus = 'Overdue'; // overdue stays overdue even if charged to credit
+  } else if (balanceDue === 0) {
+    paymentStatus = 'On Credit';
+  } else {
+    paymentStatus = 'Partially Paid';
+  }
+
+  const newOutstanding = Math.max(0, (Number(customer.outstanding_balance) || 0) + input.amount);
+  const newAvailable = Math.max(0, availableCredit - input.amount);
+
+  const [orderUpd, custUpd] = await Promise.all([
+    supabase
+      .from('orders')
+      .update({ amount_paid: newPaid, balance_due: balanceDue, payment_status: paymentStatus, updated_at: ts() })
+      .eq('id', input.orderId),
+    supabase
+      .from('customers')
+      .update({ outstanding_balance: newOutstanding, available_credit: newAvailable, updated_at: ts() })
+      .eq('id', customerId),
+  ]);
+  if (orderUpd.error) throw orderUpd.error;
+  if (custUpd.error) throw custUpd.error;
+
+  await supabase.from('order_logs').insert({
+    order_id: input.orderId,
+    action: 'payment_received',
+    performed_by: input.chargedBy,
+    description: `₱${input.amount.toLocaleString()} charged to customer credit${input.notes ? ` — ${input.notes}` : ''}`,
+    new_value: { amount: input.amount, method: 'Credit', balance_due: balanceDue },
+  });
+}
+
 /** Mark a commission row as released to the agent. */
 export async function releaseCommission(
   commissionId: string,
@@ -333,15 +427,18 @@ export async function releaseCommission(
   if (error) throw error;
 
   // Best-effort log; ignore if table doesn't allow this entity
-  await supabase
-    .from('order_logs')
-    .insert({
-      order_id: null,
-      action: 'note_added',
-      performed_by: values.releasedBy,
-      description: `Released agent commission ${commissionId}`,
-    })
-    .catch(() => null);
+  try {
+    await supabase
+      .from('order_logs')
+      .insert({
+        order_id: null,
+        action: 'note_added',
+        performed_by: values.releasedBy,
+        description: `Released agent commission ${commissionId}`,
+      });
+  } catch {
+    // best-effort log
+  }
 }
 
 /** Update a customer's credit limit; recomputes available_credit if outstanding is known. */

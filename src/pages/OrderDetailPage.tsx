@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
@@ -54,6 +54,7 @@ import {
   Loader2,
   ThumbsUp,
   PackageCheck,
+  Receipt,
   Route,
 } from 'lucide-react';
 
@@ -135,6 +136,28 @@ export function OrderDetailPage() {
   const [rejectionReason, setRejectionReason] = useState('');
   const [approvalLoading, setApprovalLoading] = useState(false);
   const [showCancelModal, setShowCancelModal] = useState(false);
+
+  /** Inline delivery input drafts keyed by line item id. */
+  const [deliveredDrafts, setDeliveredDrafts] = useState<Record<string, string>>({});
+
+  const saveDelivered = async (itemId: string, raw: string, max: number) => {
+    const val = Math.max(0, Math.min(Math.round(Number(raw) || 0), max));
+    const { error } = await supabase
+      .from('order_line_items')
+      .update({ quantity_delivered: val, updated_at: new Date().toISOString() })
+      .eq('id', itemId);
+    if (error) { console.error(error); return; }
+    setOrder((prev) =>
+      prev
+        ? {
+            ...prev,
+            items: prev.items.map((i) =>
+              i.id === itemId ? { ...i, quantityDelivered: val } : i,
+            ),
+          }
+        : prev,
+    );
+  };
 
   const [showInTransitModal, setShowInTransitModal] = useState(false);
   const [inTransitSubmitting, setInTransitSubmitting] = useState(false);
@@ -1100,25 +1123,32 @@ export function OrderDetailPage() {
     await supabase.from('order_line_items').delete().eq('order_id', id);
 
     if (editedOrder.items.length > 0) {
-      const rows = editedOrder.items.map(item => ({
-        order_id: id,
-        sku: item.sku,
-        variant_id: item.variantId ?? null,
-        product_name: item.productName,
-        variant_description: item.variantDescription,
-        quantity: item.quantity,
-        unit_price: item.unitPrice,
-        original_price: item.originalPrice ?? item.unitPrice,
-        negotiated_price: item.negotiatedPrice ?? item.unitPrice,
-        discount_percent: item.discountPercent ?? 0,
-        discount_amount: item.discountAmount ?? 0,
-        line_total: item.lineTotal,
-        stock_hint: item.stockHint ?? 'Available',
-        available_stock: item.availableStock ?? null,
-        discounts_breakdown: item.discountsBreakdown ?? null,
-        quantity_shipped: item.quantityShipped ?? null,
-        quantity_delivered: item.quantityDelivered ?? null,
-      }));
+      const rows = editedOrder.items.map(item => {
+        // Apply any pending delivery draft for this item
+        const draftVal = deliveredDrafts[item.id];
+        const quantityDelivered = draftVal !== undefined
+          ? Math.max(0, Math.min(Math.round(Number(draftVal) || 0), item.quantity))
+          : (item.quantityDelivered ?? null);
+        return {
+          order_id: id,
+          sku: item.sku,
+          variant_id: item.variantId ?? null,
+          product_name: item.productName,
+          variant_description: item.variantDescription,
+          quantity: item.quantity,
+          unit_price: item.unitPrice,
+          original_price: item.originalPrice ?? item.unitPrice,
+          negotiated_price: item.negotiatedPrice ?? item.unitPrice,
+          discount_percent: item.discountPercent ?? 0,
+          discount_amount: item.discountAmount ?? 0,
+          line_total: item.lineTotal,
+          stock_hint: item.stockHint ?? 'Available',
+          available_stock: item.availableStock ?? null,
+          discounts_breakdown: item.discountsBreakdown ?? null,
+          quantity_shipped: item.quantityShipped ?? null,
+          quantity_delivered: quantityDelivered,
+        };
+      });
       const { error: itemsErr } = await supabase.from('order_line_items').insert(rows);
       if (itemsErr) { alert('Order header saved but items failed: ' + itemsErr.message); return; }
     }
@@ -1215,8 +1245,16 @@ export function OrderDetailPage() {
     }
 
     addAuditLog('Updated Order', 'Order', `Updated order ${editedOrder.id}`);
-    // Refresh from DB
-    setOrder({ ...editedOrder, subtotal, totalAmount });
+    // Refresh from DB — merge drafted delivered values into the refreshed items
+    const savedItems = editedOrder.items.map((item) => {
+      const draftVal = deliveredDrafts[item.id];
+      const quantityDelivered = draftVal !== undefined
+        ? Math.max(0, Math.min(Math.round(Number(draftVal) || 0), item.quantity))
+        : (item.quantityDelivered ?? null);
+      return { ...item, quantityDelivered };
+    });
+    setOrder({ ...editedOrder, subtotal, totalAmount, items: savedItems });
+    setDeliveredDrafts({});
     setIsEditing(false);
     setEditedOrder(null);
   };
@@ -2033,6 +2071,13 @@ export function OrderDetailPage() {
                   Resubmit
                 </Button>
               )}
+              <Link
+                to="/finance"
+                className="inline-flex min-h-[2.5rem] shrink-0 items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50 sm:px-5"
+              >
+                <Receipt className="h-4 w-4 shrink-0" />
+                Payment Proofs
+              </Link>
               {!['Cancelled', 'Rejected', 'Delivered'].includes(order.status) && (
                 <button
                   type="button"
@@ -2443,6 +2488,20 @@ export function OrderDetailPage() {
                             ? (item.lineTotal / item.quantity).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
                             : '0.00'}/unit
                         </div>
+                        <div className="flex items-center gap-1.5 mt-1.5" onClick={(e) => e.stopPropagation()}>
+                          <span className="text-xs text-gray-500">Delivered:</span>
+                          <input
+                            type="number"
+                            min={0}
+                            max={item.quantity}
+                            value={deliveredDrafts[item.id] ?? (item.quantityDelivered ?? 0)}
+                            onChange={(e) => setDeliveredDrafts((p) => ({ ...p, [item.id]: e.target.value }))}
+                            onBlur={(e) => saveDelivered(item.id, e.target.value, item.quantity)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                            className="w-16 text-xs border border-gray-300 rounded px-1.5 py-0.5 focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                          />
+                          <span className="text-xs text-gray-400">/ {item.quantity}</span>
+                        </div>
                       </div>
 
                       <div className="w-32 text-right flex-shrink-0">
@@ -2531,6 +2590,13 @@ export function OrderDetailPage() {
                         <div className="font-medium text-gray-900">{item.quantity}</div>
                       </div>
                       <div>
+                        <div className="text-xs text-gray-500">Delivered</div>
+                        <div className="font-medium text-gray-900">
+                          {item.quantityDelivered ?? 0}
+                          <span className="text-xs font-normal text-gray-400"> / {item.quantity}</span>
+                        </div>
+                      </div>
+                      <div>
                         <div className="text-xs text-gray-500">Unit Price</div>
                         <div className="font-medium text-gray-900">₱{item.unitPrice}</div>
                       </div>
@@ -2561,6 +2627,7 @@ export function OrderDetailPage() {
                       <th className="px-6 py-3 text-left font-medium">SKU</th>
                       <th className="px-6 py-3 text-left font-medium">Product</th>
                       <th className="px-6 py-3 text-center font-medium">Qty</th>
+                      <th className="px-6 py-3 text-center font-medium">Delivered</th>
                       <th className="px-6 py-3 text-right font-medium">List Price</th>
                       <th className="px-6 py-3 text-right font-medium">Final Price</th>
                       <th className="px-6 py-3 text-center font-medium">Discount</th>
@@ -2580,6 +2647,10 @@ export function OrderDetailPage() {
                           )}
                         </td>
                         <td className="px-6 py-4 text-center font-medium">{item.quantity}</td>
+                        <td className="px-6 py-4 text-center">
+                          <span className="font-medium text-gray-900">{item.quantityDelivered ?? 0}</span>
+                          <span className="text-xs text-gray-400"> / {item.quantity}</span>
+                        </td>
                         <td className="px-6 py-4 text-right">
                           {item.originalPrice && item.negotiatedPrice && item.originalPrice !== item.negotiatedPrice ? (
                             <div>
@@ -2606,7 +2677,7 @@ export function OrderDetailPage() {
                     ))}
                     {displayOrder.items.length === 0 && (
                       <tr>
-                        <td colSpan={8} className="px-6 py-12 text-center text-gray-500">
+                        <td colSpan={9} className="px-6 py-12 text-center text-gray-500">
                           <Package className="w-12 h-12 mx-auto mb-3 text-gray-300" />
                           <p className="font-medium">No items in this order</p>
                         </td>
@@ -2615,7 +2686,7 @@ export function OrderDetailPage() {
                   </tbody>
                   <tfoot className="bg-gray-50 border-t border-gray-200">
                     <tr>
-                      <td colSpan={6} className="px-6 py-4 text-right font-semibold text-gray-700">Subtotal:</td>
+                      <td colSpan={7} className="px-6 py-4 text-right font-semibold text-gray-700">Subtotal:</td>
                       <td className="px-6 py-4 text-right font-bold text-gray-900">₱{displayOrder.totalAmount.toLocaleString()}</td>
                       <td></td>
                     </tr>

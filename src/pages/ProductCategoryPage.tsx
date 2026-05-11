@@ -1,5 +1,5 @@
-﻿import React, { useState, useEffect } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { useNavigate, useParams, Link } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
@@ -362,10 +362,8 @@ export default function ProductCategoryPage() {
                 <Edit className="w-4 h-4" />
               </button>
 
-              <Card
-                className="hover:shadow-xl transition-all duration-200 border-2 hover:border-red-500 cursor-pointer h-full"
-                onClick={() => navigate(`/products/category/${categoryName}/family/${p.id}`)}
-              >
+              <Card className="hover:shadow-xl transition-all duration-200 border-2 hover:border-red-500 h-full">
+                <Link to={`/products/category/${categoryName}/family/${p.id}`} className="block h-full">
                 <CardContent className="p-0">
                   <div className="h-48 bg-gray-100 overflow-hidden border-b">
                     <img
@@ -431,6 +429,7 @@ export default function ProductCategoryPage() {
                     )}
                   </div>
                 </CardContent>
+                </Link>
               </Card>
             </div>
           ))}

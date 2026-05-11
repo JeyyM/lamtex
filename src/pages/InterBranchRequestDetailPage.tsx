@@ -930,6 +930,18 @@ export function InterBranchRequestDetailPage() {
   const [id, setId] = useState<string | null>(routeId === 'new' ? null : (routeId ?? null));
   const [loading, setLoading] = useState(!!id);
   const [saving, setSaving] = useState(false);
+  /** Inline delivered-qty drafts keyed by item id. */
+  const [ibrDeliveredDrafts, setIbrDeliveredDrafts] = useState<Record<string, string>>({});
+
+  const saveIbrDeliveredInline = async (itemId: string, raw: string, max: number) => {
+    const val = Math.max(0, Math.min(Math.round(Number(raw) || 0), max));
+    const { error } = await supabase
+      .from('inter_branch_request_items')
+      .update({ quantity_delivered: val })
+      .eq('id', itemId);
+    if (error) { console.error(error); return; }
+    setItems((prev) => prev.map((i) => i.id === itemId ? { ...i, quantity_delivered: val } : i));
+  };
   const [error, setError] = useState<string | null>(null);
   const createdRef = useRef(false);
 
@@ -3046,6 +3058,29 @@ export function InterBranchRequestDetailPage() {
                               {Number(it.quantity).toLocaleString()}{' '}
                               <span className="text-xs font-normal text-gray-500">units</span>
                             </p>
+                          </div>
+                          <div className="text-right" onClick={(e) => e.stopPropagation()}>
+                            <p className="text-xs text-gray-500 mb-0.5">Delivered</p>
+                            {editingLines ? (
+                              <div className="flex items-center justify-end gap-1">
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={Number(it.quantity)}
+                                  value={ibrDeliveredDrafts[it.id] ?? Number(it.quantity_delivered ?? 0)}
+                                  onChange={(e) => setIbrDeliveredDrafts((p) => ({ ...p, [it.id]: e.target.value }))}
+                                  onBlur={(e) => saveIbrDeliveredInline(it.id, e.target.value, Number(it.quantity))}
+                                  onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                                  className="w-16 text-sm border border-gray-300 rounded px-1.5 py-0.5 text-right focus:ring-1 focus:ring-blue-500"
+                                />
+                                <span className="text-xs text-gray-400">/ {Number(it.quantity).toLocaleString()}</span>
+                              </div>
+                            ) : (
+                              <p className="font-medium text-gray-900 tabular-nums">
+                                {Number(it.quantity_delivered ?? 0).toLocaleString()}
+                                <span className="text-xs font-normal text-gray-400"> / {Number(it.quantity).toLocaleString()}</span>
+                              </p>
+                            )}
                           </div>
                           {editingLines && (
                             <button

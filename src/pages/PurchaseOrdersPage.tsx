@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
@@ -407,10 +407,10 @@ export function PurchaseOrdersPage() {
               {/* Mobile cards */}
               <div className="md:hidden divide-y divide-gray-200">
                 {pagedPOs.map(po => (
-                  <div
+                  <Link
                     key={po.id}
-                    className="p-4 space-y-3 hover:bg-gray-50 cursor-pointer"
-                    onClick={() => navigate(`/purchase-orders/${po.id}`)}
+                    to={`/purchase-orders/${po.id}`}
+                    className="block p-4 space-y-3 hover:bg-gray-50"
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div>
@@ -432,7 +432,7 @@ export function PurchaseOrdersPage() {
                       <div><p className="text-gray-500">Items</p><p className="font-medium">{po.purchase_order_items.length}</p></div>
                       <div><p className="text-gray-500">Amount</p><p className="font-medium">₱{po.total_amount.toLocaleString()}</p></div>
                     </div>
-                  </div>
+                  </Link>
                 ))}
               </div>
 
@@ -479,32 +479,36 @@ export function PurchaseOrdersPage() {
                   </thead>
                   <tbody className="divide-y divide-gray-200">
                     {pagedPOs.map(po => (
-                      <tr
-                        key={po.id}
-                        className="hover:bg-gray-50 cursor-pointer"
-                        onClick={() => navigate(`/purchase-orders/${po.id}`)}
-                      >
+                      <tr key={po.id} className="hover:bg-gray-50">
                         <td className="px-6 py-4">
-                          <div className="font-medium text-blue-600 hover:underline">{po.po_number}</div>
+                          <Link to={`/purchase-orders/${po.id}`} className="block font-medium text-blue-600 hover:underline">{po.po_number}</Link>
                         </td>
-                        <td className="px-6 py-4 text-gray-600">{fmt(po.order_date)}</td>
-                        <td className="px-6 py-4 font-medium text-gray-900">{po.suppliers?.name ?? '—'}</td>
-                        <td className="px-6 py-4 text-gray-600 tabular-nums">
-                          {po.purchase_order_items.length}
+                        <td className="px-6 py-4 text-gray-600">
+                          <Link to={`/purchase-orders/${po.id}`} className="block">{fmt(po.order_date)}</Link>
                         </td>
                         <td className="px-6 py-4 font-medium text-gray-900">
-                          {po.currency === 'USD' ? '$' : '₱'}{po.total_amount.toLocaleString()}
+                          <Link to={`/purchase-orders/${po.id}`} className="block">{po.suppliers?.name ?? '—'}</Link>
+                        </td>
+                        <td className="px-6 py-4 text-gray-600 tabular-nums">
+                          <Link to={`/purchase-orders/${po.id}`} className="block">{po.purchase_order_items.length}</Link>
+                        </td>
+                        <td className="px-6 py-4 font-medium text-gray-900">
+                          <Link to={`/purchase-orders/${po.id}`} className="block">{po.currency === 'USD' ? '$' : '₱'}{po.total_amount.toLocaleString()}</Link>
                         </td>
                         <td className="px-6 py-4">
-                          <span className={isOverdue(po) ? 'text-red-600 font-medium flex items-center gap-1' : 'text-gray-600'}>
-                            {isOverdue(po) && <AlertTriangle className="w-3.5 h-3.5" />}
-                            {fmt(po.expected_delivery_date)}
-                          </span>
+                          <Link to={`/purchase-orders/${po.id}`} className="block">
+                            <span className={isOverdue(po) ? 'text-red-600 font-medium flex items-center gap-1' : 'text-gray-600'}>
+                              {isOverdue(po) && <AlertTriangle className="w-3.5 h-3.5" />}
+                              {fmt(po.expected_delivery_date)}
+                            </span>
+                          </Link>
                         </td>
                         <td className="px-6 py-4 text-center">
-                          <Badge variant={getStatusVariant(po.status)} className="inline-flex items-center gap-1 whitespace-nowrap">
-                            {getStatusIcon(po.status)} {po.status}
-                          </Badge>
+                          <Link to={`/purchase-orders/${po.id}`} className="block">
+                            <Badge variant={getStatusVariant(po.status)} className="inline-flex items-center gap-1 whitespace-nowrap">
+                              {getStatusIcon(po.status)} {po.status}
+                            </Badge>
+                          </Link>
                         </td>
                       </tr>
                     ))}

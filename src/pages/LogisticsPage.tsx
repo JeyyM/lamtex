@@ -730,6 +730,13 @@ export function LogisticsPage() {
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
+                    {filteredTrips.length === 0 && (
+                      <tr>
+                        <td colSpan={4} className="px-6 py-12 text-center text-sm text-gray-500">
+                          No active trips found.
+                        </td>
+                      </tr>
+                    )}
                     {filteredTrips.map((trip) => (
                       <tr
                         key={trip.id}
@@ -767,6 +774,9 @@ export function LogisticsPage() {
               </div>
 
               <div className="md:hidden divide-y divide-gray-200">
+                {filteredTrips.length === 0 && (
+                  <div className="p-8 text-center text-sm text-gray-500">No active trips found.</div>
+                )}
                 {filteredTrips.map((trip) => (
                   <div
                     key={trip.id}
@@ -834,6 +844,13 @@ export function LogisticsPage() {
                       </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
+                      {shipments.length === 0 && (
+                        <tr>
+                          <td colSpan={7} className="px-6 py-12 text-center text-sm text-gray-500">
+                            No active shipments found.
+                          </td>
+                        </tr>
+                      )}
                       {shipments.map((shipment) => (
                         <tr key={shipment.id} className="hover:bg-gray-50">
                           <td className="px-6 py-4 whitespace-nowrap">
@@ -910,6 +927,9 @@ export function LogisticsPage() {
                 </div>
 
                 <div className="md:hidden divide-y divide-gray-200">
+                  {shipments.length === 0 && (
+                    <div className="p-8 text-center text-sm text-gray-500">No active shipments found.</div>
+                  )}
                   {shipments.map((shipment) => (
                     <div key={shipment.id} className="p-4 space-y-3 w-full">
                       <div className="flex items-start justify-between gap-3">
@@ -1213,6 +1233,9 @@ export function LogisticsPage() {
                 </CardHeader>
                 <CardContent>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {shipments.length === 0 && (
+                      <div className="col-span-full py-10 text-center text-sm text-gray-500">No vessels found.</div>
+                    )}
                     {shipments.map((shipment) => (
                       <div key={shipment.id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow w-full max-w-full">
                         <div className="flex items-start justify-between mb-3">

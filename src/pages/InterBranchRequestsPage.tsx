@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
@@ -369,10 +369,10 @@ export function InterBranchRequestsPage() {
             <>
               <div className="md:hidden divide-y divide-gray-200">
                 {pagedRows.map((r) => (
-                  <div
+                  <Link
                     key={r.id}
-                    className="p-4 space-y-3 hover:bg-gray-50 cursor-pointer"
-                    onClick={() => navigate(`/inter-branch-requests/${r.id}`)}
+                    to={`/inter-branch-requests/${r.id}`}
+                    className="block p-4 space-y-3 hover:bg-gray-50"
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div>
@@ -395,7 +395,7 @@ export function InterBranchRequestsPage() {
                         <p className="font-medium text-gray-900">{r.inter_branch_request_items.length}</p>
                       </div>
                     </div>
-                  </div>
+                  </Link>
                 ))}
               </div>
 
@@ -455,22 +455,28 @@ export function InterBranchRequestsPage() {
                   </thead>
                   <tbody className="divide-y divide-gray-200">
                     {pagedRows.map((r) => (
-                      <tr
-                        key={r.id}
-                        className="hover:bg-gray-50 cursor-pointer"
-                        onClick={() => navigate(`/inter-branch-requests/${r.id}`)}
-                      >
+                      <tr key={r.id} className="hover:bg-gray-50">
                         <td className="px-6 py-4">
-                          <div className="font-medium text-blue-600 hover:underline">{r.ibr_number}</div>
+                          <Link to={`/inter-branch-requests/${r.id}`} className="block font-medium text-blue-600 hover:underline">{r.ibr_number}</Link>
                         </td>
-                        <td className="px-6 py-4 font-medium text-gray-900">{r.req_br?.name ?? '—'}</td>
-                        <td className="px-6 py-4 font-medium text-gray-900">{r.ful_br?.name ?? '—'}</td>
-                        <td className="px-6 py-4 text-gray-600 tabular-nums">{r.inter_branch_request_items.length}</td>
-                        <td className="px-6 py-4 text-gray-600 whitespace-nowrap">{fmt(r.created_at)}</td>
+                        <td className="px-6 py-4 font-medium text-gray-900">
+                          <Link to={`/inter-branch-requests/${r.id}`} className="block">{r.req_br?.name ?? '—'}</Link>
+                        </td>
+                        <td className="px-6 py-4 font-medium text-gray-900">
+                          <Link to={`/inter-branch-requests/${r.id}`} className="block">{r.ful_br?.name ?? '—'}</Link>
+                        </td>
+                        <td className="px-6 py-4 text-gray-600 tabular-nums">
+                          <Link to={`/inter-branch-requests/${r.id}`} className="block">{r.inter_branch_request_items.length}</Link>
+                        </td>
+                        <td className="px-6 py-4 text-gray-600 whitespace-nowrap">
+                          <Link to={`/inter-branch-requests/${r.id}`} className="block">{fmt(r.created_at)}</Link>
+                        </td>
                         <td className="px-6 py-4 text-center">
-                          <Badge variant={getStatusVariant(r.status)} className="inline-flex items-center gap-1 whitespace-nowrap">
-                            {getIBRStatusIcon(r.status)} {r.status}
-                          </Badge>
+                          <Link to={`/inter-branch-requests/${r.id}`} className="block">
+                            <Badge variant={getStatusVariant(r.status)} className="inline-flex items-center gap-1 whitespace-nowrap">
+                              {getIBRStatusIcon(r.status)} {r.status}
+                            </Badge>
+                          </Link>
                         </td>
                       </tr>
                     ))}

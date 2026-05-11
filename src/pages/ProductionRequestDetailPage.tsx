@@ -356,6 +356,19 @@ export function ProductionRequestDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  /** Inline completed-qty drafts keyed by item id. */
+  const [completedDrafts, setCompletedDrafts] = useState<Record<string, string>>({});
+
+  const saveCompletedInline = async (itemId: string, raw: string, max: number) => {
+    const val = Math.max(0, Math.min(Math.round(Number(raw) || 0), max));
+    const { error } = await supabase
+      .from('production_request_items')
+      .update({ quantity_completed: val })
+      .eq('id', itemId);
+    if (error) { console.error(error); return; }
+    setItems((prev) => prev.map((i) => i.id === itemId ? { ...i, quantity_completed: val } : i));
+  };
+
   const [showAccept, setShowAccept] = useState(false);
   const [showReject, setShowReject] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
@@ -1597,11 +1610,28 @@ export function ProductionRequestDetailPage() {
                               <p className="text-xs text-gray-500">Qty to produce</p>
                               <p className="font-medium text-gray-900 tabular-nums">{Number(row.quantity).toLocaleString()}</p>
                             </div>
-                            <div className="text-right">
-                              <p className="text-xs text-gray-500">Done</p>
-                              <p className="font-medium text-gray-700 tabular-nums">
-                                {Number(row.quantity_completed).toLocaleString()}
-                              </p>
+                            <div className="text-right" onClick={(e) => e.stopPropagation()}>
+                              <p className="text-xs text-gray-500 mb-0.5">Done</p>
+                              {isEditing ? (
+                                <div className="flex items-center justify-end gap-1">
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    max={Number(row.quantity)}
+                                    value={completedDrafts[row.id] ?? Number(row.quantity_completed)}
+                                    onChange={(e) => setCompletedDrafts((p) => ({ ...p, [row.id]: e.target.value }))}
+                                    onBlur={(e) => saveCompletedInline(row.id, e.target.value, Number(row.quantity))}
+                                    onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                                    className="w-16 text-sm border border-gray-300 rounded px-1.5 py-0.5 text-right focus:ring-1 focus:ring-blue-500"
+                                  />
+                                  <span className="text-xs text-gray-400">/ {Number(row.quantity).toLocaleString()}</span>
+                                </div>
+                              ) : (
+                                <p className="font-medium text-gray-700 tabular-nums">
+                                  {Number(row.quantity_completed).toLocaleString()}
+                                  <span className="text-xs font-normal text-gray-400"> / {Number(row.quantity).toLocaleString()}</span>
+                                </p>
+                              )}
                             </div>
                             {isEditing && ['Draft', 'Requested'].includes(pr.status) && (
                               <button

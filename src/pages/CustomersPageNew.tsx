@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
@@ -493,11 +493,8 @@ export function CustomersPage() {
                     key={customer.id}
                     className="hover:bg-gray-50"
                   >
-                    <td
-                      className="px-6 py-4 cursor-pointer max-[474px]:border-r max-[474px]:border-gray-200"
-                      onClick={() => handleViewCustomer(customer)}
-                    >
-                      <div>
+                    <td className="px-6 py-4 max-[474px]:border-r max-[474px]:border-gray-200">
+                      <Link to={`/customers/${customer.id}`} className="block">
                         <div className="font-medium text-gray-900">{customer.name}</div>
                         {customer.employees && (
                           <div className="text-xs text-gray-400 mt-0.5">{customer.employees.employee_name}</div>
@@ -521,21 +518,17 @@ export function CustomersPage() {
                             </div>
                           </div>
                         </div>
-                      </div>
+                      </Link>
                     </td>
-                    <td
-                      className="px-6 py-4 cursor-pointer hidden min-[1556px]:table-cell"
-                      onClick={() => handleViewCustomer(customer)}
-                    >
-                      <span className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold text-center leading-tight max-w-[120px] break-words ${getTypeStyle(customer.type)}`}>
-                        {customer.type}
-                      </span>
+                    <td className="px-6 py-4 hidden min-[1556px]:table-cell">
+                      <Link to={`/customers/${customer.id}`} className="block">
+                        <span className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold text-center leading-tight max-w-[120px] break-words ${getTypeStyle(customer.type)}`}>
+                          {customer.type}
+                        </span>
+                      </Link>
                     </td>
-                    <td
-                      className="px-6 py-4 cursor-pointer hidden min-[475px]:table-cell"
-                      onClick={() => handleViewCustomer(customer)}
-                    >
-                      <div className="text-sm">
+                    <td className="px-6 py-4 hidden min-[475px]:table-cell">
+                      <Link to={`/customers/${customer.id}`} className="block text-sm">
                         <div className="font-medium text-gray-900">{customer.contact_person}</div>
                         <div className="text-xs text-gray-500">{customer.phone}</div>
                         {/* Show last order below contact on screens <1100px */}
@@ -543,45 +536,39 @@ export function CustomersPage() {
                           <div className="text-xs font-bold text-gray-700">Last Order</div>
                           <div className="text-xs text-gray-600">{customer.last_order_date || 'Never'}</div>
                         </div>
-                      </div>
+                      </Link>
                     </td>
-                    <td
-                      className="px-6 py-4 text-right cursor-pointer hidden min-[1330px]:table-cell"
-                      onClick={() => handleViewCustomer(customer)}
-                    >
-                      <div className="font-medium text-gray-900">₱{(customer.total_purchases_ytd / 1000000).toFixed(1)}M</div>
-                      <div className="text-xs text-gray-500">{customer.order_count} orders</div>
+                    <td className="px-6 py-4 text-right hidden min-[1330px]:table-cell">
+                      <Link to={`/customers/${customer.id}`} className="block">
+                        <div className="font-medium text-gray-900">₱{(customer.total_purchases_ytd / 1000000).toFixed(1)}M</div>
+                        <div className="text-xs text-gray-500">{customer.order_count} orders</div>
+                      </Link>
                     </td>
-                    <td
-                      className="px-6 py-4 text-right cursor-pointer max-[474px]:border-r max-[474px]:border-gray-200"
-                      onClick={() => handleViewCustomer(customer)}
-                    >
-                      <div className={`font-medium ${customer.overdue_amount > 0 ? 'text-red-600' : 'text-gray-900'}`}>
-                        ₱{(customer.outstanding_balance / 1000).toFixed(0)}K
-                      </div>
-                      {customer.overdue_amount > 0 && (
-                        <div className="text-xs text-red-600">₱{(customer.overdue_amount / 1000).toFixed(0)}K overdue</div>
-                      )}
-                      {/* Show risk below outstanding on screens ≤1210px */}
-                      <div className="mt-1 min-[1211px]:hidden flex justify-end">
+                    <td className="px-6 py-4 text-right max-[474px]:border-r max-[474px]:border-gray-200">
+                      <Link to={`/customers/${customer.id}`} className="block">
+                        <div className={`font-medium ${customer.overdue_amount > 0 ? 'text-red-600' : 'text-gray-900'}`}>
+                          ₱{(customer.outstanding_balance / 1000).toFixed(0)}K
+                        </div>
+                        {customer.overdue_amount > 0 && (
+                          <div className="text-xs text-red-600">₱{(customer.overdue_amount / 1000).toFixed(0)}K overdue</div>
+                        )}
+                        {/* Show risk below outstanding on screens ≤1210px */}
+                        <div className="mt-1 min-[1211px]:hidden flex justify-end">
+                          <Badge variant={getRiskBadgeVariant(customer.risk_level)}>
+                            {customer.risk_level}
+                          </Badge>
+                        </div>
+                      </Link>
+                    </td>
+                    <td className="px-6 py-4 text-center hidden min-[1211px]:table-cell">
+                      <Link to={`/customers/${customer.id}`} className="block">
                         <Badge variant={getRiskBadgeVariant(customer.risk_level)}>
                           {customer.risk_level}
                         </Badge>
-                      </div>
+                      </Link>
                     </td>
-                    <td
-                      className="px-6 py-4 text-center cursor-pointer hidden min-[1211px]:table-cell"
-                      onClick={() => handleViewCustomer(customer)}
-                    >
-                      <Badge variant={getRiskBadgeVariant(customer.risk_level)}>
-                        {customer.risk_level}
-                      </Badge>
-                    </td>
-                    <td
-                      className="px-6 py-4 text-gray-600 cursor-pointer hidden min-[1100px]:table-cell"
-                      onClick={() => handleViewCustomer(customer)}
-                    >
-                      {customer.last_order_date || 'Never'}
+                    <td className="px-6 py-4 text-gray-600 hidden min-[1100px]:table-cell">
+                      <Link to={`/customers/${customer.id}`} className="block">{customer.last_order_date || 'Never'}</Link>
                     </td>
                   </tr>
                 ))}
@@ -601,7 +588,7 @@ export function CustomersPage() {
           {/* Mobile Card View */}
           <div className="md:hidden divide-y divide-gray-200">
             {pagedCustomers.map((customer) => (
-              <div key={customer.id} className="p-4 space-y-3 hover:bg-gray-50 cursor-pointer" onClick={() => handleViewCustomer(customer)}>
+              <Link key={customer.id} to={`/customers/${customer.id}`} className="block p-4 space-y-3 hover:bg-gray-50">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
                     <p className="font-medium text-gray-900 break-words">{customer.name}</p>
@@ -642,21 +629,7 @@ export function CustomersPage() {
                     <p className="text-gray-900">{customer.last_order_date || 'Never'}</p>
                   </div>
                 </div>
-
-                <div className="pt-2">
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    className="w-full"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleViewCustomer(customer);
-                    }}
-                  >
-                    <Eye className="w-4 h-4" />
-                  </Button>
-                </div>
-              </div>
+              </Link>
             ))}
             {filteredCustomers.length === 0 && (
               <div className="px-4 py-12 text-center text-gray-500">

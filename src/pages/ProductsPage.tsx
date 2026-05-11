@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
@@ -365,9 +365,9 @@ export function ProductsPage() {
                     >
                       <Edit className="w-4 h-4" />
                     </button>
-                    <button
-                      onClick={() => navigate(`/products/category/${cat.slug}`)}
-                      className="w-full text-left"
+                    <Link
+                      to={`/products/category/${cat.slug}`}
+                      className="w-full text-left block"
                     >
                       <div className="aspect-video w-full min-h-[120px] overflow-hidden bg-gray-100">
                         <img
@@ -390,7 +390,7 @@ export function ProductsPage() {
                           </p>
                         )}
                       </div>
-                    </button>
+                    </Link>
                   </div>
                 );
               })}

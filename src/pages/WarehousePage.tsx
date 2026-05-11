@@ -3591,35 +3591,38 @@ export default function WarehousePage() {
                         pagedSchedulePr.map((row) => (
                           <tr key={row.rowKey} className="hover:bg-gray-50">
                           <td className="px-3 py-3 text-sm text-gray-900">
-                            <div>
-                                <Link
-                                  to={`/production-requests/${row.prId}`}
-                                  className="font-medium text-blue-700 hover:text-blue-900 hover:underline"
-                                >
-                                  {row.productName}
-                                </Link>
+                            <Link to={`/production-requests/${row.prId}`} className="block">
+                                <div className="font-medium text-blue-700 hover:text-blue-900 hover:underline">{row.productName}</div>
                                 <div className="text-xs text-gray-500">{row.productSku || '—'}</div>
-                            </div>
+                            </Link>
                           </td>
                           <td className="px-3 py-3 whitespace-nowrap text-sm">
+                            <Link to={`/production-requests/${row.prId}`} className="block">
                               <span className="font-semibold text-gray-900">{row.quantity}</span>
                               <span className="text-gray-500"> {row.unit}</span>
+                            </Link>
                           </td>
                           <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">
-                            <div className="flex items-center gap-1">
-                              <Clock className="w-4 h-4 text-gray-400" />
+                            <Link to={`/production-requests/${row.prId}`} className="block">
+                              <div className="flex items-center gap-1">
+                                <Clock className="w-4 h-4 text-gray-400" />
                                 {row.requestDateFmt}
-                            </div>
+                              </div>
+                            </Link>
                           </td>
-                            <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">{row.expectedCompletionFmt}</td>
+                          <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">
+                            <Link to={`/production-requests/${row.prId}`} className="block">{row.expectedCompletionFmt}</Link>
+                          </td>
                           <td className="px-3 py-3 whitespace-nowrap">
-                              <span
-                                className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${prScheduleBadgeClass(row.status)}`}
-                              >
+                            <Link to={`/production-requests/${row.prId}`} className="block">
+                              <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${prScheduleBadgeClass(row.status)}`}>
                                 {row.status}
-                            </span>
+                              </span>
+                            </Link>
                           </td>
-                            <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">{row.requestedBy}</td>
+                          <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">
+                            <Link to={`/production-requests/${row.prId}`} className="block">{row.requestedBy}</Link>
+                          </td>
                         </tr>
                         ))
                       )}
@@ -3632,46 +3635,37 @@ export default function WarehousePage() {
                     <div className="p-8 text-center text-sm text-gray-500">No production lines match your filters.</div>
                   ) : (
                     pagedSchedulePr.map((row) => (
-                      <div key={row.rowKey} className="p-4 space-y-3">
+                      <Link key={row.rowKey} to={`/production-requests/${row.prId}`} className="block p-4 space-y-3 hover:bg-gray-50">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
-                            <Link
-                              to={`/production-requests/${row.prId}`}
-                              className="font-medium text-gray-900 break-words hover:text-blue-700"
-                            >
-                              {row.productName}
-                            </Link>
-                            <p className="text-xs text-gray-600 mt-1">{row.productSku || '—'}</p>
+                          <p className="font-medium text-gray-900 break-words">{row.productName}</p>
+                          <p className="text-xs text-gray-600 mt-1">{row.productSku || '—'}</p>
                         </div>
-                          <span
-                            className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border flex-shrink-0 ${prScheduleBadgeClass(row.status)}`}
-                          >
-                            {row.status}
+                        <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border flex-shrink-0 ${prScheduleBadgeClass(row.status)}`}>
+                          {row.status}
                         </span>
                       </div>
                       <div className="flex items-center gap-2">
-                          <span className="font-semibold text-gray-900">
-                            {row.quantity} {row.unit}
-                        </span>
+                        <span className="font-semibold text-gray-900">{row.quantity} {row.unit}</span>
                       </div>
                       <div className="grid grid-cols-2 gap-3 text-sm">
                         <div>
-                            <p className="text-xs text-gray-500">Request date</p>
+                          <p className="text-xs text-gray-500">Request date</p>
                           <p className="text-gray-900 flex items-center gap-1">
                             <Clock className="w-3 h-3 text-gray-400" />
-                              {row.requestDateFmt}
+                            {row.requestDateFmt}
                           </p>
                         </div>
                         <div>
-                            <p className="text-xs text-gray-500">Est. completion</p>
-                            <p className="text-gray-900">{row.expectedCompletionFmt}</p>
+                          <p className="text-xs text-gray-500">Est. completion</p>
+                          <p className="text-gray-900">{row.expectedCompletionFmt}</p>
                         </div>
-                          <div className="col-span-2">
-                            <p className="text-xs text-gray-500">Requested by</p>
-                            <p className="text-gray-900">{row.requestedBy}</p>
-                        </div>
+                        <div className="col-span-2">
+                          <p className="text-xs text-gray-500">Requested by</p>
+                          <p className="text-gray-900">{row.requestedBy}</p>
                         </div>
                       </div>
+                      </Link>
                     ))
                   )}
                     </div>
@@ -3779,38 +3773,43 @@ export default function WarehousePage() {
                         pagedSchedulePo.map((row) => (
                           <tr key={row.rowKey} className="hover:bg-gray-50">
                           <td className="px-3 py-3 text-sm text-gray-900">
-                            <div>
-                                <Link
-                                  to={`/purchase-orders/${row.poId}`}
-                                  className="font-medium text-blue-700 hover:text-blue-900 hover:underline"
-                                >
-                                  {row.materialName}
-                                </Link>
-                                <div className="text-xs text-gray-500">{row.materialCode}</div>
-                            </div>
+                            <Link to={`/purchase-orders/${row.poId}`} className="block">
+                              <div className="font-medium text-blue-700 hover:text-blue-900 hover:underline">{row.materialName}</div>
+                              <div className="text-xs text-gray-500">{row.materialCode}</div>
+                            </Link>
                           </td>
                           <td className="px-3 py-3 whitespace-nowrap text-sm">
+                            <Link to={`/purchase-orders/${row.poId}`} className="block">
                               <span className="font-semibold text-gray-900">{row.quantity}</span>
                               <span className="text-gray-500"> {row.unit}</span>
+                            </Link>
                           </td>
-                            <td className="px-3 py-3 text-sm text-gray-600">{row.supplier}</td>
+                          <td className="px-3 py-3 text-sm text-gray-600">
+                            <Link to={`/purchase-orders/${row.poId}`} className="block">{row.supplier}</Link>
+                          </td>
                           <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">
-                            <div className="flex items-center gap-1">
-                              <Clock className="w-4 h-4 text-gray-400" />
+                            <Link to={`/purchase-orders/${row.poId}`} className="block">
+                              <div className="flex items-center gap-1">
+                                <Clock className="w-4 h-4 text-gray-400" />
                                 {row.requestedDeliveryFmt}
-                            </div>
+                              </div>
+                            </Link>
                           </td>
-                            <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">{row.estimatedArrivalFmt}</td>
+                          <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">
+                            <Link to={`/purchase-orders/${row.poId}`} className="block">{row.estimatedArrivalFmt}</Link>
+                          </td>
                           <td className="px-3 py-3 whitespace-nowrap">
-                              <span
-                                className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${poScheduleBadgeClass(row.status)}`}
-                              >
+                            <Link to={`/purchase-orders/${row.poId}`} className="block">
+                              <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${poScheduleBadgeClass(row.status)}`}>
                                 {row.status}
-                            </span>
+                              </span>
+                            </Link>
                           </td>
-                            <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">{row.requestedBy}</td>
-                            <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">
-                              {fmtScheduleDate(row.orderDateIso)}
+                          <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">
+                            <Link to={`/purchase-orders/${row.poId}`} className="block">{row.requestedBy}</Link>
+                          </td>
+                          <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">
+                            <Link to={`/purchase-orders/${row.poId}`} className="block">{fmtScheduleDate(row.orderDateIso)}</Link>
                           </td>
                         </tr>
                         ))
@@ -3824,54 +3823,45 @@ export default function WarehousePage() {
                     <div className="p-8 text-center text-sm text-gray-500">No purchase lines match your filters.</div>
                   ) : (
                     pagedSchedulePo.map((row) => (
-                      <div key={row.rowKey} className="p-4 space-y-3">
+                      <Link key={row.rowKey} to={`/purchase-orders/${row.poId}`} className="block p-4 space-y-3 hover:bg-gray-50">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
-                            <Link
-                              to={`/purchase-orders/${row.poId}`}
-                              className="font-medium text-gray-900 break-words hover:text-blue-700"
-                            >
-                              {row.materialName}
-                            </Link>
-                            <p className="text-xs text-gray-600 mt-1">{row.materialCode}</p>
+                          <p className="font-medium text-gray-900 break-words">{row.materialName}</p>
+                          <p className="text-xs text-gray-600 mt-1">{row.materialCode}</p>
                         </div>
-                          <span
-                            className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border flex-shrink-0 ${poScheduleBadgeClass(row.status)}`}
-                          >
-                            {row.status}
+                        <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border flex-shrink-0 ${poScheduleBadgeClass(row.status)}`}>
+                          {row.status}
                         </span>
                       </div>
                       <div className="flex items-center gap-2">
-                          <span className="font-semibold text-gray-900">
-                            {row.quantity} {row.unit}
-                        </span>
+                        <span className="font-semibold text-gray-900">{row.quantity} {row.unit}</span>
                       </div>
                       <div className="grid grid-cols-2 gap-3 text-sm">
                         <div>
                           <p className="text-xs text-gray-500">Supplier</p>
-                            <p className="text-gray-900">{row.supplier}</p>
+                          <p className="text-gray-900">{row.supplier}</p>
                         </div>
                         <div>
-                            <p className="text-xs text-gray-500">Est. arrival</p>
-                            <p className="text-gray-900">{row.estimatedArrivalFmt}</p>
+                          <p className="text-xs text-gray-500">Est. arrival</p>
+                          <p className="text-gray-900">{row.estimatedArrivalFmt}</p>
                         </div>
                         <div>
-                            <p className="text-xs text-gray-500">Req. delivery</p>
+                          <p className="text-xs text-gray-500">Req. delivery</p>
                           <p className="text-gray-900 flex items-center gap-1">
                             <Clock className="w-3 h-3 text-gray-400" />
-                              {row.requestedDeliveryFmt}
+                            {row.requestedDeliveryFmt}
                           </p>
                         </div>
                         <div>
-                            <p className="text-xs text-gray-500">Order date</p>
-                            <p className="text-gray-900">{fmtScheduleDate(row.orderDateIso)}</p>
+                          <p className="text-xs text-gray-500">Order date</p>
+                          <p className="text-gray-900">{fmtScheduleDate(row.orderDateIso)}</p>
                         </div>
                         <div className="col-span-2">
-                            <p className="text-xs text-gray-500">Requested by</p>
-                            <p className="text-gray-900">{row.requestedBy}</p>
+                          <p className="text-xs text-gray-500">Requested by</p>
+                          <p className="text-gray-900">{row.requestedBy}</p>
                         </div>
                       </div>
-                    </div>
+                      </Link>
                     ))
                   )}
                 </div>
@@ -5402,22 +5392,19 @@ export default function WarehousePage() {
                               {ev.status}
                             </span>
                           </div>
-                          <button
-                            type="button"
+                          <Link
+                            to={
+                              ev.recordRoute === 'production'
+                                ? `/production-requests/${ev.recordId}`
+                                : ev.recordRoute === 'purchase'
+                                  ? `/purchase-orders/${ev.recordId}`
+                                  : `/inter-branch-requests/${ev.recordId}`
+                            }
                             className="shrink-0 text-sm font-medium text-blue-700 hover:underline"
-                            onClick={() => {
-                              const path =
-                                ev.recordRoute === 'production'
-                                  ? `/production-requests/${ev.recordId}`
-                                  : ev.recordRoute === 'purchase'
-                                    ? `/purchase-orders/${ev.recordId}`
-                                    : `/inter-branch-requests/${ev.recordId}`;
-                              setScheduleCalendarModalOpen(false);
-                              navigate(path);
-                            }}
+                            onClick={() => setScheduleCalendarModalOpen(false)}
                           >
                             Open
-                          </button>
+                          </Link>
                         </li>
                       ))}
                     </ul>
@@ -5544,22 +5531,19 @@ export default function WarehousePage() {
                 >
                   Close
                 </button>
-                <button
-                        type="button"
-                        className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
-                  onClick={() => {
-                          const path =
-                            ev.recordRoute === 'production'
-                              ? `/production-requests/${ev.recordId}`
-                              : ev.recordRoute === 'purchase'
-                                ? `/purchase-orders/${ev.recordId}`
-                                : `/inter-branch-requests/${ev.recordId}`;
-                          setScheduleStripDetailDateKey(null);
-                          navigate(path);
-                        }}
-                      >
-                        {stripCalendarPrimaryCtaLabel(ev)}
-                </button>
+                <Link
+                  to={
+                    ev.recordRoute === 'production'
+                      ? `/production-requests/${ev.recordId}`
+                      : ev.recordRoute === 'purchase'
+                        ? `/purchase-orders/${ev.recordId}`
+                        : `/inter-branch-requests/${ev.recordId}`
+                  }
+                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium text-center"
+                  onClick={() => setScheduleStripDetailDateKey(null)}
+                >
+                  {stripCalendarPrimaryCtaLabel(ev)}
+                </Link>
               </div>
                   </div>
                 ))

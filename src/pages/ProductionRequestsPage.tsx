@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
@@ -411,10 +411,10 @@ export function ProductionRequestsPage() {
                 {pagedRows.map((r) => {
                   const targetOverdue = isPrExpectedOverdue(r.expected_completion_date, r.status);
                   return (
-                  <div
+                  <Link
                     key={r.id}
-                    className="p-4 space-y-3 hover:bg-gray-50 cursor-pointer"
-                    onClick={() => navigate(`/production-requests/${r.id}`)}
+                    to={`/production-requests/${r.id}`}
+                    className="block p-4 space-y-3 hover:bg-gray-50"
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div>
@@ -462,7 +462,7 @@ export function ProductionRequestsPage() {
                         <p className="font-medium text-gray-900">{r.production_request_items.length}</p>
                       </div>
                     </div>
-                  </div>
+                  </Link>
                   );
                 })}
               </div>
@@ -525,47 +525,53 @@ export function ProductionRequestsPage() {
                     {pagedRows.map((r) => {
                       const targetOverdue = isPrExpectedOverdue(r.expected_completion_date, r.status);
                       return (
-                      <tr
-                        key={r.id}
-                        className="hover:bg-gray-50 cursor-pointer"
-                        onClick={() => navigate(`/production-requests/${r.id}`)}
-                      >
+                      <tr key={r.id} className="hover:bg-gray-50">
                         <td className="px-6 py-4">
-                          <div className="font-medium text-blue-600 hover:underline">{r.pr_number}</div>
-                          {(r.inter_branch_request_id || r.is_transfer_request) && (
-                            <Badge
-                              variant="default"
-                              className="mt-1 text-[10px] border-violet-200 bg-violet-50 text-violet-800 gap-0.5"
-                            >
-                              <ArrowRightLeft className="w-3 h-3" />
-                              {r.inter_branch?.ibr_number
-                                ? `Inter-branch · ${r.inter_branch.ibr_number}`
-                                : `Transfer · ${r.tr_branch?.name ?? '—'}`}
-                            </Badge>
-                          )}
-                        </td>
-                        <td className="px-6 py-4 text-gray-600">{fmt(r.request_date)}</td>
-                        <td className="px-6 py-4 font-medium text-gray-900">{r.branches?.name ?? '—'}</td>
-                        <td className="px-6 py-4 text-gray-600 tabular-nums">{r.production_request_items.length}</td>
-                        <td className="px-6 py-4">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span
-                              className={targetOverdue ? 'text-red-800 font-medium' : 'text-gray-600'}
-                            >
-                              {fmt(r.expected_completion_date)}
-                            </span>
-                            {targetOverdue && (
-                              <Badge variant="danger" className="text-[10px] px-1.5 py-0 gap-0.5 shrink-0">
-                                <AlertTriangle className="w-3 h-3" />
-                                Overdue
+                          <Link to={`/production-requests/${r.id}`} className="block">
+                            <div className="font-medium text-blue-600 hover:underline">{r.pr_number}</div>
+                            {(r.inter_branch_request_id || r.is_transfer_request) && (
+                              <Badge
+                                variant="default"
+                                className="mt-1 text-[10px] border-violet-200 bg-violet-50 text-violet-800 gap-0.5"
+                              >
+                                <ArrowRightLeft className="w-3 h-3" />
+                                {r.inter_branch?.ibr_number
+                                  ? `Inter-branch · ${r.inter_branch.ibr_number}`
+                                  : `Transfer · ${r.tr_branch?.name ?? '—'}`}
                               </Badge>
                             )}
-                          </div>
+                          </Link>
+                        </td>
+                        <td className="px-6 py-4 text-gray-600">
+                          <Link to={`/production-requests/${r.id}`} className="block">{fmt(r.request_date)}</Link>
+                        </td>
+                        <td className="px-6 py-4 font-medium text-gray-900">
+                          <Link to={`/production-requests/${r.id}`} className="block">{r.branches?.name ?? '—'}</Link>
+                        </td>
+                        <td className="px-6 py-4 text-gray-600 tabular-nums">
+                          <Link to={`/production-requests/${r.id}`} className="block">{r.production_request_items.length}</Link>
+                        </td>
+                        <td className="px-6 py-4">
+                          <Link to={`/production-requests/${r.id}`} className="block">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className={targetOverdue ? 'text-red-800 font-medium' : 'text-gray-600'}>
+                                {fmt(r.expected_completion_date)}
+                              </span>
+                              {targetOverdue && (
+                                <Badge variant="danger" className="text-[10px] px-1.5 py-0 gap-0.5 shrink-0">
+                                  <AlertTriangle className="w-3 h-3" />
+                                  Overdue
+                                </Badge>
+                              )}
+                            </div>
+                          </Link>
                         </td>
                         <td className="px-6 py-4 text-center">
-                          <Badge variant={getStatusVariant(r.status)} className="inline-flex items-center gap-1 whitespace-nowrap">
-                            {getPRStatusIcon(r.status)} {r.status}
-                          </Badge>
+                          <Link to={`/production-requests/${r.id}`} className="block">
+                            <Badge variant={getStatusVariant(r.status)} className="inline-flex items-center gap-1 whitespace-nowrap">
+                              {getPRStatusIcon(r.status)} {r.status}
+                            </Badge>
+                          </Link>
                         </td>
                       </tr>
                       );

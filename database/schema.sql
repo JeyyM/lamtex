@@ -52,7 +52,7 @@ DO $$ BEGIN CREATE TYPE movement_reference_type AS ENUM ('PO', 'PR', 'Production
 
 -- ── Order Enums ─────────────────────────────────────────────────────────────
 DO $$ BEGIN CREATE TYPE order_status AS ENUM ('Draft', 'Pending', 'Approved', 'Scheduled', 'Loading', 'Packed', 'Ready', 'In Transit', 'Delivered', 'Completed', 'Cancelled', 'Rejected'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN CREATE TYPE payment_status AS ENUM ('Unbilled', 'Invoiced', 'Partially Paid', 'Paid', 'Overdue'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE payment_status AS ENUM ('Unbilled', 'Invoiced', 'Partially Paid', 'Paid', 'Overdue', 'On Credit'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE delivery_type AS ENUM ('Truck', 'Ship', 'Pickup'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE payment_terms AS ENUM ('COD', '15 Days', '30 Days', '45 Days', '60 Days', '90 Days', 'Custom'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE payment_method_enum AS ENUM ('Online', 'Offline'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
