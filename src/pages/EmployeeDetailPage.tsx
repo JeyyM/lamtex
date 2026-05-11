@@ -278,42 +278,33 @@ function performanceSection(emp: EmployeePerfRow) {
     );
   } else if (isLogisticsManager(emp)) {
     cells.push(
-      { label: 'Deliveries (completed trips)', value: emp.deliveriesManaged.toLocaleString() },
       {
-        label: 'On-time rate',
-        value: emp.onTimeDeliveryRate == null ? '—' : `${emp.onTimeDeliveryRate}%`,
+        label: 'On-time rate (scheduling)',
+        value: emp.onTimeSchedulingRate == null ? '—' : `${emp.onTimeSchedulingRate}%`,
       },
-      { label: 'Trucks at branch', value: emp.trucksManaged.toLocaleString() },
-      { label: 'Trips (90 days)', value: emp.routesOptimized.toLocaleString() },
+      {
+        label: 'Fleet utilization (branch avg.)',
+        value: emp.fleetUtilizationPercent == null ? '—' : `${emp.fleetUtilizationPercent}%`,
+      },
+      { label: 'Trips (90 days)', value: emp.tripsLast90Days.toLocaleString() },
     );
   } else if (isWarehouseManager(emp)) {
     cells.push(
-      { label: 'Orders processed (branch)', value: emp.ordersProcessed.toLocaleString() },
-      { label: 'Active staff (branch)', value: emp.staffManaged.toLocaleString() },
       {
-        label: 'Inventory accuracy',
-        value: emp.inventoryAccuracy == null ? '—' : `${emp.inventoryAccuracy}%`,
+        label: 'PO + PR created (90 days, branch)',
+        value: emp.poPrCountLast90Days.toLocaleString(),
       },
-      { label: 'Warehouse size', value: emp.warehouseSize ?? '—' },
+      {
+        label: 'Stock Gaps (branch)',
+        value: emp.stockGapsCount.toLocaleString(),
+      },
+      {
+        label: 'PO/PR on-time completion (90d, branch)',
+        value: emp.poPrOnTimeCompletionRate == null ? '—' : `${emp.poPrOnTimeCompletionRate}%`,
+      },
     );
   } else if (isTruckDriver(emp)) {
-    cells.push(
-      { label: 'Deliveries completed', value: emp.deliveriesCompleted.toLocaleString() },
-      { label: 'Assigned vehicle', value: emp.truckNumber ?? '—' },
-      { label: 'Plate', value: emp.licensePlate ?? '—' },
-      {
-        label: 'Distance / safety',
-        value:
-          emp.distanceCovered == null && emp.safetyRating == null
-            ? '—'
-            : [
-                emp.distanceCovered != null ? `${emp.distanceCovered.toLocaleString()} km` : null,
-                emp.safetyRating != null ? `★ ${emp.safetyRating}` : null,
-              ]
-                .filter(Boolean)
-                .join(' · ') || '—',
-      },
-    );
+    cells.push({ label: 'Completed trips', value: emp.completedTrips.toLocaleString() });
   } else {
     return (
       <p className="text-sm text-gray-500">
@@ -1019,14 +1010,10 @@ export default function EmployeeDetailPage() {
             </div>
 
             <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-              <h2 className="text-lg font-semibold text-gray-900 mb-2 flex items-center gap-2">
+              <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
                 <TrendingUp className="w-5 h-5 text-green-600" />
                 Performance summary
               </h2>
-              <p className="text-sm text-gray-600 mb-4">
-                Metrics use the same live rules as the Employees directory (orders, customers, trips, and
-                vehicles).
-              </p>
               {performanceSection(employee)}
             </div>
 

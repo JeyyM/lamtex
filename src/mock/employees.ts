@@ -103,10 +103,9 @@ export const logisticsManagers: LogisticsManager[] = [
     tenure: 66,
     email: 'ricardo.torres@lamtex.com',
     phone: '+63 917 111 2222',
-    deliveriesManaged: 1450,
-    onTimeDeliveryRate: 94.5,
-    trucksManaged: 12,
-    routesOptimized: 48
+    onTimeSchedulingRate: 94.5,
+    fleetUtilizationPercent: 72,
+    tripsLast90Days: 48,
   },
   {
     employeeId: 'LOG-002',
@@ -120,10 +119,9 @@ export const logisticsManagers: LogisticsManager[] = [
     tenure: 61,
     email: 'patricia.valdez@lamtex.com',
     phone: '+63 917 222 3333',
-    deliveriesManaged: 1280,
-    onTimeDeliveryRate: 92.8,
-    trucksManaged: 10,
-    routesOptimized: 42
+    onTimeSchedulingRate: 92.8,
+    fleetUtilizationPercent: 68,
+    tripsLast90Days: 42,
   },
   {
     employeeId: 'LOG-003',
@@ -137,10 +135,9 @@ export const logisticsManagers: LogisticsManager[] = [
     tenure: 58,
     email: 'miguel.fernandez@lamtex.com',
     phone: '+63 917 333 4444',
-    deliveriesManaged: 890,
-    onTimeDeliveryRate: 91.2,
-    trucksManaged: 8,
-    routesOptimized: 35
+    onTimeSchedulingRate: 91.2,
+    fleetUtilizationPercent: 61,
+    tripsLast90Days: 35,
   }
 ];
 
@@ -158,10 +155,9 @@ export const warehouseManagers: WarehouseManager[] = [
     tenure: 81,
     email: 'elena.martinez@lamtex.com',
     phone: '+63 917 444 5555',
-    inventoryAccuracy: 98.5,
-    warehouseSize: '15,000 sqm',
-    staffManaged: 25,
-    ordersProcessed: 3250
+    poPrCountLast90Days: 142,
+    stockGapsCount: 8,
+    poPrOnTimeCompletionRate: 91.4,
   },
   {
     employeeId: 'WH-002',
@@ -175,10 +171,9 @@ export const warehouseManagers: WarehouseManager[] = [
     tenure: 77,
     email: 'antonio.ramos@lamtex.com',
     phone: '+63 917 555 6666',
-    inventoryAccuracy: 97.8,
-    warehouseSize: '12,000 sqm',
-    staffManaged: 20,
-    ordersProcessed: 2890
+    poPrCountLast90Days: 128,
+    stockGapsCount: 11,
+    poPrOnTimeCompletionRate: 88.2,
   },
   {
     employeeId: 'WH-003',
@@ -192,10 +187,9 @@ export const warehouseManagers: WarehouseManager[] = [
     tenure: 72,
     email: 'sofia.domingo@lamtex.com',
     phone: '+63 917 666 7777',
-    inventoryAccuracy: 96.5,
-    warehouseSize: '10,000 sqm',
-    staffManaged: 18,
-    ordersProcessed: 2100
+    poPrCountLast90Days: 96,
+    stockGapsCount: 15,
+    poPrOnTimeCompletionRate: 84.0,
   }
 ];
 
@@ -213,11 +207,7 @@ export const truckDrivers: TruckDriver[] = [
     tenure: 70,
     email: 'fernando.reyes@lamtex.com',
     phone: '+63 917 222 1111',
-    truckNumber: 'TRK-QC-01',
-    licensePlate: 'ABC 1234',
-    deliveriesCompleted: 842,
-    distanceCovered: 125800,
-    safetyRating: 4.9
+    completedTrips: 842,
   },
   {
     employeeId: 'DRV-002',
@@ -231,11 +221,7 @@ export const truckDrivers: TruckDriver[] = [
     tenure: 68,
     email: 'marco.antonio@lamtex.com',
     phone: '+63 917 333 2222',
-    truckNumber: 'TRK-QC-02',
-    licensePlate: 'DEF 5678',
-    deliveriesCompleted: 798,
-    distanceCovered: 118500,
-    safetyRating: 4.8
+    completedTrips: 798,
   },
   {
     employeeId: 'DRV-003',
@@ -249,11 +235,7 @@ export const truckDrivers: TruckDriver[] = [
     tenure: 65,
     email: 'gabriel.santos@lamtex.com',
     phone: '+63 917 444 3333',
-    truckNumber: 'TRK-MK-01',
-    licensePlate: 'GHI 9012',
-    deliveriesCompleted: 725,
-    distanceCovered: 102300,
-    safetyRating: 4.7
+    completedTrips: 725,
   },
   {
     employeeId: 'DRV-004',
@@ -267,11 +249,7 @@ export const truckDrivers: TruckDriver[] = [
     tenure: 63,
     email: 'rodrigo.cruz@lamtex.com',
     phone: '+63 917 555 4444',
-    truckNumber: 'TRK-MK-02',
-    licensePlate: 'JKL 3456',
-    deliveriesCompleted: 695,
-    distanceCovered: 98700,
-    safetyRating: 4.9
+    completedTrips: 695,
   },
   {
     employeeId: 'DRV-005',
@@ -285,11 +263,7 @@ export const truckDrivers: TruckDriver[] = [
     tenure: 61,
     email: 'ernesto.diaz@lamtex.com',
     phone: '+63 917 666 5555',
-    truckNumber: 'TRK-CB-01',
-    licensePlate: 'MNO 7890',
-    deliveriesCompleted: 612,
-    distanceCovered: 87400,
-    safetyRating: 4.8
+    completedTrips: 612,
   },
   {
     employeeId: 'DRV-006',
@@ -303,11 +277,7 @@ export const truckDrivers: TruckDriver[] = [
     tenure: 59,
     email: 'alberto.ramos@lamtex.com',
     phone: '+63 917 777 6666',
-    truckNumber: 'TRK-CB-02',
-    licensePlate: 'PQR 1234',
-    deliveriesCompleted: 589,
-    distanceCovered: 81200,
-    safetyRating: 4.6
+    completedTrips: 589,
   },
   {
     employeeId: 'DRV-007',
@@ -321,11 +291,7 @@ export const truckDrivers: TruckDriver[] = [
     tenure: 54,
     email: 'eduardo.lopez@lamtex.com',
     phone: '+63 917 888 7777',
-    truckNumber: 'TRK-QC-03',
-    licensePlate: 'STU 5678',
-    deliveriesCompleted: 648,
-    distanceCovered: 94500,
-    safetyRating: 4.9
+    completedTrips: 648,
   },
   {
     employeeId: 'DRV-008',
@@ -339,11 +305,7 @@ export const truckDrivers: TruckDriver[] = [
     tenure: 52,
     email: 'dante.rivera@lamtex.com',
     phone: '+63 917 999 8888',
-    truckNumber: 'TRK-MK-03',
-    licensePlate: 'VWX 9012',
-    deliveriesCompleted: 624,
-    distanceCovered: 88900,
-    safetyRating: 4.7
+    completedTrips: 624,
   }
 ];
 

@@ -31,27 +31,24 @@ export interface SalesAgent extends Employee {
 
 export interface LogisticsManager extends Employee {
   role: 'Logistics Manager';
-  deliveriesManaged: number;
-  onTimeDeliveryRate: number;
-  trucksManaged: number;
-  routesOptimized: number;
+  onTimeSchedulingRate: number | null;
+  fleetUtilizationPercent: number | null;
+  tripsLast90Days: number;
 }
 
 export interface WarehouseManager extends Employee {
   role: 'Warehouse Manager';
-  inventoryAccuracy: number;
-  warehouseSize: string;
-  staffManaged: number;
-  ordersProcessed: number;
+  /** POs + PRs created in the last 90 days (branch aggregate). */
+  poPrCountLast90Days: number;
+  /** Orders currently Partially Fulfilled at the branch (open stock gaps). */
+  stockGapsCount: number;
+  /** % of completed PO/PR with a target date that finished on or before it (90d, branch). */
+  poPrOnTimeCompletionRate: number | null;
 }
 
 export interface TruckDriver extends Employee {
   role: 'Truck Driver';
-  truckNumber: string;
-  deliveriesCompleted: number;
-  distanceCovered: number; // in km
-  safetyRating: number;
-  licensePlate: string;
+  completedTrips: number;
 }
 
 export type EmployeeDetails =

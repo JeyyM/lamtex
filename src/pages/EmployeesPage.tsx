@@ -31,12 +31,6 @@ function formatPesoCompact(value: number | null | undefined): string {
   return `₱${value.toLocaleString()}`;
 }
 
-function formatNumberCompact(value: number | null | undefined, suffix = ''): string {
-  if (value == null || !Number.isFinite(value)) return '—';
-  if (value >= 1000) return `${(value / 1000).toFixed(1)}K${suffix ? ' ' + suffix : ''}`;
-  return suffix ? `${value.toLocaleString()} ${suffix}` : value.toLocaleString();
-}
-
 /** Strip leading "Branch - name" when branch matches (avoids repeating territory on cards). */
 function directoryCardDisplayName(emp: EmployeePerfRow): string {
   const raw = emp.employeeName?.trim() ?? '';
@@ -197,22 +191,20 @@ const EmployeesPage: React.FC = () => {
         return (
           <>
             <div>
-              <span className="text-gray-600">Deliveries</span>
-              <p className="font-semibold text-gray-900">{employee.deliveriesManaged.toLocaleString()}</p>
-            </div>
-            <div>
-              <span className="text-gray-600">On-Time Rate</span>
+              <span className="text-gray-600">On-time rate</span>
               <p className="font-semibold text-gray-900">
-                {employee.onTimeDeliveryRate == null ? '—' : `${employee.onTimeDeliveryRate}%`}
+                {employee.onTimeSchedulingRate == null ? '—' : `${employee.onTimeSchedulingRate}%`}
               </p>
             </div>
             <div>
-              <span className="text-gray-600">Trucks</span>
-              <p className="font-semibold text-gray-900">{employee.trucksManaged.toLocaleString()}</p>
+              <span className="text-gray-600">Fleet utilization</span>
+              <p className="font-semibold text-gray-900">
+                {employee.fleetUtilizationPercent == null ? '—' : `${employee.fleetUtilizationPercent}%`}
+              </p>
             </div>
             <div>
               <span className="text-gray-600">Trips (90d)</span>
-              <p className="font-semibold text-gray-900">{employee.routesOptimized.toLocaleString()}</p>
+              <p className="font-semibold text-gray-900">{employee.tripsLast90Days.toLocaleString()}</p>
             </div>
           </>
         );
@@ -220,45 +212,27 @@ const EmployeesPage: React.FC = () => {
         return (
           <>
             <div>
-              <span className="text-gray-600">Orders</span>
-              <p className="font-semibold text-gray-900">{employee.ordersProcessed.toLocaleString()}</p>
+              <span className="text-gray-600">PO + PR (90d)</span>
+              <p className="font-semibold text-gray-900">{employee.poPrCountLast90Days.toLocaleString()}</p>
             </div>
             <div>
-              <span className="text-gray-600">Staff</span>
-              <p className="font-semibold text-gray-900">{employee.staffManaged.toLocaleString()}</p>
+              <span className="text-gray-600">Stock Gaps</span>
+              <p className="font-semibold text-gray-900">{employee.stockGapsCount.toLocaleString()}</p>
             </div>
             <div>
-              <span className="text-gray-600">Accuracy</span>
+              <span className="text-gray-600">PO/PR on-time</span>
               <p className="font-semibold text-gray-900">
-                {employee.inventoryAccuracy == null ? '—' : `${employee.inventoryAccuracy}%`}
+                {employee.poPrOnTimeCompletionRate == null ? '—' : `${employee.poPrOnTimeCompletionRate}%`}
               </p>
-            </div>
-            <div>
-              <span className="text-gray-600">Size</span>
-              <p className="font-semibold text-gray-900">{employee.warehouseSize ?? '—'}</p>
             </div>
           </>
         );
       case 'Truck Driver':
         return (
-          <>
-            <div>
-              <span className="text-gray-600">Truck</span>
-              <p className="font-semibold text-gray-900 text-xs truncate">{employee.truckNumber ?? '—'}</p>
-            </div>
-            <div>
-              <span className="text-gray-600">Plate</span>
-              <p className="font-semibold text-gray-900">{employee.licensePlate ?? '—'}</p>
-            </div>
-            <div>
-              <span className="text-gray-600">Deliveries</span>
-              <p className="font-semibold text-gray-900">{employee.deliveriesCompleted.toLocaleString()}</p>
-            </div>
-            <div>
-              <span className="text-gray-600">Distance</span>
-              <p className="font-semibold text-gray-900">{formatNumberCompact(employee.distanceCovered, 'km')}</p>
-            </div>
-          </>
+          <div>
+            <span className="text-gray-600">Completed trips</span>
+            <p className="font-semibold text-gray-900">{employee.completedTrips.toLocaleString()}</p>
+          </div>
         );
       default:
         return null;

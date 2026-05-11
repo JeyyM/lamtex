@@ -30,27 +30,28 @@ export type SalesAgentPerf = EmployeeBase & {
 
 export type LogisticsManagerPerf = EmployeeBase & {
   role: 'Logistics Manager';
-  deliveriesManaged: number;
-  onTimeDeliveryRate: number | null;
-  trucksManaged: number;
-  routesOptimized: number;
+  /** % of delivered orders (90d) with actual_delivery on/before committed date (required → scheduled departure → estimated). */
+  onTimeSchedulingRate: number | null;
+  /** Average `vehicles.utilization_percent` for branch fleet. */
+  fleetUtilizationPercent: number | null;
+  /** Trips with scheduled_date in the last 90 days. */
+  tripsLast90Days: number;
 };
 
 export type WarehouseManagerPerf = EmployeeBase & {
   role: 'Warehouse Manager';
-  ordersProcessed: number;
-  staffManaged: number;
-  inventoryAccuracy: number | null;
-  warehouseSize: string | null;
+  /** Purchase orders + production requests created in the last 90 days (excl. cancelled). */
+  poPrCountLast90Days: number;
+  /** Distinct orders in Partially Fulfilled status at the branch (open stock gaps). */
+  stockGapsCount: number;
+  /** % of PO/PR completed in last 90d that had a target date and closed on/before it. */
+  poPrOnTimeCompletionRate: number | null;
 };
 
 export type TruckDriverPerf = EmployeeBase & {
   role: 'Truck Driver';
-  deliveriesCompleted: number;
-  truckNumber: string | null;
-  licensePlate: string | null;
-  distanceCovered: number | null;
-  safetyRating: number | null;
+  /** Trips with status Completed assigned to this driver (all time in DB). */
+  completedTrips: number;
 };
 
 export type EmployeePerfRow =
@@ -62,18 +63,25 @@ export type EmployeePerfRow =
 
 export type BranchOption = { id: string; name: string };
 
-type BranchTripStats = { completed: number; totalLast90: number; onTimePct: number | null };
+type BranchLogisticsStats = {
+  tripsLast90Days: number;
+  onTimeSchedulingPct: number | null;
+  fleetUtilizationPct: number | null;
+};
+
+type WarehouseBranchStats = {
+  poPrCountLast90Days: number;
+  stockGapsCount: number;
+  poPrOnTimeCompletionPct: number | null;
+};
 
 type AggregateMaps = {
   customersByAgent: Map<string, number>;
   revenueByAgent: Map<string, number>;
   commissionByAgent: Map<string, number>;
-  tripsByBranchAll: Map<string, BranchTripStats>;
-  vehiclesByBranch: Map<string, number>;
-  ordersProcessedByBranch: Map<string, number>;
-  staffByBranch: Map<string, number>;
+  logisticsStatsByBranch: Map<string, BranchLogisticsStats>;
+  warehouseStatsByBranch: Map<string, WarehouseBranchStats>;
   tripsByDriver: Map<string, number>;
-  activeAssignmentsByDriver: Map<string, { vehicleName: string | null; plate: string | null }>;
 };
 
 export type EmployeeSupplements = {
@@ -282,7 +290,6 @@ export type EmployeeFullProfile = {
   };
 };
 
-const ORDER_FULFILLED_STATUSES = ['Packed', 'In Transit', 'Delivered', 'Completed'];
 const ORDER_REVENUE_EXCLUDED_STATUSES = ['Draft', 'Cancelled', 'Rejected', 'Pending'];
 
 type EmployeeRow = {
@@ -362,56 +369,48 @@ function mapEmployeeRowToPerf(row: EmployeeRow, maps: AggregateMaps): EmployeePe
     };
   }
   if (row.role === 'Logistics Manager' && row.branch_id) {
-    const t = maps.tripsByBranchAll.get(row.branch_id);
+    const s = maps.logisticsStatsByBranch.get(row.branch_id);
     return {
       ...base,
       role: 'Logistics Manager',
-      deliveriesManaged: t?.completed ?? 0,
-      onTimeDeliveryRate: t?.onTimePct ?? null,
-      trucksManaged: maps.vehiclesByBranch.get(row.branch_id) ?? 0,
-      routesOptimized: t?.totalLast90 ?? 0,
+      onTimeSchedulingRate: s?.onTimeSchedulingPct ?? null,
+      fleetUtilizationPercent: s?.fleetUtilizationPct ?? null,
+      tripsLast90Days: s?.tripsLast90Days ?? 0,
     };
   }
   if (row.role === 'Logistics Manager') {
     return {
       ...base,
       role: 'Logistics Manager',
-      deliveriesManaged: 0,
-      onTimeDeliveryRate: null,
-      trucksManaged: 0,
-      routesOptimized: 0,
+      onTimeSchedulingRate: null,
+      fleetUtilizationPercent: null,
+      tripsLast90Days: 0,
     };
   }
   if (row.role === 'Warehouse Manager' && row.branch_id) {
+    const w = maps.warehouseStatsByBranch.get(row.branch_id);
     return {
       ...base,
       role: 'Warehouse Manager',
-      ordersProcessed: maps.ordersProcessedByBranch.get(row.branch_id) ?? 0,
-      staffManaged: maps.staffByBranch.get(row.branch_id) ?? 0,
-      inventoryAccuracy: null,
-      warehouseSize: null,
+      poPrCountLast90Days: w?.poPrCountLast90Days ?? 0,
+      stockGapsCount: w?.stockGapsCount ?? 0,
+      poPrOnTimeCompletionRate: w?.poPrOnTimeCompletionPct ?? null,
     };
   }
   if (row.role === 'Warehouse Manager') {
     return {
       ...base,
       role: 'Warehouse Manager',
-      ordersProcessed: 0,
-      staffManaged: 0,
-      inventoryAccuracy: null,
-      warehouseSize: null,
+      poPrCountLast90Days: 0,
+      stockGapsCount: 0,
+      poPrOnTimeCompletionRate: null,
     };
   }
   if (row.role === 'Truck Driver') {
-    const a = maps.activeAssignmentsByDriver.get(row.id);
     return {
       ...base,
       role: 'Truck Driver',
-      deliveriesCompleted: maps.tripsByDriver.get(row.id) ?? 0,
-      truckNumber: a?.vehicleName ?? null,
-      licensePlate: a?.plate ?? null,
-      distanceCovered: null,
-      safetyRating: null,
+      completedTrips: maps.tripsByDriver.get(row.id) ?? 0,
     };
   }
   return { ...base, role: null };
@@ -426,34 +425,25 @@ async function loadAggregateMapsForEmployeeRows(rows: EmployeeRow[]): Promise<Ag
     customersByAgent,
     revenueByAgent,
     commissionByAgent,
-    tripsByBranchAll,
-    vehiclesByBranch,
-    ordersProcessedByBranch,
-    staffByBranch,
+    logisticsStatsByBranch,
+    warehouseStatsByBranch,
     tripsByDriver,
-    activeAssignmentsByDriver,
   ] = await Promise.all([
     fetchCustomersByAgent(agentIds),
     fetchRevenueByAgent(agentIds),
     fetchCommissionByAgent(agentIds),
-    fetchTripsByBranch(branchIds),
-    fetchVehiclesByBranch(branchIds),
-    fetchOrdersProcessedByBranch(branchIds),
-    fetchStaffByBranch(branchIds),
+    fetchLogisticsStatsByBranch(branchIds),
+    fetchWarehouseStatsByBranch(branchIds),
     fetchTripsByDriver(driverIds),
-    fetchActiveAssignmentsByDriver(driverIds),
   ]);
 
   return {
     customersByAgent,
     revenueByAgent,
     commissionByAgent,
-    tripsByBranchAll,
-    vehiclesByBranch,
-    ordersProcessedByBranch,
-    staffByBranch,
+    logisticsStatsByBranch,
+    warehouseStatsByBranch,
     tripsByDriver,
-    activeAssignmentsByDriver,
   };
 }
 
@@ -1354,108 +1344,268 @@ async function fetchCommissionByAgent(agentIds: string[]): Promise<Map<string, n
   return out;
 }
 
-async function fetchTripsByBranch(branchIds: string[]): Promise<Map<string, BranchTripStats>> {
-  const out = new Map<string, BranchTripStats>();
+function sliceYmd(d: unknown): string | null {
+  if (d == null || d === '') return null;
+  const s = String(d);
+  return s.length >= 10 ? s.slice(0, 10) : s;
+}
+
+/** Committed date: required → scheduled departure → estimated delivery. */
+function orderCommitmentYmd(row: {
+  required_date: unknown;
+  scheduled_departure_date: unknown;
+  estimated_delivery: unknown;
+}): string | null {
+  return (
+    sliceYmd(row.required_date) ??
+    sliceYmd(row.scheduled_departure_date) ??
+    sliceYmd(row.estimated_delivery)
+  );
+}
+
+async function fetchTripCountLast90ByBranch(branchIds: string[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
   if (branchIds.length === 0) return out;
   const { data, error } = await supabase
     .from('trips')
-    .select('branch_id, status, eta, actual_arrival, scheduled_date')
+    .select('branch_id, scheduled_date')
     .in('branch_id', branchIds);
   if (error) {
-    if (import.meta.env.DEV) console.warn('[tripsByBranch]', error.message);
+    if (import.meta.env.DEV) console.warn('[tripCountLast90ByBranch]', error.message);
     return out;
   }
   const ninetyDaysAgo = Date.now() - 90 * 24 * 60 * 60 * 1000;
-  type Acc = { completed: number; totalLast90: number; onTimeNum: number; onTimeDen: number };
-  const acc = new Map<string, Acc>();
+  for (const r of (data ?? []) as Array<{ branch_id: string | null; scheduled_date: string | null }>) {
+    if (!r.branch_id || !r.scheduled_date) continue;
+    if (new Date(r.scheduled_date).getTime() >= ninetyDaysAgo) {
+      out.set(r.branch_id, (out.get(r.branch_id) ?? 0) + 1);
+    }
+  }
+  return out;
+}
 
+async function fetchOrderSchedulingOnTimeByBranch(branchIds: string[]): Promise<Map<string, number | null>> {
+  const out = new Map<string, number | null>();
+  if (branchIds.length === 0) return out;
+  const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const { data, error } = await supabase
+    .from('orders')
+    .select('branch_id, required_date, scheduled_departure_date, estimated_delivery, actual_delivery, status')
+    .in('branch_id', branchIds)
+    .in('status', ['Delivered', 'Completed'])
+    .not('actual_delivery', 'is', null)
+    .gte('actual_delivery', cutoff);
+
+  if (error) {
+    if (import.meta.env.DEV) console.warn('[orderSchedulingOnTimeByBranch]', error.message);
+    for (const id of branchIds) out.set(id, null);
+    return out;
+  }
+
+  const acc = new Map<string, { onTime: number; total: number }>();
   for (const r of (data ?? []) as Array<{
     branch_id: string | null;
-    status: string | null;
-    eta: string | null;
-    actual_arrival: string | null;
-    scheduled_date: string | null;
+    required_date: unknown;
+    scheduled_departure_date: unknown;
+    estimated_delivery: unknown;
+    actual_delivery: unknown;
   }>) {
     if (!r.branch_id) continue;
-    const a = acc.get(r.branch_id) ?? { completed: 0, totalLast90: 0, onTimeNum: 0, onTimeDen: 0 };
-
-    if (r.status === 'Completed') a.completed += 1;
-    if (r.scheduled_date && new Date(r.scheduled_date).getTime() >= ninetyDaysAgo) a.totalLast90 += 1;
-    if (r.eta && r.actual_arrival) {
-      a.onTimeDen += 1;
-      if (new Date(r.actual_arrival).getTime() <= new Date(r.eta).getTime()) a.onTimeNum += 1;
-    }
+    const actual = sliceYmd(r.actual_delivery);
+    const commit = orderCommitmentYmd(r);
+    if (!actual || !commit) continue;
+    const a = acc.get(r.branch_id) ?? { onTime: 0, total: 0 };
+    a.total += 1;
+    if (actual <= commit) a.onTime += 1;
     acc.set(r.branch_id, a);
   }
 
-  for (const [bId, a] of acc) {
-    out.set(bId, {
-      completed: a.completed,
-      totalLast90: a.totalLast90,
-      onTimePct: a.onTimeDen > 0 ? Math.round((a.onTimeNum * 1000) / a.onTimeDen) / 10 : null,
+  for (const id of branchIds) {
+    const a = acc.get(id);
+    out.set(
+      id,
+      a && a.total > 0 ? Math.round((a.onTime * 1000) / a.total) / 10 : null,
+    );
+  }
+  return out;
+}
+
+async function fetchFleetUtilizationAvgByBranch(branchIds: string[]): Promise<Map<string, number | null>> {
+  const out = new Map<string, number | null>();
+  if (branchIds.length === 0) return out;
+  const { data, error } = await supabase
+    .from('vehicles')
+    .select('branch_id, utilization_percent, status')
+    .in('branch_id', branchIds);
+  if (error) {
+    if (import.meta.env.DEV) console.warn('[fleetUtilizationByBranch]', error.message);
+    for (const id of branchIds) out.set(id, null);
+    return out;
+  }
+  const sums = new Map<string, { sum: number; n: number }>();
+  for (const r of (data ?? []) as Array<{
+    branch_id: string | null;
+    utilization_percent: number | string | null;
+    status: string | null;
+  }>) {
+    if (!r.branch_id) continue;
+    if (r.status === 'Out of Service') continue;
+    const u = Number(r.utilization_percent);
+    if (!Number.isFinite(u)) continue;
+    const s = sums.get(r.branch_id) ?? { sum: 0, n: 0 };
+    s.sum += u;
+    s.n += 1;
+    sums.set(r.branch_id, s);
+  }
+  for (const id of branchIds) {
+    const s = sums.get(id);
+    out.set(id, s && s.n > 0 ? Math.round((s.sum / s.n) * 10) / 10 : null);
+  }
+  return out;
+}
+
+async function fetchLogisticsStatsByBranch(branchIds: string[]): Promise<Map<string, BranchLogisticsStats>> {
+  const out = new Map<string, BranchLogisticsStats>();
+  if (branchIds.length === 0) return out;
+  const [tripsN, onTime, fleet] = await Promise.all([
+    fetchTripCountLast90ByBranch(branchIds),
+    fetchOrderSchedulingOnTimeByBranch(branchIds),
+    fetchFleetUtilizationAvgByBranch(branchIds),
+  ]);
+  for (const id of branchIds) {
+    out.set(id, {
+      tripsLast90Days: tripsN.get(id) ?? 0,
+      onTimeSchedulingPct: onTime.get(id) ?? null,
+      fleetUtilizationPct: fleet.get(id) ?? null,
     });
   }
   return out;
 }
 
-async function fetchVehiclesByBranch(branchIds: string[]): Promise<Map<string, number>> {
-  const out = new Map<string, number>();
+async function fetchWarehouseStatsByBranch(branchIds: string[]): Promise<Map<string, WarehouseBranchStats>> {
+  const out = new Map<string, WarehouseBranchStats>();
   if (branchIds.length === 0) return out;
-  const { data, error } = await supabase
-    .from('vehicles')
-    .select('branch_id')
-    .in('branch_id', branchIds);
-  if (error) {
-    if (import.meta.env.DEV) console.warn('[vehiclesByBranch]', error.message);
-    return out;
+  for (const id of branchIds) {
+    out.set(id, {
+      poPrCountLast90Days: 0,
+      stockGapsCount: 0,
+      poPrOnTimeCompletionPct: null,
+    });
   }
-  for (const r of (data ?? []) as Array<{ branch_id: string | null }>) {
-    if (!r.branch_id) continue;
-    out.set(r.branch_id, (out.get(r.branch_id) ?? 0) + 1);
-  }
-  return out;
-}
 
-async function fetchOrdersProcessedByBranch(branchIds: string[]): Promise<Map<string, number>> {
-  const out = new Map<string, number>();
-  if (branchIds.length === 0) return out;
-  const { data, error } = await supabase
+  const cutoffMs = Date.now() - 90 * 24 * 60 * 60 * 1000;
+  const cutoffYmd = new Date(cutoffMs).toISOString().slice(0, 10);
+  const cutoffIso = new Date(cutoffMs).toISOString();
+
+  const poSkipStatuses = new Set(['Cancelled']);
+  const prSkipStatuses = new Set(['Cancelled', 'Rejected']);
+
+  const [poCreatedRes, prCreatedRes] = await Promise.all([
+    supabase
+      .from('purchase_orders')
+      .select('branch_id, status')
+      .in('branch_id', branchIds)
+      .gte('created_at', cutoffIso),
+    supabase
+      .from('production_requests')
+      .select('branch_id, status')
+      .in('branch_id', branchIds)
+      .gte('created_at', cutoffIso),
+  ]);
+  if (import.meta.env.DEV) {
+    if (poCreatedRes.error) console.warn('[warehouseStats PO created]', poCreatedRes.error.message);
+    if (prCreatedRes.error) console.warn('[warehouseStats PR created]', prCreatedRes.error.message);
+  }
+
+  for (const r of (poCreatedRes.data ?? []) as Array<{ branch_id: string | null; status: string | null }>) {
+    if (!r.branch_id || !out.has(r.branch_id)) continue;
+    if (r.status && poSkipStatuses.has(r.status)) continue;
+    const cur = out.get(r.branch_id)!;
+    cur.poPrCountLast90Days += 1;
+  }
+  for (const r of (prCreatedRes.data ?? []) as Array<{ branch_id: string | null; status: string | null }>) {
+    if (!r.branch_id || !out.has(r.branch_id)) continue;
+    if (r.status && prSkipStatuses.has(r.status)) continue;
+    const cur = out.get(r.branch_id)!;
+    cur.poPrCountLast90Days += 1;
+  }
+
+  const { data: partialOrders, error: partialErr } = await supabase
     .from('orders')
-    .select('branch_id, status')
+    .select('id, branch_id')
     .in('branch_id', branchIds)
-    .in('status', ORDER_FULFILLED_STATUSES);
-  if (error) {
-    if (import.meta.env.DEV) console.warn('[ordersProcessedByBranch]', error.message);
-    return out;
-  }
-  for (const r of (data ?? []) as Array<{ branch_id: string | null }>) {
-    if (!r.branch_id) continue;
-    out.set(r.branch_id, (out.get(r.branch_id) ?? 0) + 1);
-  }
-  return out;
-}
+    .eq('status', 'Partially Fulfilled');
+  if (partialErr && import.meta.env.DEV) console.warn('[warehouseStats partial orders]', partialErr.message);
 
-async function fetchStaffByBranch(branchIds: string[]): Promise<Map<string, number>> {
-  const out = new Map<string, number>();
-  if (branchIds.length === 0) return out;
-  const { data, error } = await supabase
-    .from('employees')
-    .select('branch_id, role, status')
-    .in('branch_id', branchIds);
-  if (error) {
-    if (import.meta.env.DEV) console.warn('[staffByBranch]', error.message);
-    return out;
+  const gapsByBranch = new Map<string, number>();
+  for (const id of branchIds) gapsByBranch.set(id, 0);
+  for (const o of (partialOrders ?? []) as Array<{ id: string; branch_id: string | null }>) {
+    if (!o.branch_id || !gapsByBranch.has(o.branch_id)) continue;
+    gapsByBranch.set(o.branch_id, (gapsByBranch.get(o.branch_id) ?? 0) + 1);
   }
-  for (const r of (data ?? []) as Array<{
+
+  for (const b of branchIds) {
+    out.get(b)!.stockGapsCount = gapsByBranch.get(b) ?? 0;
+  }
+
+  const [poDoneRes, prDoneRes] = await Promise.all([
+    supabase
+      .from('purchase_orders')
+      .select('branch_id, expected_delivery_date, actual_delivery_date')
+      .in('branch_id', branchIds)
+      .eq('status', 'Completed')
+      .not('actual_delivery_date', 'is', null)
+      .not('expected_delivery_date', 'is', null)
+      .gte('actual_delivery_date', cutoffYmd),
+    supabase
+      .from('production_requests')
+      .select('branch_id, expected_completion_date, updated_at')
+      .in('branch_id', branchIds)
+      .eq('status', 'Completed')
+      .not('expected_completion_date', 'is', null)
+      .gte('updated_at', cutoffIso),
+  ]);
+  if (import.meta.env.DEV) {
+    if (poDoneRes.error) console.warn('[warehouseStats PO on-time]', poDoneRes.error.message);
+    if (prDoneRes.error) console.warn('[warehouseStats PR on-time]', prDoneRes.error.message);
+  }
+
+  const onAcc = new Map<string, { num: number; den: number }>();
+  for (const id of branchIds) onAcc.set(id, { num: 0, den: 0 });
+
+  for (const r of (poDoneRes.data ?? []) as Array<{
     branch_id: string | null;
-    role: string | null;
-    status: string | null;
+    expected_delivery_date: unknown;
+    actual_delivery_date: unknown;
   }>) {
-    if (!r.branch_id) continue;
-    if (r.role === 'Machine Worker') continue;
-    if (r.status && r.status !== 'active') continue;
-    out.set(r.branch_id, (out.get(r.branch_id) ?? 0) + 1);
+    if (!r.branch_id || !onAcc.has(r.branch_id)) continue;
+    const exp = sliceYmd(r.expected_delivery_date);
+    const act = sliceYmd(r.actual_delivery_date);
+    if (!exp || !act) continue;
+    const a = onAcc.get(r.branch_id)!;
+    a.den += 1;
+    if (act <= exp) a.num += 1;
   }
+  for (const r of (prDoneRes.data ?? []) as Array<{
+    branch_id: string | null;
+    expected_completion_date: unknown;
+    updated_at: string | null;
+  }>) {
+    if (!r.branch_id || !onAcc.has(r.branch_id)) continue;
+    const exp = sliceYmd(r.expected_completion_date);
+    const act = r.updated_at ? sliceYmd(r.updated_at) : null;
+    if (!exp || !act) continue;
+    const a = onAcc.get(r.branch_id)!;
+    a.den += 1;
+    if (act <= exp) a.num += 1;
+  }
+
+  for (const b of branchIds) {
+    const a = onAcc.get(b)!;
+    out.get(b)!.poPrOnTimeCompletionPct =
+      a.den > 0 ? Math.round((a.num * 1000) / a.den) / 10 : null;
+  }
+
   return out;
 }
 
@@ -1474,35 +1624,6 @@ async function fetchTripsByDriver(driverIds: string[]): Promise<Map<string, numb
     if (!r.driver_id) continue;
     if (r.status !== 'Completed') continue;
     out.set(r.driver_id, (out.get(r.driver_id) ?? 0) + 1);
-  }
-  return out;
-}
-
-async function fetchActiveAssignmentsByDriver(
-  driverIds: string[],
-): Promise<Map<string, { vehicleName: string | null; plate: string | null }>> {
-  const out = new Map<string, { vehicleName: string | null; plate: string | null }>();
-  if (driverIds.length === 0) return out;
-  const { data, error } = await supabase
-    .from('driver_assignments')
-    .select('driver_id, is_active, vehicles(vehicle_name, plate_number)')
-    .in('driver_id', driverIds)
-    .eq('is_active', true);
-  if (error) {
-    if (import.meta.env.DEV) console.warn('[activeAssignmentsByDriver]', error.message);
-    return out;
-  }
-  for (const r of (data ?? []) as Array<{
-    driver_id: string;
-    vehicles:
-      | { vehicle_name: string | null; plate_number: string | null }
-      | { vehicle_name: string | null; plate_number: string | null }[]
-      | null;
-  }>) {
-    const v = asOne(r.vehicles);
-    if (!out.has(r.driver_id)) {
-      out.set(r.driver_id, { vehicleName: v?.vehicle_name ?? null, plate: v?.plate_number ?? null });
-    }
   }
   return out;
 }
