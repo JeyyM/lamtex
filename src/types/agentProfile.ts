@@ -193,7 +193,6 @@ export interface AgentFullProfile {
   recentActivity: AgentActivity[];
   
   // Permissions
-  systemRole: 'Agent' | 'Senior Agent' | 'Team Lead' | 'Branch Manager';
   permissions: string[];
   lastPasswordChange: string;
   lastLogin: string;

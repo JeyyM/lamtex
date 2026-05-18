@@ -454,6 +454,54 @@ CREATE TABLE IF NOT EXISTS customer_assignments (
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 3s: Agent quota history (audit log for every change to agent_targets)
+-- Source migration: database/agent_analytics_quotas.sql
+CREATE TABLE IF NOT EXISTS agent_quota_history (
+  id                 UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  employee_id        UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  period             VARCHAR(20) NOT NULL,
+  prev_monthly       NUMERIC(14,2),
+  new_monthly        NUMERIC(14,2),
+  prev_quarterly     NUMERIC(14,2),
+  new_quarterly      NUMERIC(14,2),
+  prev_stretch       VARCHAR(100),
+  new_stretch        VARCHAR(100),
+  note               TEXT,
+  changed_by_email   VARCHAR(255),
+  changed_by_name    VARCHAR(200),
+  changed_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 3s-branch: Branch-wide sales quota (one target per branch per period; synced to all agents)
+-- Source migration: database/branch_sales_targets.sql
+CREATE TABLE IF NOT EXISTS branch_sales_targets (
+  id                       UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  branch_id                UUID NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
+  period                   VARCHAR(20) NOT NULL,
+  monthly_sales_target     NUMERIC(14,2) NOT NULL DEFAULT 0,
+  quarterly_sales_target   NUMERIC(14,2) NOT NULL DEFAULT 0,
+  stretch_goal_status      VARCHAR(100),
+  created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(branch_id, period)
+);
+
+CREATE TABLE IF NOT EXISTS branch_quota_history (
+  id                 UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  branch_id          UUID NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
+  period             VARCHAR(20) NOT NULL,
+  prev_monthly       NUMERIC(14,2),
+  new_monthly        NUMERIC(14,2),
+  prev_quarterly     NUMERIC(14,2),
+  new_quarterly      NUMERIC(14,2),
+  prev_stretch       VARCHAR(100),
+  new_stretch        VARCHAR(100),
+  note               TEXT,
+  changed_by_email   VARCHAR(255),
+  changed_by_name    VARCHAR(200),
+  changed_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 
 -- ============================================================================
 -- SECTION 4: SUPPLIERS
@@ -1179,6 +1227,23 @@ CREATE TABLE IF NOT EXISTS order_proof_documents (
   commission_paid_at    TIMESTAMPTZ,
   commission_paid_by    VARCHAR(200),
   uploaded_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 8e: Customer-facing order summary portals (read-only by token, no auth)
+-- Source migration: database/order_customer_portal.sql
+CREATE TABLE IF NOT EXISTS order_customer_portals (
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  order_id        UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  token           VARCHAR(64) NOT NULL UNIQUE,
+  expires_at      TIMESTAMPTZ,
+  view_count      INT NOT NULL DEFAULT 0,
+  last_viewed_at  TIMESTAMPTZ,
+  customer_email  VARCHAR(255),
+  sent_via_email  BOOLEAN NOT NULL DEFAULT FALSE,
+  last_email_sent TIMESTAMPTZ,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT order_customer_portals_order_id_key UNIQUE (order_id)
 );
 
 
@@ -2847,10 +2912,932 @@ CREATE INDEX IF NOT EXISTS idx_customer_assignments_customer ON customer_assignm
 CREATE INDEX IF NOT EXISTS idx_agent_purchase_requests_agent ON agent_purchase_requests(agent_id);
 CREATE INDEX IF NOT EXISTS idx_pod_collections_order ON pod_collections(order_id);
 CREATE INDEX IF NOT EXISTS idx_pod_collections_agent ON pod_collections(agent_id);
+CREATE INDEX IF NOT EXISTS idx_agent_quota_history_employee
+  ON agent_quota_history(employee_id, changed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_quota_history_period
+  ON agent_quota_history(period, changed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_branch_sales_targets_branch
+  ON branch_sales_targets(branch_id, period);
+CREATE INDEX IF NOT EXISTS idx_branch_quota_history_branch
+  ON branch_quota_history(branch_id, changed_at DESC);
+
+-- Order customer portal
+CREATE INDEX IF NOT EXISTS idx_order_customer_portals_token ON order_customer_portals(token);
+CREATE INDEX IF NOT EXISTS idx_order_customer_portals_order ON order_customer_portals(order_id);
 
 
 -- ============================================================================
--- SECTION 24: TRIGGER - Auto-update updated_at
+-- SECTION 24: VIEWS & RPC FUNCTIONS
+-- All idempotent (CREATE OR REPLACE). Source migrations are listed inline so
+-- folding individual migration files into schema.sql stays traceable.
+-- ============================================================================
+
+-- ── 24a: Agent revenue rollup view ─────────────────────────────────────────
+-- Source: database/agent_analytics_quotas.sql
+-- Aggregates revenue, orders, customers per agent per (year, month).
+-- Excludes Cancelled / Rejected / Draft orders. Resolves the agent via
+-- COALESCE(orders.agent_id, customers.assigned_agent_id) so orders missing an
+-- explicit agent still attribute to the customer's assigned agent.
+CREATE OR REPLACE VIEW public.agent_revenue_by_period AS
+SELECT
+  COALESCE(o.agent_id, cu.assigned_agent_id)             AS agent_id,
+  COALESCE(o.agent_name, e.employee_name)               AS agent_name,
+  o.branch_id                                           AS branch_id,
+  EXTRACT(YEAR  FROM o.order_date)::INT                 AS year,
+  EXTRACT(MONTH FROM o.order_date)::INT                 AS month,
+  COUNT(*)                                              AS order_count,
+  -- Revenue: recorded payments when present; otherwise order total.
+  COALESCE(SUM(CASE
+    WHEN COALESCE(o.amount_paid, 0) > 0 THEN o.amount_paid
+    ELSE COALESCE(o.total_amount, 0)
+  END), 0)                                             AS revenue,
+  COALESCE(SUM(o.total_amount), 0)                      AS gross_sales,
+  COALESCE(SUM(o.amount_paid), 0)                       AS amount_paid,
+  COALESCE(SUM(o.balance_due), 0)                       AS balance_due,
+  COALESCE(AVG(NULLIF(o.discount_percent, 0)), 0)       AS avg_discount_percent,
+  COUNT(DISTINCT o.customer_id)                         AS distinct_customers,
+  COUNT(*) FILTER (WHERE o.payment_status = 'Overdue')  AS overdue_orders,
+  COALESCE(SUM(o.balance_due) FILTER
+    (WHERE o.payment_status = 'Overdue'), 0)            AS overdue_balance
+FROM orders o
+LEFT JOIN customers cu ON cu.id = o.customer_id
+LEFT JOIN employees e  ON e.id  = COALESCE(o.agent_id, cu.assigned_agent_id)
+WHERE o.status NOT IN ('Cancelled', 'Rejected', 'Draft')
+  AND COALESCE(o.agent_id, cu.assigned_agent_id) IS NOT NULL
+GROUP BY
+  COALESCE(o.agent_id, cu.assigned_agent_id),
+  COALESCE(o.agent_name, e.employee_name),
+  o.branch_id,
+  EXTRACT(YEAR  FROM o.order_date),
+  EXTRACT(MONTH FROM o.order_date);
+
+GRANT SELECT ON public.agent_revenue_by_period TO authenticated;
+
+-- ── 24b: Upsert single agent target (with audit trail) ────────────────────
+-- Source: database/agent_analytics_quotas.sql
+CREATE OR REPLACE FUNCTION public.upsert_agent_target(
+  p_employee_id    UUID,
+  p_period         TEXT,
+  p_monthly        NUMERIC DEFAULT NULL,
+  p_quarterly      NUMERIC DEFAULT NULL,
+  p_stretch        TEXT    DEFAULT NULL,
+  p_note           TEXT    DEFAULT NULL,
+  p_changed_by     TEXT    DEFAULT NULL,
+  p_changed_name   TEXT    DEFAULT NULL
+)
+RETURNS agent_targets
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_existing agent_targets%ROWTYPE;
+  v_result   agent_targets%ROWTYPE;
+BEGIN
+  IF p_employee_id IS NULL OR p_period IS NULL THEN
+    RAISE EXCEPTION 'employee_id and period are required';
+  END IF;
+
+  SELECT * INTO v_existing
+  FROM agent_targets
+  WHERE employee_id = p_employee_id AND period = p_period
+  LIMIT 1;
+
+  IF FOUND THEN
+    UPDATE agent_targets
+    SET
+      monthly_sales_target   = COALESCE(p_monthly,   v_existing.monthly_sales_target),
+      quarterly_sales_target = COALESCE(p_quarterly, v_existing.quarterly_sales_target),
+      stretch_goal_status    = COALESCE(p_stretch,   v_existing.stretch_goal_status),
+      updated_at             = NOW()
+    WHERE id = v_existing.id
+    RETURNING * INTO v_result;
+  ELSE
+    INSERT INTO agent_targets (
+      employee_id, period,
+      monthly_sales_target,
+      quarterly_sales_target,
+      stretch_goal_status
+    ) VALUES (
+      p_employee_id, p_period,
+      COALESCE(p_monthly, 0),
+      COALESCE(p_quarterly, 0),
+      p_stretch
+    )
+    RETURNING * INTO v_result;
+  END IF;
+
+  INSERT INTO agent_quota_history (
+    employee_id, period,
+    prev_monthly, new_monthly,
+    prev_quarterly, new_quarterly,
+    prev_stretch,  new_stretch,
+    note, changed_by_email, changed_by_name
+  ) VALUES (
+    p_employee_id, p_period,
+    v_existing.monthly_sales_target,   v_result.monthly_sales_target,
+    v_existing.quarterly_sales_target, v_result.quarterly_sales_target,
+    v_existing.stretch_goal_status,    v_result.stretch_goal_status,
+    p_note, p_changed_by, p_changed_name
+  );
+
+  RETURN v_result;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.upsert_agent_target(UUID, TEXT, NUMERIC, NUMERIC, TEXT, TEXT, TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.upsert_agent_target(UUID, TEXT, NUMERIC, NUMERIC, TEXT, TEXT, TEXT, TEXT) TO authenticated;
+
+-- ── 24c: Bulk upsert agent targets ─────────────────────────────────────────
+-- Source: database/agent_analytics_quotas.sql
+CREATE OR REPLACE FUNCTION public.bulk_upsert_agent_targets(
+  p_period       TEXT,
+  p_rows         JSONB,
+  p_note         TEXT DEFAULT NULL,
+  p_changed_by   TEXT DEFAULT NULL,
+  p_changed_name TEXT DEFAULT NULL
+)
+RETURNS INT
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  r       JSONB;
+  v_count INT := 0;
+BEGIN
+  IF p_rows IS NULL OR jsonb_typeof(p_rows) <> 'array' THEN
+    RAISE EXCEPTION 'p_rows must be a JSON array';
+  END IF;
+
+  FOR r IN SELECT * FROM jsonb_array_elements(p_rows)
+  LOOP
+    PERFORM public.upsert_agent_target(
+      (r->>'employeeId')::UUID,
+      p_period,
+      NULLIF(r->>'monthly','')::NUMERIC,
+      NULLIF(r->>'quarterly','')::NUMERIC,
+      NULLIF(r->>'stretch',''),
+      p_note,
+      p_changed_by,
+      p_changed_name
+    );
+    v_count := v_count + 1;
+  END LOOP;
+
+  RETURN v_count;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.bulk_upsert_agent_targets(TEXT, JSONB, TEXT, TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.bulk_upsert_agent_targets(TEXT, JSONB, TEXT, TEXT, TEXT) TO authenticated;
+
+-- ── 24c-branch: Upsert branch quota + mirror to all Sales Agents in branch ──
+-- Source: database/branch_sales_targets.sql
+CREATE OR REPLACE FUNCTION public.upsert_branch_sales_target(
+  p_branch_id    UUID,
+  p_period       TEXT,
+  p_monthly      NUMERIC DEFAULT NULL,
+  p_quarterly    NUMERIC DEFAULT NULL,
+  p_stretch      TEXT    DEFAULT NULL,
+  p_note         TEXT    DEFAULT NULL,
+  p_changed_by   TEXT    DEFAULT NULL,
+  p_changed_name TEXT    DEFAULT NULL
+)
+RETURNS branch_sales_targets
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_existing branch_sales_targets%ROWTYPE;
+  v_result   branch_sales_targets%ROWTYPE;
+  v_payload  JSONB;
+BEGIN
+  IF p_branch_id IS NULL OR p_period IS NULL THEN
+    RAISE EXCEPTION 'branch_id and period are required';
+  END IF;
+
+  SELECT * INTO v_existing
+  FROM branch_sales_targets
+  WHERE branch_id = p_branch_id AND period = p_period
+  LIMIT 1;
+
+  IF FOUND THEN
+    UPDATE branch_sales_targets
+    SET
+      monthly_sales_target   = COALESCE(p_monthly, monthly_sales_target),
+      quarterly_sales_target = COALESCE(p_quarterly, quarterly_sales_target),
+      stretch_goal_status    = COALESCE(p_stretch, stretch_goal_status),
+      updated_at             = NOW()
+    WHERE id = v_existing.id
+    RETURNING * INTO v_result;
+  ELSE
+    INSERT INTO branch_sales_targets (
+      branch_id, period,
+      monthly_sales_target,
+      quarterly_sales_target,
+      stretch_goal_status
+    ) VALUES (
+      p_branch_id, p_period,
+      COALESCE(p_monthly, 0),
+      COALESCE(p_quarterly, 0),
+      p_stretch
+    )
+    RETURNING * INTO v_result;
+  END IF;
+
+  INSERT INTO branch_quota_history (
+    branch_id, period,
+    prev_monthly, new_monthly,
+    prev_quarterly, new_quarterly,
+    prev_stretch, new_stretch,
+    note, changed_by_email, changed_by_name
+  ) VALUES (
+    p_branch_id, p_period,
+    v_existing.monthly_sales_target, v_result.monthly_sales_target,
+    v_existing.quarterly_sales_target, v_result.quarterly_sales_target,
+    v_existing.stretch_goal_status, v_result.stretch_goal_status,
+    p_note, p_changed_by, p_changed_name
+  );
+
+  SELECT COALESCE(
+    jsonb_agg(
+      jsonb_build_object(
+        'employeeId', e.id::text,
+        'monthly', v_result.monthly_sales_target,
+        'quarterly', v_result.quarterly_sales_target,
+        'stretch', v_result.stretch_goal_status
+      )
+    ),
+    '[]'::jsonb
+  )
+  INTO v_payload
+  FROM employees e
+  WHERE e.branch_id = p_branch_id
+    AND e.role = 'Sales Agent'::employee_role
+    AND e.status = 'active'::employee_status;
+
+  IF jsonb_array_length(v_payload) > 0 THEN
+    PERFORM public.bulk_upsert_agent_targets(
+      p_period,
+      v_payload,
+      COALESCE(p_note, 'Synced from branch quota'),
+      p_changed_by,
+      p_changed_name
+    );
+  END IF;
+
+  RETURN v_result;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.upsert_branch_sales_target(UUID, TEXT, NUMERIC, NUMERIC, TEXT, TEXT, TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.upsert_branch_sales_target(UUID, TEXT, NUMERIC, NUMERIC, TEXT, TEXT, TEXT, TEXT) TO authenticated;
+
+-- ── 24e: Send agent coaching nudge (creates an alert) ─────────────────────
+-- Source: database/agent_analytics_quotas.sql
+CREATE OR REPLACE FUNCTION public.send_agent_coaching_nudge(
+  p_employee_id UUID,
+  p_severity    TEXT,
+  p_title       TEXT,
+  p_message     TEXT
+)
+RETURNS UUID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_id UUID;
+BEGIN
+  IF p_employee_id IS NULL THEN
+    RAISE EXCEPTION 'employee_id is required';
+  END IF;
+
+  INSERT INTO agent_alerts (agent_id, severity, type, title, message, action_required)
+  VALUES (
+    p_employee_id,
+    COALESCE(p_severity, 'Medium')::alert_severity,
+    'Target Alert'::agent_alert_type,
+    'Coaching: ' || COALESCE(p_title, 'Performance review'),
+    COALESCE(p_message, 'A manager has flagged you for review.'),
+    TRUE
+  )
+  RETURNING id INTO v_id;
+
+  RETURN v_id;
+EXCEPTION WHEN undefined_table OR undefined_column THEN
+  RETURN NULL;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.send_agent_coaching_nudge(UUID, TEXT, TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.send_agent_coaching_nudge(UUID, TEXT, TEXT, TEXT) TO authenticated;
+
+-- ── 24e: Expand per-line discounts breakdown ──────────────────────────────
+-- Source: database/order_customer_portal_contacts.sql
+CREATE OR REPLACE FUNCTION public.expand_order_line_discounts(
+  p_qty INT,
+  p_unit_price NUMERIC,
+  p_discount_amount NUMERIC,
+  p_breakdown JSONB
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+IMMUTABLE
+SET search_path = public
+AS $$
+DECLARE
+  v_gross NUMERIC;
+  v_running NUMERIC;
+  v_elem JSONB;
+  v_pct NUMERIC;
+  v_after NUMERIC;
+  v_amt NUMERIC;
+  v_name TEXT;
+  v_lines JSONB := '[]'::jsonb;
+  v_from_breakdown NUMERIC := 0;
+  v_unallocated NUMERIC;
+BEGIN
+  v_gross := COALESCE(p_qty, 0) * COALESCE(p_unit_price, 0);
+  v_running := v_gross;
+
+  IF p_breakdown IS NOT NULL AND jsonb_typeof(p_breakdown) = 'array' THEN
+    FOR v_elem IN SELECT value FROM jsonb_array_elements(p_breakdown) AS t(value)
+    LOOP
+      v_name := NULLIF(trim(COALESCE(v_elem->>'name', '')), '');
+      BEGIN
+        v_pct := COALESCE(
+          NULLIF(trim(COALESCE(v_elem->>'percentage', v_elem->>'percent', '')), '')::numeric,
+          0
+        );
+      EXCEPTION WHEN OTHERS THEN
+        v_pct := 0;
+      END;
+      IF v_pct > 0 AND v_running > 0 THEN
+        v_after := v_running * (1 - v_pct / 100);
+        v_amt := round(v_running - v_after, 2);
+        IF v_amt > 0 THEN
+          v_lines := v_lines || jsonb_build_array(jsonb_build_object(
+            'name', COALESCE(v_name, 'Discount'),
+            'percentage', v_pct,
+            'amount', v_amt
+          ));
+          v_from_breakdown := v_from_breakdown + v_amt;
+          v_running := v_after;
+        END IF;
+      END IF;
+    END LOOP;
+  END IF;
+
+  v_unallocated := round(COALESCE(p_discount_amount, 0) - v_from_breakdown, 2);
+  IF v_unallocated > 0.005 THEN
+    v_lines := v_lines || jsonb_build_array(jsonb_build_object(
+      'name', 'Discount',
+      'amount', v_unallocated
+    ));
+  END IF;
+
+  IF jsonb_array_length(v_lines) = 0 AND COALESCE(p_discount_amount, 0) > 0 THEN
+    v_lines := jsonb_build_array(jsonb_build_object(
+      'name', 'Discount',
+      'amount', round(COALESCE(p_discount_amount, 0), 2)
+    ));
+  END IF;
+
+  RETURN v_lines;
+END;
+$$;
+
+-- ── 24f: Get public order summary by portal token ─────────────────────────
+-- Source: database/order_customer_portal_contacts.sql (latest version)
+CREATE OR REPLACE FUNCTION public.get_public_order_summary(p_token TEXT)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_portal   order_customer_portals%ROWTYPE;
+  v_order    RECORD;
+  v_customer RECORD;
+  v_invoice  RECORD;
+  v_company  RECORD;
+  v_addr     TEXT;
+  v_items    JSONB;
+  v_trips    JSONB;
+  v_activities JSONB;
+  v_agent    JSONB;
+  v_agent_core TEXT;
+  v_driver   JSONB;
+BEGIN
+  IF p_token IS NULL OR length(trim(p_token)) < 8 THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'invalid_token');
+  END IF;
+
+  SELECT * INTO v_portal
+  FROM order_customer_portals
+  WHERE token = trim(p_token);
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'not_found');
+  END IF;
+
+  IF v_portal.expires_at IS NOT NULL AND v_portal.expires_at < NOW() THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'expired');
+  END IF;
+
+  SELECT
+    o.id,
+    o.order_number,
+    o.order_date,
+    o.required_date,
+    o.status,
+    o.payment_status,
+    o.payment_terms,
+    o.delivery_type,
+    o.delivery_address,
+    o.subtotal,
+    o.discount_percent,
+    o.discount_amount,
+    o.tax_amount,
+    o.total_amount,
+    o.amount_paid,
+    o.balance_due,
+    o.invoice_date,
+    o.due_date,
+    o.order_notes,
+    o.agent_id,
+    o.agent_name,
+    o.customer_name,
+    o.customer_id,
+    o.branch_id,
+    b.name AS branch_name
+  INTO v_order
+  FROM orders o
+  LEFT JOIN branches b ON b.id = o.branch_id
+  WHERE o.id = v_portal.order_id;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'order_missing');
+  END IF;
+
+  IF v_order.status = 'Cancelled' THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'cancelled');
+  END IF;
+
+  UPDATE order_customer_portals
+  SET view_count = view_count + 1,
+      last_viewed_at = NOW(),
+      updated_at = NOW()
+  WHERE id = v_portal.id;
+
+  SELECT c.name, c.email, c.phone, c.address, c.city, c.province, c.postal_code, c.contact_person
+  INTO v_customer
+  FROM customers c
+  WHERE c.id = v_order.customer_id;
+
+  SELECT i.invoice_number, i.issue_date, i.due_date, i.payment_terms, i.notes
+  INTO v_invoice
+  FROM invoices i
+  WHERE i.order_id = v_order.id
+  ORDER BY i.created_at DESC
+  LIMIT 1;
+
+  SELECT cs.company_name, cs.primary_phone, cs.primary_email
+  INTO v_company
+  FROM company_settings cs
+  WHERE cs.branch_id = v_order.branch_id
+  LIMIT 1;
+
+  SELECT trim(concat_ws(', ',
+    NULLIF(ca.street, ''),
+    NULLIF(ca.city, ''),
+    NULLIF(ca.province, ''),
+    NULLIF(ca.postal_code, '')
+  ))
+  INTO v_addr
+  FROM company_addresses ca
+  JOIN company_settings cs ON cs.id = ca.settings_id
+  WHERE cs.branch_id = v_order.branch_id AND ca.is_primary = true
+  LIMIT 1;
+
+  v_agent := jsonb_build_object(
+    'name', COALESCE(v_order.agent_name, ''),
+    'phone', NULL,
+    'email', NULL
+  );
+
+  v_agent_core := NULLIF(trim(v_order.agent_name), '');
+  IF v_agent_core IS NOT NULL THEN
+    IF NULLIF(trim(COALESCE(v_order.branch_name, '')), '') IS NOT NULL THEN
+      v_agent_core := NULLIF(trim(regexp_replace(
+        v_agent_core,
+        '^' || regexp_replace(trim(v_order.branch_name), '([\[\].^$|?*+(){}\\])', '\\\1', 'g') || '\s*[-–—]\s*',
+        '',
+        'i'
+      )), '');
+    END IF;
+    IF v_agent_core IS NOT NULL AND v_agent_core = trim(v_order.agent_name) THEN
+      v_agent_core := NULLIF(trim(regexp_replace(v_agent_core, '^[^-–—]+[-–—]\s*', '', 'i')), '');
+    END IF;
+  END IF;
+
+  SELECT jsonb_build_object(
+    'name', COALESCE(e.employee_name, v_order.agent_name, ''),
+    'phone', NULLIF(trim(COALESCE(eci.primary_phone, eci.secondary_phone, e.phone)), ''),
+    'email', NULLIF(trim(COALESCE(eci.work_email, eci.personal_email, e.email)), '')
+  )
+  INTO v_agent
+  FROM employees e
+  LEFT JOIN employee_contact_info eci ON eci.employee_id = e.id
+  WHERE (
+      v_order.agent_id IS NOT NULL AND e.id = v_order.agent_id
+    )
+    OR (
+      e.role = 'Sales Agent'
+      AND (
+        NULLIF(trim(v_order.agent_name), '') IS NOT NULL
+        OR v_agent_core IS NOT NULL
+      )
+      AND (
+        lower(trim(e.employee_name)) = lower(trim(v_order.agent_name))
+        OR (v_agent_core IS NOT NULL AND lower(trim(e.employee_name)) = lower(v_agent_core))
+        OR lower(trim(v_order.agent_name)) LIKE '%' || lower(trim(e.employee_name)) || '%'
+        OR (v_agent_core IS NOT NULL AND lower(v_agent_core) LIKE '%' || lower(trim(e.employee_name)) || '%')
+      )
+    )
+  ORDER BY
+    CASE WHEN v_order.agent_id IS NOT NULL AND e.id = v_order.agent_id THEN 0 ELSE 1 END,
+    CASE WHEN e.branch_id IS NOT DISTINCT FROM v_order.branch_id THEN 0 ELSE 1 END,
+    CASE
+      WHEN v_agent_core IS NOT NULL AND lower(trim(e.employee_name)) = lower(v_agent_core) THEN 0
+      WHEN lower(trim(e.employee_name)) = lower(trim(COALESCE(v_order.agent_name, ''))) THEN 1
+      ELSE 2
+    END,
+    length(COALESCE(eci.primary_phone, eci.secondary_phone, e.phone, '')) DESC,
+    length(COALESCE(eci.work_email, eci.personal_email, e.email, '')) DESC
+  LIMIT 1;
+
+  IF v_agent IS NULL THEN
+    v_agent := jsonb_build_object(
+      'name', COALESCE(v_order.agent_name, ''),
+      'phone', NULL,
+      'email', NULL
+    );
+  ELSIF
+    NULLIF(trim(COALESCE(v_agent->>'phone', '')), '') IS NULL
+    AND NULLIF(trim(COALESCE(v_agent->>'email', '')), '') IS NULL
+  THEN
+    v_agent := jsonb_build_object(
+      'name', COALESCE(v_agent->>'name', v_order.agent_name, ''),
+      'phone', NULL,
+      'email', NULL
+    );
+  END IF;
+
+  v_driver := NULL;
+  SELECT jsonb_build_object(
+    'name', COALESCE(drv.employee_name, NULLIF(trim(t.driver_name), ''), ''),
+    'phone', NULLIF(trim(COALESCE(drv_ci.primary_phone, drv_ci.secondary_phone, drv.phone)), ''),
+    'email', NULLIF(trim(COALESCE(drv_ci.work_email, drv_ci.personal_email, drv.email)), ''),
+    'vehicleName', NULLIF(trim(t.vehicle_name), ''),
+    'tripNumber', t.trip_number,
+    'status', t.status::text
+  )
+  INTO v_driver
+  FROM trips t
+  LEFT JOIN employees drv ON drv.id = t.driver_id
+  LEFT JOIN employee_contact_info drv_ci ON drv_ci.employee_id = drv.id
+  WHERE v_order.id = ANY(t.order_ids)
+    AND (
+      t.driver_id IS NOT NULL
+      OR NULLIF(trim(t.driver_name), '') IS NOT NULL
+    )
+  ORDER BY
+    CASE t.status::text
+      WHEN 'In Transit' THEN 1
+      WHEN 'Loading' THEN 2
+      WHEN 'Packed' THEN 3
+      WHEN 'Ready' THEN 4
+      WHEN 'Scheduled' THEN 5
+      ELSE 10
+    END,
+    t.scheduled_date DESC NULLS LAST,
+    t.created_at DESC
+  LIMIT 1;
+
+  SELECT COALESCE(jsonb_agg(
+    jsonb_build_object(
+      'description', trim(concat_ws(' — ', NULLIF(oli.product_name, ''), NULLIF(oli.variant_description, ''))),
+      'quantity', oli.quantity,
+      'unitPrice', oli.unit_price,
+      'discountAmount', COALESCE(oli.discount_amount, 0),
+      'discountsBreakdown', COALESCE(oli.discounts_breakdown, '[]'::jsonb),
+      'discountLines', public.expand_order_line_discounts(
+        oli.quantity,
+        oli.unit_price,
+        oli.discount_amount,
+        oli.discounts_breakdown
+      ),
+      'total', oli.line_total
+    ) ORDER BY oli.created_at
+  ), '[]'::jsonb)
+  INTO v_items
+  FROM order_line_items oli
+  WHERE oli.order_id = v_order.id;
+
+  SELECT COALESCE(jsonb_agg(
+    jsonb_build_object(
+      'tripNumber', t.trip_number,
+      'driverName', COALESCE(drv.employee_name, t.driver_name, ''),
+      'driverPhone', NULLIF(trim(COALESCE(drv_ci.primary_phone, drv_ci.secondary_phone, drv.phone)), ''),
+      'driverEmail', NULLIF(trim(COALESCE(drv_ci.work_email, drv_ci.personal_email, drv.email)), ''),
+      'vehicleName', COALESCE(t.vehicle_name, ''),
+      'status', t.status,
+      'scheduledDate', t.scheduled_date,
+      'delayReason', t.delay_reason
+    )
+    ORDER BY t.scheduled_date DESC NULLS LAST
+  ), '[]'::jsonb)
+  INTO v_trips
+  FROM trips t
+  LEFT JOIN employees drv ON drv.id = t.driver_id
+  LEFT JOIN employee_contact_info drv_ci ON drv_ci.employee_id = drv.id
+  WHERE v_order.id = ANY(t.order_ids);
+
+  SELECT COALESCE(jsonb_agg(
+    jsonb_build_object(
+      'at', l.timestamp,
+      'action', l.action::text,
+      'description', l.description,
+      'oldValue', l.old_value,
+      'newValue', l.new_value,
+      'metadata', l.metadata
+    ) ORDER BY l.timestamp DESC
+  ), '[]'::jsonb)
+  INTO v_activities
+  FROM order_logs l
+  WHERE l.order_id = v_order.id
+    AND (
+      l.action::text IN (
+        'created',
+        'item_added', 'item_removed', 'item_quantity_changed', 'item_price_changed',
+        'discount_applied',
+        'status_changed', 'payment_status_changed',
+        'approved', 'rejected', 'cancelled',
+        'shipped', 'delivered',
+        'payment_received', 'invoice_generated'
+      )
+      OR (
+        l.action = 'proof_uploaded'
+        AND COALESCE(l.description, '') ILIKE 'proof of delivery%'
+      )
+    )
+    AND NOT (
+      l.action = 'proof_uploaded'
+      AND COALESCE(l.description, '') ILIKE '%payment%'
+    );
+
+  RETURN jsonb_build_object(
+    'ok', true,
+    'orderNumber', v_order.order_number,
+    'orderDate', v_order.order_date,
+    'requiredDate', v_order.required_date,
+    'status', v_order.status,
+    'paymentStatus', v_order.payment_status,
+    'paymentTerms', COALESCE(v_invoice.payment_terms::text, v_order.payment_terms::text),
+    'deliveryType', v_order.delivery_type,
+    'deliveryAddress', COALESCE(v_order.delivery_address, v_customer.address),
+    'subtotal', v_order.subtotal,
+    'discountPercent', v_order.discount_percent,
+    'discountAmount', v_order.discount_amount,
+    'taxAmount', v_order.tax_amount,
+    'totalAmount', v_order.total_amount,
+    'amountPaid', v_order.amount_paid,
+    'balanceDue', v_order.balance_due,
+    'invoiceNumber', v_invoice.invoice_number,
+    'issueDate', COALESCE(v_invoice.issue_date, v_order.invoice_date),
+    'dueDate', COALESCE(v_invoice.due_date, v_order.due_date),
+    'orderNotes', v_order.order_notes,
+    'invoiceNotes', v_invoice.notes,
+    'agentName', COALESCE(v_agent->>'name', v_order.agent_name),
+    'agent', v_agent,
+    'assignedDriver', v_driver,
+    'branchName', v_order.branch_name,
+    'customer', jsonb_build_object(
+      'name', COALESCE(v_customer.name, v_order.customer_name),
+      'email', v_customer.email,
+      'phone', v_customer.phone,
+      'contactPerson', v_customer.contact_person,
+      'address', trim(concat_ws(', ',
+        NULLIF(v_customer.address, ''),
+        NULLIF(v_customer.city, ''),
+        NULLIF(v_customer.province, ''),
+        NULLIF(v_customer.postal_code, '')
+      ))
+    ),
+    'company', jsonb_build_object(
+      'name', COALESCE(v_company.company_name, 'LAMTEX'),
+      'phone', v_company.primary_phone,
+      'email', v_company.primary_email,
+      'address', v_addr
+    ),
+    'items', v_items,
+    'trips', v_trips,
+    'activities', v_activities
+  );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.get_public_order_summary(TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_public_order_summary(TEXT) TO anon, authenticated;
+
+-- ── 24g: Get public per-line discount lines by token ───────────────────────
+-- Source: database/public_order_discount_lines.sql
+CREATE OR REPLACE FUNCTION public.get_public_order_discount_lines(p_token TEXT)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_portal order_customer_portals%ROWTYPE;
+  v_lines  JSONB;
+BEGIN
+  IF p_token IS NULL OR length(trim(p_token)) < 8 THEN
+    RETURN '[]'::jsonb;
+  END IF;
+
+  SELECT * INTO v_portal
+  FROM order_customer_portals
+  WHERE token = trim(p_token);
+
+  IF NOT FOUND THEN
+    RETURN '[]'::jsonb;
+  END IF;
+
+  IF v_portal.expires_at IS NOT NULL AND v_portal.expires_at < NOW() THEN
+    RETURN '[]'::jsonb;
+  END IF;
+
+  SELECT COALESCE(jsonb_agg(
+    jsonb_build_object(
+      'description', trim(concat_ws(' — ',
+        NULLIF(oli.product_name, ''),
+        NULLIF(oli.variant_description, '')
+      )),
+      'sku', oli.sku,
+      'quantity', oli.quantity,
+      'unitPrice', oli.unit_price,
+      'lineTotal', oli.line_total,
+      'discountAmount', COALESCE(oli.discount_amount, 0),
+      'discountsBreakdown', COALESCE(oli.discounts_breakdown, '[]'::jsonb)
+    ) ORDER BY oli.created_at
+  ), '[]'::jsonb)
+  INTO v_lines
+  FROM order_line_items oli
+  WHERE oli.order_id = v_portal.order_id;
+
+  RETURN v_lines;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.get_public_order_discount_lines(TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_public_order_discount_lines(TEXT) TO anon, authenticated;
+
+-- ── 24h: Executive RPC: create employee auth account ──────────────────────
+-- Source: database/rpc_create_employee_auth_account.sql
+-- Requires the pgcrypto extension under the "extensions" schema (Supabase default).
+CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions;
+
+CREATE OR REPLACE FUNCTION public.create_employee_auth_account(
+  p_employee_id UUID,
+  p_password TEXT
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_caller UUID := auth.uid();
+  v_is_exec BOOLEAN;
+  v_email TEXT;
+  v_auth_uid UUID;
+  v_existing_link UUID;
+  inst UUID := '00000000-0000-0000-0000-000000000000';
+BEGIN
+  IF v_caller IS NULL THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'not_authenticated');
+  END IF;
+
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.employees e
+    WHERE e.auth_user_id = v_caller
+      AND e.user_role IS NOT DISTINCT FROM 'Executive'::public.user_role
+      AND e.status = 'active'
+  )
+  INTO v_is_exec;
+
+  IF NOT COALESCE(v_is_exec, false) THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'forbidden');
+  END IF;
+
+  SELECT lower(trim(e.email)), e.auth_user_id
+  INTO v_email, v_existing_link
+  FROM public.employees e
+  WHERE e.id = p_employee_id;
+
+  IF v_email IS NULL OR v_email = '' THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'employee_not_found');
+  END IF;
+
+  IF v_existing_link IS NOT NULL THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'already_linked');
+  END IF;
+
+  IF length(trim(COALESCE(p_password, ''))) < 8 THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'password_too_short');
+  END IF;
+
+  SELECT u.id INTO v_auth_uid FROM auth.users u WHERE lower(trim(u.email)) = v_email LIMIT 1;
+
+  IF v_auth_uid IS NOT NULL THEN
+    IF EXISTS (
+      SELECT 1
+      FROM public.employees e2
+      WHERE e2.auth_user_id = v_auth_uid
+        AND e2.id <> p_employee_id
+    ) THEN
+      RETURN jsonb_build_object('ok', false, 'error', 'auth_email_claimed');
+    END IF;
+
+    UPDATE auth.users
+    SET
+      encrypted_password = extensions.crypt(trim(p_password), extensions.gen_salt('bf')),
+      updated_at = now()
+    WHERE id = v_auth_uid;
+  ELSE
+    v_auth_uid := gen_random_uuid();
+    INSERT INTO auth.users (
+      id, instance_id, aud, role, email, encrypted_password,
+      email_confirmed_at, created_at, updated_at,
+      raw_app_meta_data, raw_user_meta_data, is_super_admin,
+      confirmation_token, recovery_token,
+      email_change_token_current, email_change_token_new, email_change,
+      phone_change_token, phone_change, reauthentication_token
+    )
+    VALUES (
+      v_auth_uid, inst, 'authenticated', 'authenticated', v_email,
+      extensions.crypt(trim(p_password), extensions.gen_salt('bf')),
+      now(), now(), now(),
+      '{"provider":"email","providers":["email"]}'::jsonb, '{}'::jsonb, false,
+      '', '', '', '', '', '', '', ''
+    );
+  END IF;
+
+  UPDATE auth.users
+  SET
+    confirmation_token = COALESCE(confirmation_token, ''),
+    recovery_token = COALESCE(recovery_token, ''),
+    email_change_token_current = COALESCE(email_change_token_current, ''),
+    email_change_token_new = COALESCE(email_change_token_new, ''),
+    email_change = COALESCE(email_change, ''),
+    phone_change_token = COALESCE(phone_change_token, ''),
+    phone_change = COALESCE(phone_change, ''),
+    reauthentication_token = COALESCE(reauthentication_token, '')
+  WHERE id = v_auth_uid;
+
+  INSERT INTO auth.identities (id, user_id, identity_data, provider, provider_id, last_sign_in_at, created_at, updated_at)
+  SELECT
+    v_auth_uid, v_auth_uid,
+    jsonb_build_object('sub', v_auth_uid::text, 'email', v_email),
+    'email', v_auth_uid::text,
+    now(), now(), now()
+  WHERE NOT EXISTS (
+    SELECT 1 FROM auth.identities i WHERE i.user_id = v_auth_uid AND i.provider = 'email'
+  );
+
+  UPDATE public.employees
+  SET auth_user_id = v_auth_uid, updated_at = now()
+  WHERE id = p_employee_id;
+
+  RETURN jsonb_build_object('ok', true, 'auth_user_id', v_auth_uid);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.create_employee_auth_account(UUID, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.create_employee_auth_account(UUID, TEXT) TO authenticated;
+
+COMMENT ON FUNCTION public.create_employee_auth_account(UUID, TEXT) IS
+  'Executive-only: create or link Supabase Auth login for an employee; sets employees.auth_user_id.';
+
+
+-- ============================================================================
+-- SECTION 25: TRIGGER - Auto-update updated_at
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION update_updated_at()
@@ -2884,7 +3871,7 @@ END $$;
 
 
 -- ============================================================================
--- SECTION 25: ROW LEVEL SECURITY (RLS)
+-- SECTION 26: ROW LEVEL SECURITY (RLS)
 -- Enable RLS on ALL tables and grant full CRUD to any logged-in user.
 -- Supabase requires RLS to be enabled; without policies, no data is accessible.
 -- Policy check: auth.uid() IS NOT NULL — true for any authenticated session.
@@ -2943,7 +3930,7 @@ END $$;
 
 
 -- ============================================================================
--- SECTION 26: SEED DATA
+-- SECTION 27: SEED DATA
 -- ============================================================================
 
 -- Branches (titles: region + LAMTEX role; keep in sync with `src/constants/lamtexBranches.ts`)
@@ -3003,5 +3990,11 @@ ON CONFLICT (method) DO NOTHING;
 
 -- ============================================================================
 -- SCHEMA COMPLETE
--- Total: ~70 tables, ~120 enums, ~150 indexes, auto-trigger, RLS, seed data
+-- Total: ~72 tables, ~120 enums, ~155 indexes, ~10 RPC functions, 1 view,
+-- auto-trigger, RLS, seed data.
+--
+-- KEEP IN SYNC: any *.sql file added under database/ that creates/alters DB
+-- objects (tables, columns, indexes, enums, functions, views, RLS, triggers)
+-- MUST also be folded into this file in the same change. See
+-- .cursor/rules/schema-sync.mdc for the rule the AI agent follows.
 -- ============================================================================

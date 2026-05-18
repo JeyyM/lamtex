@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useMatch } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { Bell, Search, Menu, Calendar, X, Settings } from 'lucide-react';
 import { UserRole, Branch } from '@/src/types';
@@ -10,6 +11,8 @@ import { LAMTEX_BRANCHES_CHANGED_EVENT } from '@/src/lib/branches';
 
 export function Topbar() {
   const { role, setRole, branch, setBranch, isMobileMenuOpen, setIsMobileMenuOpen, hideBranchSelector } = useAppContext();
+  const agentAnalyticsRoute = useMatch({ path: '/agents', end: true });
+  const hideHeaderBranchAndDate = Boolean(agentAnalyticsRoute);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [isMobileSettingsOpen, setIsMobileSettingsOpen] = useState(false);
   const [notifications, setNotifications] = useState(getNotificationsByBranch(branch));
@@ -154,7 +157,8 @@ export function Topbar() {
 
         {/* Desktop Controls */}
         <div className="hidden md:flex items-center gap-4 lg:gap-6">
-          {/* Date Range Selector */}
+          {/* Date Range Selector — hidden on Agent Analytics (/agents) which uses its own controls */}
+          {!hideHeaderBranchAndDate && (
           <div className="relative">
             <button
               onClick={() => setShowDatePicker(!showDatePicker)}
@@ -225,9 +229,10 @@ export function Topbar() {
               </div>
             )}
           </div>
+          )}
 
           {/* Branch Switcher */}
-          {!hideBranchSelector && (
+          {!hideBranchSelector && !hideHeaderBranchAndDate && (
           <div className="hidden lg:flex items-center gap-2">
             <span className="text-xs font-medium text-gray-500 uppercase tracking-wider">Branch:</span>
             <select 
@@ -299,93 +304,97 @@ export function Topbar() {
             className="absolute top-16 left-0 right-0 bg-white border-b border-gray-200 shadow-lg p-4 space-y-4"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Date Range Selector - Mobile */}
-            <div className="relative">
-              <button
-                onClick={() => setShowDatePicker(!showDatePicker)}
-                className="w-full flex items-center justify-between gap-2 text-sm text-gray-600 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200 hover:bg-gray-100 transition-colors"
-              >
-                <div className="flex items-center gap-2">
-                  <Calendar className="w-4 h-4 text-gray-400" />
-                  <span className="font-medium">{formatDateRange()}</span>
-                </div>
-              </button>
-
-              {showDatePicker && (
-                <div className="mt-2 bg-white rounded-lg border border-gray-200 p-4">
-                  <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-sm font-semibold text-gray-900">Select Date Range</h3>
-                    <button
-                      onClick={() => setShowDatePicker(false)}
-                      className="text-gray-400 hover:text-gray-600"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-
-                  <div className="space-y-3">
-                    <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">From Date</label>
-                      <input
-                        type="date"
-                        value={dateFrom}
-                        onChange={(e) => handleDateFromChange(e.target.value)}
-                        max={getTodayDate()}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                      />
+            {!hideHeaderBranchAndDate && (
+              <>
+                {/* Date Range Selector - Mobile */}
+                <div className="relative">
+                  <button
+                    onClick={() => setShowDatePicker(!showDatePicker)}
+                    className="w-full flex items-center justify-between gap-2 text-sm text-gray-600 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200 hover:bg-gray-100 transition-colors"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Calendar className="w-4 h-4 text-gray-400" />
+                      <span className="font-medium">{formatDateRange()}</span>
                     </div>
+                  </button>
 
-                    <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">To Date</label>
-                      <input
-                        type="date"
-                        value={dateTo}
-                        onChange={(e) => handleDateToChange(e.target.value)}
-                        min={dateFrom || undefined}
-                        max={getTodayDate()}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                      />
-                    </div>
-
-                    {dateError && (
-                      <div className="text-xs text-red-600 bg-red-50 px-2 py-1 rounded">
-                        {dateError}
+                  {showDatePicker && (
+                    <div className="mt-2 bg-white rounded-lg border border-gray-200 p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="text-sm font-semibold text-gray-900">Select Date Range</h3>
+                        <button
+                          onClick={() => setShowDatePicker(false)}
+                          className="text-gray-400 hover:text-gray-600"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
                       </div>
-                    )}
 
-                    <div className="flex items-center gap-2 pt-2">
-                      <button
-                        onClick={applyDateRange}
-                        disabled={!dateFrom || !dateTo || !!dateError}
-                        className="flex-1 px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
-                      >
-                        Apply
-                      </button>
-                      <button
-                        onClick={clearDateRange}
-                        className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors"
-                      >
-                        Clear
-                      </button>
+                      <div className="space-y-3">
+                        <div>
+                          <label className="block text-xs font-medium text-gray-700 mb-1">From Date</label>
+                          <input
+                            type="date"
+                            value={dateFrom}
+                            onChange={(e) => handleDateFromChange(e.target.value)}
+                            max={getTodayDate()}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-medium text-gray-700 mb-1">To Date</label>
+                          <input
+                            type="date"
+                            value={dateTo}
+                            onChange={(e) => handleDateToChange(e.target.value)}
+                            min={dateFrom || undefined}
+                            max={getTodayDate()}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                          />
+                        </div>
+
+                        {dateError && (
+                          <div className="text-xs text-red-600 bg-red-50 px-2 py-1 rounded">
+                            {dateError}
+                          </div>
+                        )}
+
+                        <div className="flex items-center gap-2 pt-2">
+                          <button
+                            onClick={applyDateRange}
+                            disabled={!dateFrom || !dateTo || !!dateError}
+                            className="flex-1 px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+                          >
+                            Apply
+                          </button>
+                          <button
+                            onClick={clearDateRange}
+                            className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors"
+                          >
+                            Clear
+                          </button>
+                        </div>
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </div>
-              )}
-            </div>
 
-            {/* Branch Switcher - Mobile */}
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">Branch</label>
-              <select 
-                value={branch}
-                onChange={(e) => setBranch(e.target.value as Branch)}
-                className="w-full text-sm border-gray-300 rounded-lg shadow-sm focus:border-red-500 focus:ring-red-500 py-2 px-3"
-              >
-                {branches.map(b => (
-                  <option key={b} value={b}>{b}</option>
-                ))}
-              </select>
-            </div>
+                {/* Branch Switcher - Mobile */}
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Branch</label>
+                  <select 
+                    value={branch}
+                    onChange={(e) => setBranch(e.target.value as Branch)}
+                    className="w-full text-sm border-gray-300 rounded-lg shadow-sm focus:border-red-500 focus:ring-red-500 py-2 px-3"
+                  >
+                    {branches.map(b => (
+                      <option key={b} value={b}>{b}</option>
+                    ))}
+                  </select>
+                </div>
+              </>
+            )}
 
             {/* Role Switcher - Mobile */}
             <div>

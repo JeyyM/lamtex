@@ -1,0 +1,55 @@
+---
+description: Keep database/schema.sql in sync with every database change
+globs: database/**/*.sql
+alwaysApply: true
+---
+
+# Schema must always be in sync
+
+`database/schema.sql` is the canonical, idempotent source of truth for the
+Supabase database. **It must reflect the live schema at all times.**
+
+## When this rule fires
+
+Any change that affects the database — even one column — including:
+
+- Creating / editing a `*.sql` file in `database/`
+- Adding or modifying a Supabase table, view, function, RPC, trigger, enum, RLS
+  policy, index, constraint, comment, default, FK
+- Hand-running SQL in the Supabase SQL editor that the user mentions
+- Adding a new TypeScript field that maps to a new DB column
+
+## What to do
+
+After writing the migration file (e.g. `database/foo.sql`), **always also
+update `database/schema.sql`** in the same edit batch:
+
+1. Locate the matching `-- SECTION N: ...` block (tables go near related
+   tables, indexes go in `SECTION 23: INDEXES`, enums in `SECTION 1: ENUM
+   TYPES`, functions/views go at the end of their parent section).
+2. Add the new object using **idempotent** syntax so re-running schema.sql is
+   safe:
+   - `CREATE TABLE IF NOT EXISTS …`
+   - `ALTER TABLE … ADD COLUMN IF NOT EXISTS …`
+   - `CREATE INDEX IF NOT EXISTS …`
+   - `CREATE OR REPLACE FUNCTION …` / `CREATE OR REPLACE VIEW …`
+   - `DO $$ BEGIN CREATE TYPE … EXCEPTION WHEN duplicate_object THEN NULL; END $$;`
+3. Mirror any RLS / GRANT statements introduced by the migration.
+4. Keep section headers and ordering — schema.sql is read top-to-bottom as a
+   bootstrap script.
+
+## Do NOT
+
+- Do **not** delete the per-feature migration file in `database/` after folding
+  it in. The migration files are still used for live deployments; schema.sql is
+  the consolidated picture.
+- Do **not** introduce non-idempotent statements into schema.sql.
+- Do **not** leave the migration file and schema.sql out of sync. If you can't
+  fold the change in, flag it explicitly to the user.
+
+## Quick checklist before finishing
+
+- [ ] Migration file written under `database/`
+- [ ] Same change reflected in `database/schema.sql` in the matching section
+- [ ] All new statements are idempotent
+- [ ] RLS / GRANT / triggers updated where relevant

@@ -42,7 +42,7 @@ export const mockAgentProfiles: AgentFullProfile[] = [
       employeeId: 'EMP-2023-001',
       dateHired: '2023-03-15',
       employmentStatus: 'Full-time',
-      position: 'Senior Sales Agent',
+      position: 'Sales Agent',
       department: 'Sales',
       reportingTo: 'Patricia Valdez',
       branchManagerName: 'Patricia Valdez',
@@ -344,7 +344,6 @@ export const mockAgentProfiles: AgentFullProfile[] = [
       },
     ],
     
-    systemRole: 'Senior Agent',
     permissions: [
       'View Product Catalog',
       'Create Orders',

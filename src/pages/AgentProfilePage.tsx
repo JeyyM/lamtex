@@ -943,8 +943,8 @@ const AgentProfilePage: React.FC = () => {
               </h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
-                  <label className="text-sm text-gray-600">System Role</label>
-                  <p className="font-semibold text-gray-900">{agentProfile.systemRole}</p>
+                  <label className="text-sm text-gray-600">Role</label>
+                  <p className="font-semibold text-gray-900">Sales Agent</p>
                 </div>
                 <div>
                   <label className="text-sm text-gray-600">Last Login</label>

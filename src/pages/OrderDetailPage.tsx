@@ -2536,6 +2536,44 @@ export function OrderDetailPage() {
     return 0;
   };
 
+  const lineGrossSubtotal = (item: OrderLineItem) => item.unitPrice * item.quantity;
+
+  const fmtMoney = (n: number) =>
+    n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  /**
+   * Sequential compound discount deductions (same logic as Update Item modal).
+   * If there is no JSON breakdown but line_total reflects a discount, show one aggregate row.
+   */
+  const lineItemDiscountDeductions = (item: OrderLineItem): Array<{ label: string; amount: number }> => {
+    const gross = lineGrossSubtotal(item);
+    let cur = gross;
+    const rows: Array<{ label: string; amount: number }> = [];
+
+    if (item.discountsBreakdown && item.discountsBreakdown.length > 0) {
+      item.discountsBreakdown.forEach((d, i) => {
+        const pct = Number(d.percentage);
+        if (!(pct > 0 && pct <= 100)) return;
+        const amt = cur * (pct / 100);
+        rows.push({
+          label: `${d.name?.trim() || `Discount ${i + 1}`} (${pct}%)`,
+          amount: amt,
+        });
+        cur -= amt;
+      });
+    }
+
+    if (rows.length === 0 && gross > item.lineTotal + 1e-6) {
+      const pct = effectiveDiscountPct(item);
+      rows.push({
+        label: pct > 0 ? `Discount (${pct.toFixed(1)}%)` : 'Discount',
+        amount: gross - item.lineTotal,
+      });
+    }
+
+    return rows;
+  };
+
   // All available statuses (workflow: Approved → Scheduled → Loading → … → In Transit → Delivered)
   const allStatuses: OrderStatus[] = [
     'Draft',
@@ -4376,9 +4414,58 @@ export function OrderDetailPage() {
                       <span className="text-blue-700">Customer:</span>
                       <span className="font-medium text-blue-900">{order?.customer}</span>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-blue-700">Total Amount:</span>
-                      <span className="font-bold text-blue-900">₱{order?.totalAmount.toLocaleString()}</span>
+                    {order && order.items.length > 0 && (
+                      <>
+                        <div className="flex justify-between pt-2 border-t border-blue-200">
+                          <span className="text-blue-700">Items subtotal (before discounts)</span>
+                          <span className="font-medium text-blue-900 tabular-nums">
+                            ₱{fmtMoney(order.items.reduce((s, i) => s + lineGrossSubtotal(i), 0))}
+                          </span>
+                        </div>
+                        {order.items.some(
+                          (item) =>
+                            lineItemDiscountDeductions(item).length > 0 ||
+                            lineGrossSubtotal(item) > item.lineTotal + 1e-6,
+                        ) && (
+                          <div className="text-xs space-y-2 max-h-36 overflow-y-auto pr-1 pt-1">
+                            {order.items.map((item) => {
+                              const deds = lineItemDiscountDeductions(item);
+                              if (deds.length === 0 && lineGrossSubtotal(item) <= item.lineTotal + 1e-6)
+                                return null;
+                              return (
+                                <div key={item.id} className="rounded bg-white/80 border border-blue-100 px-2 py-1.5 space-y-0.5">
+                                  <p className="font-medium text-blue-950 truncate">{item.productName}</p>
+                                  {deds.map((row, i) => (
+                                    <div key={i} className="flex justify-between text-green-700">
+                                      <span className="truncate mr-2">{row.label}</span>
+                                      <span className="tabular-nums shrink-0">-₱{fmtMoney(row.amount)}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                        <div className="flex justify-between border-t border-blue-200 pt-2">
+                          <span className="text-blue-700">Subtotal (after line discounts)</span>
+                          <span className="font-medium text-blue-900 tabular-nums">
+                            ₱{fmtMoney(order.items.reduce((s, i) => s + i.lineTotal, 0))}
+                          </span>
+                        </div>
+                        {order.discountAmount > 1e-6 && (
+                          <div className="flex justify-between text-xs text-green-800">
+                            <span>
+                              Order discount
+                              {order.discountPercent > 0 ? ` (${order.discountPercent.toFixed(1)}%)` : ''}
+                            </span>
+                            <span className="tabular-nums font-semibold">-₱{fmtMoney(order.discountAmount)}</span>
+                          </div>
+                        )}
+                      </>
+                    )}
+                    <div className="flex justify-between pt-2 border-t border-blue-200">
+                      <span className="text-blue-700 font-semibold">Total Amount:</span>
+                      <span className="font-bold text-blue-900 tabular-nums">₱{fmtMoney(order?.totalAmount ?? 0)}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-blue-700">Payment Terms:</span>

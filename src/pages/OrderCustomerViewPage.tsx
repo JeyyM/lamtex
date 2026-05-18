@@ -52,41 +52,6 @@ function DetailRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function ItemLineBreakdown({
-  item,
-  discounts,
-  lineGross,
-}: {
-  item: PublicOrderLineItem;
-  discounts: ReturnType<typeof getItemDiscountLines>;
-  lineGross: number;
-}) {
-  if (discounts.length === 0) return null;
-  return (
-    <div className="mt-2 rounded-lg border border-blue-200 bg-blue-50 p-3 space-y-2 text-sm max-w-md sm:ml-auto">
-      <div className="flex items-center justify-between gap-4">
-        <span className="font-medium text-blue-900">Subtotal</span>
-        <span className="font-semibold text-blue-900 tabular-nums">{formatMoney(lineGross)}</span>
-      </div>
-      {discounts.map((d, di) => (
-        <div key={`${di}-${d.name}`} className="flex items-center justify-between gap-4">
-          <span className="text-green-700">
-            {d.name}
-            {d.percentage != null && d.percentage > 0 ? ` (${d.percentage}%)` : ''}
-          </span>
-          <span className="text-green-700 font-semibold tabular-nums shrink-0">
-            -{formatMoney(d.amount)}
-          </span>
-        </div>
-      ))}
-      <div className="flex items-center justify-between gap-4 border-t border-blue-200 pt-2">
-        <span className="font-semibold text-blue-900">Line total</span>
-        <span className="font-bold text-blue-900 tabular-nums">{formatMoney(item.total)}</span>
-      </div>
-    </div>
-  );
-}
-
 function ContactCard({
   title,
   icon: Icon,
@@ -275,12 +240,12 @@ export function OrderCustomerViewPage() {
                 </thead>
                 <tbody>
                   {s.items.map((item, idx) => {
-                    const discounts = getItemDiscountLines(item);
+                    const discountLines = getItemDiscountLines(item);
                     const lineGross = item.quantity * item.unitPrice;
-                    const hasDiscounts = discounts.length > 0;
+                    const hasDiscount = discountLines.length > 0 || lineGross > item.total + 1e-6;
                     return (
                       <React.Fragment key={idx}>
-                        <tr className={hasDiscounts ? 'border-b-0' : 'border-b border-gray-200'}>
+                        <tr className={hasDiscount ? 'border-b-0' : 'border-b border-gray-200'}>
                           <td className="py-3 text-gray-900 text-sm align-top">{item.description}</td>
                           <td className="text-right py-3 text-gray-700 text-sm align-top">{item.quantity}</td>
                           <td className="text-right py-3 text-gray-900 text-sm align-top tabular-nums">
@@ -290,14 +255,34 @@ export function OrderCustomerViewPage() {
                             {formatMoney(item.total)}
                           </td>
                         </tr>
-                        {hasDiscounts && (
+                        {hasDiscount && (
                           <tr className="border-b border-gray-200">
-                            <td colSpan={4} className="pb-4 pt-0 px-0">
-                              <ItemLineBreakdown
-                                item={item}
-                                discounts={discounts}
-                                lineGross={lineGross}
-                              />
+                            <td colSpan={3} />
+                            <td className="pb-3 pt-0 pl-4">
+                              <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 space-y-1 print:break-inside-avoid">
+                                <div className="flex justify-between gap-6 text-xs text-blue-800">
+                                  <span>Subtotal</span>
+                                  <span className="tabular-nums font-medium">{formatMoney(lineGross)}</span>
+                                </div>
+                                {discountLines.map((d, di) => (
+                                  <div key={di} className="flex justify-between gap-6 text-xs text-green-700">
+                                    <span className="min-w-0">
+                                      {d.name}{d.percentage != null && d.percentage > 0 ? ` (${d.percentage}%)` : ''}
+                                    </span>
+                                    <span className="tabular-nums font-semibold shrink-0">-{formatMoney(d.amount)}</span>
+                                  </div>
+                                ))}
+                                {discountLines.length === 0 && lineGross > item.total + 1e-6 && (
+                                  <div className="flex justify-between gap-6 text-xs text-green-700">
+                                    <span>Discount</span>
+                                    <span className="tabular-nums font-semibold shrink-0">-{formatMoney(lineGross - item.total)}</span>
+                                  </div>
+                                )}
+                                <div className="flex justify-between gap-6 text-xs font-semibold text-blue-900 pt-1 border-t border-blue-200">
+                                  <span>Line total</span>
+                                  <span className="tabular-nums">{formatMoney(item.total)}</span>
+                                </div>
+                              </div>
                             </td>
                           </tr>
                         )}
@@ -310,10 +295,10 @@ export function OrderCustomerViewPage() {
           </section>
 
           <div className="flex justify-end mb-8">
-            <div className="w-full max-w-sm space-y-2 text-sm">
+            <div className="w-full max-w-md space-y-3 text-sm">
               <div className="flex justify-between text-gray-700">
                 <span>Subtotal</span>
-                <span className="font-medium">{formatMoney(totals.itemsNetTotal)}</span>
+                <span className="font-medium tabular-nums">{formatMoney(totals.itemsNetTotal)}</span>
               </div>
               {totals.orderDiscountAmount > 0 && (
                 <div className="flex justify-between text-green-700">
@@ -321,26 +306,26 @@ export function OrderCustomerViewPage() {
                     Order discount
                     {s.discountPercent > 0 ? ` (${s.discountPercent}%)` : ''}
                   </span>
-                  <span className="font-medium">-{formatMoney(totals.orderDiscountAmount)}</span>
+                  <span className="font-medium tabular-nums">-{formatMoney(totals.orderDiscountAmount)}</span>
                 </div>
               )}
               {s.taxAmount > 0 && (
                 <div className="flex justify-between text-gray-700">
                   <span>Tax</span>
-                  <span className="font-medium">{formatMoney(s.taxAmount)}</span>
+                  <span className="font-medium tabular-nums">{formatMoney(s.taxAmount)}</span>
                 </div>
               )}
               <div className="flex justify-between border-t-2 border-gray-300 pt-2 text-lg font-bold text-gray-900">
                 <span>Total</span>
-                <span>{formatMoney(s.totalAmount)}</span>
+                <span className="tabular-nums">{formatMoney(s.totalAmount)}</span>
               </div>
               <div className="flex justify-between text-gray-700">
                 <span>Amount paid</span>
-                <span className="font-medium text-green-700">{formatMoney(s.amountPaid)}</span>
+                <span className="font-medium text-green-700 tabular-nums">{formatMoney(s.amountPaid)}</span>
               </div>
               <div className="flex justify-between font-semibold text-gray-900">
                 <span>Balance due</span>
-                <span>{formatMoney(s.balanceDue)}</span>
+                <span className="tabular-nums">{formatMoney(s.balanceDue)}</span>
               </div>
             </div>
           </div>

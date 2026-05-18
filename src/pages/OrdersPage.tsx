@@ -44,6 +44,7 @@ type OrderTab = 'all' | 'draft' | 'pending' | 'approved' | 'intransit' | 'delive
 interface OrderRow {
   id: string;
   order_number: string;
+  customer_id: string | null;
   customer_name: string | null;
   agent_name: string | null;
   order_date: string | null;
@@ -84,7 +85,7 @@ export function OrdersPage() {
 
     const { data } = await supabase
       .from('orders')
-      .select('id, order_number, customer_name, agent_name, order_date, required_date, total_amount, discount_percent, status, payment_status, requires_approval, delivery_address, urgency')
+      .select('id, order_number, customer_id, customer_name, agent_name, order_date, required_date, total_amount, discount_percent, status, payment_status, requires_approval, delivery_address, urgency')
       .eq('branch_id', branchData.id)
       .order('created_at', { ascending: false });
 
@@ -135,10 +136,13 @@ export function OrdersPage() {
     });
   }, [allOrders, orderStatusListOrder]);
 
-  const distinctPaymentStatuses = useMemo(() => {
-    const s = new Set<string>(allOrders.map((o) => o.payment_status).filter((v): v is string => Boolean(v)));
-    return Array.from(s).sort((a, b) => a.localeCompare(b));
-  }, [allOrders]);
+  // Canonical payment-status filter options. Listed in lifecycle order so the
+  // dropdown reads naturally. 'Invoiced' is intentionally excluded because the
+  // invoicing flow is not in production yet.
+  const distinctPaymentStatuses = useMemo(
+    () => ['Unbilled', 'Partially Paid', 'On Credit', 'Paid', 'Overdue'],
+    [],
+  );
 
   const filteredOrders = allOrders.filter(order => {
     const matchesSearch =
@@ -249,8 +253,7 @@ export function OrdersPage() {
     }
   };
 
-  const handleViewOrder = (orderId: string) => {
-    navigate(`/orders/${orderId}`);
+  const logOrderOpenedFromList = (orderId: string) => {
     addAuditLog('Viewed Order', 'Order', `Viewed order ${orderId}`);
   };
 
@@ -375,9 +378,14 @@ export function OrdersPage() {
                     </div>
                   </div>
                   <div className="flex flex-col sm:flex-row gap-2 pt-2 border-t border-gray-200">
-                    <Button variant="outline" size="sm" className="gap-2 flex-1 sm:flex-initial" onClick={() => handleViewOrder(order.id)}>
-                      <FileText className="w-4 h-4" />View Details
-                    </Button>
+                    <Link
+                      to={`/orders/${order.id}`}
+                      onClick={() => logOrderOpenedFromList(order.id)}
+                      className="inline-flex items-center justify-center font-medium transition-colors rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 h-8 px-3 text-xs gap-2 flex-1 sm:flex-initial"
+                    >
+                      <FileText className="w-4 h-4" aria-hidden />
+                      View Details
+                    </Link>
                   </div>
                 </div>
               </CardContent>
@@ -468,12 +476,28 @@ export function OrdersPage() {
               {/* Mobile Card View */}
               <div className="md:hidden divide-y divide-gray-200">
                 {pagedOrders.map((order) => (
-                  <Link key={order.id} to={`/orders/${order.id}`} onClick={() => addAuditLog('Viewed Order', 'Order', `Viewed order ${order.id}`)} className="block p-4 hover:bg-gray-50 cursor-pointer transition-colors">
-                    <div className="space-y-3">
+                  <div key={order.id} className="relative hover:bg-gray-50 transition-colors focus-within:bg-gray-50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-red-500">
+                    <Link
+                      to={`/orders/${order.id}`}
+                      onClick={() => logOrderOpenedFromList(order.id)}
+                      className="absolute inset-0 z-0 outline-none"
+                      aria-label={`Open order ${order.order_number}`}
+                    />
+                    <div className="relative z-10 space-y-3 p-4 pointer-events-none">
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex items-start gap-2 min-w-0 flex-1">
                           <div className="min-w-0 flex-1">
-                            <div className="font-semibold text-gray-900 truncate">{order.customer_name ?? '—'}</div>
+                            {order.customer_id ? (
+                              <Link
+                                to={`/customers/${order.customer_id}`}
+                                className="font-medium text-blue-700 hover:text-blue-900 hover:underline truncate block text-left pointer-events-auto"
+                                rel="noopener noreferrer"
+                              >
+                                {order.customer_name ?? '—'}
+                              </Link>
+                            ) : (
+                              <div className="font-semibold text-gray-900 truncate">{order.customer_name ?? '—'}</div>
+                            )}
                             <div className="text-xs text-gray-600 truncate tabular-nums">{order.order_number}</div>
                           </div>
                           {order.requires_approval && <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />}
@@ -500,7 +524,7 @@ export function OrdersPage() {
                         <Badge variant={getPaymentBadgeVariant(order.payment_status)} className="text-xs flex-shrink-0">{order.payment_status}</Badge>
                       </div>
                     </div>
-                  </Link>
+                  </div>
                 ))}
                 {sortedOrders.length === 0 && (
                   <div className="px-4 py-12 text-center text-gray-500">
@@ -566,49 +590,83 @@ export function OrdersPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
-                    {pagedOrders.map((order) => (
-                      <tr key={order.id} className="hover:bg-gray-50 transition-colors">
-                        <td className="px-6 py-4">
-                          <Link to={`/orders/${order.id}`} onClick={() => addAuditLog('Viewed Order', 'Order', `Viewed order ${order.id}`)} className="flex items-start gap-2 w-full">
+                    {pagedOrders.map((order) => {
+                      const orderHref = `/orders/${order.id}`;
+                      const logOpen = () => logOrderOpenedFromList(order.id);
+                      const rowOverlay = (opts: { primary?: boolean }) => (
+                        <Link
+                          to={orderHref}
+                          onClick={logOpen}
+                          tabIndex={opts.primary ? undefined : -1}
+                          aria-hidden={opts.primary ? undefined : true}
+                          aria-label={opts.primary ? `Open order ${order.order_number}` : undefined}
+                          className="absolute inset-0 z-0 outline-none"
+                        />
+                      );
+                      return (
+                      <tr
+                        key={order.id}
+                        className="group hover:bg-gray-50 transition-colors focus-within:bg-gray-50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-red-500"
+                      >
+                        <td className="relative px-6 py-4 align-top">
+                          {rowOverlay({ primary: true })}
+                          <div className="relative z-10 flex items-start gap-2 w-full pointer-events-none">
                             <div className="min-w-0">
-                              <div className="font-medium text-gray-900">{order.customer_name ?? '—'}</div>
+                              {order.customer_id ? (
+                                <Link
+                                  to={`/customers/${order.customer_id}`}
+                                  className="font-medium text-blue-700 hover:text-blue-900 hover:underline block text-left pointer-events-auto"
+                                  rel="noopener noreferrer"
+                                >
+                                  {order.customer_name ?? '—'}
+                                </Link>
+                              ) : (
+                                <div className="font-medium text-gray-900">{order.customer_name ?? '—'}</div>
+                              )}
                               <div className="text-xs text-gray-600 tabular-nums">{order.order_number}</div>
                               <div className="text-xs text-gray-500">{order.agent_name}</div>
                             </div>
                             {order.requires_approval && <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />}
-                          </Link>
+                          </div>
                         </td>
-                        <td className="px-6 py-4 text-gray-600">
-                          <Link to={`/orders/${order.id}`} className="block w-full">{order.order_date ?? '—'}</Link>
+                        <td className="relative px-6 py-4 align-top text-gray-600">
+                          {rowOverlay({})}
+                          <span className="relative z-10 pointer-events-none">{order.order_date ?? '—'}</span>
                         </td>
-                        <td className="px-6 py-4 text-gray-600">
-                          <Link to={`/orders/${order.id}`} className="block w-full">{order.required_date ?? '—'}</Link>
+                        <td className="relative px-6 py-4 align-top text-gray-600">
+                          {rowOverlay({})}
+                          <span className="relative z-10 pointer-events-none">{order.required_date ?? '—'}</span>
                         </td>
-                        <td className="px-6 py-4">
-                          <Link to={`/orders/${order.id}`} className="block w-full">
+                        <td className="relative px-6 py-4 align-top">
+                          {rowOverlay({})}
+                          <div className="relative z-10 pointer-events-none">
                             <div className="font-medium text-gray-900">₱{order.total_amount.toLocaleString()}</div>
                             {order.discount_percent > 0 && <div className="text-xs text-gray-500">-{order.discount_percent.toFixed(1)}% discount</div>}
-                          </Link>
+                          </div>
                         </td>
-                        <td className="px-6 py-4">
-                          <Link to={`/orders/${order.id}`} className="block w-full">
+                        <td className="relative px-6 py-4 align-top">
+                          {rowOverlay({})}
+                          <span className="relative z-10 inline-flex pointer-events-none">
                             <Badge variant={getStatusBadgeVariant(order.status)} className="min-w-[120px] justify-center">{order.status}</Badge>
-                          </Link>
+                          </span>
                         </td>
-                        <td className="px-6 py-4">
-                          <Link to={`/orders/${order.id}`} className="block w-full">
+                        <td className="relative px-6 py-4 align-top">
+                          {rowOverlay({})}
+                          <span className="relative z-10 inline-flex pointer-events-none">
                             <Badge variant={getUrgencyBadgeVariant(order.urgency)} className="min-w-[100px] justify-center">
                               {displayUrgency(order.urgency)}
                             </Badge>
-                          </Link>
+                          </span>
                         </td>
-                        <td className="px-6 py-4">
-                          <Link to={`/orders/${order.id}`} className="block w-full">
+                        <td className="relative px-6 py-4 align-top">
+                          {rowOverlay({})}
+                          <span className="relative z-10 inline-flex pointer-events-none">
                             <Badge variant={getPaymentBadgeVariant(order.payment_status)} className="min-w-[100px] justify-center">{order.payment_status}</Badge>
-                          </Link>
+                          </span>
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                     {sortedOrders.length === 0 && (
                       <tr>
                         <td colSpan={7} className="px-6 py-12 text-center text-gray-500">

@@ -191,9 +191,7 @@ function mapPublicSummary(raw: Record<string, unknown>): PublicOrderSummary {
           return {
             ...lineItem,
             discountLines:
-              fromRpc.length > 0
-                ? fromRpc
-                : getItemDiscountLinesFromBreakdown(lineItem),
+              fromRpc.length > 0 ? fromRpc : getItemDiscountLinesFromBreakdown(lineItem),
           };
         })
       : [],
@@ -263,8 +261,82 @@ export async function ensureOrderCustomerPortal(
   return { portal: mapPortalRow(data as Record<string, unknown>) };
 }
 
+/**
+ * Calls the supplementary RPC that returns per-line `discountsBreakdown`.
+ * Returns [] silently if the function is missing in the DB so the page still renders.
+ */
+async function fetchPublicOrderDiscountLines(token: string): Promise<Record<string, unknown>[]> {
+  const { data, error } = await supabase.rpc('get_public_order_discount_lines', {
+    p_token: token,
+  });
+  if (error) {
+    // Function may not be deployed yet; the page will fall back to summary-only rendering.
+    return [];
+  }
+  if (Array.isArray(data)) return data as Record<string, unknown>[];
+  if (typeof data === 'string') {
+    try {
+      const parsed = JSON.parse(data) as unknown;
+      return Array.isArray(parsed) ? (parsed as Record<string, unknown>[]) : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+/**
+ * Merges per-line discount breakdown rows from the supplementary RPC into the
+ * summary items. Both RPCs sort by `oli.created_at`, so we merge by index and
+ * also defensively match by SKU/description as a safety net.
+ */
+function mergeDiscountBreakdownIntoSummary(
+  summary: PublicOrderSummary,
+  rows: Record<string, unknown>[],
+): PublicOrderSummary {
+  if (!rows.length || !summary.items.length) return summary;
+
+  const items = summary.items.map((item, idx) => {
+    const positional = rows[idx];
+    const candidates = positional ? [positional] : [];
+    // Defensive lookup: if descriptions don't line up (e.g. one RPC reordered),
+    // also try matching by description text.
+    if (!candidates.length || String(candidates[0]?.description ?? '') !== item.description) {
+      const byDesc = rows.find(
+        (r) => String(r.description ?? '') === item.description,
+      );
+      if (byDesc) candidates.unshift(byDesc);
+    }
+    const match = candidates[0];
+    if (!match) return item;
+
+    const breakdown = mapDiscountsBreakdown(
+      match.discountsBreakdown ?? match.discounts_breakdown,
+    );
+    if (!breakdown.length && !item.discountsBreakdown?.length) return item;
+
+    const merged = {
+      ...item,
+      discountsBreakdown: breakdown.length ? breakdown : item.discountsBreakdown,
+    };
+    // Recompute the named per-discount lines now that we have the breakdown.
+    return {
+      ...merged,
+      discountLines:
+        merged.discountLines && merged.discountLines.length > 0 && breakdown.length === 0
+          ? merged.discountLines
+          : getItemDiscountLinesFromBreakdown(merged),
+    };
+  });
+
+  return { ...summary, items };
+}
+
 export async function fetchPublicOrderSummary(token: string): Promise<PublicOrderSummary> {
-  const { data, error } = await supabase.rpc('get_public_order_summary', { p_token: token });
+  const [{ data, error }, discountRows] = await Promise.all([
+    supabase.rpc('get_public_order_summary', { p_token: token }),
+    fetchPublicOrderDiscountLines(token),
+  ]);
   if (error) {
     console.error('fetchPublicOrderSummary', error);
     return {
@@ -290,7 +362,10 @@ export async function fetchPublicOrderSummary(token: string): Promise<PublicOrde
       activities: [],
     };
   }
-  return mapPublicSummary((data ?? { ok: false, error: 'empty' }) as Record<string, unknown>);
+  const summary = mapPublicSummary(
+    (data ?? { ok: false, error: 'empty' }) as Record<string, unknown>,
+  );
+  return mergeDiscountBreakdownIntoSummary(summary, discountRows);
 }
 
 /** Marks email as sent. Wire Resend/SendGrid in an Edge Function when ready. */

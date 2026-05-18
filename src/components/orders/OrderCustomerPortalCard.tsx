@@ -103,24 +103,13 @@ export function OrderCustomerPortalCard({ orderUuid, customerEmail }: Props) {
         <div className="flex-1 min-w-0 space-y-4">
           <div>
             <h4 className="text-sm font-semibold text-gray-900">Customer order page</h4>
-            <p className="text-xs text-gray-600 mt-1">
-              Read-only summary for your customer (items, dates, agent, delivery, payments received). No online checkout.
-            </p>
-            <p className="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-2 mt-2">
-              Per-discount names on the customer page need{' '}
-              <code className="text-[10px]">order_customer_portal_contacts.sql</code> in Supabase, then re-open each
-              line item here and click <strong>Update item</strong> (or Save order).
-            </p>
-            <div className="flex flex-wrap items-center gap-2 mt-2">
-              {portal.sentViaEmail && (
+            {portal.sentViaEmail && (
+              <div className="mt-2">
                 <Badge variant="success" className="text-xs">
                   Email sent
                 </Badge>
-              )}
-              {portal.viewCount > 0 && (
-                <span className="text-xs text-gray-500">Viewed {portal.viewCount}×</span>
-              )}
-            </div>
+              </div>
+            )}
           </div>
 
           <div className="flex gap-2">
