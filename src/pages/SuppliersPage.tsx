@@ -1,41 +1,29 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { supabase } from '@/src/lib/supabase';
+import { SUPPLIER_DETAIL_SELECT, type SupplierRow } from '@/src/pages/supplierModel';
 import {
   Factory,
   User,
   Phone,
-  Mail,
-  MapPin,
-  Calendar,
   DollarSign,
   Clock,
   AlertTriangle,
   Package,
-  FileText,
-  BarChart3,
   PieChart as PieChartIcon,
   Search,
-  Filter,
   Download,
   Plus,
-  Edit,
-  Eye,
   ShoppingCart,
-  Truck,
   Award,
-  Shield,
   ChevronDown,
   Loader2,
   RefreshCw,
-  X,
   GitBranch,
-  Save,
-  Trash2,
 } from 'lucide-react';
 import {
   Tooltip,
@@ -45,87 +33,23 @@ import {
   Cell,
 } from 'recharts';
 
-// ── DB row shapes ──────────────────────────────────────────
-
-interface SupplierMaterialRow {
-  id: string;
-  material_id: string;
-  unit_price: number;
-  lead_time_days: number;
-  min_order_qty: number;
-  is_preferred: boolean;
-  notes: string | null;
-  raw_materials: { name: string; sku: string; unit_of_measure: string; status: string } | null;
-}
-
-interface SupplierBranchRow {
-  branch_id: string;
-  is_primary: boolean;
-  branches: { name: string; code: string } | null;
-}
-
-interface SupplierRow {
-  id: string;
-  name: string;
-  type: string;
-  category: string | null;
-  contact_person: string | null;
-  phone: string | null;
-  email: string | null;
-  payment_terms: string;
-  currency: string;
-  status: string;
-  performance_score: number;
-  quality_rating: number;
-  delivery_rating: number;
-  avg_lead_time: number;
-  on_time_delivery_rate: number;
-  defect_rate: number;
-  total_purchases_ytd: number;
-  total_purchases_lifetime: number;
-  order_count: number;
-  avg_order_value: number;
-  last_purchase_date: string | null;
-  account_since: string | null;
-  preferred_supplier: boolean;
-  risk_level: string;
-  notes: string | null;
-  created_at: string;
-  supplier_branches: SupplierBranchRow[];
-  supplier_materials: SupplierMaterialRow[];
-}
-
 type ViewMode = 'overview' | 'spending';
 
 export function SuppliersPage() {
   const { branch } = useAppContext();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const openSupplierId = searchParams.get('supplier');
+  const legacyOpenSupplierId = searchParams.get('supplier');
 
   const [viewMode, setViewMode] = useState<ViewMode>('overview');
   const [suppliers, setSuppliers] = useState<SupplierRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selectedSupplier, setSelectedSupplier] = useState<SupplierRow | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState('All');
   const [filterRisk, setFilterRisk] = useState('All');
   const [filterStatus, setFilterStatus] = useState('All');
   const [resolvedBranchId, setResolvedBranchId] = useState<string | null>(null);
-
-  // ── Edit state ─────────────────────────────────────────
-  const [isEditing, setIsEditing] = useState(false);
-  const [editForm, setEditForm] = useState<Partial<SupplierRow>>({});
-  const [saving, setSaving] = useState(false);
-  const [allMaterials, setAllMaterials] = useState<{ id: string; name: string; sku: string; unit_of_measure: string }[]>([]);
-  const [allBranches, setAllBranches] = useState<{ id: string; name: string; code: string }[]>([]);
-  const [editBranches, setEditBranches] = useState<SupplierBranchRow[]>([]);
-  const [addMatId, setAddMatId] = useState('');
-  const [addMatPrice, setAddMatPrice] = useState('');
-  const [addMatLeadTime, setAddMatLeadTime] = useState('');
-  const [addMatMinQty, setAddMatMinQty] = useState('');
-  const [addMatPreferred, setAddMatPreferred] = useState(false);
 
   /** Live aggregates from `purchase_orders` (authoritative for Spending Analysis) */
   const [poSpendBySupplier, setPoSpendBySupplier] = useState<
@@ -144,14 +68,7 @@ export function SuppliersPage() {
           : Promise.resolve({ data: null }),
         supabase
           .from('suppliers')
-          .select(`
-            *,
-            supplier_branches ( branch_id, is_primary, branches ( name, code ) ),
-            supplier_materials (
-              id, material_id, unit_price, lead_time_days, min_order_qty, is_preferred, notes,
-              raw_materials ( name, sku, unit_of_measure, status )
-            )
-          `)
+          .select(SUPPLIER_DETAIL_SELECT)
           .order('preferred_supplier', { ascending: false })
           .order('name', { ascending: true }),
       ]);
@@ -182,23 +99,11 @@ export function SuppliersPage() {
 
   useEffect(() => { fetchSuppliers(); }, [fetchSuppliers]);
 
-  // Deep link: /suppliers?supplier=<uuid> (e.g. from raw material analytics)
+  /** Old deep links: /suppliers?supplier=<uuid> */
   useEffect(() => {
-    if (!openSupplierId || loading) return;
-    const s = suppliers.find(x => x.id === openSupplierId);
-    if (s) {
-      setSelectedSupplier(s);
-      setViewMode('overview');
-    }
-  }, [openSupplierId, loading, suppliers]);
-
-  // Keep detail panel in sync after every fetch
-  useEffect(() => {
-    if (selectedSupplier) {
-      const updated = suppliers.find(s => s.id === selectedSupplier.id);
-      if (updated) setSelectedSupplier(updated);
-    }
-  }, [suppliers]);
+    if (!legacyOpenSupplierId) return;
+    navigate(`/suppliers/${legacyOpenSupplierId}`, { replace: true });
+  }, [legacyOpenSupplierId, navigate]);
 
   const EXCLUDED_PO_FOR_SPEND = ['Draft', 'Requested', 'Rejected', 'Cancelled'] as const;
 
@@ -248,133 +153,6 @@ export function SuppliersPage() {
     void fetchPOSpendBySupplier(resolvedBranchId);
   }, [loading, resolvedBranchId, fetchPOSpendBySupplier]);
 
-  // ── Edit handlers ──────────────────────────────────────
-  const fetchEditResources = useCallback(async () => {
-    const [mats, branches] = await Promise.all([
-      supabase.from('raw_materials').select('id, name, sku, unit_of_measure').order('name'),
-      supabase.from('branches').select('id, name, code').eq('is_active', true).order('name'),
-    ]);
-    setAllMaterials((mats.data ?? []) as any);
-    setAllBranches((branches.data ?? []) as any);
-  }, []);
-
-  const handleStartEdit = () => {
-    if (!selectedSupplier) return;
-    setEditForm({ ...selectedSupplier });
-    setEditBranches([...selectedSupplier.supplier_branches]);
-    setIsEditing(true);
-    fetchEditResources();
-  };
-
-  const handleCancelEdit = () => {
-    setIsEditing(false);
-    setEditForm({});
-    setEditBranches([]);
-    setAddMatId('');
-    setAddMatPrice('');
-    setAddMatLeadTime('');
-    setAddMatMinQty('');
-    setAddMatPreferred(false);
-  };
-
-  const handleSaveEdit = async () => {
-    if (!selectedSupplier) return;
-    setSaving(true);
-    try {
-      // Save core supplier fields
-      const { error: supplierError } = await supabase.from('suppliers').update({
-        name:               editForm.name,
-        type:               editForm.type,
-        category:           editForm.category,
-        contact_person:     editForm.contact_person,
-        phone:              editForm.phone,
-        email:              editForm.email,
-        payment_terms:      editForm.payment_terms,
-        currency:           'PHP',
-        status:             editForm.status,
-        risk_level:         editForm.risk_level,
-        preferred_supplier: editForm.preferred_supplier,
-        notes:              editForm.notes,
-      }).eq('id', selectedSupplier.id);
-      if (supplierError) throw supplierError;
-
-      // Commit staged branch changes
-      const originalIds = selectedSupplier.supplier_branches.map(sb => sb.branch_id);
-      const newIds      = editBranches.map(sb => sb.branch_id);
-      const toRemove    = originalIds.filter(id => !newIds.includes(id));
-      const toAdd       = editBranches.filter(sb => !originalIds.includes(sb.branch_id));
-
-      if (toRemove.length > 0) {
-        const { error } = await supabase.from('supplier_branches')
-          .delete()
-          .eq('supplier_id', selectedSupplier.id)
-          .in('branch_id', toRemove);
-        if (error) throw error;
-      }
-      for (const sb of toAdd) {
-        const { error } = await supabase.from('supplier_branches').insert({
-          supplier_id: selectedSupplier.id,
-          branch_id:   sb.branch_id,
-          is_primary:  sb.is_primary,
-        });
-        if (error) throw error;
-      }
-
-      await fetchSuppliers();
-      setIsEditing(false);
-      setEditForm({});
-      setEditBranches([]);
-    } catch (e: any) {
-      alert(e.message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleRemoveMaterial = async (smId: string) => {
-    const { error } = await supabase.from('supplier_materials').delete().eq('id', smId);
-    if (error) { alert(error.message); return; }
-    await fetchSuppliers();
-  };
-
-  const handleAddMaterial = async () => {
-    if (!selectedSupplier || !addMatId) return;
-    const alreadyLinked = selectedSupplier.supplier_materials.some(sm => sm.material_id === addMatId);
-    if (alreadyLinked) { alert('This material is already linked to this supplier.'); return; }
-    const { error } = await supabase.from('supplier_materials').insert({
-      supplier_id:    selectedSupplier.id,
-      material_id:    addMatId,
-      unit_price:     parseFloat(addMatPrice) || 0,
-      lead_time_days: parseInt(addMatLeadTime) || 0,
-      min_order_qty:  parseInt(addMatMinQty) || 1,
-      is_preferred:   addMatPreferred,
-    });
-    if (error) { alert(error.message); return; }
-    setAddMatId('');
-    setAddMatPrice('');
-    setAddMatLeadTime('');
-    setAddMatMinQty('');
-    setAddMatPreferred(false);
-    await fetchSuppliers();
-  };
-
-  const handleRemoveBranch = (branchId: string) => {
-    setEditBranches(prev => prev.filter(sb => sb.branch_id !== branchId));
-  };
-
-  const handleAddBranch = (branchId: string) => {
-    const branchInfo = allBranches.find(b => b.id === branchId);
-    if (!branchInfo) return;
-    setEditBranches(prev => [
-      ...prev,
-      {
-        branch_id:  branchId,
-        is_primary: prev.length === 0,
-        branches:   { name: branchInfo.name, code: branchInfo.code },
-      },
-    ]);
-  };
-
   // ── Derived / filtered data ────────────────────────────
   const branchFilteredSuppliers = suppliers.filter(s => {
     if (!branch) return true;
@@ -407,6 +185,24 @@ export function SuppliersPage() {
     }, 0);
   }, [filteredSuppliers, poSpendBySupplier]);
 
+  /** Same as `totalYTD` / PO order counts, but for the branch-filtered supplier list (dashboard cards). */
+  const branchYtdDashboard = useMemo(() => {
+    return branchFilteredSuppliers.reduce(
+      (acc, s) => {
+        const a = poSpendBySupplier[s.id];
+        if (a && a.n > 0) {
+          acc.spend += a.ytd;
+          acc.ordersYtd += a.ytdN;
+        } else {
+          acc.spend += s.total_purchases_ytd;
+          acc.ordersYtd += s.order_count;
+        }
+        return acc;
+      },
+      { spend: 0, ordersYtd: 0 },
+    );
+  }, [branchFilteredSuppliers, poSpendBySupplier]);
+
   const getSpend = (s: SupplierRow) => {
     const a = poSpendBySupplier[s.id];
     if (a && a.n > 0) {
@@ -423,7 +219,7 @@ export function SuppliersPage() {
       ytd: s.total_purchases_ytd,
       lifetime: s.total_purchases_lifetime,
       orderCount: s.order_count,
-      ytdOrderCount: 0,
+      ytdOrderCount: s.order_count,
       avgOrder: s.avg_order_value,
       fromPO: false as const,
     };
@@ -516,11 +312,6 @@ export function SuppliersPage() {
           </p>
         </div>
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-          <Button variant="outline" onClick={() => navigate('/reports')} className="gap-2">
-            <BarChart3 className="w-4 h-4" />
-            <span className="hidden sm:inline">Procurement Reports</span>
-            <span className="sm:hidden">Reports</span>
-          </Button>
           <Button variant="primary" className="gap-2">
             <Plus className="w-4 h-4" />
             <span className="hidden sm:inline">Add New Supplier</span>
@@ -561,7 +352,7 @@ export function SuppliersPage() {
               <div>
                 <p className="text-xs sm:text-sm text-gray-500">YTD Spending</p>
                 <p className="text-xl sm:text-2xl font-bold text-gray-900 mt-1">
-                  {formatCurrency(branchFilteredSuppliers.reduce((s, x) => s + x.total_purchases_ytd, 0))}
+                  {formatCurrency(branchYtdDashboard.spend)}
                 </p>
               </div>
               <div className="p-3 bg-orange-100 rounded-lg"><DollarSign className="w-6 h-6 text-orange-600" /></div>
@@ -574,7 +365,7 @@ export function SuppliersPage() {
               <div>
                 <p className="text-xs sm:text-sm text-gray-500">Total Orders YTD</p>
                 <p className="text-xl sm:text-2xl font-bold text-gray-900 mt-1">
-                  {branchFilteredSuppliers.reduce((s, x) => s + x.order_count, 0)}
+                  {branchYtdDashboard.ordersYtd}
                 </p>
               </div>
               <div className="p-3 bg-purple-100 rounded-lg"><ShoppingCart className="w-6 h-6 text-purple-600" /></div>
@@ -701,9 +492,15 @@ export function SuppliersPage() {
                   .map(sb => sb.branches?.name ?? '?')
                   .join(', ');
                 const materialCount = supplier.supplier_materials.length;
+                const spend = getSpend(supplier);
 
                 return (
-              <Card key={supplier.id} className="hover:shadow-lg transition-shadow">
+              <Link
+                key={supplier.id}
+                to={`/suppliers/${supplier.id}`}
+                className="block rounded-xl text-inherit no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2"
+              >
+              <Card className="hover:shadow-lg transition-shadow h-full">
                 <CardContent className="p-4 sm:p-6">
                       {/* Top row */}
                       <div className="flex items-start gap-4">
@@ -730,12 +527,6 @@ export function SuppliersPage() {
                             </p>
                           )}
                             </div>
-                        <div className="flex gap-2 flex-shrink-0">
-                          <Button variant="outline" size="sm" onClick={() => setSelectedSupplier(supplier)}>
-                            <Eye className="w-4 h-4 sm:mr-1" />
-                            <span className="hidden sm:inline">View</span>
-                        </Button>
-                      </div>
                     </div>
 
                       {/* Info grid */}
@@ -776,17 +567,17 @@ export function SuppliersPage() {
                       <div>
                         <div className="text-xs text-gray-500 mb-1">YTD Spending</div>
                         <div className="text-sm font-bold text-blue-600">
-                              {formatCurrency(supplier.total_purchases_ytd)}
+                              {formatCurrency(spend.ytd)}
                         </div>
                       </div>
                       <div>
                             <div className="text-xs text-gray-500 mb-1">Orders YTD</div>
-                            <div className="text-sm font-bold text-gray-900">{supplier.order_count}</div>
+                            <div className="text-sm font-bold text-gray-900">{spend.ytdOrderCount}</div>
                       </div>
                       <div>
                         <div className="text-xs text-gray-500 mb-1">Avg Order Value</div>
                         <div className="text-sm font-bold text-green-600">
-                              {supplier.avg_order_value > 0 ? formatCurrency(supplier.avg_order_value) : '—'}
+                              {spend.avgOrder > 0 ? formatCurrency(spend.avgOrder) : '—'}
                         </div>
                       </div>
                       <div>
@@ -803,6 +594,7 @@ export function SuppliersPage() {
               </div>
             </CardContent>
           </Card>
+              </Link>
                 );
               })}
             </div>
@@ -889,7 +681,12 @@ export function SuppliersPage() {
                             <div className="flex items-center justify-between text-sm mb-1">
                               <div className="flex items-center gap-2 min-w-0">
                                 <div className="w-6 h-6 bg-red-100 rounded-full flex items-center justify-center text-red-600 font-bold text-xs flex-shrink-0">{i + 1}</div>
-                                <span className="font-medium text-gray-900 truncate">{s.name}</span>
+                                <Link
+                                  to={`/suppliers/${s.id}`}
+                                  className="font-medium text-gray-900 truncate min-w-0 hover:text-red-700 hover:underline underline-offset-2"
+                                >
+                                  {s.name}
+                                </Link>
                                 {getSpend(s).fromPO && (
                                   <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 flex-shrink-0">PO</span>
                                 )}
@@ -936,11 +733,14 @@ export function SuppliersPage() {
                         <tr key={s.id} className="hover:bg-gray-50">
                           <td className="px-3 py-3 align-middle min-w-0">
                             <div className="flex items-center gap-2 min-w-0">
-                              <Factory className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                              <div className="min-w-0 flex-1">
-                                <div className="font-medium text-gray-900 truncate" title={s.name}>{s.name}</div>
-                                {s.preferred_supplier && <Badge variant="success" className="text-xs mt-1">Preferred</Badge>}
-                              </div>
+                              <Link
+                                to={`/suppliers/${s.id}`}
+                                className="flex items-center gap-2 min-w-0 flex-1 text-inherit no-underline rounded-md -m-1 p-1 hover:bg-gray-100/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
+                              >
+                                <Factory className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                                <span className="font-medium text-gray-900 truncate" title={s.name}>{s.name}</span>
+                              </Link>
+                              {s.preferred_supplier && <Badge variant="success" className="text-xs flex-shrink-0">Preferred</Badge>}
                             </div>
                           </td>
                           <td className="w-0 px-3 py-3 align-middle text-sm text-gray-600 whitespace-nowrap" title={s.type}>
@@ -1001,446 +801,6 @@ export function SuppliersPage() {
         </div>
         );
       })()}
-
-      {/* ══════════════════════════════════════════════════ */}
-      {/* SUPPLIER DETAIL PANEL                             */}
-      {/* ══════════════════════════════════════════════════ */}
-      {selectedSupplier && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-
-            {/* ── Panel Header ── */}
-            <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between z-10">
-              <div className="flex items-center gap-3">
-                <div className={`p-2 rounded-lg ${getTypeStyle(isEditing ? (editForm.type ?? selectedSupplier.type) : selectedSupplier.type).bg}`}>
-                  <Factory className={`w-5 h-5 ${getTypeStyle(isEditing ? (editForm.type ?? selectedSupplier.type) : selectedSupplier.type).icon}`} />
-                </div>
-                <div>
-                  {isEditing
-                    ? <input
-                        value={editForm.name ?? ''}
-                        onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))}
-                        className="text-lg font-bold text-gray-900 border-b border-indigo-400 focus:outline-none bg-transparent w-64"
-                      />
-                    : <h2 className="text-lg font-bold text-gray-900">{selectedSupplier.name}</h2>
-                  }
-                  <p className="text-sm text-gray-500">
-                    {isEditing ? (editForm.type ?? selectedSupplier.type) : selectedSupplier.type}
-                    {' · '}
-                    {isEditing ? (editForm.category || '—') : (selectedSupplier.category ?? '—')}
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                {isEditing ? (
-                  <>
-                    <button
-                      onClick={handleSaveEdit}
-                      disabled={saving}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-60"
-                    >
-                      {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                      {saving ? 'Saving…' : 'Save'}
-                    </button>
-                    <button onClick={handleCancelEdit} className="px-3 py-1.5 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50">
-                      Cancel
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    onClick={handleStartEdit}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
-                  >
-                    <Edit className="w-4 h-4" /> Edit
-                  </button>
-                )}
-                <button
-                  onClick={() => { setSelectedSupplier(null); setIsEditing(false); setEditForm({}); }}
-                  className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
-
-            <div className="p-6 space-y-6">
-
-              {/* ── VIEW MODE ── */}
-              {!isEditing && (
-                <>
-                  {/* Status badges */}
-                  <div className="flex flex-wrap gap-2">
-                    {selectedSupplier.preferred_supplier && <Badge variant="success"><Award className="w-3 h-3 mr-1" />Preferred Supplier</Badge>}
-                    <Badge variant={getStatusColor(selectedSupplier.status)}>{selectedSupplier.status}</Badge>
-                    <Badge variant={getRiskColor(selectedSupplier.risk_level)}>{selectedSupplier.risk_level} Risk</Badge>
-                          </div>
-
-                  {/* Contact info */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {[
-                      { icon: <User className="w-4 h-4 text-gray-400" />,     label: 'Contact Person', value: selectedSupplier.contact_person },
-                      { icon: <Phone className="w-4 h-4 text-gray-400" />,    label: 'Phone',          value: selectedSupplier.phone },
-                      { icon: <Mail className="w-4 h-4 text-gray-400" />,     label: 'Email',          value: selectedSupplier.email },
-                      { icon: <MapPin className="w-4 h-4 text-gray-400" />,   label: 'Location',       value: 'To be set via Google Maps' },
-                      { icon: <Clock className="w-4 h-4 text-gray-400" />,    label: 'Avg Delivery',   value: selectedSupplier.payment_terms ? `${selectedSupplier.payment_terms.replace(/[^0-9]/g, '')} days` : '—' },
-                      { icon: <Calendar className="w-4 h-4 text-gray-400" />, label: 'Member Since',   value: selectedSupplier.account_since ?? '—' },
-                    ].map(item => (
-                      <div key={item.label} className="flex items-start gap-2">
-                        {item.icon}
-                        <div>
-                          <div className="text-xs text-gray-500">{item.label}</div>
-                          <div className="text-sm text-gray-900">{item.value ?? '—'}</div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Branches */}
-                  <div>
-                    <h3 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
-                      <GitBranch className="w-4 h-4" /> Assigned Branches
-                    </h3>
-                    {selectedSupplier.supplier_branches.length > 0 ? (
-                      <div className="flex flex-wrap gap-2">
-                        {selectedSupplier.supplier_branches.map(sb => (
-                          <span key={sb.branch_id} className={`px-3 py-1 rounded-full text-xs font-medium border ${sb.is_primary ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-gray-50 text-gray-600 border-gray-200'}`}>
-                            {sb.branches?.name ?? '?'}{sb.is_primary ? ' (Primary)' : ''}
-                          </span>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="text-sm text-gray-400">No branches assigned. Click Edit to assign.</p>
-                    )}
-                  </div>
-
-                  {/* Financials */}
-                  <div>
-                    <h3 className="text-sm font-semibold text-gray-700 mb-3">Financial Summary</h3>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                      {[
-                        { label: 'YTD Spending',    value: formatCurrency(selectedSupplier.total_purchases_ytd), color: 'text-blue-600' },
-                        { label: 'Lifetime Spend',  value: formatCurrency(selectedSupplier.total_purchases_lifetime), color: 'text-gray-900' },
-                        { label: 'Order Count',     value: String(selectedSupplier.order_count), color: 'text-gray-900' },
-                        { label: 'Avg Order Value', value: selectedSupplier.avg_order_value > 0 ? formatCurrency(selectedSupplier.avg_order_value) : '—', color: 'text-green-600' },
-                        { label: 'Last Purchase',   value: selectedSupplier.last_purchase_date ?? 'Never', color: 'text-gray-900' },
-                        { label: 'Materials Linked', value: String(selectedSupplier.supplier_materials.length), color: 'text-purple-600' },
-                      ].map(item => (
-                        <div key={item.label} className="bg-gray-50 rounded-lg p-3">
-                          <div className="text-xs text-gray-500 mb-1">{item.label}</div>
-                          <div className={`text-sm font-bold ${item.color}`}>{item.value}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* [REVISIT] Detail "Performance" block (score, on-time bars, quality/delivery stars, defect %) — see git history */}
-
-                  {/* Linked Materials */}
-                  {selectedSupplier.supplier_materials.length > 0 && (
-                    <div>
-                      <h3 className="text-sm font-semibold text-gray-700 mb-3">Linked Raw Materials</h3>
-                      <div className="space-y-2">
-                        {selectedSupplier.supplier_materials.map(sm => (
-                          <div key={sm.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-100">
-                          <div className="flex items-center gap-2">
-                            <Package className="w-4 h-4 text-gray-400" />
-                              <div>
-                                <div className="text-sm font-medium text-gray-900">{sm.raw_materials?.name ?? '—'}</div>
-                                <div className="text-xs text-gray-500">{sm.raw_materials?.sku} · Lead: {sm.lead_time_days}d · Min: {sm.min_order_qty.toLocaleString()} {sm.raw_materials?.unit_of_measure}</div>
-                          </div>
-                            </div>
-                            <div className="text-right">
-                              <div className="text-sm font-bold text-gray-900">₱{sm.unit_price.toLocaleString()}/{sm.raw_materials?.unit_of_measure ?? 'unit'}</div>
-                              {sm.is_preferred && <Badge variant="success" className="text-xs">Preferred</Badge>}
-                            </div>
-                          </div>
-                        ))}
-              </div>
-                    </div>
-                  )}
-
-                  {/* Notes */}
-                  {selectedSupplier.notes && (
-                    <div>
-                      <h3 className="text-sm font-semibold text-gray-700 mb-2">Notes</h3>
-                      <p className="text-sm text-gray-600 bg-yellow-50 border border-yellow-200 rounded-lg p-3">{selectedSupplier.notes}</p>
-              </div>
-                  )}
-                </>
-              )}
-
-              {/* ── EDIT MODE ── */}
-              {isEditing && (
-                <>
-                  {/* Basic Details */}
-                  <div>
-                    <h3 className="text-sm font-semibold text-gray-700 mb-3">Basic Details</h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-
-                      <div>
-                        <label className="block text-xs font-medium text-gray-600 mb-1">Type</label>
-                        <select
-                          value={editForm.type ?? ''}
-                          onChange={e => setEditForm(f => ({ ...f, type: e.target.value }))}
-                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                        >
-                          {['Raw Materials', 'Chemicals', 'Packaging', 'Equipment', 'Services'].map(t => (
-                            <option key={t} value={t}>{t}</option>
-                          ))}
-                        </select>
-        </div>
-
-                      <div>
-                        <label className="block text-xs font-medium text-gray-600 mb-1">Category</label>
-                        <input
-                          value={editForm.category ?? ''}
-                          onChange={e => setEditForm(f => ({ ...f, category: e.target.value }))}
-                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                          placeholder="e.g. PVC Resin"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-medium text-gray-600 mb-1">Contact Person</label>
-                        <input
-                          value={editForm.contact_person ?? ''}
-                          onChange={e => setEditForm(f => ({ ...f, contact_person: e.target.value }))}
-                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-medium text-gray-600 mb-1">Phone</label>
-                        <input
-                          value={editForm.phone ?? ''}
-                          onChange={e => setEditForm(f => ({ ...f, phone: e.target.value }))}
-                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-medium text-gray-600 mb-1">Email</label>
-                        <input
-                          type="email"
-                          value={editForm.email ?? ''}
-                          onChange={e => setEditForm(f => ({ ...f, email: e.target.value }))}
-                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-medium text-gray-600 mb-1">Avg Delivery (days)</label>
-                        <input
-                          type="number"
-                          min="0"
-                          value={editForm.payment_terms ?? ''}
-                          onChange={e => setEditForm(f => ({ ...f, payment_terms: e.target.value }))}
-                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                          placeholder="e.g. 14"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-medium text-gray-600 mb-1">Status</label>
-                        <select
-                          value={editForm.status ?? ''}
-                          onChange={e => setEditForm(f => ({ ...f, status: e.target.value }))}
-                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                        >
-                          {['Active', 'Under Review', 'Inactive', 'Suspended'].map(s => (
-                            <option key={s} value={s}>{s}</option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-medium text-gray-600 mb-1">Risk Level</label>
-                        <select
-                          value={editForm.risk_level ?? ''}
-                          onChange={e => setEditForm(f => ({ ...f, risk_level: e.target.value }))}
-                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                        >
-                          {['Low', 'Medium', 'High'].map(r => (
-                            <option key={r} value={r}>{r}</option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div className="flex items-center gap-3 pt-5">
-                        <input
-                          type="checkbox"
-                          id="preferred_edit"
-                          checked={editForm.preferred_supplier ?? false}
-                          onChange={e => setEditForm(f => ({ ...f, preferred_supplier: e.target.checked }))}
-                          className="w-4 h-4 text-indigo-600 rounded"
-                        />
-                        <label htmlFor="preferred_edit" className="text-sm text-gray-700 font-medium">Mark as Preferred Supplier</label>
-                      </div>
-
-                      <div className="sm:col-span-2">
-                        <label className="block text-xs font-medium text-gray-600 mb-1">Notes</label>
-                        <textarea
-                          rows={3}
-                          value={editForm.notes ?? ''}
-                          onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))}
-                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none"
-                          placeholder="Internal notes about this supplier…"
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Branch Assignment */}
-                  <div>
-                    <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
-                      <GitBranch className="w-4 h-4" /> Branch Assignment
-                      <span className="text-xs font-normal text-gray-400">(applied on save)</span>
-                    </h3>
-                    <div className="space-y-2">
-                      {editBranches.length === 0 && (
-                        <p className="text-sm text-gray-400">No branches assigned.</p>
-                      )}
-                      {editBranches.map(sb => (
-                        <div key={sb.branch_id} className="flex items-center justify-between px-3 py-2 bg-blue-50 border border-blue-100 rounded-lg">
-                          <span className="text-sm font-medium text-blue-800">
-                            {sb.branches?.name ?? '?'}{sb.is_primary ? ' (Primary)' : ''}
-                          </span>
-                          <button
-                            onClick={() => handleRemoveBranch(sb.branch_id)}
-                            className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      ))}
-                      {/* Add branch */}
-                      {allBranches.filter(b => !editBranches.some(sb => sb.branch_id === b.id)).length > 0 && (
-                        <div className="flex gap-2 mt-2">
-                          <select
-                            id="add-branch-select"
-                            className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500"
-                            defaultValue=""
-                          >
-                            <option value="" disabled>Add a branch…</option>
-                            {allBranches
-                              .filter(b => !editBranches.some(sb => sb.branch_id === b.id))
-                              .map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-                          </select>
-                          <button
-                            onClick={() => {
-                              const sel = document.getElementById('add-branch-select') as HTMLSelectElement;
-                              if (sel.value) { handleAddBranch(sel.value); sel.value = ''; }
-                            }}
-                            className="px-3 py-2 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 flex items-center gap-1"
-                          >
-                            <Plus className="w-4 h-4" /> Add
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Material Assignment */}
-                  <div>
-                    <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
-                      <Package className="w-4 h-4" /> Raw Material Assignments
-                    </h3>
-                    <div className="space-y-2 mb-4">
-                      {selectedSupplier.supplier_materials.length === 0 && (
-                        <p className="text-sm text-gray-400">No materials linked yet.</p>
-                      )}
-                      {selectedSupplier.supplier_materials.map(sm => (
-                        <div key={sm.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-100">
-                          <div>
-                            <div className="text-sm font-medium text-gray-900">{sm.raw_materials?.name ?? '—'}</div>
-                            <div className="text-xs text-gray-500">
-                              ₱{sm.unit_price.toLocaleString()}/{sm.raw_materials?.unit_of_measure ?? 'unit'}
-                              {' · '}Lead: {sm.lead_time_days}d
-                              {' · '}Min: {sm.min_order_qty.toLocaleString()}
-                              {sm.is_preferred ? ' · Preferred' : ''}
-                            </div>
-                          </div>
-                          <button
-                            onClick={() => handleRemoveMaterial(sm.id)}
-                            className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Add new material form */}
-                    <div className="border border-dashed border-gray-300 rounded-lg p-4 space-y-3">
-                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Link a New Material</p>
-                      <select
-                        value={addMatId}
-                        onChange={e => setAddMatId(e.target.value)}
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500"
-                      >
-                        <option value="">Select raw material…</option>
-                        {allMaterials
-                          .filter(m => !selectedSupplier.supplier_materials.some(sm => sm.material_id === m.id))
-                          .map(m => <option key={m.id} value={m.id}>{m.name} ({m.sku})</option>)}
-                      </select>
-                      {addMatId && (
-                        <div className="grid grid-cols-2 gap-2">
-                          <div>
-                            <label className="block text-xs text-gray-500 mb-1">Unit Price (₱)</label>
-                            <input
-                              type="number" min="0" value={addMatPrice}
-                              onChange={e => setAddMatPrice(e.target.value)}
-                              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500"
-                              placeholder="0"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-xs text-gray-500 mb-1">Lead Time (days)</label>
-                            <input
-                              type="number" min="0" value={addMatLeadTime}
-                              onChange={e => setAddMatLeadTime(e.target.value)}
-                              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500"
-                              placeholder="0"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-xs text-gray-500 mb-1">Min Order Qty</label>
-                            <input
-                              type="number" min="1" value={addMatMinQty}
-                              onChange={e => setAddMatMinQty(e.target.value)}
-                              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500"
-                              placeholder="1"
-                            />
-                          </div>
-                          <div className="flex items-end pb-2">
-                            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
-                              <input
-                                type="checkbox"
-                                checked={addMatPreferred}
-                                onChange={e => setAddMatPreferred(e.target.checked)}
-                                className="w-4 h-4 text-indigo-600 rounded"
-                              />
-                              Preferred source
-                            </label>
-                          </div>
-                        </div>
-                      )}
-                      <button
-                        onClick={handleAddMaterial}
-                        disabled={!addMatId}
-                        className="w-full py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                      >
-                        <Plus className="w-4 h-4" /> Link Material
-                      </button>
-                    </div>
-                  </div>
-                </>
-              )}
-
-            </div>
-          </div>
-        </div>
-      )}
 
     </div>
   );

@@ -204,6 +204,16 @@ export function LogisticsPage() {
     setFleetTrucks(vehicles);
   }, [branch]);
 
+  const openCreateTruckModal = useCallback(() => {
+    if (!branch?.trim()) {
+      window.alert('Select a branch in the header first.');
+      return;
+    }
+    setTruckFormMode('create');
+    setTruckFormEditId(null);
+    setTruckFormOpen(true);
+  }, [branch]);
+
   const loadDrivers = useCallback(async () => {
     if (!branch?.trim()) { setPlanningDrivers([]); return; }
     const { drivers } = await fetchDriversForBranch(branch);
@@ -1000,22 +1010,13 @@ export function LogisticsPage() {
         <div className="space-y-6">
           {fleetError && (
             <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-              Could not load fleet from the database ({fleetError}). Check migrations and that you are signed in.
+              Unable to load trucks for this branch. Please try again in a moment.
             </div>
           )}
           {fleetLoading && (
             <p className="text-sm text-gray-500">Loading fleet for this branch…</p>
           )}
-          {!fleetLoading && !fleetError && fleetList.length === 0 && (
-            <Card>
-              <CardContent className="py-8 text-center text-gray-600 text-sm">
-                No trucks found for this branch. Apply{' '}
-                <code className="text-xs bg-gray-100 px-1 rounded">database/fleet_trucks_extension.sql</code> and{' '}
-                <code className="text-xs bg-gray-100 px-1 rounded">database/seed_fleet_trucks.sql</code>.
-              </CardContent>
-            </Card>
-          )}
-          {fleetList.length > 0 && (
+          {!fleetLoading && !fleetError && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Fleet Overview */}
             <div className="lg:col-span-2 space-y-4">
@@ -1024,6 +1025,26 @@ export function LogisticsPage() {
                   <CardTitle>Truck fleet</CardTitle>
                 </CardHeader>
                 <CardContent>
+                  {fleetList.length === 0 ? (
+                    <div className="py-12 px-4 text-center">
+                      <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-gray-100 text-gray-500">
+                        <Truck className="h-7 w-7" aria-hidden />
+                      </div>
+                      <h3 className="text-base font-semibold text-gray-900">No trucks yet</h3>
+                      <p className="mt-2 text-sm text-gray-600 max-w-md mx-auto">
+                        This branch does not have any trucks in the fleet. Add one to start scheduling deliveries and route planning.
+                      </p>
+                      <Button
+                        type="button"
+                        variant="primary"
+                        className="mt-6 bg-red-600 hover:bg-red-700"
+                        onClick={openCreateTruckModal}
+                      >
+                        <Plus className="w-4 h-4 mr-2" />
+                        Add truck
+                      </Button>
+                    </div>
+                  ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {fleetList.map((vehicle) => (
                       <Link
@@ -1101,6 +1122,7 @@ export function LogisticsPage() {
                       </Link>
                     ))}
                   </div>
+                  )}
                 </CardContent>
               </Card>
             </div>
@@ -1118,7 +1140,10 @@ export function LogisticsPage() {
                       <span className="text-gray-900 font-bold">{fleetList.length}</span>
                     </div>
                     <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
-                      <div className="h-full bg-blue-600" style={{ width: '100%' }}></div>
+                      <div
+                        className="h-full bg-blue-600 transition-all"
+                        style={{ width: fleetList.length > 0 ? '100%' : '0%' }}
+                      ></div>
                     </div>
                   </div>
 
@@ -1192,15 +1217,7 @@ export function LogisticsPage() {
                   <Button
                     variant="outline"
                     className="w-full justify-start"
-                    onClick={() => {
-                      if (!branch?.trim()) {
-                        window.alert('Select a branch in the header first.');
-                        return;
-                      }
-                      setTruckFormMode('create');
-                      setTruckFormEditId(null);
-                      setTruckFormOpen(true);
-                    }}
+                    onClick={openCreateTruckModal}
                   >
                     <Plus className="w-4 h-4 mr-2" />
                     Add New Vehicle

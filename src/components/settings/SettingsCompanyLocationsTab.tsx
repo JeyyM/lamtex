@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Ca
 import { Button } from '@/src/components/ui/Button';
 import { Badge } from '@/src/components/ui/Badge';
 import { CompanyMapPicker } from '@/src/components/maps/CompanyMapPicker';
+import { GoogleMapEmbed } from '@/src/components/maps/GoogleMapEmbed';
 import { openGoogleMapsSearch } from '@/src/lib/maps';
 import { getOrCreateCompanySettingsId } from '@/src/lib/branchCompanySettings';
 import {
@@ -85,6 +86,30 @@ function draftToInput(d: LocationDraft) {
     latitude: d.mapPin?.lat ?? null,
     longitude: d.mapPin?.lng ?? null,
   };
+}
+
+/** Strip junk placeholders sometimes stored in legacy rows (avoids "edit · edit" in the UI). */
+function cleanAddrPart(s: string | null | undefined): string | null {
+  const t = (s ?? '').trim();
+  if (!t) return null;
+  const lower = t.toLowerCase();
+  if (lower === 'edit' || lower === 'n/a' || lower === '—' || lower === '-') return null;
+  return t;
+}
+
+function formatAddressSummary(a: CompanyAddressRecord): string {
+  const street = cleanAddrPart(a.street);
+  const city = cleanAddrPart(a.city);
+  const province = cleanAddrPart(a.province);
+  const postal = cleanAddrPart(a.postal_code);
+  const country = cleanAddrPart(a.country);
+  const lines: string[] = [];
+  if (street) lines.push(street);
+  const locality = [city, province].filter(Boolean).join(', ');
+  const cityLine = [locality, postal].filter(Boolean).join(' ').trim();
+  if (cityLine) lines.push(cityLine);
+  if (country) lines.push(country);
+  return lines.join('\n');
 }
 
 function typeBadgeClass(t: string): { wrap: string; icon: string } {
@@ -219,11 +244,6 @@ export function SettingsCompanyLocationsTab({ addAuditLog }: SettingsCompanyLoca
     if (q) openGoogleMapsSearch(q);
   };
 
-  const previewOk =
-    editing?.draft.mapPin != null &&
-    Number.isFinite(editing.draft.mapPin.lat) &&
-    Number.isFinite(editing.draft.mapPin.lng);
-
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-gray-500 gap-3">
@@ -237,11 +257,6 @@ export function SettingsCompanyLocationsTab({ addAuditLog }: SettingsCompanyLoca
     <div className="space-y-8">
       <div>
         <h2 className="text-lg font-bold text-gray-900">Company locations</h2>
-        <p className="text-sm text-gray-600 mt-1">
-          One or more locations per branch. Set a map pin and mailing lines; the primary location syncs to logistics
-          depot coordinates. Run <code className="text-xs bg-gray-100 px-1 rounded">database/alter_company_addresses_lat_lng.sql</code>{' '}
-          in Supabase if saves fail.
-        </p>
       </div>
 
       {groups.map((g) => (
@@ -375,8 +390,9 @@ export function SettingsCompanyLocationsTab({ addAuditLog }: SettingsCompanyLoca
                 <div className="space-y-2">
                   <p className="text-sm font-medium text-gray-700">Map pin</p>
                   <CompanyMapPicker
-                    lat={previewOk ? editing.draft.mapPin!.lat : null}
-                    lng={previewOk ? editing.draft.mapPin!.lng : null}
+                    searchInputId={`company-location-map-search-${editing.branchId}-${editing.addressId ?? 'new'}`}
+                    lat={editing.draft.mapPin?.lat ?? null}
+                    lng={editing.draft.mapPin?.lng ?? null}
                     onPositionChange={(la, ln) =>
                       setEditing((x) => (x ? { ...x, draft: { ...x.draft, mapPin: { lat: la, lng: ln } } } : x))
                     }
@@ -437,33 +453,55 @@ export function SettingsCompanyLocationsTab({ addAuditLog }: SettingsCompanyLoca
                     key={a.id}
                     className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 rounded-lg border border-gray-200 bg-white p-4"
                   >
-                    <div className="flex gap-3 min-w-0">
-                      <div className={`p-2 rounded-lg shrink-0 ${tc.wrap}`}>
-                        <MapPin className={`w-5 h-5 ${tc.icon}`} />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h3 className="font-semibold text-gray-900">{a.label || '—'}</h3>
-                          <Badge variant="outline" className="text-xs">
-                            {a.address_type}
-                          </Badge>
-                          {a.is_primary ? (
-                            <Badge className="bg-red-100 text-red-700 text-xs">Primary</Badge>
-                          ) : null}
+                    <div className="flex flex-col sm:flex-row gap-3 min-w-0 flex-1">
+                      <div className="flex gap-3 min-w-0">
+                        <div className={`p-2 rounded-lg shrink-0 self-start ${tc.wrap}`}>
+                          <MapPin className={`w-5 h-5 ${tc.icon}`} />
                         </div>
-                        <p className="text-sm text-gray-600 mt-1">
-                          {[a.street, [a.city, a.province].filter(Boolean).join(', '), a.postal_code, a.country]
-                            .filter((x) => x && String(x).trim())
-                            .join(' · ') || '—'}
-                        </p>
-                        {a.latitude != null && a.longitude != null && Number.isFinite(a.latitude + a.longitude) ? (
-                          <p className="text-xs text-gray-500 mt-1 font-mono">
-                            {Number(a.latitude).toFixed(5)}, {Number(a.longitude).toFixed(5)}
-                          </p>
-                        ) : (
-                          <p className="text-xs text-gray-400 mt-1">No map pin</p>
-                        )}
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="font-semibold text-gray-900">{a.label || '—'}</h3>
+                            <Badge variant="outline" className="text-xs">
+                              {a.address_type}
+                            </Badge>
+                            {a.is_primary ? (
+                              <Badge className="bg-red-100 text-red-700 text-xs">Primary</Badge>
+                            ) : null}
+                          </div>
+                          {(() => {
+                            const addrText = formatAddressSummary(a);
+                            return addrText ? (
+                              <p className="text-sm text-gray-600 mt-1 whitespace-pre-line">{addrText}</p>
+                            ) : (
+                              <p className="text-sm text-gray-400 mt-1 italic">No mailing address on file</p>
+                            );
+                          })()}
+                          {a.latitude != null &&
+                          a.longitude != null &&
+                          Number.isFinite(Number(a.latitude)) &&
+                          Number.isFinite(Number(a.longitude)) ? (
+                            <p className="text-xs text-gray-500 mt-1 font-mono">
+                              {Number(a.latitude).toFixed(5)}, {Number(a.longitude).toFixed(5)}
+                            </p>
+                          ) : (
+                            <p className="text-xs text-gray-400 mt-1">No map pin</p>
+                          )}
+                        </div>
                       </div>
+                      {a.latitude != null &&
+                      a.longitude != null &&
+                      Number.isFinite(Number(a.latitude)) &&
+                      Number.isFinite(Number(a.longitude)) ? (
+                        <div className="w-full sm:w-56 sm:shrink-0 rounded-lg border border-gray-200 overflow-hidden bg-gray-50">
+                          <GoogleMapEmbed
+                            title={`Map: ${a.label ?? 'Location'}`}
+                            lat={Number(a.latitude)}
+                            lng={Number(a.longitude)}
+                            zoom={16}
+                            className="!h-36 w-full !border-0 rounded-lg"
+                          />
+                        </div>
+                      ) : null}
                     </div>
                     <div className="flex gap-2 shrink-0">
                       <Button

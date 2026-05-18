@@ -1,6 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { getGoogleMapsApiKey, loadGoogleMapsJs } from '@/src/lib/maps';
-import { blueCustomerPinIcon } from '@/src/lib/customerMapPinIcon';
+import {
+  getGoogleMapsApiKey,
+  getGoogleMapsMapId,
+  importMapsMarkerLibrary,
+  loadGoogleMapsJs,
+  type AdvancedMarkerLike,
+} from '@/src/lib/maps';
 
 export type RoutePlanningStop = {
   lat: number;
@@ -39,7 +44,7 @@ export function RoutePlanningMap({
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<google.maps.Map | null>(null);
-  const markersRef = useRef<google.maps.Marker[]>([]);
+  const markersRef = useRef<AdvancedMarkerLike[]>([]);
   const polyRef = useRef<google.maps.Polyline | null>(null);
   const directionsRendererRef = useRef<google.maps.DirectionsRenderer | null>(null);
 
@@ -66,11 +71,12 @@ export function RoutePlanningMap({
     let cancelled = false;
 
     loadGoogleMapsJs()
-      .then(() => {
+      .then(async () => {
         if (cancelled || !containerRef.current) return;
 
-        // Clear previous overlays
-        markersRef.current.forEach((m) => m.setMap(null));
+        markersRef.current.forEach((m) => {
+          m.map = null;
+        });
         markersRef.current = [];
         polyRef.current?.setMap(null);
         polyRef.current = null;
@@ -79,6 +85,8 @@ export function RoutePlanningMap({
           directionsRendererRef.current = null;
         }
 
+        const { AdvancedMarkerElement, PinElement } = await importMapsMarkerLibrary();
+
         const oLa = originLat != null ? Number(originLat) : NaN;
         const oLn = originLng != null ? Number(originLng) : NaN;
         const hasOrigin = Number.isFinite(oLa) && Number.isFinite(oLn);
@@ -86,6 +94,7 @@ export function RoutePlanningMap({
         const map = new google.maps.Map(containerRef.current, {
           center: DEFAULT_CENTER,
           zoom: 11,
+          mapId: getGoogleMapsMapId(),
           mapTypeControl: true,
           streetViewControl: false,
           fullscreenControl: true,
@@ -95,28 +104,33 @@ export function RoutePlanningMap({
 
         // --- Always draw depot/origin marker ---
         if (hasOrigin) {
-          const om = new google.maps.Marker({
+          const pin = new PinElement({
+            background: '#EA4335',
+            borderColor: '#ffffff',
+            glyphColor: '#ffffff',
+          });
+          const om = new AdvancedMarkerElement({
             map,
             position: { lat: oLa, lng: oLn },
+            content: pin.element,
             title: originTitle,
             zIndex: 5,
           });
           markersRef.current.push(om);
         }
 
-        // --- Numbered delivery stop markers ---
         stops.forEach((s, i) => {
-          const m = new google.maps.Marker({
+          const pin = new PinElement({
+            background: '#2563eb',
+            borderColor: '#ffffff',
+            glyphColor: '#ffffff',
+            glyph: String(i + 1),
+          });
+          const m = new AdvancedMarkerElement({
             map,
             position: { lat: s.lat, lng: s.lng },
+            content: pin.element,
             title: s.title,
-            label: {
-              text: String(i + 1),
-              color: '#1e3a8a',
-              fontSize: '12px',
-              fontWeight: '700',
-            },
-            icon: blueCustomerPinIcon(),
             zIndex: 10 + i,
           });
           markersRef.current.push(m);
@@ -184,7 +198,9 @@ export function RoutePlanningMap({
 
     return () => {
       cancelled = true;
-      markersRef.current.forEach((m) => m.setMap(null));
+      markersRef.current.forEach((m) => {
+        m.map = null;
+      });
       markersRef.current = [];
       polyRef.current?.setMap(null);
       polyRef.current = null;

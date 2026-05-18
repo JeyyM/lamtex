@@ -32,7 +32,14 @@ DECLARE
     'diego.flores.cebu@lamtex.com',
     'leo.marasigan.batangas@lamtex.com',
     'nina.ilagan.batangas@lamtex.com',
-    'roy.castillo.batangas@lamtex.com'
+    'roy.castillo.batangas@lamtex.com',
+    'ina.morales.quezon@lamtex.com',
+    'gabriel.ramos.quezon@lamtex.com',
+    'michelle.dy.quezon@lamtex.com',
+    'armand.vergara.quezon@lamtex.com',
+    'denise.lopez.quezon@lamtex.com',
+    'warren.castro.quezon@lamtex.com',
+    'hannah.torres.quezon@lamtex.com'
   ];
   -- Every email shown on LoginPage quick-select (identity backfill).
   all_login_presets TEXT[] := ARRAY[
@@ -57,7 +64,14 @@ DECLARE
     'bernard.ocampo.batangas@lamtex.com',
     'cynthia.bautista.batangas@lamtex.com',
     'roberto.mendoza.batangas@lamtex.com',
-    'luz.aguilar.batangas@lamtex.com'
+    'luz.aguilar.batangas@lamtex.com',
+    'ina.morales.quezon@lamtex.com',
+    'gabriel.ramos.quezon@lamtex.com',
+    'michelle.dy.quezon@lamtex.com',
+    'armand.vergara.quezon@lamtex.com',
+    'denise.lopez.quezon@lamtex.com',
+    'warren.castro.quezon@lamtex.com',
+    'hannah.torres.quezon@lamtex.com'
   ];
   em TEXT;
   uid UUID;

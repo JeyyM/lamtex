@@ -51,7 +51,36 @@ interface CustomerFormData {
   paymentTerms: 'COD' | '15 Days' | '30 Days' | '45 Days' | '60 Days';
   assignedAgentId: string;
   assignedAgent: string;
-  status: 'Active' | 'Inactive' | 'Suspended';
+  status: 'Active' | 'Inactive' | 'Suspended' | 'Dormant' | 'On Hold';
+}
+
+const FORM_ID = 'customer-form';
+
+/** Supabase FK embeds may return one object or a single-element array. */
+function embedOne<T extends Record<string, unknown>>(v: unknown): T | null {
+  if (v == null) return null;
+  if (Array.isArray(v)) return (v[0] as T | undefined) ?? null;
+  if (typeof v === 'object') return v as T;
+  return null;
+}
+
+/** Map DB / legacy payment_terms strings to form select values. */
+function normalizePaymentTermsForForm(raw: string | null | undefined): CustomerFormData['paymentTerms'] {
+  const s = (raw ?? '').trim().toUpperCase();
+  if (s === 'COD' || s === 'CASH ON DELIVERY' || s === 'C.O.D.') return 'COD';
+  const n = s.match(/\d+/);
+  if (n) {
+    const d = parseInt(n[0], 10);
+    if (d === 15) return '15 Days';
+    if (d === 30) return '30 Days';
+    if (d === 45) return '45 Days';
+    if (d === 60) return '60 Days';
+  }
+  if (s.includes('15')) return '15 Days';
+  if (s.includes('30')) return '30 Days';
+  if (s.includes('45')) return '45 Days';
+  if (s.includes('60')) return '60 Days';
+  return '30 Days';
 }
 
 export function CustomerFormPage() {
@@ -87,6 +116,8 @@ export function CustomerFormPage() {
   const [errors, setErrors] = useState<Partial<Record<keyof CustomerFormData, string>>>({});
   const [initialFetchLoading, setInitialFetchLoading] = useState(isEditMode);
   const [saving, setSaving] = useState(false);
+  /** When editing, keep the customer's existing branch_id unless creating (navbar branch applies to new rows only). */
+  const [existingBranchId, setExistingBranchId] = useState<string | null>(null);
   /** Map pin (saved as map_lat / map_lng); separate from typed address fields. */
   const [customerMapPin, setCustomerMapPin] = useState<{ lat: number; lng: number } | null>(null);
   /** Current navbar branch store HQ from company_settings (red default pin on map). */
@@ -120,6 +151,9 @@ export function CustomerFormPage() {
           return;
         }
 
+        const empRow = embedOne<Record<string, unknown>>(data.employees);
+
+        setExistingBranchId(data.branch_id ? String(data.branch_id) : null);
         setFormData({
           name: data.name ?? '',
           type: data.type ?? 'Hardware Store',
@@ -136,9 +170,9 @@ export function CustomerFormPage() {
           businessRegistration: data.business_registration ?? '',
           taxId: data.tax_id ?? '',
           creditLimit: String(data.credit_limit ?? ''),
-          paymentTerms: (data.payment_terms as CustomerFormData['paymentTerms']) ?? '30 Days',
+          paymentTerms: normalizePaymentTermsForForm(data.payment_terms as string | null),
           assignedAgentId: data.assigned_agent_id ?? '',
-          assignedAgent: data.employees?.employee_name ?? '',
+          assignedAgent: (empRow?.employee_name as string | undefined) ?? '',
           status: (data.status as CustomerFormData['status']) ?? 'Active',
         });
         const la = data.map_lat != null ? Number(data.map_lat) : null;
@@ -179,9 +213,10 @@ export function CustomerFormPage() {
         if (error) throw error;
 
         // Filter client-side by branch name (contextBranch = "Manila" / "Cebu" / "Batangas")
-        const filtered = (data ?? []).filter(
-          (e: any) => e.branches?.name === contextBranch
-        );
+        const filtered = (data ?? []).filter((e: any) => {
+          const br = embedOne(e.branches);
+          return br?.name === contextBranch;
+        });
 
         setAgents(
           filtered.map((e: any) => ({
@@ -265,14 +300,20 @@ export function CustomerFormPage() {
     } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
       newErrors.email = 'Invalid email format';
     }
-    if (!formData.address.trim()) newErrors.address = 'Address is required';
-    if (!formData.city.trim()) newErrors.city = 'City is required';
-    if (!formData.province.trim()) newErrors.province = 'Province is required';
     if (formData.creditLimit.trim() !== '' && (isNaN(Number(formData.creditLimit)) || Number(formData.creditLimit) < 0))
       newErrors.creditLimit = 'Credit limit must be a valid non-negative number';
 
     setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
+    const keys = Object.keys(newErrors);
+    if (keys.length > 0) {
+      const first = keys[0];
+      window.requestAnimationFrame(() => {
+        const el = document.querySelector<HTMLElement>(`[name="${first}"]`);
+        el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el?.focus?.();
+      });
+    }
+    return keys.length === 0;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -282,14 +323,40 @@ export function CustomerFormPage() {
 
     setSaving(true);
     try {
-      // Resolve branch_id from contextBranch name
-      const { data: branchData, error: branchError } = await supabase
-        .from('branches')
-        .select('id')
-        .eq('name', contextBranch)
-        .single();
+      let branchId: string;
 
-      if (branchError || !branchData) throw new Error('Could not resolve branch');
+      if (isEditMode && existingBranchId) {
+        branchId = existingBranchId;
+      } else {
+        if (!contextBranch?.trim()) {
+          alert('Select a branch in the header before saving.');
+          setSaving(false);
+          return;
+        }
+        const { data: branchData, error: branchError } = await supabase
+          .from('branches')
+          .select('id')
+          .eq('name', contextBranch)
+          .maybeSingle();
+
+        if (branchError || !branchData?.id) {
+          throw new Error('Could not resolve branch from the header selector.');
+        }
+        branchId = branchData.id as string;
+      }
+
+      const creditLimit = formData.creditLimit.trim() === '' ? 0 : parseFloat(formData.creditLimit);
+      let outstandingBalance = 0;
+      if (isEditMode && id) {
+        const { data: existing, error: existingErr } = await supabase
+          .from('customers')
+          .select('outstanding_balance')
+          .eq('id', id)
+          .maybeSingle();
+        if (existingErr) throw existingErr;
+        outstandingBalance = Number(existing?.outstanding_balance ?? 0);
+      }
+      const availableCredit = Math.max(0, creditLimit - outstandingBalance);
 
       const payload = {
         name: formData.name.trim(),
@@ -300,16 +367,17 @@ export function CustomerFormPage() {
         email: formData.email.trim(),
         alternate_phone: formData.alternatePhone.trim() || null,
         alternate_email: formData.alternateEmail.trim() || null,
-        address: formData.address.trim(),
-        city: formData.city.trim(),
-        province: formData.province.trim(),
+        address: formData.address.trim() || null,
+        city: formData.city.trim() || null,
+        province: formData.province.trim() || null,
         postal_code: formData.postalCode.trim() || null,
         business_registration: formData.businessRegistration.trim() || null,
         tax_id: formData.taxId.trim() || null,
-        credit_limit: formData.creditLimit.trim() === '' ? 0 : parseFloat(formData.creditLimit),
+        credit_limit: creditLimit,
+        available_credit: availableCredit,
         payment_terms: formData.paymentTerms,
         assigned_agent_id: formData.assignedAgentId || null,
-        branch_id: branchData.id,
+        branch_id: branchId,
         status: formData.status,
         map_lat: customerMapPin?.lat ?? null,
         map_lng: customerMapPin?.lng ?? null,
@@ -321,12 +389,12 @@ export function CustomerFormPage() {
           .update({ ...payload, updated_at: new Date().toISOString() })
           .eq('id', id);
         if (error) throw error;
+        navigate(`/customers/${id}`);
       } else {
         const { error } = await supabase.from('customers').insert(payload);
         if (error) throw error;
+        navigate('/customers');
       }
-
-      navigate('/customers');
     } catch (err: any) {
       console.error('Failed to save customer:', err);
       alert(`Failed to save customer: ${err.message ?? 'Unknown error'}`);
@@ -337,7 +405,8 @@ export function CustomerFormPage() {
 
   const handleCancel = () => {
     if (window.confirm('Are you sure you want to cancel? Any unsaved changes will be lost.')) {
-      navigate('/customers');
+      if (isEditMode && id) navigate(`/customers/${id}`);
+      else navigate('/customers');
     }
   };
 
@@ -357,7 +426,12 @@ export function CustomerFormPage() {
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
         <div className="flex items-center gap-4">
-          <Button variant="ghost" size="sm" onClick={() => navigate('/customers')}>
+          <Button
+            variant="ghost"
+            size="sm"
+            type="button"
+            onClick={() => navigate(isEditMode && id ? `/customers/${id}` : '/customers')}
+          >
             <ArrowLeft className="w-4 h-4" />
           </Button>
           <div>
@@ -370,18 +444,18 @@ export function CustomerFormPage() {
           </div>
         </div>
         <div className="flex flex-col-reverse sm:flex-row gap-2 w-full md:w-auto">
-          <Button variant="outline" onClick={handleCancel} className="w-full sm:w-auto">
+          <Button variant="outline" type="button" onClick={handleCancel} className="w-full sm:w-auto">
             <X className="w-4 h-4 mr-2" />
             Cancel
           </Button>
-          <Button variant="primary" onClick={handleSubmit} disabled={saving} className="w-full sm:w-auto">
+          <Button variant="primary" type="submit" form={FORM_ID} disabled={saving} className="w-full sm:w-auto">
             <Save className="w-4 h-4 mr-2" />
             {saving ? 'Saving…' : isEditMode ? 'Save Changes' : 'Create Customer'}
           </Button>
         </div>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-6">
+      <form id={FORM_ID} onSubmit={handleSubmit} className="space-y-6">
         {/* Basic Information */}
         <Card>
           <CardHeader>
@@ -457,6 +531,8 @@ export function CustomerFormPage() {
                   <option value="Active">Active</option>
                   <option value="Inactive">Inactive</option>
                   <option value="Suspended">Suspended</option>
+                  <option value="Dormant">Dormant</option>
+                  <option value="On Hold">On Hold</option>
                 </select>
               </div>
 
@@ -580,70 +656,40 @@ export function CustomerFormPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Street Address <span className="text-red-500">*</span>
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Street Address</label>
               <input
                 type="text"
                 name="address"
                 value={formData.address}
                 onChange={handleInputChange}
-                className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent ${
-                  errors.address ? 'border-red-500' : 'border-gray-300'
-                }`}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
                 placeholder="Street address, building, floor"
               />
-              {errors.address && (
-                <p className="text-red-500 text-xs mt-1 flex items-center gap-1">
-                  <AlertCircle className="w-3 h-3" />
-                  {errors.address}
-                </p>
-              )}
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  City <span className="text-red-500">*</span>
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">City</label>
                 <input
                   type="text"
                   name="city"
                   value={formData.city}
                   onChange={handleInputChange}
-                  className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent ${
-                    errors.city ? 'border-red-500' : 'border-gray-300'
-                  }`}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
                   placeholder="City"
                 />
-                {errors.city && (
-                  <p className="text-red-500 text-xs mt-1 flex items-center gap-1">
-                    <AlertCircle className="w-3 h-3" />
-                    {errors.city}
-                  </p>
-                )}
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Province <span className="text-red-500">*</span>
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Province</label>
                 <input
                   type="text"
                   name="province"
                   value={formData.province}
                   onChange={handleInputChange}
-                  className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent ${
-                    errors.province ? 'border-red-500' : 'border-gray-300'
-                  }`}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
                   placeholder="Province"
                 />
-                {errors.province && (
-                  <p className="text-red-500 text-xs mt-1 flex items-center gap-1">
-                    <AlertCircle className="w-3 h-3" />
-                    {errors.province}
-                  </p>
-                )}
               </div>
 
               <div>
@@ -662,12 +708,6 @@ export function CustomerFormPage() {
             </div>
 
             <div className="space-y-2 border-t border-gray-100 pt-4">
-              <p className="text-sm text-gray-600">
-                Pin the delivery or billing location on the map (optional). Address fields above stay independent; use
-                search or click the map. <strong className="font-medium text-gray-800">Blue</strong> = customer;
-                when the branch has HQ coordinates in Settings, <strong className="font-medium text-gray-800">red</strong>{' '}
-                = store / HQ on the same map.
-              </p>
               <CompanyMapPicker
                 lat={customerMapPin?.lat ?? null}
                 lng={customerMapPin?.lng ?? null}
@@ -850,11 +890,11 @@ export function CustomerFormPage() {
 
         {/* Action Buttons - Mobile */}
         <div className="flex gap-2 md:hidden">
-          <Button variant="outline" onClick={handleCancel} className="flex-1">
+          <Button variant="outline" type="button" onClick={handleCancel} className="flex-1">
             <X className="w-4 h-4 mr-2" />
             Cancel
           </Button>
-          <Button variant="primary" onClick={handleSubmit} disabled={saving} className="flex-1">
+          <Button variant="primary" type="submit" disabled={saving} className="flex-1">
             <Save className="w-4 h-4 mr-2" />
             {saving ? 'Saving…' : isEditMode ? 'Save' : 'Create'}
           </Button>

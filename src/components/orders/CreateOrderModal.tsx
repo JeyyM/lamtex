@@ -505,19 +505,37 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
       if (orderError) throw orderError;
 
       // Insert line items
-      const lineItems = orderItems.map(item => ({
-        order_id:           newOrder.id,
-        variant_id:         item.variantId || null,
-        product_name:       item.productName,
-        variant_description: item.variantSize,
-        quantity:           item.quantity,
-        unit_price:         item.price,
-        original_price:     item.originalPrice,
-        negotiated_price:   item.negotiatedPrice,
-        line_total:         item.subtotal,
-        available_stock:    item.stockAvailable,
-        stock_hint:         item.stockAvailable >= item.quantity ? 'Available' : item.stockAvailable > 0 ? 'Partial' : 'Not Available',
-      }));
+      const lineItems = orderItems.map((item) => {
+        const gross = item.negotiatedPrice * item.quantity;
+        const discountAmount = Math.max(0, gross - item.subtotal);
+        const discountPercent =
+          gross > 0 ? ((gross - item.subtotal) / gross) * 100 : 0;
+        const breakdown =
+          item.discounts && item.discounts.length > 0
+            ? item.discounts.map((d) => ({ name: d.name, percentage: d.percentage }))
+            : null;
+        return {
+          order_id: newOrder.id,
+          variant_id: item.variantId || null,
+          product_name: item.productName,
+          variant_description: item.variantSize,
+          quantity: item.quantity,
+          unit_price: item.price,
+          original_price: item.originalPrice,
+          negotiated_price: item.negotiatedPrice,
+          discount_percent: discountPercent,
+          discount_amount: discountAmount,
+          discounts_breakdown: breakdown,
+          line_total: item.subtotal,
+          available_stock: item.stockAvailable,
+          stock_hint:
+            item.stockAvailable >= item.quantity
+              ? 'Available'
+              : item.stockAvailable > 0
+                ? 'Partial'
+                : 'Not Available',
+        };
+      });
 
       const { error: itemsError } = await supabase
         .from('order_line_items')

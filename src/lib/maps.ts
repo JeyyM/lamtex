@@ -1,11 +1,53 @@
 /**
- * Google Maps helpers. Loads Maps JS with the `places` library (address search).
- * In Google Cloud: enable Maps JavaScript API and Places API (Autocomplete).
+ * Google Maps helpers. Loads Maps JS with the `places` library.
+ * In Google Cloud: enable Maps JavaScript API and Places API (New)
+ * (AutocompleteSuggestion.fetchAutocompleteSuggestions / Autocomplete Data).
  *
  * Env: VITE_GOOGLE_MAPS_API_KEY
+ * Optional: VITE_GOOGLE_MAPS_MAP_ID — required style for `AdvancedMarkerElement` (vector map).
+ * If unset, `DEMO_MAP_ID` is used (fine for dev; create a Map ID in Cloud Console for production).
+ *
+ * @see https://developers.google.com/maps/documentation/javascript/advanced-markers/overview
  */
 export function getGoogleMapsApiKey(): string {
   return (import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined)?.trim() ?? '';
+}
+
+export function getGoogleMapsMapId(): string {
+  const id = (import.meta.env.VITE_GOOGLE_MAPS_MAP_ID as string | undefined)?.trim();
+  return id || 'DEMO_MAP_ID';
+}
+
+/** Minimal surface for `google.maps.marker.AdvancedMarkerElement` (@types often lag). */
+export type AdvancedMarkerLike = {
+  map: google.maps.Map | null;
+  position: google.maps.LatLng | google.maps.LatLngLiteral | null | undefined;
+  content?: Element | null | undefined;
+  title?: string;
+  zIndex?: number | null;
+  gmpDraggable?: boolean;
+  addListener(eventName: string, handler: () => void): google.maps.MapsEventListener;
+};
+
+export async function importMapsMarkerLibrary(): Promise<{
+  AdvancedMarkerElement: new (opts: Record<string, unknown>) => AdvancedMarkerLike;
+  PinElement: new (opts?: Record<string, unknown>) => { element: HTMLElement };
+}> {
+  return (await google.maps.importLibrary('marker')) as unknown as {
+    AdvancedMarkerElement: new (opts: Record<string, unknown>) => AdvancedMarkerLike;
+    PinElement: new (opts?: Record<string, unknown>) => { element: HTMLElement };
+  };
+}
+
+export function getAdvancedMarkerLatLng(marker: AdvancedMarkerLike): { lat: number; lng: number } | null {
+  const p = marker.position;
+  if (p == null) return null;
+  if (typeof (p as google.maps.LatLng).lat === 'function') {
+    const ll = p as google.maps.LatLng;
+    return { lat: ll.lat(), lng: ll.lng() };
+  }
+  const lit = p as google.maps.LatLngLiteral;
+  return { lat: lit.lat, lng: lit.lng };
 }
 
 let mapsJsPromise: Promise<void> | null = null;

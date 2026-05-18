@@ -256,11 +256,6 @@ export function SettingsSocialMediaTab({ branchId, branchLabel, addAuditLog }: S
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-lg font-bold text-gray-900">Social media</h2>
-          <p className="text-sm text-gray-600 mt-1">
-            External links for <strong>{branchLabel.trim() || 'this branch'}</strong>. Run{' '}
-            <code className="text-xs bg-gray-100 px-1 rounded">database/alter_company_social_media.sql</code>{' '}
-            if saves fail (missing columns or legacy enum).
-          </p>
         </div>
         <Button
           type="button"
@@ -428,7 +423,7 @@ export function SettingsSocialMediaTab({ branchId, branchLabel, addAuditLog }: S
       </div>
 
       {!editing && rows.length === 0 && !loadError ? (
-        <p className="text-sm text-gray-500 text-center py-8">No links yet. Add a platform or run the seed SQL.</p>
+        <p className="text-sm text-gray-500 text-center py-8">No links yet. Add a platform.</p>
       ) : null}
     </div>
   );

@@ -7,6 +7,7 @@ import { Button } from '@/src/components/ui/Button';
 import { supabase } from '@/src/lib/supabase';
 import {
   User,
+  Users,
   Phone,
   Mail,
   MapPin,
@@ -23,6 +24,11 @@ import {
 import { CreateOrderModal } from '@/src/components/orders/CreateOrderModal';
 import { CustomerLocationMapPreview } from '@/src/components/maps/CustomerLocationMapPreview';
 import { clientCommissionFraction, clientCommissionPercentLabel } from '@/src/types/customers';
+import { recalculateCustomerPaymentScore } from '@/src/lib/customerPaymentScore';
+
+function formatPeso(amount: number): string {
+  return amount.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -36,6 +42,7 @@ interface CustomerDetail {
   payment_terms: string; payment_score: number; avg_payment_days: number;
   overdue_amount: number; total_purchases_ytd: number; total_purchases_lifetime: number;
   order_count: number; last_order_date: string | null; account_since: string | null;
+  payment_score_order_count?: number;
   assigned_agent_id: string | null;
   employees: { employee_name: string; employee_id: string } | null;
   branch_id: string | null;
@@ -57,6 +64,18 @@ interface OrderRow {
 
 function formatPhp(amount: number) {
   return `₱${amount.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function embedOne<T extends Record<string, unknown>>(v: unknown): T | null {
+  if (v == null) return null;
+  if (Array.isArray(v)) return (v[0] as T | undefined) ?? null;
+  if (typeof v === 'object') return v as T;
+  return null;
+}
+
+function formatAddressLine(address: string, city: string, province: string): string {
+  const parts = [address, city, province].map((p) => (p ?? '').trim()).filter(Boolean);
+  return parts.length > 0 ? parts.join(', ') : '—';
 }
 
 function orderHistoryStatusBadgeVariant(status: string): 'default' | 'success' | 'warning' | 'danger' | 'neutral' {
@@ -120,20 +139,55 @@ export function CustomerDetailPage() {
         ]);
         if (custRes.error || !custRes.data) { setNotFound(true); return; }
         const c = custRes.data as any;
+        const empRow = embedOne<Record<string, unknown>>(c.employees);
+        const employeesNormalized =
+          empRow && typeof empRow.employee_name === 'string'
+            ? {
+                employee_name: empRow.employee_name,
+                employee_id: String(empRow.employee_id ?? ''),
+              }
+            : null;
+        const creditLimit = Number(c.credit_limit ?? 0);
+        const outstandingBalance = Number(c.outstanding_balance ?? 0);
+        let availableCredit = Number(c.available_credit ?? 0);
+        const expectedAvailable = Math.max(0, creditLimit - outstandingBalance);
+        if (Math.abs(availableCredit - expectedAvailable) > 0.01) {
+          availableCredit = expectedAvailable;
+          await supabase
+            .from('customers')
+            .update({ available_credit: expectedAvailable, updated_at: new Date().toISOString() })
+            .eq('id', id);
+        }
+        let paymentScore = c.payment_score ?? 0;
+        let avgPaymentDays = c.avg_payment_days ?? 0;
+        let paymentBehavior = c.payment_behavior ?? 'Good';
+        let overdueAmount = Number(c.overdue_amount ?? 0);
+        let paymentScoreOrderCount: number | undefined;
+
+        const scoreRes = await recalculateCustomerPaymentScore(id);
+        if (scoreRes.ok) {
+          paymentScore = scoreRes.result.paymentScore;
+          avgPaymentDays = scoreRes.result.avgPaymentDays;
+          paymentBehavior = scoreRes.result.paymentBehavior;
+          overdueAmount = scoreRes.result.overdueAmount;
+          paymentScoreOrderCount = scoreRes.result.settledOrderCount;
+        }
+
         setCustomer({
           id: c.id, name: c.name, type: c.type ?? '', client_type: c.client_type ?? 'Office',
-          status: c.status ?? 'Active', risk_level: c.risk_level ?? 'Low', payment_behavior: c.payment_behavior ?? 'Good',
+          status: c.status ?? 'Active', risk_level: c.risk_level ?? 'Low', payment_behavior: paymentBehavior,
           contact_person: c.contact_person ?? '', phone: c.phone ?? '', email: c.email ?? '',
           alternate_phone: c.alternate_phone ?? null, alternate_email: c.alternate_email ?? null,
           address: c.address ?? '', city: c.city ?? '', province: c.province ?? '',
           postal_code: c.postal_code ?? null, business_registration: c.business_registration ?? null, tax_id: c.tax_id ?? null,
-          credit_limit: Number(c.credit_limit ?? 0), outstanding_balance: Number(c.outstanding_balance ?? 0),
-          available_credit: Number(c.available_credit ?? 0), payment_terms: c.payment_terms ?? '',
-          payment_score: c.payment_score ?? 0, avg_payment_days: c.avg_payment_days ?? 0,
-          overdue_amount: Number(c.overdue_amount ?? 0), total_purchases_ytd: Number(c.total_purchases_ytd ?? 0),
+          credit_limit: creditLimit, outstanding_balance: outstandingBalance,
+          available_credit: availableCredit, payment_terms: c.payment_terms ?? '',
+          payment_score: paymentScore, avg_payment_days: avgPaymentDays,
+          overdue_amount: overdueAmount, total_purchases_ytd: Number(c.total_purchases_ytd ?? 0),
           total_purchases_lifetime: Number(c.total_purchases_lifetime ?? 0), order_count: c.order_count ?? 0,
           last_order_date: c.last_order_date ?? null, account_since: c.account_since ?? null,
-          assigned_agent_id: c.assigned_agent_id ?? null, employees: c.employees ?? null,
+          payment_score_order_count: paymentScoreOrderCount,
+          assigned_agent_id: c.assigned_agent_id ?? null, employees: employeesNormalized,
           branch_id: c.branch_id ?? null,
           map_lat: c.map_lat != null ? Number(c.map_lat) : null,
           map_lng: c.map_lng != null ? Number(c.map_lng) : null,
@@ -315,11 +369,33 @@ export function CustomerDetailPage() {
               <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <InfoRow icon={User} label="Contact Person" value={customer.contact_person} />
                 <InfoRow icon={Phone} label="Phone" value={customer.phone} />
-                <InfoRow icon={Mail} label="Email" value={customer.email} />
+                <InfoRow icon={Mail} label="Email" value={customer.email || '—'} />
+                {customer.assigned_agent_id ? (
+                  <InfoRow
+                    icon={Users}
+                    label="Assigned Agent"
+                    value={
+                      <Link
+                        to={`/employees/${customer.assigned_agent_id}`}
+                        className="text-blue-600 hover:underline font-medium"
+                      >
+                        {customer.employees?.employee_name ?? 'View agent'}
+                        {customer.employees?.employee_id ? ` (${customer.employees.employee_id})` : ''}
+                      </Link>
+                    }
+                  />
+                ) : (
+                  <InfoRow icon={Users} label="Assigned Agent" value="—" />
+                )}
                 {customer.alternate_phone && (
                   <InfoRow icon={Phone} label="Alternate Phone" value={customer.alternate_phone} />
                 )}
-                <InfoRow icon={MapPin} label="Address" value={`${customer.address}, ${customer.city}, ${customer.province}`} className="md:col-span-2" />
+                <InfoRow
+                  icon={MapPin}
+                  label="Address"
+                  value={formatAddressLine(customer.address, customer.city, customer.province)}
+                  className="md:col-span-2"
+                />
                 {customer.map_lat != null &&
                   customer.map_lng != null &&
                   Number.isFinite(customer.map_lat) &&
@@ -349,30 +425,30 @@ export function CustomerDetailPage() {
               <CardContent className="grid grid-cols-2 md:grid-cols-3 gap-4">
                 <div>
                   <div className="text-xs text-gray-500 mb-1">Credit Limit</div>
-                  <div className="text-lg font-semibold text-gray-900">₱{(customer.credit_limit / 1000000).toFixed(1)}M</div>
+                  <div className="text-lg font-semibold text-gray-900">₱{formatPeso(customer.credit_limit)}</div>
                 </div>
                 <div>
                   <div className="text-xs text-gray-500 mb-1">Outstanding Balance</div>
                   <div className={`text-lg font-semibold ${customer.outstanding_balance > customer.credit_limit * 0.8 ? 'text-red-600' : 'text-gray-900'}`}>
-                    ₱{(customer.outstanding_balance / 1000000).toFixed(2)}M
+                    ₱{formatPeso(customer.outstanding_balance)}
                   </div>
                 </div>
                 <div>
                   <div className="text-xs text-gray-500 mb-1">Available Credit</div>
-                  <div className="text-lg font-semibold text-green-600">₱{(customer.available_credit / 1000000).toFixed(2)}M</div>
+                  <div className="text-lg font-semibold text-green-600">₱{formatPeso(customer.available_credit)}</div>
                 </div>
                 <div>
                   <div className="text-xs text-gray-500 mb-1">YTD Purchases</div>
-                  <div className="text-lg font-semibold text-gray-900">₱{(customer.total_purchases_ytd / 1000000).toFixed(2)}M</div>
+                  <div className="text-lg font-semibold text-gray-900">₱{formatPeso(customer.total_purchases_ytd)}</div>
                 </div>
                 <div>
                   <div className="text-xs text-gray-500 mb-1">Lifetime Purchases</div>
-                  <div className="text-lg font-semibold text-gray-900">₱{(customer.total_purchases_lifetime / 1000000).toFixed(1)}M</div>
+                  <div className="text-lg font-semibold text-gray-900">₱{formatPeso(customer.total_purchases_lifetime)}</div>
                 </div>
                 <div>
                   <div className="text-xs text-gray-500 mb-1">Overdue Amount</div>
                   <div className={`text-lg font-semibold ${customer.overdue_amount > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                    ₱{(customer.overdue_amount / 1000).toFixed(0)}K
+                    ₱{formatPeso(customer.overdue_amount)}
                   </div>
                 </div>
                 <div className="col-span-2 md:col-span-3 pt-3 border-t border-gray-200">
@@ -387,7 +463,7 @@ export function CustomerDetailPage() {
                   <div className="mt-2 flex items-center justify-between">
                     <div className="text-xs text-gray-500">Estimated YTD Commission</div>
                     <div className="text-lg font-semibold text-blue-600">
-                      ₱{((customer.total_purchases_ytd * clientCommissionFraction(customer.client_type)) / 1000).toFixed(0)}K
+                      ₱{formatPeso(customer.total_purchases_ytd * clientCommissionFraction(customer.client_type))}
                     </div>
                   </div>
                 </div>
@@ -425,6 +501,15 @@ export function CustomerDetailPage() {
                       style={{ width: `${customer.payment_score}%` }}
                     />
                   </div>
+                  {customer.payment_score_order_count != null && customer.payment_score_order_count > 0 ? (
+                    <p className="text-xs text-gray-500 mt-1">
+                      Based on {customer.payment_score_order_count} paid order
+                      {customer.payment_score_order_count === 1 ? '' : 's'} (last 18 months). On-time and early pay raise
+                      score; overdue and credit pay lower it.
+                    </p>
+                  ) : (
+                    <p className="text-xs text-gray-500 mt-1">No paid orders yet in the scoring window.</p>
+                  )}
                 </div>
                 <div>
                   <div className="text-xs text-gray-500 mb-1">Avg Payment Days</div>
@@ -551,7 +636,17 @@ export function CustomerDetailPage() {
 }
 
 // Helper component for info rows
-function InfoRow({ icon: Icon, label, value, className = '' }: { icon: any; label: string; value: string; className?: string }) {
+function InfoRow({
+  icon: Icon,
+  label,
+  value,
+  className = '',
+}: {
+  icon: React.ElementType;
+  label: string;
+  value: React.ReactNode;
+  className?: string;
+}) {
   return (
     <div className={className}>
       <div className="flex items-center gap-2 text-xs text-gray-500 mb-1">

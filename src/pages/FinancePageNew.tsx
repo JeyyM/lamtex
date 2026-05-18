@@ -1,37 +1,26 @@
 /**
  * Invoices & Payments page (rebuilt).
  *
- * Reframes the area away from formal invoices into a payments tracker:
- *   - Outstanding orders (uses orders.balance_due / due_date / payment_terms)
- *   - Customer credit utilization (customers.credit_limit / outstanding_balance)
- *   - Payment proofs uploaded by agents (verified by Executive)
- *   - Digital receipts after a verified payment
- *   - Commission release per period (Executive only). Real verified payments
- *     accrue commission to the originating agent; orders that only consumed
- *     credit do NOT count toward commission until the customer pays in cash.
+ *   - Outstanding orders (delivered orders + payment status)
+ *   - Customer credit utilization
+ *   - Commission release: orders with payment proofs on file
  */
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   AlertTriangle,
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
-  ArrowUpRight,
   CheckCircle2,
   CircleDollarSign,
   Clock,
   CreditCard,
-  Download,
-  ExternalLink,
   Eye,
   FileText,
-  Filter,
   Loader2,
-  Receipt,
   Search,
   TrendingUp,
-  Upload,
   Wallet,
   X,
   XCircle,
@@ -43,30 +32,24 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Ca
 import { useAppContext } from '@/src/store/AppContext';
 
 import {
-  fetchAgentCommissionsForPeriod,
   fetchCustomerCredit,
-  fetchDigitalReceipts,
   fetchFinanceMetrics,
+  fetchOrderCommissionModalData,
+  fetchOrdersWithPaymentProofs,
   fetchOutstandingOrders,
-  fetchPaymentProofs,
-  periodKeyForDate,
-  type AgentCommissionRow,
   type CustomerCreditRow,
-  type DigitalReceiptRow,
   type FinanceMetrics,
+  type OrderCommissionProofRow,
+  type OrderWithPaymentProofsRow,
   type OutstandingOrderRow,
-  type PaymentProofRow,
 } from '@/src/lib/financeData';
 import {
   adjustCustomerCreditLimit,
-  chargeToCredit,
-  rejectPaymentProof,
-  releaseCommission,
-  uploadPaymentProof,
-  verifyPaymentProof,
+  markAllProofCommissionsPaidForOrder,
+  markProofCommissionPaid,
 } from '@/src/lib/financeMutations';
 
-type TabId = 'outstanding' | 'credit' | 'proofs' | 'receipts' | 'commissions';
+type TabId = 'outstanding' | 'credit' | 'commissions';
 
 const PESO = '₱';
 
@@ -94,12 +77,18 @@ function formatDateTime(iso: string | null | undefined): string {
   return d.toLocaleString('en-PH', { dateStyle: 'medium', timeStyle: 'short' });
 }
 
-function dueDateBadge(row: OutstandingOrderRow): { label: string; variant: 'success' | 'warning' | 'danger' | 'neutral' } {
-  if (!row.dueDate) return { label: 'No due date', variant: 'neutral' };
-  if (row.daysOverdue > 0) return { label: `${row.daysOverdue}d overdue`, variant: 'danger' };
-  const dueIn = Math.floor((new Date(row.dueDate).getTime() - Date.now()) / 86_400_000);
-  if (dueIn <= 7) return { label: `Due in ${Math.max(dueIn, 0)}d`, variant: 'warning' };
-  return { label: `Due in ${dueIn}d`, variant: 'success' };
+function AgentCell(props: { agentId: string | null; agentName: string | null; className?: string }) {
+  if (props.agentId && props.agentName) {
+    return (
+      <Link
+        to={`/employees/${props.agentId}`}
+        className={`text-blue-600 hover:underline font-medium ${props.className ?? ''}`}
+      >
+        {props.agentName}
+      </Link>
+    );
+  }
+  return <span className={props.className ?? 'text-gray-700'}>{props.agentName ?? '—'}</span>;
 }
 
 function paymentStatusVariant(status: string): 'success' | 'warning' | 'info' | 'danger' | 'neutral' {
@@ -119,13 +108,17 @@ function paymentStatusVariant(status: string): 'success' | 'warning' | 'info' | 
   }
 }
 
-function commissionStatusVariant(status: AgentCommissionRow['status']) {
-  if (status === 'Paid') return 'success';
-  if (status === 'Approved') return 'info';
-  return 'warning';
-}
+const OUTSTANDING_PAGE_SIZE = 20;
+const COMMISSION_PAGE_SIZE = 20;
 
-const PAYMENT_METHODS = ['Cash', 'Bank Transfer', 'GCash', 'Maya', 'Check', 'Credit Card', 'Debit Card'] as const;
+const PAYMENT_STATUS_FILTER_OPTIONS = [
+  'Unbilled',
+  'Invoiced',
+  'Partially Paid',
+  'Paid',
+  'Overdue',
+  'On Credit',
+] as const;
 
 type ToastState = { kind: 'success' | 'error'; message: string } | null;
 
@@ -139,34 +132,30 @@ export function FinancePageNew() {
   const [metrics, setMetrics] = useState<FinanceMetrics | null>(null);
   const [outstanding, setOutstanding] = useState<OutstandingOrderRow[]>([]);
   const [credits, setCredits] = useState<CustomerCreditRow[]>([]);
-  const [proofs, setProofs] = useState<PaymentProofRow[]>([]);
-  const [receipts, setReceipts] = useState<DigitalReceiptRow[]>([]);
-  const [commissions, setCommissions] = useState<AgentCommissionRow[]>([]);
-  const [period, setPeriod] = useState<string>(periodKeyForDate(new Date()));
-  const [proofFilter, setProofFilter] = useState<'pending' | 'verified' | 'rejected' | 'all'>('pending');
+  const [ordersWithProofs, setOrdersWithProofs] = useState<OrderWithPaymentProofsRow[]>([]);
   const [search, setSearch] = useState('');
+  const [commissionSearch, setCommissionSearch] = useState('');
 
   // Outstanding orders — column sort & status dropdown filter
   const [sortKey, setSortKey] = useState<string>('dueDate');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [headerPaymentFilter, setHeaderPaymentFilter] = useState('');
+  const [outstandingPage, setOutstandingPage] = useState(1);
 
-  // Receipts — column sort
-  const [receiptSortKey, setReceiptSortKey] = useState<string>('paidAt');
-  const [receiptSortDir, setReceiptSortDir] = useState<'asc' | 'desc'>('desc');
+  // Commission release (orders with payment proofs)
+  const [commissionSortKey, setCommissionSortKey] = useState<string>('orderNumber');
+  const [commissionSortDir, setCommissionSortDir] = useState<'asc' | 'desc'>('desc');
+  const [commissionPage, setCommissionPage] = useState(1);
 
   const [loading, setLoading] = useState({
     metrics: true,
     outstanding: true,
     credit: false,
-    proofs: false,
-    receipts: false,
     commissions: false,
   });
 
-  const [proofModalOrder, setProofModalOrder] = useState<OutstandingOrderRow | null>(null);
-  const [reviewProof, setReviewProof] = useState<PaymentProofRow | null>(null);
   const [creditEdit, setCreditEdit] = useState<CustomerCreditRow | null>(null);
+  const [commissionModalOrder, setCommissionModalOrder] = useState<OrderWithPaymentProofsRow | null>(null);
 
   /** Toast auto-dismiss. */
   useEffect(() => {
@@ -211,37 +200,13 @@ export function FinancePageNew() {
     }
   };
 
-  const loadProofs = async () => {
-    setLoading((s) => ({ ...s, proofs: true }));
-    try {
-      const rows = await fetchPaymentProofs(proofFilter);
-      setProofs(rows);
-    } catch (e) {
-      setToast({ kind: 'error', message: e instanceof Error ? e.message : 'Failed to load proofs' });
-    } finally {
-      setLoading((s) => ({ ...s, proofs: false }));
-    }
-  };
-
-  const loadReceipts = async () => {
-    setLoading((s) => ({ ...s, receipts: true }));
-    try {
-      const rows = await fetchDigitalReceipts();
-      setReceipts(rows);
-    } catch (e) {
-      setToast({ kind: 'error', message: e instanceof Error ? e.message : 'Failed to load receipts' });
-    } finally {
-      setLoading((s) => ({ ...s, receipts: false }));
-    }
-  };
-
-  const loadCommissions = async () => {
+  const loadOrdersWithProofs = async () => {
     setLoading((s) => ({ ...s, commissions: true }));
     try {
-      const rows = await fetchAgentCommissionsForPeriod(period);
-      setCommissions(rows);
+      const rows = await fetchOrdersWithPaymentProofs();
+      setOrdersWithProofs(rows);
     } catch (e) {
-      setToast({ kind: 'error', message: e instanceof Error ? e.message : 'Failed to load commissions' });
+      setToast({ kind: 'error', message: e instanceof Error ? e.message : 'Failed to load orders with proofs' });
     } finally {
       setLoading((s) => ({ ...s, commissions: false }));
     }
@@ -254,26 +219,12 @@ export function FinancePageNew() {
 
   useEffect(() => {
     if (tab === 'credit') void loadCredits();
-    if (tab === 'proofs') void loadProofs();
-    if (tab === 'receipts') void loadReceipts();
-    if (tab === 'commissions') void loadCommissions();
+    if (tab === 'commissions') {
+      void loadOrdersWithProofs();
+      void loadMetrics();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
-
-  useEffect(() => {
-    if (tab === 'proofs') void loadProofs();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [proofFilter]);
-
-  useEffect(() => {
-    if (tab === 'commissions') void loadCommissions();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [period]);
-
-  const distinctPaymentStatuses = useMemo(() => {
-    const s = new Set<string>(outstanding.map((r) => r.paymentStatus).filter(Boolean));
-    return Array.from(s).sort((a, b) => a.localeCompare(b));
-  }, [outstanding]);
 
   const handleSort = (key: string) => {
     if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -287,14 +238,17 @@ export function FinancePageNew() {
       : <ArrowDown className="w-3 h-3 ml-1 text-blue-600" />;
   };
 
-  const handleReceiptSort = (key: string) => {
-    if (receiptSortKey === key) setReceiptSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
-    else { setReceiptSortKey(key); setReceiptSortDir('asc'); }
+  const handleCommissionSort = (key: string) => {
+    if (commissionSortKey === key) setCommissionSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else {
+      setCommissionSortKey(key);
+      setCommissionSortDir('asc');
+    }
   };
 
-  const receiptSortIcon = (col: string) => {
-    if (receiptSortKey !== col) return <ArrowUpDown className="w-3 h-3 ml-1 opacity-40" />;
-    return receiptSortDir === 'asc'
+  const commissionSortIcon = (col: string) => {
+    if (commissionSortKey !== col) return <ArrowUpDown className="w-3 h-3 ml-1 opacity-40" />;
+    return commissionSortDir === 'asc'
       ? <ArrowUp className="w-3 h-3 ml-1 text-blue-600" />
       : <ArrowDown className="w-3 h-3 ml-1 text-blue-600" />;
   };
@@ -314,7 +268,6 @@ export function FinancePageNew() {
         case 'terms': av = a.paymentTerms ?? ''; bv = b.paymentTerms ?? ''; break;
         case 'total': av = a.totalAmount; bv = b.totalAmount; break;
         case 'paid': av = a.amountPaid; bv = b.amountPaid; break;
-        case 'balance': av = a.balanceDue; bv = b.balanceDue; break;
         case 'dueDate': av = a.dueDate ?? ''; bv = b.dueDate ?? ''; break;
         case 'status': av = a.paymentStatus; bv = b.paymentStatus; break;
         default: av = a.dueDate ?? ''; bv = b.dueDate ?? '';
@@ -327,139 +280,104 @@ export function FinancePageNew() {
     });
   }, [outstanding, search, headerPaymentFilter, sortKey, sortDir]);
 
-  const sortedReceipts = useMemo(() => {
-    return [...receipts].sort((a, b) => {
+  const outstandingTotalPages = Math.max(1, Math.ceil(filteredOutstanding.length / OUTSTANDING_PAGE_SIZE));
+
+  const paginatedOutstanding = useMemo(() => {
+    const safePage = Math.min(outstandingPage, outstandingTotalPages);
+    const start = (safePage - 1) * OUTSTANDING_PAGE_SIZE;
+    return filteredOutstanding.slice(start, start + OUTSTANDING_PAGE_SIZE);
+  }, [filteredOutstanding, outstandingPage, outstandingTotalPages]);
+
+  useEffect(() => {
+    setOutstandingPage(1);
+  }, [search, headerPaymentFilter, sortKey, sortDir]);
+
+  useEffect(() => {
+    if (outstandingPage > outstandingTotalPages) {
+      setOutstandingPage(outstandingTotalPages);
+    }
+  }, [outstandingPage, outstandingTotalPages]);
+
+  const filteredOrdersWithProofs = useMemo(() => {
+    const q = commissionSearch.trim().toLowerCase();
+    let rows = ordersWithProofs;
+    if (q) {
+      rows = rows.filter((r) =>
+        [r.orderNumber, r.customerName, r.agentName].some((v) => v?.toLowerCase().includes(q)),
+      );
+    }
+    return [...rows].sort((a, b) => {
       let av: string | number;
       let bv: string | number;
-      switch (receiptSortKey) {
-        case 'receiptNumber': av = a.receiptNumber ?? ''; bv = b.receiptNumber ?? ''; break;
-        case 'order': av = (a.orderNumber ?? '').toLowerCase(); bv = (b.orderNumber ?? '').toLowerCase(); break;
-        case 'customer': av = (a.customerName ?? '').toLowerCase(); bv = (b.customerName ?? '').toLowerCase(); break;
-        case 'method': av = a.paymentMethod ?? ''; bv = b.paymentMethod ?? ''; break;
-        case 'amount': av = a.totalPaid; bv = b.totalPaid; break;
-        case 'paidAt': av = a.paidAt ?? ''; bv = b.paidAt ?? ''; break;
-        default: av = a.paidAt ?? ''; bv = b.paidAt ?? '';
+      switch (commissionSortKey) {
+        case 'orderNumber':
+          av = a.orderNumber ?? '';
+          bv = b.orderNumber ?? '';
+          break;
+        case 'customer':
+          av = (a.customerName ?? '').toLowerCase();
+          bv = (b.customerName ?? '').toLowerCase();
+          break;
+        case 'agent':
+          av = (a.agentName ?? '').toLowerCase();
+          bv = (b.agentName ?? '').toLowerCase();
+          break;
+        case 'total':
+          av = a.totalAmount;
+          bv = b.totalAmount;
+          break;
+        case 'paid':
+          av = a.amountPaid;
+          bv = b.amountPaid;
+          break;
+        case 'proofAmount':
+          av = a.totalProofAmount;
+          bv = b.totalProofAmount;
+          break;
+        case 'proofCount':
+          av = a.proofCount;
+          bv = b.proofCount;
+          break;
+        case 'lastProofAt':
+          av = a.lastProofAt ?? '';
+          bv = b.lastProofAt ?? '';
+          break;
+        case 'status':
+          av = a.paymentStatus;
+          bv = b.paymentStatus;
+          break;
+        default:
+          av = a.lastProofAt ?? '';
+          bv = b.lastProofAt ?? '';
       }
-      if (typeof av === 'number' && typeof bv === 'number') return receiptSortDir === 'asc' ? av - bv : bv - av;
-      const as = String(av); const bs = String(bv);
-      if (as < bs) return receiptSortDir === 'asc' ? -1 : 1;
-      if (as > bs) return receiptSortDir === 'asc' ? 1 : -1;
+      if (typeof av === 'number' && typeof bv === 'number') {
+        return commissionSortDir === 'asc' ? av - bv : bv - av;
+      }
+      const as = String(av);
+      const bs = String(bv);
+      if (as < bs) return commissionSortDir === 'asc' ? -1 : 1;
+      if (as > bs) return commissionSortDir === 'asc' ? 1 : -1;
       return 0;
     });
-  }, [receipts, receiptSortKey, receiptSortDir]);
+  }, [ordersWithProofs, commissionSearch, commissionSortKey, commissionSortDir]);
 
-  const reviewer = (employeeName || 'User').trim();
+  const commissionTotalPages = Math.max(1, Math.ceil(filteredOrdersWithProofs.length / COMMISSION_PAGE_SIZE));
 
-  /** Refresh side-effects after a proof verify/reject so KPIs and tables stay in sync. */
-  const refreshAfterMutation = async () => {
-    await Promise.all([loadMetrics(), loadOutstanding(), loadProofs(), loadReceipts(), loadCommissions()]);
-  };
+  const paginatedOrdersWithProofs = useMemo(() => {
+    const safePage = Math.min(commissionPage, commissionTotalPages);
+    const start = (safePage - 1) * COMMISSION_PAGE_SIZE;
+    return filteredOrdersWithProofs.slice(start, start + COMMISSION_PAGE_SIZE);
+  }, [filteredOrdersWithProofs, commissionPage, commissionTotalPages]);
 
-  const handleProofUpload = async (input: {
-    batches: Array<{ file: File | null; amount: number; method: string; reference: string; notes: string }>;
-    creditAmount: number;
-    creditNotes: string;
-  }) => {
-    if (!proofModalOrder) return;
-    const uploaderRole = role === 'Agent' ? 'Agent' : role === 'Executive' ? 'Executive' : 'Cashier';
-    try {
-      // Upload each proof batch sequentially (file is optional)
-      for (const batch of input.batches) {
-        await uploadPaymentProof({
-          orderId: proofModalOrder.id,
-          file: batch.file,
-          amount: batch.amount,
-          paymentMethod: batch.method,
-          referenceNumber: batch.reference || null,
-          notes: batch.notes || null,
-          uploadedBy: reviewer,
-          uploadedByRole: uploaderRole,
-        });
-        addAuditLog(
-          'Payment recorded',
-          'Order',
-          `${proofModalOrder.orderNumber} · ${formatPeso(batch.amount)} via ${batch.method}${batch.file ? '' : ' (no proof attached)'}`,
-        );
-      }
+  useEffect(() => {
+    setCommissionPage(1);
+  }, [commissionSearch, commissionSortKey, commissionSortDir]);
 
-      // Apply credit charge immediately (no proof needed)
-      if (input.creditAmount > 0) {
-        await chargeToCredit({
-          orderId: proofModalOrder.id,
-          amount: input.creditAmount,
-          notes: input.creditNotes || null,
-          chargedBy: reviewer,
-        });
-        addAuditLog(
-          'Credit charge applied',
-          'Order',
-          `${proofModalOrder.orderNumber} · ${formatPeso(input.creditAmount)} charged to credit`,
-        );
-      }
-
-      setProofModalOrder(null);
-      const batchCount = input.batches.length;
-      const hasCredit = input.creditAmount > 0;
-      const parts: string[] = [];
-      if (batchCount > 0) parts.push(`${batchCount} proof${batchCount > 1 ? 's' : ''} uploaded — pending verification`);
-      if (hasCredit) parts.push(`${formatPeso(input.creditAmount)} charged to credit`);
-      setToast({ kind: 'success', message: parts.join(' · ') + '.' });
-      await Promise.all([loadOutstanding(), loadMetrics(), tab === 'proofs' ? loadProofs() : Promise.resolve()]);
-    } catch (e) {
-      setToast({ kind: 'error', message: e instanceof Error ? e.message : 'Upload failed' });
+  useEffect(() => {
+    if (commissionPage > commissionTotalPages) {
+      setCommissionPage(commissionTotalPages);
     }
-  };
-
-  const handleVerify = async (
-    proof: PaymentProofRow,
-    values: { amount: number; method: string; reference: string; paidAt: string },
-  ) => {
-    try {
-      await verifyPaymentProof(proof.id, {
-        amount: values.amount,
-        paymentMethod: values.method,
-        referenceNumber: values.reference || null,
-        paidAt: values.paidAt || null,
-        reviewedBy: reviewer,
-      });
-      addAuditLog(
-        'Payment proof verified',
-        'Order',
-        `${proof.orderNumber ?? proof.orderId} · ${formatPeso(values.amount)} via ${values.method}`,
-      );
-      setReviewProof(null);
-      setToast({ kind: 'success', message: 'Payment recorded and commission accrued.' });
-      await refreshAfterMutation();
-    } catch (e) {
-      setToast({ kind: 'error', message: e instanceof Error ? e.message : 'Verification failed' });
-    }
-  };
-
-  const handleReject = async (proof: PaymentProofRow, reason: string) => {
-    try {
-      await rejectPaymentProof(proof.id, { rejectionReason: reason, reviewedBy: reviewer });
-      addAuditLog('Payment proof rejected', 'Order', `${proof.orderNumber ?? proof.orderId} · ${reason}`);
-      setReviewProof(null);
-      setToast({ kind: 'success', message: 'Proof rejected.' });
-      await Promise.all([loadProofs(), loadMetrics()]);
-    } catch (e) {
-      setToast({ kind: 'error', message: e instanceof Error ? e.message : 'Rejection failed' });
-    }
-  };
-
-  const handleReleaseCommission = async (row: AgentCommissionRow) => {
-    if (!isExecutive) return;
-    if (!window.confirm(`Release ${formatPeso2(row.commissionEarned)} to ${row.agentName ?? 'this agent'} for ${row.period}?`))
-      return;
-    try {
-      await releaseCommission(row.id, { releasedBy: reviewer });
-      addAuditLog('Commission released', 'Agent', `${row.agentName ?? row.employeeId} · ${row.period} · ${formatPeso2(row.commissionEarned)}`);
-      setToast({ kind: 'success', message: 'Commission marked as released.' });
-      await Promise.all([loadCommissions(), loadMetrics()]);
-    } catch (e) {
-      setToast({ kind: 'error', message: e instanceof Error ? e.message : 'Release failed' });
-    }
-  };
+  }, [commissionPage, commissionTotalPages]);
 
   const handleAdjustCredit = async (row: CustomerCreditRow, newLimit: number) => {
     try {
@@ -479,8 +397,7 @@ export function FinancePageNew() {
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Invoices & Payments</h1>
           <p className="text-sm text-gray-600 mt-1">
-            Track which orders still need payment, monitor customer credit usage, verify proofs, and release commissions on real
-            payments.
+            Track delivered orders awaiting payment, monitor customer credit, and review orders with payment proofs on file.
           </p>
         </div>
       </div>
@@ -505,9 +422,9 @@ export function FinancePageNew() {
           valueClass="text-red-600"
         />
         <KpiCard
-          label="Collected this Month"
-          value={formatPeso(metrics?.collectedThisMonth)}
-          sub="Verified payments"
+          label="Commissions Paid Out"
+          value={formatPeso(metrics?.commissionsPaidOut)}
+          sub="Released on cash payment proofs"
           icon={<TrendingUp className="w-6 h-6 text-green-600" />}
           accent="bg-green-100"
           loading={loading.metrics}
@@ -516,12 +433,17 @@ export function FinancePageNew() {
         <KpiCard
           label="Pending Commissions"
           value={formatPeso(metrics?.pendingCommissions)}
-          sub={metrics?.pendingProofs ? `${metrics.pendingProofs} proof(s) awaiting review` : 'Awaiting executive release'}
+          sub={
+            metrics?.pendingCommissionCount
+              ? `${metrics.pendingCommissionCount} cash proof(s) awaiting payout`
+              : 'Awaiting executive release'
+          }
           icon={<Wallet className="w-6 h-6 text-purple-600" />}
           accent="bg-purple-100"
           loading={loading.metrics}
+          valueClass={metrics?.pendingCommissions ? 'text-amber-700' : undefined}
         />
-      </div>
+              </div>
 
       {/* Tabs */}
       <div className="border-b border-gray-200 overflow-x-auto">
@@ -532,34 +454,17 @@ export function FinancePageNew() {
           <TabButton active={tab === 'credit'} onClick={() => setTab('credit')} icon={<CreditCard className="w-4 h-4" />}>
             Customer Credit
           </TabButton>
-          <TabButton active={tab === 'proofs'} onClick={() => setTab('proofs')} icon={<Upload className="w-4 h-4" />}>
-            Payment Proofs
-            {(metrics?.pendingProofs ?? 0) > 0 ? (
-              <span className="ml-2 inline-flex items-center justify-center min-w-5 h-5 rounded-full bg-red-600 text-white text-[11px] px-1.5">
-                {metrics?.pendingProofs}
-              </span>
-            ) : null}
+          <TabButton active={tab === 'commissions'} onClick={() => setTab('commissions')} icon={<Wallet className="w-4 h-4" />}>
+            Commission Release
           </TabButton>
-          <TabButton active={tab === 'receipts'} onClick={() => setTab('receipts')} icon={<Receipt className="w-4 h-4" />}>
-            Receipts
-          </TabButton>
-          {isExecutive ? (
-            <TabButton
-              active={tab === 'commissions'}
-              onClick={() => setTab('commissions')}
-              icon={<Wallet className="w-4 h-4" />}
-            >
-              Commission Release
-            </TabButton>
-          ) : null}
-        </div>
-      </div>
+              </div>
+              </div>
 
       {tab === 'outstanding' && (
         <Card>
           <CardHeader>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <CardTitle className="text-lg">Orders awaiting payment</CardTitle>
+              <CardTitle className="text-lg">Delivered orders — payment tracking</CardTitle>
               <div className="relative w-full sm:w-72">
                 <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
@@ -569,15 +474,17 @@ export function FinancePageNew() {
                   onChange={(e) => setSearch(e.target.value)}
                 />
               </div>
-            </div>
+              </div>
           </CardHeader>
           <CardContent>
             {loading.outstanding ? (
               <div className="py-12 flex justify-center text-gray-500">
                 <Loader2 className="w-6 h-6 animate-spin" />
-              </div>
+            </div>
             ) : filteredOutstanding.length === 0 ? (
-              <p className="py-10 text-center text-sm text-gray-500">No outstanding orders.</p>
+              <p className="py-10 text-center text-sm text-gray-500">
+                No delivered or partially fulfilled orders match your filters.
+              </p>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -601,9 +508,6 @@ export function FinancePageNew() {
                       <th onClick={() => handleSort('paid')} className="text-right py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
                         <span className="flex items-center justify-end">Paid{sortIcon('paid')}</span>
                       </th>
-                      <th onClick={() => handleSort('balance')} className="text-right py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
-                        <span className="flex items-center justify-end">Balance{sortIcon('balance')}</span>
-                      </th>
                       <th onClick={() => handleSort('dueDate')} className="text-center py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
                         <span className="flex items-center justify-center">Due{sortIcon('dueDate')}</span>
                       </th>
@@ -615,18 +519,16 @@ export function FinancePageNew() {
                           onClick={(e) => e.stopPropagation()}
                           className="w-full text-xs font-semibold text-gray-600 border border-gray-200 rounded-md px-2 py-1.5 bg-white hover:border-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
                         >
-                          <option value="">Status</option>
-                          {distinctPaymentStatuses.map((s) => (
+                          <option value="">All statuses</option>
+                          {PAYMENT_STATUS_FILTER_OPTIONS.map((s) => (
                             <option key={s} value={s}>{s}</option>
                           ))}
                         </select>
                       </th>
-                      <th className="text-right py-2.5 px-3 font-semibold">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {filteredOutstanding.map((row) => {
-                      const due = dueDateBadge(row);
+                    {paginatedOutstanding.map((row) => {
                       return (
                         <tr key={row.id} className="hover:bg-gray-50/80">
                           <td className="py-3 px-3">
@@ -646,34 +548,53 @@ export function FinancePageNew() {
                               <span className="text-gray-800">{row.customerName ?? '—'}</span>
                             )}
                           </td>
-                          <td className="py-3 px-3 text-gray-700 hidden md:table-cell">{row.agentName ?? '—'}</td>
+                          <td className="py-3 px-3 hidden md:table-cell">
+                            <AgentCell agentId={row.agentId} agentName={row.agentName} />
+                          </td>
                           <td className="py-3 px-3 text-gray-700 hidden lg:table-cell">{row.paymentTerms ?? '—'}</td>
                           <td className="py-3 px-3 text-right tabular-nums">{formatPeso(row.totalAmount)}</td>
                           <td className="py-3 px-3 text-right tabular-nums text-green-700">{formatPeso(row.amountPaid)}</td>
-                          <td className="py-3 px-3 text-right tabular-nums font-semibold">{formatPeso(row.balanceDue)}</td>
-                          <td className="py-3 px-3 text-center">
-                            <Badge variant={due.variant}>{due.label}</Badge>
-                            <p className="text-[11px] text-gray-500 mt-0.5">{formatDate(row.dueDate)}</p>
+                          <td className="py-3 px-3 text-center text-gray-800">
+                            {formatDate(row.dueDate)}
                           </td>
                           <td className="py-3 px-3 text-center">
                             <Badge variant={paymentStatusVariant(row.paymentStatus)}>{row.paymentStatus}</Badge>
-                          </td>
-                          <td className="py-3 px-3 text-right">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="gap-1"
-                              onClick={() => setProofModalOrder(row)}
-                            >
-                              <Upload className="w-3.5 h-3.5" />
-                              Record payment
-                            </Button>
                           </td>
                         </tr>
                       );
                     })}
                   </tbody>
                 </table>
+                {outstandingTotalPages > 1 && (
+                  <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mt-4 pt-4 border-t border-gray-200">
+                    <p className="text-sm text-gray-600">
+                      Showing {(outstandingPage - 1) * OUTSTANDING_PAGE_SIZE + 1}–
+                      {Math.min(outstandingPage * OUTSTANDING_PAGE_SIZE, filteredOutstanding.length)} of{' '}
+                      {filteredOutstanding.length}
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={outstandingPage <= 1}
+                        onClick={() => setOutstandingPage((p) => Math.max(1, p - 1))}
+                      >
+                        Previous
+                      </Button>
+                      <span className="text-sm text-gray-600 tabular-nums px-2">
+                        Page {outstandingPage} of {outstandingTotalPages}
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={outstandingPage >= outstandingTotalPages}
+                        onClick={() => setOutstandingPage((p) => Math.min(outstandingTotalPages, p + 1))}
+                      >
+                        Next
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </CardContent>
@@ -703,158 +624,26 @@ export function FinancePageNew() {
         </Card>
       )}
 
-      {tab === 'proofs' && (
-        <Card>
-          <CardHeader>
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <CardTitle className="text-lg">Payment proofs</CardTitle>
-              <div className="flex items-center gap-2">
-                <Filter className="w-4 h-4 text-gray-500" />
-                <select
-                  value={proofFilter}
-                  onChange={(e) => setProofFilter(e.target.value as typeof proofFilter)}
-                  className="px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white"
-                >
-                  <option value="pending">Pending</option>
-                  <option value="verified">Verified</option>
-                  <option value="rejected">Rejected</option>
-                  <option value="all">All</option>
-                </select>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            {loading.proofs ? (
-              <div className="py-12 flex justify-center text-gray-500">
-                <Loader2 className="w-6 h-6 animate-spin" />
-              </div>
-            ) : proofs.length === 0 ? (
-              <p className="py-10 text-center text-sm text-gray-500">No payment proofs in this view.</p>
-            ) : (
-              <div className="space-y-3">
-                {proofs.map((p) => (
-                  <ProofRowCard
-                    key={p.id}
-                    proof={p}
-                    canReview={isExecutive && p.status === 'pending'}
-                    onReview={() => setReviewProof(p)}
-                  />
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      {tab === 'receipts' && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">Digital receipts</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {loading.receipts ? (
-              <div className="py-12 flex justify-center text-gray-500">
-                <Loader2 className="w-6 h-6 animate-spin" />
-              </div>
-            ) : receipts.length === 0 ? (
-              <p className="py-10 text-center text-sm text-gray-500">
-                No digital receipts yet. Verifying a payment automatically creates a transaction; receipts are issued after a
-                successful online payment via /pay/:token.
-              </p>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50 text-xs text-gray-500 uppercase border-b border-gray-200">
-                    <tr>
-                      <th onClick={() => handleReceiptSort('receiptNumber')} className="text-left py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
-                        <span className="flex items-center">Receipt #{receiptSortIcon('receiptNumber')}</span>
-                      </th>
-                      <th onClick={() => handleReceiptSort('order')} className="text-left py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
-                        <span className="flex items-center">Order{receiptSortIcon('order')}</span>
-                      </th>
-                      <th onClick={() => handleReceiptSort('customer')} className="text-left py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
-                        <span className="flex items-center">Customer{receiptSortIcon('customer')}</span>
-                      </th>
-                      <th onClick={() => handleReceiptSort('method')} className="text-left py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
-                        <span className="flex items-center">Method{receiptSortIcon('method')}</span>
-                      </th>
-                      <th onClick={() => handleReceiptSort('amount')} className="text-right py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
-                        <span className="flex items-center justify-end">Amount{receiptSortIcon('amount')}</span>
-                      </th>
-                      <th onClick={() => handleReceiptSort('paidAt')} className="text-left py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
-                        <span className="flex items-center">Paid at{receiptSortIcon('paidAt')}</span>
-                      </th>
-                      <th className="text-right py-2.5 px-3 font-semibold">Link</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {sortedReceipts.map((r) => (
-                      <tr key={r.id} className="hover:bg-gray-50/80">
-                        <td className="py-3 px-3 font-medium text-gray-900">{r.receiptNumber}</td>
-                        <td className="py-3 px-3">
-                          {r.orderId ? (
-                            <Link to={`/orders/${r.orderId}`} className="text-blue-600 hover:underline">
-                              {r.orderNumber ?? r.orderId.slice(0, 8)}
-                            </Link>
-                          ) : (
-                            <span className="text-gray-500">—</span>
-                          )}
-                        </td>
-                        <td className="py-3 px-3 text-gray-800">{r.customerName ?? '—'}</td>
-                        <td className="py-3 px-3">
-                          <Badge variant="neutral">{r.paymentMethod}</Badge>
-                        </td>
-                        <td className="py-3 px-3 text-right tabular-nums font-semibold">{formatPeso(r.totalPaid)}</td>
-                        <td className="py-3 px-3 text-gray-700">{formatDateTime(r.paidAt)}</td>
-                        <td className="py-3 px-3 text-right">
-                          <div className="inline-flex gap-1">
-                            <a
-                              href={r.publicUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded border border-gray-300 text-gray-700 hover:bg-gray-50"
-                            >
-                              <ExternalLink className="w-3 h-3" /> Open
-                            </a>
-                            {r.pdfUrl ? (
-                              <a
-                                href={r.pdfUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded border border-gray-300 text-gray-700 hover:bg-gray-50"
-                              >
-                                <Download className="w-3 h-3" /> PDF
-                              </a>
-                            ) : null}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      {tab === 'commissions' && isExecutive && (
+      {tab === 'commissions' && (
         <Card>
           <CardHeader>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <CardTitle className="text-lg">Agent commission release</CardTitle>
+                <CardTitle className="text-lg">Commission release</CardTitle>
                 <p className="text-xs text-gray-600 mt-1">
-                  Commission accrues only when a real payment proof is verified. Orders paid using credit do not count toward
-                  commission until the customer settles in cash.
+                  Click a row to view payment proofs and release agent commission for cash payments. Orders become Completed
+                  only when fully paid and all cash commissions are released.
                 </p>
               </div>
-              <input
-                type="month"
-                value={period}
-                onChange={(e) => setPeriod(e.target.value)}
-                className="px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white"
-              />
+              <div className="relative w-full sm:w-72">
+                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input
+                  className="w-full pl-9 pr-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                  placeholder="Search by order #, customer, or agent"
+                  value={commissionSearch}
+                  onChange={(e) => setCommissionSearch(e.target.value)}
+                />
+              </div>
             </div>
           </CardHeader>
           <CardContent>
@@ -862,38 +651,125 @@ export function FinancePageNew() {
               <div className="py-12 flex justify-center text-gray-500">
                 <Loader2 className="w-6 h-6 animate-spin" />
               </div>
-            ) : commissions.length === 0 ? (
-              <p className="py-10 text-center text-sm text-gray-500">No commissions accrued in this period yet.</p>
+            ) : filteredOrdersWithProofs.length === 0 ? (
+              <p className="py-10 text-center text-sm text-gray-500">No orders with payment proofs yet.</p>
             ) : (
-              <div className="space-y-3">
-                {commissions.map((c) => (
-                  <CommissionRowCard
-                    key={c.id}
-                    row={c}
-                    onRelease={() => handleReleaseCommission(c)}
-                    canRelease={c.status !== 'Paid'}
-                  />
-                ))}
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 text-xs text-gray-500 uppercase border-b border-gray-200">
+                    <tr>
+                      <th onClick={() => handleCommissionSort('orderNumber')} className="text-left py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100">
+                        <span className="flex items-center">Order{commissionSortIcon('orderNumber')}</span>
+                      </th>
+                      <th onClick={() => handleCommissionSort('customer')} className="text-left py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100">
+                        <span className="flex items-center">Customer{commissionSortIcon('customer')}</span>
+                      </th>
+                      <th onClick={() => handleCommissionSort('agent')} className="text-left py-2.5 px-3 font-semibold hidden md:table-cell cursor-pointer select-none hover:bg-gray-100">
+                        <span className="flex items-center">Agent{commissionSortIcon('agent')}</span>
+                      </th>
+                      <th onClick={() => handleCommissionSort('total')} className="text-right py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100">
+                        <span className="flex items-center justify-end">Total{commissionSortIcon('total')}</span>
+                      </th>
+                      <th onClick={() => handleCommissionSort('paid')} className="text-right py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100">
+                        <span className="flex items-center justify-end">Paid{commissionSortIcon('paid')}</span>
+                      </th>
+                      <th onClick={() => handleCommissionSort('proofCount')} className="text-center py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100">
+                        <span className="flex items-center justify-center">Proofs{commissionSortIcon('proofCount')}</span>
+                      </th>
+                      <th className="text-center py-2.5 px-3 font-semibold">Commission</th>
+                      <th onClick={() => handleCommissionSort('status')} className="text-center py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100">
+                        <span className="flex items-center justify-center">Status{commissionSortIcon('status')}</span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {paginatedOrdersWithProofs.map((row) => {
+                      const cashProofs = row.cashProofCount;
+                      const released = cashProofs - row.pendingCashCommissionCount;
+                      return (
+                      <tr
+                        key={row.orderId}
+                        className="hover:bg-gray-50/80 cursor-pointer"
+                        onClick={() => setCommissionModalOrder(row)}
+                      >
+                        <td className="py-3 px-3" onClick={(e) => e.stopPropagation()}>
+                          <Link to={`/orders/${row.orderId}`} className="font-medium text-blue-600 hover:underline">
+                            {row.orderNumber}
+                          </Link>
+                        </td>
+                        <td className="py-3 px-3" onClick={(e) => e.stopPropagation()}>
+                          {row.customerId ? (
+                            <Link to={`/customers/${row.customerId}`} className="text-blue-600 hover:underline font-medium">
+                              {row.customerName ?? '—'}
+                            </Link>
+                          ) : (
+                            <span className="text-gray-800">{row.customerName ?? '—'}</span>
+                          )}
+                        </td>
+                        <td className="py-3 px-3 hidden md:table-cell" onClick={(e) => e.stopPropagation()}>
+                          <AgentCell agentId={row.agentId} agentName={row.agentName} />
+                        </td>
+                        <td className="py-3 px-3 text-right tabular-nums">{formatPeso(row.totalAmount)}</td>
+                        <td className="py-3 px-3 text-right tabular-nums text-green-700">{formatPeso(row.amountPaid)}</td>
+                        <td className="py-3 px-3 text-center tabular-nums">{row.proofCount}</td>
+                        <td className="py-3 px-3 text-center text-xs text-gray-600">
+                          {row.totalCashOnProofs > 0.01 ? (
+                            row.pendingCashCommissionCount > 0 ? (
+                              <span className="text-amber-700 font-medium">{released}/{cashProofs} released</span>
+                            ) : (
+                              <span className="text-green-700 font-medium">All released</span>
+                            )
+                          ) : (
+                            <span className="text-gray-400">—</span>
+                          )}
+                        </td>
+                        <td className="py-3 px-3 text-center">
+                          <Badge variant={paymentStatusVariant(row.paymentStatus)}>{row.paymentStatus}</Badge>
+                        </td>
+                      </tr>
+                    );})}
+                  </tbody>
+                </table>
+                {filteredOrdersWithProofs.length > COMMISSION_PAGE_SIZE && (
+                  <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mt-4 pt-4 border-t border-gray-200">
+                    <p className="text-sm text-gray-600">
+                      Showing {(commissionPage - 1) * COMMISSION_PAGE_SIZE + 1}–
+                      {Math.min(commissionPage * COMMISSION_PAGE_SIZE, filteredOrdersWithProofs.length)} of{' '}
+                      {filteredOrdersWithProofs.length}
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <Button size="sm" variant="outline" disabled={commissionPage <= 1} onClick={() => setCommissionPage((p) => Math.max(1, p - 1))}>
+                        Previous
+                      </Button>
+                      <span className="text-sm text-gray-600 tabular-nums px-2">
+                        Page {commissionPage} of {commissionTotalPages}
+                      </span>
+                      <Button size="sm" variant="outline" disabled={commissionPage >= commissionTotalPages} onClick={() => setCommissionPage((p) => Math.min(commissionTotalPages, p + 1))}>
+                        Next
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </CardContent>
         </Card>
       )}
 
-      {proofModalOrder && (
-        <RecordPaymentModal
-          order={proofModalOrder}
-          onClose={() => setProofModalOrder(null)}
-          onSubmit={(input) => handleProofUpload(input)}
-        />
-      )}
-
-      {reviewProof && (
-        <ReviewProofModal
-          proof={reviewProof}
-          onClose={() => setReviewProof(null)}
-          onApprove={(values) => handleVerify(reviewProof, values)}
-          onReject={(reason) => handleReject(reviewProof, reason)}
+      {commissionModalOrder && (
+        <OrderCommissionProofsModal
+          order={commissionModalOrder}
+          isExecutive={isExecutive}
+          releasedBy={employeeName || 'Executive'}
+          onClose={() => setCommissionModalOrder(null)}
+          onAudit={(message) => addAuditLog('Commission released', 'Order', message)}
+          onUpdated={async () => {
+            const rows = await fetchOrdersWithPaymentProofs();
+            setOrdersWithProofs(rows);
+            const refreshed = rows.find((o) => o.orderId === commissionModalOrder.orderId);
+            if (refreshed) setCommissionModalOrder(refreshed);
+            await loadMetrics();
+          }}
         />
       )}
 
@@ -915,9 +791,9 @@ export function FinancePageNew() {
         >
           {toast.kind === 'success' ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
           {toast.message}
-        </div>
+                  </div>
       ) : null}
-    </div>
+                </div>
   );
 }
 
@@ -942,13 +818,13 @@ function KpiCard(props: {
               {props.loading ? '…' : props.value}
             </p>
             <p className="text-xs text-gray-500 mt-1 truncate">{props.sub}</p>
-          </div>
+                  </div>
           <div className={`w-10 sm:w-12 h-10 sm:h-12 rounded-lg flex items-center justify-center flex-shrink-0 ${props.accent}`}>
             {props.icon}
-          </div>
-        </div>
-      </CardContent>
-    </Card>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
   );
 }
 
@@ -968,16 +844,21 @@ function TabButton(props: { active: boolean; onClick: () => void; children: Reac
 
 function CreditRowCard(props: { row: CustomerCreditRow; canEdit: boolean; onEdit: () => void }) {
   const c = props.row;
-  return (
+                    return (
     <div className="border border-gray-200 rounded-lg p-4">
       <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
         <div className="min-w-0">
-          <p className="font-semibold text-gray-900 truncate">{c.customerName}</p>
+          <Link
+            to={`/customers/${c.customerId}`}
+            className="font-semibold text-blue-600 hover:underline truncate block"
+          >
+            {c.customerName}
+          </Link>
           <p className="text-xs text-gray-500 mt-0.5">
             Terms: <span className="font-medium text-gray-700">{c.paymentTerms ?? '—'}</span>
             {c.paymentScore != null ? <span className="ml-3">Payment score: <span className="font-medium text-gray-700">{c.paymentScore}</span></span> : null}
           </p>
-        </div>
+                          </div>
         <div className="flex items-center gap-2">
           <Badge variant={c.status === 'Good' ? 'success' : c.status === 'Warning' ? 'warning' : 'danger'}>{c.status}</Badge>
           {props.canEdit ? (
@@ -1012,523 +893,264 @@ function CreditRowCard(props: { row: CustomerCreditRow; canEdit: boolean; onEdit
 
 function Stat(props: { label: string; value: string; className?: string }) {
   return (
-    <div>
+                          <div>
       <p className="text-xs text-gray-500">{props.label}</p>
       <p className={`mt-0.5 font-semibold ${props.className ?? 'text-gray-900'}`}>{props.value}</p>
-    </div>
+                          </div>
   );
 }
 
-function ProofRowCard(props: { proof: PaymentProofRow; canReview: boolean; onReview: () => void }) {
-  const p = props.proof;
+function OrderCommissionProofsModal(props: {
+  order: OrderWithPaymentProofsRow;
+  isExecutive: boolean;
+  releasedBy: string;
+  onClose: () => void;
+  onUpdated: () => Promise<void>;
+  onAudit?: (message: string) => void;
+}) {
+  const [proofs, setProofs] = useState<OrderCommissionProofRow[]>([]);
+  const [clientType, setClientType] = useState<'Office' | 'Personal'>('Office');
+  const [commissionPercentLabel, setCommissionPercentLabel] = useState('0.5%');
+  const [loading, setLoading] = useState(true);
+  const [releasingId, setReleasingId] = useState<string | null>(null);
+  const [markingAll, setMarkingAll] = useState(false);
+
+  const commissionSummary = useMemo(() => {
+    let total = 0;
+    let released = 0;
+    let pendingCount = 0;
+    for (const p of proofs) {
+      if (!p.requiresCommission) continue;
+      total += p.commissionAmount;
+      if (p.commissionPaidAt) released += p.commissionAmount;
+      else pendingCount += 1;
+    }
+    return {
+      total: Math.round((total + Number.EPSILON) * 100) / 100,
+      released: Math.round((released + Number.EPSILON) * 100) / 100,
+      pending: Math.round((total - released + Number.EPSILON) * 100) / 100,
+      pendingCount,
+    };
+  }, [proofs]);
+
+  const loadProofs = async () => {
+    setLoading(true);
+    try {
+      const data = await fetchOrderCommissionModalData(props.order.orderId, props.order.customerId);
+      setProofs(data.proofs);
+      setClientType(data.clientType);
+      setCommissionPercentLabel(data.commissionPercentLabel);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadProofs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.order.orderId]);
+
+  const handleMarkAllPaid = async () => {
+    if (!props.isExecutive || commissionSummary.pendingCount === 0) return;
+    if (
+      !window.confirm(
+        `Mark all ${commissionSummary.pendingCount} pending commission(s) as paid out (${formatPeso2(commissionSummary.pending)})?`,
+      )
+    ) {
+      return;
+    }
+    setMarkingAll(true);
+    try {
+      const { orderCompleted, releasedCount } = await markAllProofCommissionsPaidForOrder(
+        props.order.orderId,
+        { paidBy: props.releasedBy },
+      );
+      props.onAudit?.(
+        `Bulk commission release · ${props.order.orderNumber} · ${releasedCount} proof(s) · ${formatPeso2(commissionSummary.pending)}`,
+      );
+      await loadProofs();
+      await props.onUpdated();
+      if (orderCompleted) {
+        window.alert(`Marked ${releasedCount} commission(s) as paid. Order is now Completed.`);
+      }
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : 'Failed to mark all as paid');
+    } finally {
+      setMarkingAll(false);
+    }
+  };
+
+  const handleRelease = async (proof: OrderCommissionProofRow) => {
+    if (!props.isExecutive) return;
+    if (!window.confirm(`Mark commission as paid for this cash payment (${formatPeso(proof.cashAmount)})?`)) return;
+    setReleasingId(proof.id);
+    try {
+      const { orderCompleted } = await markProofCommissionPaid(proof.id, { paidBy: props.releasedBy });
+      props.onAudit?.(
+        `Commission released · ${props.order.orderNumber} · ${formatPeso(proof.cashAmount)} cash`,
+      );
+      await loadProofs();
+      await props.onUpdated();
+      if (orderCompleted) {
+        window.alert('Commission released. Order is now marked Completed.');
+      }
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : 'Failed to release commission');
+    } finally {
+      setReleasingId(null);
+    }
+  };
+
   return (
-    <div className="border border-gray-200 rounded-lg p-4 flex flex-col md:flex-row gap-4">
-      <a
-        href={p.fileUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="block w-full md:w-32 h-28 rounded-md overflow-hidden border border-gray-200 bg-gray-50 flex-shrink-0"
-      >
-        {/^image\//.test(p.fileName ?? '') || /\.(png|jpg|jpeg|webp|gif)$/i.test(p.fileUrl) ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={p.fileUrl} alt="proof" className="w-full h-full object-cover" />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center text-gray-400">
-            <FileText className="w-8 h-8" />
-          </div>
-        )}
-      </a>
-      <div className="flex-1 min-w-0">
-        <div className="flex flex-wrap items-start justify-between gap-2">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <p className="font-semibold text-gray-900">{p.customerName ?? '—'}</p>
-              <Badge
-                variant={
-                  p.status === 'verified' ? 'success' : p.status === 'rejected' ? 'danger' : 'warning'
-                }
-              >
-                {p.status}
-              </Badge>
-            </div>
-            <p className="text-xs text-gray-600 mt-0.5">
-              Order:{' '}
-              <Link to={`/orders/${p.orderId}`} className="text-blue-600 hover:underline">
-                {p.orderNumber ?? p.orderId.slice(0, 8)}
-              </Link>
-              {' · '}Agent: {p.agentName ?? '—'}
-            </p>
-          </div>
-          <div className="text-right">
-            <p className="text-lg font-bold text-gray-900 tabular-nums">{formatPeso(p.claimedAmount ?? 0)}</p>
-            <p className="text-xs text-gray-500">via {p.paymentMethod ?? '—'}</p>
-          </div>
+    <Modal
+      title={`Payment proofs — ${props.order.orderNumber}`}
+      onClose={props.onClose}
+    >
+      <div className="text-sm mb-4 rounded-lg border border-gray-200 bg-gray-50 p-3 space-y-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+          <p className="font-semibold text-gray-900 text-base">{props.order.customerName ?? '—'}</p>
+          <Badge
+            variant="success"
+            title={`${commissionPercentLabel} commission on cash payments`}
+          >
+            {clientType} Client • {commissionPercentLabel} Commission
+          </Badge>
         </div>
-        <p className="text-xs text-gray-600 mt-2">
-          Reference: <span className="font-medium text-gray-800">{p.referenceNumber ?? '—'}</span>
+        <p className="text-gray-600 text-xs">
+          Agent:{' '}
+          <AgentCell agentId={props.order.agentId} agentName={props.order.agentName} className="text-xs" />
         </p>
-        {p.notes ? <p className="text-xs text-gray-600 mt-1 italic">"{p.notes}"</p> : null}
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
-          <span>Uploaded {formatDateTime(p.uploadedAt)} by {p.uploadedBy ?? '—'}</span>
-          <div className="flex items-center gap-2">
-            <a
-              href={p.fileUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 px-2 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-50"
+        <div className="rounded-md border border-gray-200 bg-white p-3 space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+            <div>
+              <p className="text-gray-500">Total commission (all proofs)</p>
+              <p className="font-semibold text-gray-900 tabular-nums text-base">{formatPeso2(commissionSummary.total)}</p>
+            </div>
+            <div>
+              <p className="text-gray-500">To pay out</p>
+              <p className="font-semibold text-amber-700 tabular-nums text-base">{formatPeso2(commissionSummary.pending)}</p>
+              <p className="text-[11px] text-gray-500 mt-0.5">
+                {commissionSummary.pendingCount} commission{commissionSummary.pendingCount === 1 ? '' : 's'} pending
+              </p>
+            </div>
+            <div>
+              <p className="text-gray-500">Total paid out</p>
+              <p className="font-semibold text-green-700 tabular-nums text-base">{formatPeso2(commissionSummary.released)}</p>
+            </div>
+          </div>
+          {props.isExecutive && commissionSummary.pendingCount > 0 ? (
+            <Button
+              size="sm"
+              variant="primary"
+              className="w-full sm:w-auto gap-1.5"
+              disabled={markingAll || releasingId != null}
+              onClick={() => void handleMarkAllPaid()}
             >
-              <Eye className="w-3.5 h-3.5" /> View file
-            </a>
-            {props.canReview ? (
-              <Button size="sm" variant="primary" className="gap-1" onClick={props.onReview}>
-                Review
-              </Button>
-            ) : null}
-          </div>
-        </div>
-        {p.status === 'rejected' && p.rejectionReason ? (
-          <p className="text-xs text-red-700 mt-2">Reason: {p.rejectionReason}</p>
-        ) : null}
-        {p.status === 'verified' && p.verifiedBy ? (
-          <p className="text-xs text-green-700 mt-2">Verified by {p.verifiedBy} on {formatDateTime(p.verifiedAt)}</p>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-function CommissionRowCard(props: { row: AgentCommissionRow; canRelease: boolean; onRelease: () => void }) {
-  const c = props.row;
-  return (
-    <div className="border border-gray-200 rounded-lg p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="font-semibold text-gray-900">{c.agentName ?? c.employeeId.slice(0, 8)}</p>
-          <p className="text-xs text-gray-500 mt-0.5">
-            Period {c.period} · {c.commissionRate.toFixed(2)}% rate
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <div className="text-right">
-            <p className="text-xs text-gray-500">Eligible commission</p>
-            <p className="text-lg font-bold text-gray-900 tabular-nums">{formatPeso2(c.commissionEarned)}</p>
-            <p className="text-[11px] text-gray-500">From {formatPeso(c.salesAmount)} verified payments</p>
-          </div>
-          <Badge variant={commissionStatusVariant(c.status)}>{c.status}</Badge>
-          {props.canRelease ? (
-            <Button size="sm" variant="primary" className="gap-1" onClick={props.onRelease}>
-              <ArrowUpRight className="w-3.5 h-3.5" /> Release
+              {markingAll ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wallet className="w-4 h-4" />}
+              Mark all as paid out
             </Button>
           ) : null}
         </div>
-      </div>
-      {c.breakdown.length > 0 ? (
-        <details className="mt-3">
-          <summary className="text-xs text-blue-600 cursor-pointer">View breakdown ({c.breakdown.length})</summary>
-          <div className="mt-2 overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead className="text-gray-500">
-                <tr className="text-left">
-                  <th className="py-1.5 pr-3">Order</th>
-                  <th className="py-1.5 pr-3">Customer</th>
-                  <th className="py-1.5 pr-3 text-right">Payment</th>
-                  <th className="py-1.5 pr-3 text-right">Commission</th>
-                  <th className="py-1.5 pr-3">Paid at</th>
-                </tr>
-              </thead>
-              <tbody>
-                {c.breakdown.map((b, i) => (
-                  <tr key={i} className="border-t border-gray-100">
-                    <td className="py-1.5 pr-3 font-medium text-gray-900">{b.orderNumber}</td>
-                    <td className="py-1.5 pr-3 text-gray-700">{b.customerName ?? '—'}</td>
-                    <td className="py-1.5 pr-3 text-right tabular-nums">{formatPeso(b.paymentAmount ?? b.saleAmount ?? 0)}</td>
-                    <td className="py-1.5 pr-3 text-right tabular-nums text-green-700">{formatPeso2(b.commission ?? 0)}</td>
-                    <td className="py-1.5 pr-3 text-gray-700">{b.paidAt ? formatDateTime(b.paidAt) : '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </details>
-      ) : null}
-      {c.status === 'Paid' && c.paidDate ? (
-        <p className="text-xs text-green-700 mt-2 flex items-center gap-1">
-          <CheckCircle2 className="w-3.5 h-3.5" /> Released on {formatDate(c.paidDate)}
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
-/* ------------------------------- Modals --------------------------------- */
-
-type PaymentBatch = {
-  id: number;
-  file: File | null;
-  preview: string | null;
-  amount: string;
-  method: typeof PAYMENT_METHODS[number];
-  reference: string;
-  notes: string;
-};
-
-function BatchUploadRow(props: {
-  batch: PaymentBatch;
-  index: number;
-  canRemove: boolean;
-  onChange: (updated: Partial<PaymentBatch>) => void;
-  onRemove: () => void;
-}) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const { batch, index } = props;
-
-  const handleFile = (f: File | null | undefined) => {
-    if (!f) return;
-    if (f.type.startsWith('image/')) {
-      const reader = new FileReader();
-      reader.onloadend = () => props.onChange({ file: f, preview: reader.result as string });
-      reader.readAsDataURL(f);
-    } else {
-      props.onChange({ file: f, preview: null });
-    }
-  };
-
-  return (
-    <div className="border border-gray-200 rounded-lg p-3 space-y-3 bg-gray-50/50">
-      <div className="flex items-center justify-between mb-1">
-        <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Batch {index + 1}</p>
-        {props.canRemove && (
-          <button type="button" onClick={props.onRemove} className="text-gray-400 hover:text-red-500 transition-colors">
-            <X className="w-4 h-4" />
-          </button>
-        )}
-      </div>
-
-      {/* Proof upload */}
-      <div
-        onClick={() => inputRef.current?.click()}
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => { e.preventDefault(); handleFile(e.dataTransfer.files?.[0]); }}
-        className="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50/50 transition-colors"
-      >
-        {batch.preview ? (
-          <img src={batch.preview} alt="proof" className="max-h-28 mx-auto rounded" />
-        ) : batch.file ? (
-          <p className="text-sm text-gray-700 truncate">{batch.file.name}</p>
-        ) : (
-          <>
-            <Upload className="w-6 h-6 text-gray-400 mx-auto mb-1" />
-            <p className="text-xs text-gray-600">Click or drop proof image / PDF</p>
-            <p className="text-[11px] text-gray-400 mt-0.5">Optional</p>
-          </>
-        )}
-        <input ref={inputRef} type="file" accept="image/*,application/pdf" className="hidden"
-          onChange={(e) => handleFile(e.target.files?.[0])} />
-      </div>
-
-      <div className="grid grid-cols-2 gap-2">
-        <Field label="Amount">
-          <input type="number" value={batch.amount} onChange={(e) => props.onChange({ amount: e.target.value })}
-            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" />
-        </Field>
-        <Field label="Method">
-          <select value={batch.method} onChange={(e) => props.onChange({ method: e.target.value as typeof PAYMENT_METHODS[number] })}
-            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none bg-white">
-            {PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
-          </select>
-        </Field>
-        <Field label="Reference #">
-          <input value={batch.reference} onChange={(e) => props.onChange({ reference: e.target.value })}
-            placeholder="OR #, Tx #, Check #"
-            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" />
-        </Field>
-        <Field label="Notes">
-          <input value={batch.notes} onChange={(e) => props.onChange({ notes: e.target.value })}
-            placeholder="Optional"
-            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" />
-        </Field>
-      </div>
-    </div>
-  );
-}
-
-function RecordPaymentModal(props: {
-  order: OutstandingOrderRow;
-  onClose: () => void;
-  onSubmit: (input: {
-    batches: Array<{ file: File | null; amount: number; method: string; reference: string; notes: string }>;
-    creditAmount: number;
-    creditNotes: string;
-  }) => Promise<void>;
-}) {
-  const [batches, setBatches] = useState<PaymentBatch[]>([
-    { id: 1, file: null, preview: null, amount: '', method: 'Bank Transfer', reference: '', notes: '' },
-  ]);
-  const [creditAmount, setCreditAmount] = useState('');
-  const [creditNotes, setCreditNotes] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  let nextId = useRef(2);
-
-  const updateBatch = (id: number, patch: Partial<PaymentBatch>) => {
-    setBatches((prev) => prev.map((b) => (b.id === id ? { ...b, ...patch } : b)));
-  };
-
-  const addBatch = () => {
-    setBatches((prev) => [
-      ...prev,
-      { id: nextId.current++, file: null, preview: null, amount: '', method: 'Bank Transfer', reference: '', notes: '' },
-    ]);
-  };
-
-  const removeBatch = (id: number) => setBatches((prev) => prev.filter((b) => b.id !== id));
-
-  const batchTotal = batches.reduce((sum, b) => sum + (Number(b.amount) || 0), 0);
-  const creditNum = Number(creditAmount) || 0;
-  const combinedTotal = batchTotal + creditNum;
-  const remaining = props.order.balanceDue - combinedTotal;
-
-  const submit = async () => {
-    // Active = any batch that has an amount entered (file is optional)
-    const activeBatches = batches.filter((b) => (Number(b.amount) || 0) > 0);
-    for (const b of activeBatches) {
-      const n = Number(b.amount);
-      if (!Number.isFinite(n) || n <= 0) { window.alert('Each batch needs a valid amount greater than zero.'); return; }
-    }
-    if (activeBatches.length === 0 && creditNum <= 0) {
-      window.alert('Add at least one payment batch or a credit charge.');
-      return;
-    }
-    if (creditNum < 0) { window.alert('Credit amount cannot be negative.'); return; }
-    if (remaining < -0.01) {
-      if (!window.confirm(`Combined amount (${formatPeso(combinedTotal)}) exceeds the balance (${formatPeso(props.order.balanceDue)}). Submit anyway?`)) return;
-    }
-
-    setSubmitting(true);
-    try {
-      await props.onSubmit({
-        batches: activeBatches.map((b) => ({
-          file: b.file ?? null,
-          amount: Number(b.amount),
-          method: b.method,
-          reference: b.reference,
-          notes: b.notes,
-        })),
-        creditAmount: creditNum,
-        creditNotes,
-      });
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <Modal title="Record payment" onClose={props.onClose}>
-      {/* Order summary */}
-      <div className="bg-blue-50 border border-blue-200 rounded-md p-3 text-sm mb-4">
-        <p className="text-blue-900 font-semibold">{props.order.orderNumber}</p>
-        <p className="text-blue-800 text-xs">{props.order.customerName ?? '—'} · {props.order.paymentTerms ?? '—'}</p>
-        <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
-          <div><p className="text-blue-700">Total</p><p className="font-semibold text-blue-900">{formatPeso(props.order.totalAmount)}</p></div>
-          <div><p className="text-blue-700">Paid</p><p className="font-semibold text-blue-900">{formatPeso(props.order.amountPaid)}</p></div>
-          <div><p className="text-blue-700">Balance</p><p className="font-semibold text-blue-900">{formatPeso(props.order.balanceDue)}</p></div>
+        <div className="flex flex-wrap gap-4 text-xs pt-1 border-t border-gray-200">
+          <span>
+            Order total <strong className="text-gray-900">{formatPeso(props.order.totalAmount)}</strong>
+          </span>
+          <span>
+            Paid <strong className="text-green-700">{formatPeso(props.order.amountPaid)}</strong>
+          </span>
+          <Badge variant={paymentStatusVariant(props.order.paymentStatus)}>{props.order.paymentStatus}</Badge>
         </div>
       </div>
 
-      {/* Proof batches */}
-      <div className="space-y-3 mb-4">
-        <div className="flex items-center justify-between">
-          <p className="text-sm font-semibold text-gray-700">Payment Batches</p>
-          <button type="button" onClick={addBatch}
-            className="text-xs font-medium text-blue-600 hover:text-blue-800 flex items-center gap-1">
-            + Add batch
-          </button>
+      {loading ? (
+        <div className="py-10 flex justify-center text-gray-500">
+          <Loader2 className="w-6 h-6 animate-spin" />
         </div>
-        {batches.map((b, i) => (
-          <BatchUploadRow
-            key={b.id}
-            batch={b}
-            index={i}
-            canRemove={batches.length > 1}
-            onChange={(patch) => updateBatch(b.id, patch)}
-            onRemove={() => removeBatch(b.id)}
-          />
-        ))}
-      </div>
+      ) : proofs.length === 0 ? (
+        <p className="text-sm text-gray-500 text-center py-8">No payment proofs on this order.</p>
+      ) : (
+        <div className="space-y-3">
+          {proofs.map((proof) => (
+            <div key={proof.id} className="border border-gray-200 rounded-lg p-3">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="font-medium text-gray-900">{proof.title?.trim() || proof.fileName || 'Payment proof'}</p>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    {formatDateTime(proof.uploadedAt)}
+                    {proof.uploadedBy ? ` · ${proof.uploadedBy}` : ''}
+                  </p>
+                  {proof.userNotes ? (
+                    <p className="text-xs text-gray-600 mt-1.5 italic">Note: {proof.userNotes}</p>
+                  ) : null}
+                </div>
+                {proof.fileUrl ? (
+                  <a
+                    href={proof.fileUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-50"
+                  >
+                    <Eye className="w-3.5 h-3.5" /> View
+                  </a>
+                ) : null}
+              </div>
 
-      {/* Credit charge section */}
-      <div className="border border-purple-200 bg-purple-50 rounded-lg p-3 mb-4 space-y-2">
-        <p className="text-sm font-semibold text-purple-800 flex items-center gap-1.5">
-          <CreditCard className="w-4 h-4" /> Charge to Credit
-        </p>
-        <p className="text-xs text-purple-700">
-          Charges against the customer's credit limit are applied immediately without requiring proof verification.
-          The order will be marked <strong>On Credit</strong> if the balance is fully covered.
-        </p>
-        <div className="grid grid-cols-2 gap-2">
-          <Field label="Credit amount">
-            <input type="number" value={creditAmount} onChange={(e) => setCreditAmount(e.target.value)}
-              placeholder="0"
-              className="w-full px-3 py-2 text-sm border border-purple-300 rounded-md focus:ring-2 focus:ring-purple-500 outline-none" />
-          </Field>
-          <Field label="Notes">
-            <input value={creditNotes} onChange={(e) => setCreditNotes(e.target.value)}
-              placeholder="Optional"
-              className="w-full px-3 py-2 text-sm border border-purple-300 rounded-md focus:ring-2 focus:ring-purple-500 outline-none" />
-          </Field>
-        </div>
-      </div>
+              <div className="mt-2 grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
+                <div>
+                  <p className="text-gray-500">Cash</p>
+                  <p className="font-semibold text-gray-900 tabular-nums">{formatPeso2(proof.cashAmount)}</p>
+                </div>
+                <div>
+                  <p className="text-gray-500">Credit</p>
+                  <p className="font-semibold text-purple-700 tabular-nums">{formatPeso2(proof.creditAmount)}</p>
+                </div>
+                {proof.requiresCommission ? (
+                  <div>
+                    <p className="text-gray-500">Commission</p>
+                    <p className="font-semibold text-blue-700 tabular-nums">{formatPeso2(proof.commissionAmount)}</p>
+                  </div>
+                ) : null}
+              </div>
 
-      {/* Running total */}
-      <div className="rounded-md bg-gray-100 px-3 py-2 text-xs text-gray-700 flex flex-wrap gap-x-4 gap-y-1 mb-4">
-        <span>Batches: <strong>{formatPeso(batchTotal)}</strong></span>
-        {creditNum > 0 && <span>Credit: <strong className="text-purple-700">{formatPeso(creditNum)}</strong></span>}
-        <span>Combined: <strong>{formatPeso(combinedTotal)}</strong></span>
-        <span className={remaining < -0.01 ? 'text-orange-600 font-semibold' : remaining <= 0.01 ? 'text-green-700 font-semibold' : ''}>
-          Remaining: <strong>{formatPeso(Math.max(0, remaining))}</strong>
-        </span>
-      </div>
-
-      <ModalFooter onClose={props.onClose}>
-        <Button variant="primary" onClick={submit} disabled={submitting} className="gap-2">
-          {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-          Submit
-        </Button>
-      </ModalFooter>
-    </Modal>
-  );
-}
-
-function ReviewProofModal(props: {
-  proof: PaymentProofRow;
-  onClose: () => void;
-  onApprove: (values: { amount: number; method: string; reference: string; paidAt: string }) => void;
-  onReject: (reason: string) => void;
-}) {
-  const p = props.proof;
-  const [amount, setAmount] = useState(String(p.claimedAmount ?? p.orderBalance ?? 0));
-  const [method, setMethod] = useState<string>(p.paymentMethod ?? 'Bank Transfer');
-  const [reference, setReference] = useState(p.referenceNumber ?? '');
-  const [paidAt, setPaidAt] = useState<string>(new Date().toISOString().slice(0, 16));
-  const [reason, setReason] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-
-  const approve = async () => {
-    const n = Number(amount);
-    if (!Number.isFinite(n) || n <= 0) {
-      window.alert('Approved amount must be positive.');
-      return;
-    }
-    setSubmitting(true);
-    try {
-      await props.onApprove({ amount: n, method, reference, paidAt });
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const reject = async () => {
-    if (!reason.trim()) {
-      window.alert('Rejection reason is required.');
-      return;
-    }
-    setSubmitting(true);
-    try {
-      await props.onReject(reason);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <Modal title="Review payment proof" onClose={props.onClose}>
-      <div className="grid md:grid-cols-2 gap-4">
-        <a
-          href={p.fileUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="block bg-gray-100 rounded-md overflow-hidden border border-gray-200 max-h-80"
-        >
-          {/^image\//.test(p.fileName ?? '') || /\.(png|jpg|jpeg|webp|gif)$/i.test(p.fileUrl) ? (
-            <img src={p.fileUrl} alt="proof" className="w-full h-full object-contain max-h-80" />
-          ) : (
-            <div className="w-full h-40 flex items-center justify-center text-gray-500">
-              <FileText className="w-10 h-10" />
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-gray-100 pt-3">
+                {proof.requiresCommission ? (
+                  proof.commissionPaidAt ? (
+                    <p className="text-xs text-green-700 flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      Commission paid {formatDateTime(proof.commissionPaidAt)}
+                      {proof.commissionPaidBy ? ` by ${proof.commissionPaidBy}` : ''}
+                    </p>
+                  ) : props.isExecutive ? (
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      disabled={releasingId === proof.id}
+                      onClick={() => void handleRelease(proof)}
+                      className="gap-1"
+                    >
+                      {releasingId === proof.id ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Wallet className="w-3.5 h-3.5" />
+                      )}
+                      Release commission
+                    </Button>
+                  ) : (
+                    <p className="text-xs text-amber-700">Commission pending executive release</p>
+                  )
+                ) : (
+                  <p className="text-xs text-gray-500">Credit only — no agent commission on this proof</p>
+                )}
+              </div>
             </div>
-          )}
-        </a>
-        <div className="text-sm space-y-1">
-          <p className="font-semibold text-gray-900">{p.customerName ?? '—'}</p>
-          <p className="text-gray-600">
-            Order:{' '}
-            <Link to={`/orders/${p.orderId}`} className="text-blue-600 hover:underline">
-              {p.orderNumber ?? p.orderId.slice(0, 8)}
-            </Link>
-          </p>
-          <p className="text-gray-600">Agent: {p.agentName ?? '—'}</p>
-          <p className="text-gray-600">Order total: {formatPeso(p.orderTotal)}</p>
-          <p className="text-gray-600">Outstanding balance: {formatPeso(p.orderBalance)}</p>
-          <p className="text-gray-600">Claimed: {formatPeso(p.claimedAmount ?? 0)} via {p.paymentMethod ?? '—'}</p>
-          {p.notes ? <p className="text-gray-600 italic mt-2">"{p.notes}"</p> : null}
+          ))}
         </div>
+      )}
+
+      <div className="mt-4 pt-3 border-t border-gray-200 flex justify-end">
+        <Button variant="outline" onClick={props.onClose}>Close</Button>
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
-        <Field label="Approved amount">
-          <input
-            type="number"
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none"
-          />
-        </Field>
-        <Field label="Payment method">
-          <select
-            value={method}
-            onChange={(e) => setMethod(e.target.value)}
-            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none bg-white"
-          >
-            {PAYMENT_METHODS.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Reference number">
-          <input
-            value={reference}
-            onChange={(e) => setReference(e.target.value)}
-            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none"
-          />
-        </Field>
-        <Field label="Paid at">
-          <input
-            type="datetime-local"
-            value={paidAt}
-            onChange={(e) => setPaidAt(e.target.value)}
-            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none"
-          />
-        </Field>
-      </div>
-      <div className="mt-4 border-t border-gray-200 pt-4">
-        <Field label="If rejecting, give a reason">
-          <input
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            placeholder="e.g., reference not matching bank slip"
-            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 outline-none"
-          />
-        </Field>
-      </div>
-      <ModalFooter onClose={props.onClose}>
-        <Button variant="outline" onClick={reject} disabled={submitting} className="gap-2 text-red-700 border-red-300 hover:bg-red-50">
-          <XCircle className="w-4 h-4" />
-          Reject
-        </Button>
-        <Button variant="primary" onClick={approve} disabled={submitting} className="gap-2">
-          {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-          Approve & record
-        </Button>
-      </ModalFooter>
     </Modal>
   );
 }
@@ -1582,10 +1204,10 @@ function Modal(props: { title: string; onClose: () => void; children: React.Reac
           <button onClick={props.onClose} className="text-gray-400 hover:text-gray-600">
             <X className="w-5 h-5" />
           </button>
-        </div>
+                </div>
         <div className="p-5 overflow-y-auto flex-1">{props.children}</div>
-      </div>
-    </div>
+              </div>
+            </div>
   );
 }
 
@@ -1593,8 +1215,8 @@ function ModalFooter(props: { onClose: () => void; children: React.ReactNode }) 
   return (
     <div className="mt-5 flex flex-wrap justify-end gap-2">
       <Button variant="outline" onClick={props.onClose}>
-        Cancel
-      </Button>
+                Cancel
+              </Button>
       {props.children}
     </div>
   );

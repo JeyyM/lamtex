@@ -225,6 +225,7 @@ export function OrdersPage() {
 
   const getPaymentBadgeVariant = (status: string): 'success' | 'warning' | 'danger' | 'info' | 'default' | 'neutral' | 'outline' | 'destructive' => {
     if (status === 'Paid') return 'success';
+    if (status === 'On Credit') return 'info';
     if (status === 'Overdue') return 'danger';
     if (['Partially Paid', 'Invoiced'].includes(status)) return 'warning';
     if (status === 'Unbilled') return 'neutral';

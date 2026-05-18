@@ -19,6 +19,7 @@ import { CustomersPage } from './pages/CustomersPageNew';
 import { CustomerDetailPage } from './pages/CustomerDetailPage';
 import { CustomerFormPage } from './pages/CustomerFormPage';
 import { SuppliersPage } from './pages/SuppliersPage';
+import { SupplierDetailPage } from './pages/SupplierDetailPage';
 import { FinancePageNew } from './pages/FinancePageNew';
 import { ReportsPage } from './pages/ReportsPage';
 import SettingsPage from './pages/SettingsPage';
@@ -27,6 +28,7 @@ import { PlaceholderPage } from './pages/PlaceholderPage';
 import { PaymentPage } from './pages/PaymentPage';
 import { PaymentSuccessPage } from './pages/PaymentSuccessPage';
 import { ReceiptPage } from './pages/ReceiptPage';
+import { OrderCustomerViewPage } from './pages/OrderCustomerViewPage';
 import AgentAnalyticsPage from './pages/AgentAnalyticsPage';
 import AgentProfilePage from './pages/AgentProfilePage';
 import EmployeesPage from './pages/EmployeesPage';
@@ -93,6 +95,7 @@ function AppRoutes() {
       <Route path="/pay/:token" element={<PaymentPage />} />
       <Route path="/payment-success/:token" element={<PaymentSuccessPage />} />
       <Route path="/receipt/:id" element={<ReceiptPage />} />
+      <Route path="/order/:token" element={<OrderCustomerViewPage />} />
       
       {/* Protected Routes - Require Auth */}
       <Route path="/" element={<RequireAuth><AppLayout /></RequireAuth>}>
@@ -120,6 +123,7 @@ function AppRoutes() {
             <Route path="customers/new" element={<CustomerFormPage />} />
             <Route path="customers/:id" element={<CustomerDetailPage />} />
             <Route path="customers/:id/edit" element={<CustomerFormPage />} />
+            <Route path="suppliers/:id" element={<SupplierDetailPage />} />
             <Route path="suppliers" element={<SuppliersPage />} />
             <Route path="finance" element={<FinancePageNew />} />
             <Route path="employees" element={<EmployeesPage />} />

@@ -1,20 +1,59 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Navigation } from 'lucide-react';
 import { Button } from '@/src/components/ui/Button';
-import { getGoogleMapsApiKey, loadGoogleMapsJs } from '@/src/lib/maps';
-import { blueCustomerPinIcon } from '@/src/lib/customerMapPinIcon';
+import {
+  getAdvancedMarkerLatLng,
+  getGoogleMapsApiKey,
+  getGoogleMapsMapId,
+  importMapsMarkerLibrary,
+  loadGoogleMapsJs,
+  type AdvancedMarkerLike,
+} from '@/src/lib/maps';
+import { blueCustomerPinImgElement } from '@/src/lib/customerMapPinIcon';
 
 /** Default center (Metro Manila) when no pin is set yet. */
 const DEFAULT_CENTER = { lat: 14.5995, lng: 120.9842 };
 
 export type CompanyMapPickerPinColor = 'default' | 'blue';
 
-function markerIconForPinColor(
-  pinColor: CompanyMapPickerPinColor | undefined,
-): google.maps.Icon | google.maps.Symbol | string | undefined {
+function mainMarkerContent(pinColor: CompanyMapPickerPinColor | undefined): HTMLElement | undefined {
   if (pinColor !== 'blue') return undefined;
-  return blueCustomerPinIcon();
+  return blueCustomerPinImgElement();
 }
+
+/** Place object from Places API (New) — @types/google.maps lags this surface. */
+type NewPlaceInstance = {
+  fetchFields: (opts: { fields: string[] }) => Promise<unknown>;
+  location?: google.maps.LatLng | google.maps.LatLngLiteral | null;
+  viewport?: google.maps.LatLngBounds | null;
+};
+
+type PlacesAutocompleteLib = {
+  AutocompleteSessionToken: new () => unknown;
+  AutocompleteSuggestion: {
+    fetchAutocompleteSuggestions: (req: {
+      input: string;
+      sessionToken: unknown;
+      includedRegionCodes: string[];
+      locationBias?: google.maps.LatLngBounds;
+    }) => Promise<{
+      suggestions?: Array<{
+        placePrediction?: {
+          text: { text: string };
+          toPlace: () => NewPlaceInstance;
+        };
+      }>;
+    }>;
+  };
+};
+
+type SuggestionRow = {
+  label: string;
+  placePrediction: {
+    text: { text: string };
+    toPlace: () => NewPlaceInstance;
+  };
+};
 
 type Props = {
   lat: number | null;
@@ -34,6 +73,17 @@ type Props = {
   referencePin?: { lat: number; lng: number; title?: string } | null;
 };
 
+type AdvancedMarkerCtor = new (opts: Record<string, unknown>) => AdvancedMarkerLike;
+
+function readLatLng(loc: google.maps.LatLng | google.maps.LatLngLiteral): { la: number; ln: number } {
+  if (loc && typeof (loc as google.maps.LatLng).lat === 'function') {
+    const ll = loc as google.maps.LatLng;
+    return { la: ll.lat(), ln: ll.lng() };
+  }
+  const lit = loc as google.maps.LatLngLiteral;
+  return { la: lit.lat, ln: lit.lng };
+}
+
 export function CompanyMapPicker({
   lat,
   lng,
@@ -45,25 +95,27 @@ export function CompanyMapPicker({
   referencePin = null,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const searchInputRef = useRef<HTMLInputElement>(null);
   const mapRef = useRef<google.maps.Map | null>(null);
-  const markerRef = useRef<google.maps.Marker | null>(null);
-  const referenceMarkerRef = useRef<google.maps.Marker | null>(null);
+  const markerRef = useRef<AdvancedMarkerLike | null>(null);
+  const referenceMarkerRef = useRef<AdvancedMarkerLike | null>(null);
+  const advancedMarkerCtorRef = useRef<AdvancedMarkerCtor | null>(null);
   const onPositionChangeRef = useRef(onPositionChange);
   onPositionChangeRef.current = onPositionChange;
 
   const placeMarkerAtRef = useRef<(position: google.maps.LatLngLiteral, pan: boolean) => void>(() => {});
 
+  const sessionTokenRef = useRef<unknown>(null);
+  const suggestRequestIdRef = useRef(0);
+  const searchWrapRef = useRef<HTMLDivElement>(null);
+
   const [loadError, setLoadError] = useState<'missing_key' | 'load_failed' | null>(null);
   const [loading, setLoading] = useState(true);
   const [mapReady, setMapReady] = useState(false);
   const [locating, setLocating] = useState(false);
-  /** Stops Chrome "saved addresses" until the user focuses the field once. */
-  const [mapSearchUnlocked, setMapSearchUnlocked] = useState(false);
-
-  useEffect(() => {
-    if (!mapReady || loading) setMapSearchUnlocked(false);
-  }, [mapReady, loading]);
+  const [searchText, setSearchText] = useState('');
+  const [suggestions, setSuggestions] = useState<SuggestionRow[]>([]);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [suggestBusy, setSuggestBusy] = useState(false);
 
   useEffect(() => {
     const key = getGoogleMapsApiKey();
@@ -77,27 +129,27 @@ export function CompanyMapPicker({
     if (!el) return;
 
     let cancelled = false;
-    let autocomplete: google.maps.places.Autocomplete | undefined;
 
     const placeMarker = (position: google.maps.LatLngLiteral, pan: boolean) => {
       const map = mapRef.current;
-      if (!map) return;
-      const icon = markerIconForPinColor(pinColor);
+      const Adv = advancedMarkerCtorRef.current;
+      if (!map || !Adv) return;
+      const content = mainMarkerContent(pinColor);
       if (markerRef.current) {
-        markerRef.current.setPosition(position);
-        markerRef.current.setIcon(icon as google.maps.Icon | google.maps.Symbol | string | undefined);
-        markerRef.current.setTitle(markerTitle);
+        markerRef.current.position = position;
+        markerRef.current.content = content ?? undefined;
+        markerRef.current.title = markerTitle;
       } else {
-        const marker = new google.maps.Marker({
+        const marker = new Adv({
           map,
           position,
-          draggable: true,
+          gmpDraggable: true,
           title: markerTitle,
-          icon: icon as google.maps.Icon | google.maps.Symbol | string | undefined,
+          ...(content ? { content } : {}),
         });
         marker.addListener('dragend', () => {
-          const p = marker.getPosition();
-          if (p) onPositionChangeRef.current(p.lat(), p.lng());
+          const p = getAdvancedMarkerLatLng(marker);
+          if (p) onPositionChangeRef.current(p.lat, p.lng);
         });
         markerRef.current = marker;
       }
@@ -106,9 +158,11 @@ export function CompanyMapPicker({
       }
     };
 
-    loadGoogleMapsJs()
-      .then(() => {
+    void loadGoogleMapsJs()
+      .then(async () => {
         if (cancelled || !containerRef.current) return;
+        const { AdvancedMarkerElement } = await importMapsMarkerLibrary();
+        advancedMarkerCtorRef.current = AdvancedMarkerElement;
         const hasPin =
           lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng);
         const ref = referencePin;
@@ -123,6 +177,7 @@ export function CompanyMapPicker({
         const map = new google.maps.Map(containerRef.current, {
           center,
           zoom,
+          mapId: getGoogleMapsMapId(),
           mapTypeControl: true,
           streetViewControl: false,
           fullscreenControl: true,
@@ -141,31 +196,6 @@ export function CompanyMapPicker({
           placeMarker({ lat: lat as number, lng: lng as number }, false);
         }
 
-        const searchEl = searchInputRef.current;
-        if (searchEl && google.maps.places?.Autocomplete) {
-          autocomplete = new google.maps.places.Autocomplete(searchEl, {
-            fields: ['geometry', 'formatted_address', 'name'],
-            componentRestrictions: { country: 'ph' },
-          });
-          autocomplete.bindTo('bounds', map);
-          autocomplete.addListener('place_changed', () => {
-            if (cancelled) return;
-            const place = autocomplete!.getPlace();
-            const loc = place.geometry?.location;
-            if (!loc) return;
-            const la = loc.lat();
-            const ln = loc.lng();
-            placeMarker({ lat: la, lng: ln }, true);
-            if (place.geometry?.viewport) {
-              map.fitBounds(place.geometry.viewport);
-            } else {
-              map.setCenter({ lat: la, lng: ln });
-              map.setZoom(16);
-            }
-            onPositionChangeRef.current(la, ln);
-          });
-        }
-
         setMapReady(true);
         setLoading(false);
       })
@@ -181,38 +211,120 @@ export function CompanyMapPicker({
       cancelled = true;
       setMapReady(false);
       placeMarkerAtRef.current = () => {};
-      if (autocomplete) {
-        google.maps.event.clearInstanceListeners(autocomplete);
-      }
-      markerRef.current?.setMap(null);
+      sessionTokenRef.current = null;
+      suggestRequestIdRef.current += 1;
+
+      const m = markerRef.current;
+      if (m) m.map = null;
       markerRef.current = null;
-      referenceMarkerRef.current?.setMap(null);
+      const rm = referenceMarkerRef.current;
+      if (rm) rm.map = null;
       referenceMarkerRef.current = null;
+      advancedMarkerCtorRef.current = null;
       mapRef.current = null;
       if (el) el.innerHTML = '';
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- lat/lng sync in next effect; referencePin synced below
   }, [pinColor, markerTitle, referencePin?.lat, referencePin?.lng]);
 
+  /** Session token for Places autocomplete billing; renewed after each place selection. */
+  useEffect(() => {
+    if (!mapReady || typeof google.maps.importLibrary !== 'function') return;
+    let cancelled = false;
+    void google.maps.importLibrary('places').then((lib) => {
+      if (cancelled) return;
+      const { AutocompleteSessionToken } = lib as unknown as PlacesAutocompleteLib;
+      sessionTokenRef.current = new AutocompleteSessionToken();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [mapReady]);
+
+  useEffect(() => {
+    if (!mapReady || loadError) return;
+    const q = searchText.trim();
+    if (q.length < 2) {
+      setSuggestions([]);
+      setSearchOpen(false);
+      setSuggestBusy(false);
+      return;
+    }
+    const handle = window.setTimeout(() => {
+      void (async () => {
+        const map = mapRef.current;
+        if (!map || typeof google.maps.importLibrary !== 'function') return;
+        const reqId = ++suggestRequestIdRef.current;
+        setSuggestBusy(true);
+        try {
+          const { AutocompleteSuggestion, AutocompleteSessionToken } =
+            (await google.maps.importLibrary('places')) as unknown as PlacesAutocompleteLib;
+          if (!sessionTokenRef.current) {
+            sessionTokenRef.current = new AutocompleteSessionToken();
+          }
+          const bias = map.getBounds() ?? undefined;
+          const { suggestions: raw } = await AutocompleteSuggestion.fetchAutocompleteSuggestions({
+            input: q,
+            sessionToken: sessionTokenRef.current,
+            includedRegionCodes: ['ph'],
+            ...(bias ? { locationBias: bias } : {}),
+          });
+          if (reqId !== suggestRequestIdRef.current) return;
+          const preds = (raw ?? [])
+            .map((s) => s.placePrediction)
+            .filter(
+              (p): p is NonNullable<typeof p> =>
+                Boolean(p && typeof p.toPlace === 'function' && p.text?.text),
+            );
+          const rows: SuggestionRow[] = preds.map((p) => ({
+            label: p.text.text,
+            placePrediction: p,
+          }));
+          setSuggestions(rows);
+          setSearchOpen(rows.length > 0);
+        } catch {
+          if (reqId !== suggestRequestIdRef.current) return;
+          setSuggestions([]);
+          setSearchOpen(false);
+        } finally {
+          if (reqId === suggestRequestIdRef.current) setSuggestBusy(false);
+        }
+      })();
+    }, 280);
+    return () => clearTimeout(handle);
+  }, [searchText, mapReady, loadError]);
+
+  useEffect(() => {
+    if (!searchOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      const w = searchWrapRef.current;
+      if (w && !w.contains(e.target as Node)) setSearchOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [searchOpen]);
+
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !mapReady) return;
+    const Adv = advancedMarkerCtorRef.current;
+    if (!map || !mapReady || !Adv) return;
     const ref = referencePin;
     if (!ref || !Number.isFinite(ref.lat) || !Number.isFinite(ref.lng)) {
-      referenceMarkerRef.current?.setMap(null);
-      referenceMarkerRef.current = null;
+      if (referenceMarkerRef.current) {
+        referenceMarkerRef.current.map = null;
+        referenceMarkerRef.current = null;
+      }
       return;
     }
     const pos = { lat: ref.lat, lng: ref.lng };
     const title = ref.title?.trim() || 'Store / HQ';
     if (referenceMarkerRef.current) {
-      referenceMarkerRef.current.setPosition(pos);
-      referenceMarkerRef.current.setTitle(title);
+      referenceMarkerRef.current.position = pos;
+      referenceMarkerRef.current.title = title;
     } else {
-      referenceMarkerRef.current = new google.maps.Marker({
+      referenceMarkerRef.current = new Adv({
         map,
         position: pos,
-        draggable: false,
         title,
         zIndex: 1,
       });
@@ -226,44 +338,82 @@ export function CompanyMapPicker({
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map) return;
+    const Adv = advancedMarkerCtorRef.current;
+    if (!map || !mapReady || !Adv) return;
     const hasPin = lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng);
     if (!hasPin) {
-      markerRef.current?.setMap(null);
-      markerRef.current = null;
+      if (markerRef.current) {
+        markerRef.current.map = null;
+        markerRef.current = null;
+      }
       return;
     }
 
     const position = { lat: lat as number, lng: lng as number };
-    const icon = markerIconForPinColor(pinColor);
+    const content = mainMarkerContent(pinColor);
     if (markerRef.current) {
-      const cur = markerRef.current.getPosition();
-      if (
+      const cur = getAdvancedMarkerLatLng(markerRef.current);
+      const samePos =
         cur &&
-        Math.abs(cur.lat() - position.lat) < 1e-8 &&
-        Math.abs(cur.lng() - position.lng) < 1e-8
-      ) {
+        Math.abs(cur.lat - position.lat) < 1e-8 &&
+        Math.abs(cur.lng - position.lng) < 1e-8;
+      if (samePos) {
+        markerRef.current.content = content ?? undefined;
+        markerRef.current.title = markerTitle;
         return;
       }
-      markerRef.current.setPosition(position);
-      markerRef.current.setIcon(icon as google.maps.Icon | google.maps.Symbol | string | undefined);
-      markerRef.current.setTitle(markerTitle);
+      markerRef.current.position = position;
+      markerRef.current.content = content ?? undefined;
+      markerRef.current.title = markerTitle;
       map.panTo(position);
     } else {
-      const marker = new google.maps.Marker({
+      const marker = new Adv({
         map,
         position,
-        draggable: true,
+        gmpDraggable: true,
         title: markerTitle,
-        icon: icon as google.maps.Icon | google.maps.Symbol | string | undefined,
+        ...(content ? { content } : {}),
       });
       marker.addListener('dragend', () => {
-        const p = marker.getPosition();
-        if (p) onPositionChangeRef.current(p.lat(), p.lng());
+        const p = getAdvancedMarkerLatLng(marker);
+        if (p) onPositionChangeRef.current(p.lat, p.lng);
       });
       markerRef.current = marker;
     }
-  }, [lat, lng, pinColor, markerTitle]);
+  }, [lat, lng, pinColor, markerTitle, mapReady]);
+
+  const searchListboxId = `${searchInputId}-listbox`;
+
+  const handlePickSuggestion = async (row: SuggestionRow) => {
+    const map = mapRef.current;
+    if (!map) return;
+    try {
+      const place = row.placePrediction.toPlace();
+      await place.fetchFields({ fields: ['location', 'viewport'] });
+      const loc = place.location;
+      if (!loc) return;
+      const { la, ln } = readLatLng(loc);
+      placeMarkerAtRef.current({ lat: la, lng: ln }, true);
+      const vp = place.viewport;
+      if (vp) {
+        map.fitBounds(vp);
+      } else {
+        map.setCenter({ lat: la, lng: ln });
+        map.setZoom(16);
+      }
+      onPositionChangeRef.current(la, ln);
+      setSearchText(row.label);
+      setSuggestions([]);
+      setSearchOpen(false);
+      if (typeof google.maps.importLibrary === 'function') {
+        const { AutocompleteSessionToken } =
+          (await google.maps.importLibrary('places')) as unknown as PlacesAutocompleteLib;
+        sessionTokenRef.current = new AutocompleteSessionToken();
+      }
+    } catch {
+      /* Places fetch failed — ignore */
+    }
+  };
 
   const handleUseCurrentLocation = () => {
     if (!navigator.geolocation) {
@@ -319,27 +469,55 @@ export function CompanyMapPicker({
   return (
     <div className="space-y-3">
       <div className="flex flex-col gap-2 lg:flex-row lg:items-end">
-        <div className="min-w-0 flex-1" role="search">
+        <div className="company-map-picker-search min-w-0 flex-1" role="search">
           <label htmlFor={searchInputId} className="mb-1 block text-sm font-medium text-gray-700">
             Search
           </label>
-          <input
-            id={searchInputId}
-            ref={searchInputRef}
-            type="search"
-            name={searchInputName}
-            autoComplete="off"
-            autoCorrect="off"
-            autoCapitalize="off"
-            spellCheck={false}
-            readOnly={!mapSearchUnlocked}
-            onFocus={() => setMapSearchUnlocked(true)}
-            placeholder="e.g. Ayala Avenue Makati"
-            disabled={loading || !mapReady}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-red-500 focus:outline-none focus:ring-1 focus:ring-red-500 disabled:bg-gray-100"
-            data-lpignore="true"
-            data-1p-ignore
-          />
+          <div
+            ref={searchWrapRef}
+            className="company-map-picker-search-host relative w-full min-h-[42px] rounded-lg border border-gray-300 bg-white text-gray-900 [color-scheme:light] focus-within:border-red-500 focus-within:ring-1 focus-within:ring-red-500"
+          >
+            <input
+              id={searchInputId}
+              name={searchInputName}
+              type="search"
+              autoComplete="off"
+              placeholder="e.g. Ayala Avenue Makati"
+              aria-autocomplete="list"
+              aria-expanded={searchOpen}
+              aria-controls={searchListboxId}
+              role="combobox"
+              disabled={loading || !mapReady}
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              className="company-map-picker-search-input h-[42px] w-full rounded-lg border-0 bg-transparent px-3 py-2 text-gray-900 placeholder:text-gray-500 outline-none focus:ring-0 disabled:cursor-not-allowed disabled:bg-gray-100"
+            />
+            {suggestBusy && (
+              <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">
+                …
+              </span>
+            )}
+            {searchOpen && suggestions.length > 0 && (
+              <ul
+                id={searchListboxId}
+                role="listbox"
+                className="company-map-picker-suggestions absolute left-0 right-0 top-full z-[10001] mt-1 max-h-60 overflow-auto rounded-lg border border-gray-200 bg-white py-1 text-sm shadow-lg"
+              >
+                {suggestions.map((row, idx) => (
+                  <li key={`${row.label}-${idx}`} role="option">
+                    <button
+                      type="button"
+                      className="w-full px-3 py-2 text-left text-gray-900 hover:bg-gray-100 focus:bg-gray-100 focus:outline-none"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => void handlePickSuggestion(row)}
+                    >
+                      {row.label}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </div>
         <Button
           type="button"

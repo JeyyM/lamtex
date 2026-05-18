@@ -63,10 +63,10 @@ DO $$ BEGIN CREATE TYPE order_log_action AS ENUM (
   'item_added', 'item_removed', 'item_quantity_changed', 'item_price_changed',
   'discount_applied', 'approved', 'rejected', 'shipped', 'delivered', 'cancelled',
   'payment_received', 'invoice_generated', 'note_added',
-  'proof_uploaded', 'proof_verified', 'proof_rejected'
+  'proof_uploaded', 'proof_verified', 'proof_rejected', 'proof_updated', 'proof_removed'
 ); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE order_log_role AS ENUM ('Agent', 'Warehouse Staff', 'Manager', 'Admin', 'System', 'Logistics'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN CREATE TYPE proof_type AS ENUM ('delivery', 'payment', 'receipt'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE proof_type AS ENUM ('delivery', 'payment', 'receipt', 'other'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE proof_status AS ENUM ('pending', 'verified', 'rejected'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE proof_uploader_role AS ENUM ('Agent', 'Customer', 'Logistics'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
@@ -492,6 +492,14 @@ CREATE TABLE IF NOT EXISTS suppliers (
   risk_level               TEXT        NOT NULL DEFAULT 'Low'
                              CHECK (risk_level IN ('Low','Medium','High')),
   notes                    TEXT,
+
+  address                  TEXT,
+  city                     TEXT,
+  province                 TEXT,
+  postal_code              VARCHAR(20),
+  map_lat                  NUMERIC(10,7),
+  map_lng                  NUMERIC(10,7),
+
   created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -1164,6 +1172,12 @@ CREATE TABLE IF NOT EXISTS order_proof_documents (
   verified_at     TIMESTAMPTZ,
   rejection_reason TEXT,
   notes           TEXT,
+  title           VARCHAR(500),
+  payment_cash_amount   NUMERIC(14,2) DEFAULT 0,
+  payment_credit_amount NUMERIC(14,2) DEFAULT 0,
+  payment_adjustment    NUMERIC(14,2) DEFAULT 0,
+  commission_paid_at    TIMESTAMPTZ,
+  commission_paid_by    VARCHAR(200),
   uploaded_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

@@ -78,7 +78,14 @@ export function orderLogCardHeadline(log: OrderLog): string {
   if (log.action === 'proof_uploaded') {
     if (d.toLowerCase().startsWith('proof of delivery')) return 'Proof of delivery added.';
     if (d.toLowerCase().startsWith('proof of payment')) return 'Proof of payment added.';
-    if (d.toLowerCase().startsWith('receipt')) return 'Receipt / proof document added.';
+    if (d.toLowerCase().startsWith('other document')) return 'Other document added.';
+    if (d.toLowerCase().startsWith('receipt')) return 'Document added.';
+  }
+  if (log.action === 'proof_updated') {
+    return 'Document proof updated.';
+  }
+  if (log.action === 'proof_removed') {
+    return 'Document proof removed.';
   }
 
   if (log.action === 'rejected') {
@@ -211,16 +218,31 @@ function receivedLinesFromLog(log: OrderLog): string[] {
 }
 
 function proofSectionLines(log: OrderLog): string[] {
-  if (log.action !== 'proof_uploaded') return [];
-  const meta = asRecord(log.metadata);
-  if (!meta) return [];
-  const lines: string[] = [];
-  if (typeof meta.count === 'number') lines.push(`${meta.count} file(s) attached.`);
-  const names = strVal(meta.fileNames);
-  if (names) lines.push(`Files: ${names}.`);
-  const src = strVal(meta.source);
-  if (src) lines.push(`Source: ${src.replace(/_/g, ' ')}.`);
-  return lines;
+  if (log.action === 'proof_uploaded') {
+    const meta = asRecord(log.metadata);
+    if (!meta) return [];
+    const lines: string[] = [];
+    if (typeof meta.count === 'number') lines.push(`${meta.count} file(s) attached.`);
+    const names = strVal(meta.fileNames);
+    if (names) lines.push(`Files: ${names}.`);
+    const src = strVal(meta.source);
+    if (src) lines.push(`Source: ${src.replace(/_/g, ' ')}.`);
+    const typ = strVal(meta.type);
+    if (typ) lines.push(`Category: ${typ}.`);
+    return lines;
+  }
+  if (log.action === 'proof_updated') {
+    const nx = strVal(asRecord(log.newValue)?.title);
+    if (nx) return [`New title: “${nx}”.`];
+    return [];
+  }
+  if (log.action === 'proof_removed') {
+    const meta = asRecord(log.metadata);
+    const fn = strVal(meta?.fileName);
+    if (fn) return [`Removed file: ${fn}.`];
+    return [];
+  }
+  return [];
 }
 
 export function buildOrderLogLaymanSections(log: OrderLog): LaymanSection[] {
@@ -265,12 +287,19 @@ export function buildOrderLogLaymanSections(log: OrderLog): LaymanSection[] {
 
   const proofLines = proofSectionLines(log);
   if (proofLines.length) {
-    const dl = log.description?.toLowerCase() ?? '';
-    const heading = dl.includes('payment')
-      ? 'Proof of payment'
-      : dl.includes('receipt')
-        ? 'Receipt or document'
-        : 'Proof of delivery';
+    let heading = 'Proof of delivery';
+    if (log.action === 'proof_uploaded') {
+      const dl = log.description?.toLowerCase() ?? '';
+      heading = dl.includes('payment')
+        ? 'Proof of payment'
+        : dl.includes('other document')
+          ? 'Other document'
+          : 'Proof of delivery';
+    } else if (log.action === 'proof_updated') {
+      heading = 'Proof updated';
+    } else if (log.action === 'proof_removed') {
+      heading = 'Proof removed';
+    }
     out.push({ heading, lines: proofLines });
   }
 

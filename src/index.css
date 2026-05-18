@@ -47,7 +47,17 @@
   }
 }
 
-/* Google Places Autocomplete panel above stacked cards / modals */
+/* Google Places: legacy .pac-container above modals (other pickers may still use it) */
 .pac-container {
   z-index: 10000 !important;
+}
+
+/* Native map search input — readable under OS dark mode */
+.company-map-picker-search-host {
+  color-scheme: light;
+}
+
+.company-map-picker-search-input {
+  background-color: #ffffff;
+  color: #111827;
 }

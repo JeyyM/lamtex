@@ -9,6 +9,17 @@ const CHART_EXCLUDED_ORDER_STATUSES = new Set(['Cancelled', 'Rejected', 'Draft']
 
 export type MonthlyMovementChartRow = { month: string; qty: number };
 
+/** Calendar YYYY-MM from a Postgres date / ISO string (avoids UTC day-shift skewing the month). */
+export function consumptionCalendarMonthKey(consumptionDate: string | null | undefined): string | null {
+  if (consumptionDate == null || consumptionDate === '') return null;
+  const head = String(consumptionDate).slice(0, 10);
+  const m = /^(\d{4})-(\d{2})/.exec(head);
+  if (m) return `${m[1]}-${m[2]}`;
+  const d = new Date(consumptionDate);
+  if (Number.isNaN(d.getTime())) return null;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
 /** PHP revenue per calendar month from order lines (uses `line_total` when set, else qty × unit_price). */
 export type MonthlyRevenueChartRow = { month: string; revenue: number };
 
@@ -294,9 +305,8 @@ export async function fetchMaterialMonthlyUsageFromConsumption(
     if (!r.consumption_date) continue;
     const q = Number(r.quantity_consumed) || 0;
     if (q <= 0) continue;
-    const od = new Date(r.consumption_date);
-    const ymk = `${od.getFullYear()}-${String(od.getMonth() + 1).padStart(2, '0')}`;
-    if (!monthSet.has(ymk)) continue;
+    const ymk = consumptionCalendarMonthKey(r.consumption_date);
+    if (!ymk || !monthSet.has(ymk)) continue;
     agg.set(ymk, (agg.get(ymk) || 0) + q);
   }
 

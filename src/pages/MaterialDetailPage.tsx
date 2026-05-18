@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
@@ -90,6 +90,87 @@ interface MaterialStockRow {
   branches: { code: string; name: string } | null;
 }
 
+interface LinkedVariantRow {
+  pvrId: string;
+  quantityNeeded: number;
+  uom: string | null;
+  variantId: string;
+  sku: string;
+  size: string;
+  productId: string;
+  productName: string;
+  categorySlug: string | null;
+}
+
+interface MaterialSupplierRow {
+  smId: string;
+  unitPrice: number;
+  leadTimeDays: number;
+  minOrderQty: number;
+  isCatalogPreferred: boolean;
+  supplierId: string;
+  name: string;
+  paymentTerms: string | null;
+  supplierPreferred: boolean;
+  status: string;
+}
+
+function MaterialSupplierCatalogueCards({ suppliers }: { suppliers: MaterialSupplierRow[] }) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+      {suppliers.map(sup => (
+        <Link
+          key={sup.smId}
+          to={`/suppliers/${encodeURIComponent(sup.supplierId)}`}
+          title="View supplier"
+          className="group rounded-xl border border-indigo-100 bg-white p-4 shadow-sm flex flex-col gap-2 cursor-pointer hover:border-indigo-300 hover:shadow-md transition-all focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-1"
+        >
+          <div className="flex gap-2 items-start">
+            <p className="min-w-0 flex-1 text-sm font-semibold text-indigo-900 leading-tight group-hover:underline">
+              {sup.name}
+            </p>
+            <div className="flex shrink-0 flex-col items-end gap-1 self-start">
+              {sup.isCatalogPreferred && (
+                <Badge variant="default" className="text-[10px] bg-amber-100 text-amber-800 border-amber-200">
+                  Cat. preferred
+                </Badge>
+              )}
+              {sup.supplierPreferred && (
+                <Badge variant="default" className="text-[10px] bg-slate-100 text-slate-700">
+                  Preferred supplier
+                </Badge>
+              )}
+            </div>
+          </div>
+          <p className="text-xs text-gray-500">Listed net price</p>
+          <p className="text-lg font-bold text-indigo-700">₱{sup.unitPrice.toLocaleString()}</p>
+          <div className="grid grid-cols-2 gap-2 text-xs text-gray-600 pt-1 border-t border-gray-100">
+            <div>
+              <span className="text-gray-400 block">Lead time</span>
+              <span className="font-medium">{sup.leadTimeDays} days</span>
+            </div>
+            <div>
+              <span className="text-gray-400 block">Min. order</span>
+              <span className="font-medium">{sup.minOrderQty.toLocaleString()}</span>
+            </div>
+            {sup.paymentTerms && (
+              <div className="col-span-2">
+                <span className="text-gray-400">Est. terms / delivery</span>
+                <span className="ml-1 font-medium text-gray-800">{sup.paymentTerms}</span>
+              </div>
+            )}
+            <div className="col-span-2">
+              <span className={`text-[11px] px-1.5 py-0.5 rounded ${sup.status === 'Active' ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                {sup.status}
+              </span>
+            </div>
+          </div>
+        </Link>
+      ))}
+    </div>
+  );
+}
+
 interface RawMaterialRow {
   id: string;
   name: string;
@@ -128,29 +209,6 @@ export function MaterialDetailPage() {
   /** '' = all PO statuses in purchase order history */
   const [headerPoHistoryStatusFilter, setHeaderPoHistoryStatusFilter] = useState('');
 
-  interface LinkedVariantRow {
-    pvrId: string;
-    quantityNeeded: number;
-    uom: string | null;
-    variantId: string;
-    sku: string;
-    size: string;
-    productId: string;
-    productName: string;
-    categorySlug: string | null;
-  }
-  interface MaterialSupplierRow {
-    smId: string;
-    unitPrice: number;
-    leadTimeDays: number;
-    minOrderQty: number;
-    isCatalogPreferred: boolean;
-    supplierId: string;
-    name: string;
-    paymentTerms: string | null;
-    supplierPreferred: boolean;
-    status: string;
-  }
   const [linkedVariants, setLinkedVariants]   = useState<LinkedVariantRow[]>([]);
   const [materialSuppliers, setMaterialSuppliers] = useState<MaterialSupplierRow[]>([]);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
@@ -336,23 +394,35 @@ export function MaterialDetailPage() {
   }, [id]);
 
   useEffect(() => {
-    if (activeTab === 'analytics' && id) fetchAnalyticsLinks();
+    if ((activeTab === 'overview' || activeTab === 'analytics') && id) fetchAnalyticsLinks();
   }, [activeTab, id, fetchAnalyticsLinks]);
 
   /** Monthly series from `material_consumption` (BOM / production), for Analytics usage chart. */
   const [consumptionMonthlySeries, setConsumptionMonthlySeries] = useState<MonthlyMovementChartRow[]>([]);
   const [consumptionSeriesLoading, setConsumptionSeriesLoading] = useState(false);
+  /** When branch filter returns no points but other sites have BOM consumption, we show all branches and set this true. */
+  const [bomUsageAllBranches, setBomUsageAllBranches] = useState(false);
 
   useEffect(() => {
     if (activeTab !== 'analytics' || !id) return;
     let cancelled = false;
     void (async () => {
       setConsumptionSeriesLoading(true);
+      setBomUsageAllBranches(false);
       const bCode = await resolveBranchCode(selectedBranch ?? null);
       if (cancelled) return;
-      const rows = await fetchMaterialMonthlyUsageFromConsumption(id, bCode);
+      let rows = await fetchMaterialMonthlyUsageFromConsumption(id, bCode);
+      let allBranchFallback = false;
+      if (rows.length === 0 && bCode) {
+        const allRows = await fetchMaterialMonthlyUsageFromConsumption(id, null);
+        if (!cancelled && allRows.length > 0) {
+          rows = allRows;
+          allBranchFallback = true;
+        }
+      }
       if (!cancelled) {
         setConsumptionMonthlySeries(rows);
+        setBomUsageAllBranches(allBranchFallback);
         setConsumptionSeriesLoading(false);
       }
     })();
@@ -365,10 +435,6 @@ export function MaterialDetailPage() {
     if (!material) {
       return [] as { month: string; actual: number | null; forecast: number | null }[];
     }
-    const y = new Date().getFullYear();
-    const m0 = new Date().getMonth();
-    const mLab = (d: Date) => d.toLocaleDateString('en-PH', { month: 'short', year: '2-digit' });
-
     if (consumptionMonthlySeries.length > 0) {
       return consumptionMonthlySeries.map((r) => ({
         month: r.month,
@@ -376,22 +442,29 @@ export function MaterialDetailPage() {
         forecast: null as number | null,
       }));
     }
-
-    const uRows: { month: string; actual: number | null; forecast: number | null }[] = [];
-    for (let i = 0; i < 12; i++) {
-      const d = new Date(y, m0 - 11 + i, 1);
-      const t = 0.72 + 0.02 * (i % 5) + 0.01 * i;
-      uRows.push({ month: mLab(d), actual: material.monthly_consumption * t, forecast: null });
-    }
-    return uRows;
+    return [];
   }, [material, consumptionMonthlySeries]);
 
   const usageHasConsumptionData = consumptionMonthlySeries.length > 0;
 
-  /** Price = monthly avg unit price from PO lines (unchanged). */
-  const { priceHistoryData, priceHasPoData } = useMemo(() => {
+  /** Analytics summary numbers only from logged BOM consumption (not the material.monthly_consumption field). */
+  const analyticsConsumptionFromBom = useMemo(() => {
+    if (!material || consumptionMonthlySeries.length === 0) return null;
+    const total = consumptionMonthlySeries.reduce((s, r) => s + (Number(r.qty) || 0), 0);
+    const n = consumptionMonthlySeries.length;
+    const avgMonthly = n > 0 ? total / n : 0;
+    const daily = avgMonthly / 30;
+    const stock = Number(material.total_stock) || 0;
+    const reorder = Number(material.reorder_point) || 0;
+    const daysUntilReorder =
+      daily > 0 ? Math.max(0, Math.floor((stock - reorder) / daily)) : null;
+    return { avgMonthly, yearlyProjection: avgMonthly * 12, daysUntilReorder };
+  }, [material, consumptionMonthlySeries]);
+
+  /** Monthly unit price: PO line averages when present; else catalog cost from activity log (material_updated / cost_synced_from_po). */
+  const { priceHistoryData, hasPriceHistory: priceHasPoData } = useMemo(() => {
     if (!material) {
-      return { priceHistoryData: [] as { month: string; price: number | null }[], priceHasPoData: false };
+      return { priceHistoryData: [] as { month: string; price: number | null }[], hasPriceHistory: false };
     }
 
     const pAgg = new Map<string, { sum: number; n: number }>();
@@ -408,6 +481,21 @@ export function MaterialDetailPage() {
       }
     }
 
+    /** Latest catalog cost in each month from activity log (chronological last wins within the month). */
+    const logPriceByMonth = new Map<string, number>();
+    const logsChrono = [...materialLogRows].sort(
+      (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+    );
+    for (const log of logsChrono) {
+      if (log.action !== 'material_updated' && log.action !== 'cost_synced_from_po') continue;
+      const nv = log.new_value;
+      if (nv == null || typeof nv !== 'object' || Array.isArray(nv)) continue;
+      const cpu = Number((nv as Record<string, unknown>).cost_per_unit);
+      if (!Number.isFinite(cpu) || cpu <= 0) continue;
+      const key = log.created_at.slice(0, 7);
+      logPriceByMonth.set(key, Math.round(cpu * 100) / 100);
+    }
+
     const y = new Date().getFullYear();
     const m0 = new Date().getMonth();
     const mKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -418,29 +506,27 @@ export function MaterialDetailPage() {
       const d = new Date(y, m0 - k, 1);
       const key = mKey(d);
       const ag = pAgg.get(key);
-      pRows.push({
-        month: mLab(d),
-        price: ag && ag.n > 0 ? Math.round((ag.sum / ag.n) * 100) / 100 : null,
-      });
-    }
-    const priceFromPo = pRows.some(r => r.price != null);
-    if (!priceFromPo && material.cost_per_unit > 0) {
-      for (let i = 0; i < pRows.length; i++) {
-        pRows[i].price = material.cost_per_unit;
+      const logP = logPriceByMonth.get(key);
+      let price: number | null = null;
+      if (ag && ag.n > 0) {
+        price = Math.round((ag.sum / ag.n) * 100) / 100;
+      } else if (logP != null) {
+        price = logP;
       }
-    } else if (priceFromPo) {
-      const i0 = pRows.findIndex(r => r.price != null);
-      if (i0 > 0) pRows.splice(0, i0);
+      pRows.push({ month: mLab(d), price });
     }
-    if (!priceFromPo && material.cost_per_unit > 0 && pRows.length > 12) {
-      pRows.splice(0, pRows.length - 12);
+    const hasPriceHistory = pRows.some(r => r.price != null);
+    if (!hasPriceHistory) {
+      return { priceHistoryData: [] as { month: string; price: number | null }[], hasPriceHistory: false };
     }
+    const i0 = pRows.findIndex(r => r.price != null);
+    if (i0 > 0) pRows.splice(0, i0);
 
     return {
       priceHistoryData: pRows,
-      priceHasPoData: priceFromPo,
+      hasPriceHistory: true,
     };
-  }, [material, poHistory]);
+  }, [material, poHistory, materialLogRows]);
 
   const handleHistorySort = (key: string) => {
     if (historySortKey === key) {
@@ -603,6 +689,9 @@ export function MaterialDetailPage() {
     );
   }
 
+  const monthlyConsumptionValue = Number(material.monthly_consumption) || 0;
+  const hasMonthlyConsumptionData = monthlyConsumptionValue > 0;
+
   const getStatusColor = (status: MaterialStatus): 'success' | 'warning' | 'danger' | 'default' => {
     if (status === 'Active') return 'success';
     if (status === 'Low Stock') return 'warning';
@@ -631,7 +720,7 @@ export function MaterialDetailPage() {
   };
 
   const currentStock = getStockForBranch();
-  const avgDailyUsage = material.monthly_consumption / 30;
+  const avgDailyUsage = hasMonthlyConsumptionData ? monthlyConsumptionValue / 30 : 0;
   const daysOfCover = avgDailyUsage > 0 ? currentStock / avgDailyUsage : Infinity;
 
   // Prepare chart data — dynamic from material_stock rows
@@ -889,8 +978,10 @@ export function MaterialDetailPage() {
                   </div>
                   <div>
                     <p className="text-sm text-gray-500">Monthly Consumption</p>
-                    <p className="text-2xl font-bold text-gray-900">
-                      {material.monthly_consumption.toLocaleString()}
+                    <p className={`text-2xl font-bold ${hasMonthlyConsumptionData ? 'text-gray-900' : 'text-gray-400 font-normal'}`}>
+                      {hasMonthlyConsumptionData
+                        ? `${monthlyConsumptionValue.toLocaleString()} ${material.unit_of_measure}`
+                        : '—'}
                     </p>
                   </div>
                 </div>
@@ -1055,11 +1146,19 @@ export function MaterialDetailPage() {
               <div className="space-y-3">
                 <div className="flex justify-between py-2 border-b border-gray-100">
                   <span className="text-sm font-medium text-gray-500">Monthly Consumption</span>
-                  <span className="text-sm text-gray-900">{material.monthly_consumption.toLocaleString()} {material.unit_of_measure}</span>
+                  <span className={`text-sm ${hasMonthlyConsumptionData ? 'text-gray-900' : 'text-gray-400'}`}>
+                    {hasMonthlyConsumptionData
+                      ? `${monthlyConsumptionValue.toLocaleString()} ${material.unit_of_measure}`
+                      : '—'}
+                  </span>
                 </div>
                 <div className="flex justify-between py-2 border-b border-gray-100">
                   <span className="text-sm font-medium text-gray-500">Yearly Consumption</span>
-                  <span className="text-sm text-gray-900">{(material.monthly_consumption * 12).toLocaleString()} {material.unit_of_measure}</span>
+                  <span className={`text-sm ${hasMonthlyConsumptionData ? 'text-gray-900' : 'text-gray-400'}`}>
+                    {hasMonthlyConsumptionData
+                      ? `${(monthlyConsumptionValue * 12).toLocaleString()} ${material.unit_of_measure}`
+                      : '—'}
+                  </span>
                 </div>
                 <div className="flex justify-between py-2 border-b border-gray-100">
                   <span className="text-sm font-medium text-gray-500">Reorder Point</span>
@@ -1073,6 +1172,33 @@ export function MaterialDetailPage() {
             </CardContent>
           </Card>
           </div>
+
+          <Card className="border-indigo-100 bg-gradient-to-b from-indigo-50/40 to-white">
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Truck className="w-5 h-5 text-indigo-600" />
+                Where to order
+              </CardTitle>
+              <p className="text-xs text-gray-500 font-normal">
+                Suppliers you can purchase this raw material from, with pricing and lead times. Manage links on each supplier's page.
+              </p>
+            </CardHeader>
+            <CardContent>
+              {analyticsLoading ? (
+                <div className="flex items-center gap-2 text-sm text-gray-400 py-4">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Loading suppliers…
+                </div>
+              ) : materialSuppliers.length === 0 ? (
+                <p className="text-sm text-gray-500">
+                  No suppliers linked to this material yet. Add this material under{' '}
+                  <span className="font-medium text-gray-700">Suppliers</span> to show where to order it.
+                </p>
+              ) : (
+                <MaterialSupplierCatalogueCards suppliers={materialSuppliers} />
+              )}
+            </CardContent>
+          </Card>
 
           <EntityActivityLogCard
             logs={materialLogRows}
@@ -1317,7 +1443,7 @@ export function MaterialDetailPage() {
       {/* Tab Content - Analytics */}
       {activeTab === 'analytics' && (
         <div className="space-y-6">
-          {/* Usage history: BOM consumption (material_consumption); fallback model from monthly_consumption */}
+          {/* Usage history: BOM consumption (material_consumption) only */}
           <Card>
             <CardHeader>
               <CardTitle className="text-base flex items-center gap-2">
@@ -1326,21 +1452,29 @@ export function MaterialDetailPage() {
               </CardTitle>
               {usageHasConsumptionData ? (
                 <p className="text-xs text-gray-500 font-normal mt-1">
-                  Monthly <strong>BOM consumption</strong> (production and finished-good stock adds).{' '}
-                  {selectedBranch ? 'Uses the selected branch only.' : null}
+                  Monthly <strong>BOM consumption</strong> logged when production consumes materials (same source as product
+                  BOM deductions).{' '}
+                  {bomUsageAllBranches && selectedBranch
+                    ? `Showing all branches — no consumption rows tagged for ${selectedBranch} in this window.`
+                    : selectedBranch
+                      ? `Filtered to site code for ${selectedBranch}.`
+                      : 'All branches.'}
                 </p>
-              ) : (
-                <p className="text-xs text-amber-800/90 font-normal mt-1 bg-amber-50/80 border border-amber-100 rounded-lg px-2 py-1.5">
-                  No BOM consumption logged yet for this material — showing a <strong>model trend</strong> from the
-                  material&apos;s monthly consumption field. Usage appears after production runs or finished-good stock
-                  adds that apply BOM deductions.
+              ) : !consumptionSeriesLoading ? (
+                <p className="text-xs text-gray-500 font-normal mt-1">
+                  BOM usage appears after production posts <strong>material_consumption</strong> for this material. If your
+                  plant uses another branch in the header, totals may include all sites when none match the filter.
                 </p>
-              )}
+              ) : null}
             </CardHeader>
             <CardContent>
               {consumptionSeriesLoading ? (
                 <div className="flex h-[350px] items-center justify-center text-gray-400">
                   <Loader2 className="w-8 h-8 animate-spin" />
+                </div>
+              ) : usageForecastData.length === 0 ? (
+                <div className="flex min-h-[220px] items-center justify-center px-4 py-12 text-center text-sm text-gray-500">
+                  No BOM consumption data yet.
                 </div>
               ) : (
                 <>
@@ -1389,18 +1523,19 @@ export function MaterialDetailPage() {
               </CardTitle>
               {priceHasPoData ? (
                 <p className="text-xs text-gray-500 font-normal mt-1">
-                  Monthly <strong>average</strong> unit price from purchase order lines for this material.
+                  Monthly <strong>average</strong> unit price from <strong>purchase orders</strong> when available; otherwise the
+                  catalog <strong>unit cost</strong> recorded in the activity log for that month.
                 </p>
-              ) : (
-                <p className="text-xs text-gray-500 font-normal mt-1">
-                  <strong>Unit cost</strong> from this record until PO line prices fill in the chart.
-                </p>
-              )}
+              ) : null}
             </CardHeader>
             <CardContent>
               {historyLoading ? (
                 <div className="flex h-[300px] items-center justify-center text-gray-400">
                   <Loader2 className="w-8 h-8 animate-spin" />
+                </div>
+              ) : !priceHasPoData ? (
+                <div className="flex min-h-[220px] items-center justify-center px-4 py-12 text-center text-sm text-gray-500">
+                  No purchase order or activity-log price history yet.
                 </div>
               ) : (
                 <ResponsiveContainer width="100%" height={300}>
@@ -1426,7 +1561,7 @@ export function MaterialDetailPage() {
                       stroke="#3B82F6"
                       strokeWidth={2}
                       name="Avg unit price"
-                      dot={priceHasPoData ? { fill: '#3B82F6', r: 3 } : false}
+                      dot={{ fill: '#3B82F6', r: 3 }}
                       activeDot={{ r: 5 }}
                       connectNulls
                     />
@@ -1445,22 +1580,26 @@ export function MaterialDetailPage() {
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-gray-500">Average Monthly</span>
-                    <span className="text-lg font-bold text-gray-900">
-                      {material.monthly_consumption.toLocaleString()} {material.unit_of_measure}
+                    <span className={`text-lg font-bold ${analyticsConsumptionFromBom ? 'text-gray-900' : 'text-gray-400 font-normal'}`}>
+                      {analyticsConsumptionFromBom
+                        ? `${analyticsConsumptionFromBom.avgMonthly.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${material.unit_of_measure}`
+                        : '—'}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-gray-500">Yearly Total</span>
-                    <span className="text-lg font-bold text-gray-900">
-                      {(material.monthly_consumption * 12).toLocaleString()} {material.unit_of_measure}
+                    <span className={`text-lg font-bold ${analyticsConsumptionFromBom ? 'text-gray-900' : 'text-gray-400 font-normal'}`}>
+                      {analyticsConsumptionFromBom
+                        ? `${analyticsConsumptionFromBom.yearlyProjection.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${material.unit_of_measure}`
+                        : '—'}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-gray-500">Days Until Reorder</span>
-                    <span className="text-lg font-bold text-orange-600">
-                      {material.monthly_consumption > 0
-                        ? Math.max(0, Math.floor((material.total_stock - material.reorder_point) / (material.monthly_consumption / 30)))
-                        : '—'} {material.monthly_consumption > 0 ? 'days' : ''}
+                    <span className={`text-lg font-bold ${analyticsConsumptionFromBom && analyticsConsumptionFromBom.daysUntilReorder != null ? 'text-orange-600' : 'text-gray-400 font-normal'}`}>
+                      {analyticsConsumptionFromBom && analyticsConsumptionFromBom.daysUntilReorder != null
+                        ? `${analyticsConsumptionFromBom.daysUntilReorder} days`
+                        : '—'}
                     </span>
                   </div>
                 </div>
@@ -1529,7 +1668,7 @@ export function MaterialDetailPage() {
                 Existing suppliers
               </CardTitle>
               <p className="text-xs text-gray-500 font-normal">
-                Suppliers that list this material in your catalogue (pricing & lead times from the Suppliers page).
+                Suppliers that list this material, with pricing and lead times from the Suppliers page.
               </p>
             </CardHeader>
             <CardContent>
@@ -1544,65 +1683,7 @@ export function MaterialDetailPage() {
                   <span className="font-medium text-gray-700">Suppliers</span> to see who can supply it.
                 </p>
               ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-                  {materialSuppliers.map(sup => (
-                    <div
-                      key={sup.smId}
-                      role="link"
-                      tabIndex={0}
-                      title="View supplier in Suppliers"
-                      onClick={() => navigate(`/suppliers?supplier=${encodeURIComponent(sup.supplierId)}`)}
-                      onKeyDown={e => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault();
-                          navigate(`/suppliers?supplier=${encodeURIComponent(sup.supplierId)}`);
-                        }
-                      }}
-                      className="group rounded-xl border border-indigo-100 bg-white p-4 shadow-sm flex flex-col gap-2 cursor-pointer hover:border-indigo-300 hover:shadow-md transition-all focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-1"
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <p className="text-sm font-semibold text-indigo-900 leading-tight group-hover:underline">
-                          {sup.name}
-                        </p>
-                        <div className="flex flex-wrap gap-1 justify-end">
-                          {sup.isCatalogPreferred && (
-                            <Badge variant="default" className="text-[10px] bg-amber-100 text-amber-800 border-amber-200">
-                              Cat. preferred
-                            </Badge>
-                          )}
-                          {sup.supplierPreferred && (
-                            <Badge variant="default" className="text-[10px] bg-slate-100 text-slate-700">
-                              Preferred supplier
-                            </Badge>
-                          )}
-                        </div>
-                      </div>
-                      <p className="text-xs text-gray-500">Listed net price (catalogue)</p>
-                      <p className="text-lg font-bold text-indigo-700">₱{sup.unitPrice.toLocaleString()}</p>
-                      <div className="grid grid-cols-2 gap-2 text-xs text-gray-600 pt-1 border-t border-gray-100">
-                        <div>
-                          <span className="text-gray-400 block">Lead time</span>
-                          <span className="font-medium">{sup.leadTimeDays} days</span>
-                        </div>
-                        <div>
-                          <span className="text-gray-400 block">Min. order</span>
-                          <span className="font-medium">{sup.minOrderQty.toLocaleString()}</span>
-                        </div>
-                        {sup.paymentTerms && (
-                          <div className="col-span-2">
-                            <span className="text-gray-400">Est. terms / delivery</span>
-                            <span className="ml-1 font-medium text-gray-800">{sup.paymentTerms}</span>
-                          </div>
-                        )}
-                        <div className="col-span-2">
-                          <span className={`text-[11px] px-1.5 py-0.5 rounded ${sup.status === 'Active' ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
-                            {sup.status}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                <MaterialSupplierCatalogueCards suppliers={materialSuppliers} />
               )}
             </CardContent>
           </Card>

@@ -1,0 +1,3 @@
+-- Agent contacts still missing on /order/:token ?
+-- Copy and run the FULL contents of: database/order_customer_portal_contacts.sql
+-- in Supabase SQL Editor, then hard-refresh the customer order page.

@@ -2,7 +2,8 @@
  * Finance / Invoices & Payments data layer.
  *
  * Frames everything around live data instead of formal "invoices":
- *  - Outstanding orders (balance_due > 0)
+ *  - Outstanding orders (balance_due > 0): agent column = customer's assigned_agent;
+ *    due date = actual_delivery + payment_terms (COD = next day after delivery; Net N = N days after).
  *  - Customer credit utilization (customers.credit_limit / outstanding_balance)
  *  - Payment proofs uploaded by agents (order_proof_documents type='payment')
  *  - Digital receipts (digital_receipts) generated after a verified payment
@@ -10,6 +11,17 @@
  */
 
 import { supabase } from '@/src/lib/supabase';
+import {
+  evaluateOrderFinanceCompletion,
+  proofCashAmount,
+  proofRequiresCommissionPayout,
+} from '@/src/lib/orderCommissionCompletion';
+import { proofPaymentParts } from '@/src/lib/orderProofPayments';
+import {
+  clientCommissionFraction,
+  clientCommissionPercentLabel,
+  type ClientType,
+} from '@/src/types/customers';
 
 export type OutstandingOrderRow = {
   id: string;
@@ -46,6 +58,77 @@ export type CustomerCreditRow = {
   paymentScore: number | null;
   status: 'Good' | 'Warning' | 'Exceeded';
 };
+
+/** One row per order that has at least one payment proof uploaded. */
+export type OrderWithPaymentProofsRow = {
+  orderId: string;
+  orderNumber: string;
+  customerId: string | null;
+  customerName: string | null;
+  agentName: string | null;
+  agentId: string | null;
+  orderStatus: string;
+  totalAmount: number;
+  amountPaid: number;
+  balanceDue: number;
+  paymentStatus: string;
+  proofCount: number;
+  totalProofAmount: number;
+  totalCashOnProofs: number;
+  cashProofCount: number;
+  lastProofAt: string | null;
+  pendingCashCommissionCount: number;
+  allCashCommissionsReleased: boolean;
+};
+
+export type OrderCommissionProofRow = {
+  id: string;
+  orderId: string;
+  title: string | null;
+  fileName: string | null;
+  fileUrl: string;
+  uploadedAt: string;
+  uploadedBy: string | null;
+  userNotes: string | null;
+  cashAmount: number;
+  creditAmount: number;
+  adjustment: number;
+  requiresCommission: boolean;
+  commissionAmount: number;
+  commissionPaidAt: string | null;
+  commissionPaidBy: string | null;
+};
+
+export type OrderCommissionModalData = {
+  proofs: OrderCommissionProofRow[];
+  clientType: ClientType;
+  commissionPercentLabel: string;
+};
+
+export function computeProofCommissionAmount(cashAmount: number, commissionRate: number): number {
+  if (cashAmount <= 0 || commissionRate <= 0) return 0;
+  return Math.round(cashAmount * (commissionRate / 100) * 100) / 100;
+}
+
+/** Commission on cash using customer Office (0.5%) / Personal (1%) client type. */
+export function computeProofCommissionForClientType(cashAmount: number, clientType: string): number {
+  if (cashAmount <= 0) return 0;
+  return Math.round(cashAmount * clientCommissionFraction(clientType) * 100) / 100;
+}
+
+/** User-entered notes on a payment proof (title is separate). */
+export function extractProofUserNotes(raw: string | null): string | null {
+  if (!raw?.trim()) return null;
+  const parsed = parseProofNotes(raw);
+  if (parsed.notes?.trim()) return parsed.notes.trim();
+  try {
+    const obj = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof obj.notes === 'string' && obj.notes.trim()) return obj.notes.trim();
+  } catch {
+    if (!raw.trim().startsWith('{')) return raw.trim();
+  }
+  return null;
+}
 
 export type PaymentProofRow = {
   id: string;
@@ -116,7 +199,11 @@ export type FinanceMetrics = {
   overdueCount: number;
   collectedThisMonth: number;
   pendingProofs: number;
+  /** Cash proof commissions not yet marked paid by executive. */
   pendingCommissions: number;
+  pendingCommissionCount: number;
+  /** Cash proof commissions already marked paid (commission_paid_at set). */
+  commissionsPaidOut: number;
 };
 
 const ACTIVE_ORDER_STATUSES = [
@@ -134,47 +221,70 @@ const ACTIVE_ORDER_STATUSES = [
 /** Statuses that should be checked for overdue (excludes already-Paid). */
 const OVERDUEABLE_STATUSES = ['Unbilled', 'Invoiced', 'Partially Paid', 'On Credit'];
 
+/** Parse YYYY-MM-DD (or leading portion) as a local calendar date. */
+export function parseDateOnly(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value).trim());
+  if (m) {
+    const y = Number(m[1]);
+    const mo = Number(m[2]) - 1;
+    const d = Number(m[3]);
+    const dt = new Date(y, mo, d);
+    return Number.isFinite(dt.getTime()) ? dt : null;
+  }
+  const dt = new Date(value);
+  return Number.isFinite(dt.getTime()) ? dt : null;
+}
+
 function diffDaysFromToday(iso: string | null | undefined): number {
-  if (!iso) return 0;
-  const t = new Date(iso).getTime();
-  if (!Number.isFinite(t)) return 0;
+  const d = parseDateOnly(iso ?? null);
+  if (!d) return 0;
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  return Math.floor((today - t) / 86_400_000);
+  return Math.floor((today - d.getTime()) / 86_400_000);
+}
+
+function formatDateOnlyLocal(d: Date): string {
+  const y = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${mo}-${day}`;
 }
 
 /**
- * Compute the due date for an order given its payment terms and order date.
- * COD is due the next calendar day; all other term formats (Net 15, Net 30, …)
- * extract the day count from the string.
+ * Payment due date = delivery date (actual_delivery) + payment terms.
+ * COD / cash on delivery: next calendar day after delivery.
+ * Net N (e.g. Net 30): N calendar days after delivery.
  */
-function computeDueDate(orderDate: string | null, paymentTerms: string | null): Date | null {
-  if (!orderDate) return null;
-  const base = new Date(orderDate);
-  if (!Number.isFinite(base.getTime())) return null;
+export function computeDueDateFromDelivery(deliveryDate: string | null, paymentTerms: string | null): Date | null {
+  const base = parseDateOnly(deliveryDate);
+  if (!base) return null;
   const terms = (paymentTerms ?? '').trim().toUpperCase();
+  const d = new Date(base.getFullYear(), base.getMonth(), base.getDate());
   if (terms === 'COD' || terms === 'CASH ON DELIVERY') {
-    const d = new Date(base);
     d.setDate(d.getDate() + 1);
-    return d;
-  }
-  const match = terms.match(/\d+/);
-  if (match) {
+  } else {
+    const match = terms.match(/\d+/);
+    if (!match) return null;
     const days = parseInt(match[0], 10);
-    const d = new Date(base);
     d.setDate(d.getDate() + days);
-    return d;
   }
-  return null;
+  d.setHours(0, 0, 0, 0);
+  return d;
 }
 
 /**
- * For every order in the list that should be overdue (due_date < today and
- * payment_status is still an unpaid/credit status), update the DB row to Overdue
- * in a single batch upsert. Fire-and-forget; does not throw on partial failure.
+ * For every order in the list that should be overdue (computed due < today and
+ * payment_status is still an unpaid/credit status), update the DB row to Overdue.
+ * Due is derived only from actual_delivery + payment_terms (not stored due_date).
  */
 async function syncOverdueStatuses(
-  rows: Array<{ id: string; dueDate: string | null; orderDate: string | null; paymentTerms: string | null; paymentStatus: string }>,
+  rows: Array<{
+    id: string;
+    actualDelivery: string | null;
+    paymentTerms: string | null;
+    paymentStatus: string;
+  }>,
 ): Promise<Set<string>> {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -182,13 +292,7 @@ async function syncOverdueStatuses(
   const overdueIds: string[] = [];
   for (const r of rows) {
     if (!OVERDUEABLE_STATUSES.includes(r.paymentStatus)) continue;
-    // Use stored due_date if present; otherwise derive from order_date + terms
-    let due: Date | null = null;
-    if (r.dueDate) {
-      due = new Date(r.dueDate);
-      if (!Number.isFinite(due.getTime())) due = null;
-    }
-    if (!due) due = computeDueDate(r.orderDate, r.paymentTerms);
+    const due = computeDueDateFromDelivery(r.actualDelivery, r.paymentTerms);
     if (due && due < today) overdueIds.push(r.id);
   }
 
@@ -226,24 +330,49 @@ function nestedName(value: unknown): string | null {
   return null;
 }
 
+function assignedAgentFromCustomerEmbed(
+  cust: unknown,
+): { id: string | null; name: string | null } {
+  if (!cust || typeof cust !== 'object') return { id: null, name: null };
+  const c = cust as Record<string, unknown>;
+  const id = asString(c.assigned_agent_id);
+  const emb = c.employees;
+  if (emb && typeof emb === 'object') {
+    const e = emb as Record<string, unknown>;
+    return { id, name: asString(e.employee_name) };
+  }
+  return { id, name: null };
+}
+
+const FINANCE_ORDER_PAYMENT_STATUSES = [
+  'Unbilled',
+  'Invoiced',
+  'Partially Paid',
+  'Paid',
+  'Overdue',
+  'On Credit',
+] as const;
+
+/** Finance list: only orders with at least partial delivery recorded. */
+const FINANCE_DELIVERED_ORDER_STATUSES = ['Partially Fulfilled', 'Delivered', 'Completed'] as const;
+
 /**
- * Outstanding orders: every active order with balance_due > 0.
- * Also includes On Credit orders (balance_due may be 0 but still tracked).
- * Auto-syncs overdue statuses on fetch (best-effort, fire-and-forget).
+ * Orders for Finance → Outstanding tab: delivered (or partially delivered) orders with tracked payment status.
+ * Auto-syncs overdue statuses on fetch (best-effort).
  */
 export async function fetchOutstandingOrders(branchId?: string | null): Promise<OutstandingOrderRow[]> {
   let q = supabase
     .from('orders')
     .select(
       `id, order_number, customer_id, customer_name, agent_id, agent_name, branch_id,
-       order_date, due_date, payment_terms, payment_method, status, payment_status,
+       order_date, due_date, actual_delivery, payment_terms, payment_method, status, payment_status,
        total_amount, amount_paid, balance_due,
        branches(name),
-       customers(name)`,
+       customers(name, assigned_agent_id, employees!assigned_agent_id(id, employee_name))`,
     )
-    .in('status', ACTIVE_ORDER_STATUSES)
-    .or('balance_due.gt.0,payment_status.eq.On Credit')
-    .order('due_date', { ascending: true, nullsFirst: false });
+    .in('status', [...FINANCE_DELIVERED_ORDER_STATUSES])
+    .in('payment_status', [...FINANCE_ORDER_PAYMENT_STATUSES])
+    .order('order_date', { ascending: false });
 
   if (branchId) q = q.eq('branch_id', branchId);
 
@@ -257,8 +386,7 @@ export async function fetchOutstandingOrders(branchId?: string | null): Promise<
   const overdueIds = await syncOverdueStatuses(
     rows.map((r) => ({
       id: String(r.id),
-      dueDate: asString(r.due_date),
-      orderDate: asString(r.order_date),
+      actualDelivery: asString(r.actual_delivery),
       paymentTerms: asString(r.payment_terms),
       paymentStatus: asString(r.payment_status) ?? 'Unbilled',
     })),
@@ -277,25 +405,34 @@ export async function fetchOutstandingOrders(branchId?: string | null): Promise<
     pendingByOrder.set(id, (pendingByOrder.get(id) ?? 0) + 1);
   }
 
-  return rows.map((r) => {
+  const mapped = rows.map((r) => {
     const branch = nestedName(r.branches);
-    const cust = nestedName(r.customers) ?? asString(r.customer_name);
-    const due = asString(r.due_date);
+    const custEmbed = r.customers;
+    const cust = assignedAgentFromCustomerEmbed(custEmbed);
+    const customerName = nestedName(custEmbed) ?? asString(r.customer_name);
+    const delivery = asString(r.actual_delivery);
+    const terms = asString(r.payment_terms);
+    const computedDueDt = computeDueDateFromDelivery(delivery, terms);
+    const due = computedDueDt ? formatDateOnlyLocal(computedDueDt) : null;
+
     const rawStatus = asString(r.payment_status) ?? 'Unbilled';
-    // Reflect the overdue sync locally so the UI doesn't need a second fetch
     const paymentStatus = overdueIds.has(String(r.id)) ? 'Overdue' : rawStatus;
+
+    const agentId = cust.id;
+    const agentName = cust.id ? (cust.name ?? '—') : null;
+
     return {
       id: String(r.id),
       orderNumber: asString(r.order_number) ?? String(r.id),
       customerId: asString(r.customer_id),
-      customerName: cust,
-      agentId: asString(r.agent_id),
-      agentName: asString(r.agent_name),
+      customerName,
+      agentId,
+      agentName,
       branchId: asString(r.branch_id),
       branchName: branch,
       orderDate: asString(r.order_date),
       dueDate: due,
-      paymentTerms: asString(r.payment_terms),
+      paymentTerms: terms,
       paymentMethod: asString(r.payment_method),
       status: asString(r.status) ?? '—',
       paymentStatus,
@@ -306,6 +443,16 @@ export async function fetchOutstandingOrders(branchId?: string | null): Promise<
       pendingProofs: pendingByOrder.get(String(r.id)) ?? 0,
     };
   });
+
+  mapped.sort((a, b) => {
+    const da = a.dueDate ? parseDateOnly(a.dueDate) : null;
+    const db = b.dueDate ? parseDateOnly(b.dueDate) : null;
+    const ta = da ? da.getTime() : Number.POSITIVE_INFINITY;
+    const tb = db ? db.getTime() : Number.POSITIVE_INFINITY;
+    return ta - tb;
+  });
+
+  return mapped;
 }
 
 /** Customers with credit configured or any outstanding balance. */
@@ -343,6 +490,239 @@ export async function fetchCustomerCredit(): Promise<CustomerCreditRow[]> {
     });
 }
 
+function proofRowAmount(r: Record<string, unknown>): number {
+  let cash = num(r.payment_cash_amount);
+  let credit = num(r.payment_credit_amount);
+  let adj = num(r.payment_adjustment);
+  if (cash === 0 && credit === 0 && adj === 0) {
+    const meta = parseProofNotes(asString(r.notes));
+    if (meta.amount != null) return meta.amount;
+  }
+  return Math.round((cash + credit + adj + Number.EPSILON) * 100) / 100;
+}
+
+/** Orders that have one or more payment proof documents (grouped per order). */
+export async function fetchOrdersWithPaymentProofs(): Promise<OrderWithPaymentProofsRow[]> {
+  const { data, error } = await supabase
+    .from('order_proof_documents')
+    .select(
+      `id, order_id, uploaded_at, type,
+       payment_cash_amount, payment_credit_amount, payment_adjustment, notes,
+       commission_paid_at,
+       orders(id, order_number, customer_id, customer_name, agent_id, agent_name, status,
+         total_amount, amount_paid, balance_due, payment_status,
+         customers(name, assigned_agent_id, employees!assigned_agent_id(employee_name)))`,
+    )
+    .eq('type', 'payment')
+    .order('uploaded_at', { ascending: false });
+
+  if (error) throw error;
+
+  const byOrder = new Map<
+    string,
+    OrderWithPaymentProofsRow & { _lastMs: number; _proofs: Array<Record<string, unknown>> }
+  >();
+
+  for (const r of (data ?? []) as Array<Record<string, unknown>>) {
+    const orderId = String(r.order_id);
+    const order = (r.orders ?? null) as Record<string, unknown> | null;
+    if (!order) continue;
+
+    const custEmbed = order.customers ?? null;
+    const assigned = assignedAgentFromCustomerEmbed(custEmbed);
+    const orderAgentName = asString(order.agent_name);
+    const agentName = assigned.id != null ? (assigned.name ?? '—') : orderAgentName;
+    const uploadedAt = String(r.uploaded_at ?? '');
+    const uploadedMs = uploadedAt ? new Date(uploadedAt).getTime() : 0;
+    const amt = proofRowAmount(r);
+    const cash = proofCashAmount({
+      id: String(r.id),
+      type: 'payment',
+      payment_cash_amount: r.payment_cash_amount,
+      payment_credit_amount: r.payment_credit_amount,
+      payment_adjustment: r.payment_adjustment,
+      notes: asString(r.notes),
+    });
+
+    const existing = byOrder.get(orderId);
+    if (!existing) {
+      byOrder.set(orderId, {
+        orderId,
+        orderNumber: asString(order.order_number) ?? orderId,
+        customerId: asString(order.customer_id),
+        customerName: nestedName(custEmbed) ?? asString(order.customer_name),
+        agentName,
+        agentId: assigned.id ?? asString(order.agent_id),
+        orderStatus: asString(order.status) ?? '—',
+        totalAmount: num(order.total_amount),
+        amountPaid: num(order.amount_paid),
+        balanceDue: num(order.balance_due),
+        paymentStatus: asString(order.payment_status) ?? '—',
+        proofCount: 1,
+        totalProofAmount: amt,
+        totalCashOnProofs: cash,
+        cashProofCount: proofRequiresCommissionPayout({
+          id: String(r.id),
+          type: 'payment',
+          payment_cash_amount: r.payment_cash_amount,
+          payment_credit_amount: r.payment_credit_amount,
+          payment_adjustment: r.payment_adjustment,
+          notes: asString(r.notes),
+        })
+          ? 1
+          : 0,
+        lastProofAt: uploadedAt || null,
+        pendingCashCommissionCount: 0,
+        allCashCommissionsReleased: true,
+        _lastMs: uploadedMs,
+        _proofs: [r],
+      });
+    } else {
+      existing.proofCount += 1;
+      existing.totalProofAmount = Math.round((existing.totalProofAmount + amt + Number.EPSILON) * 100) / 100;
+      existing.totalCashOnProofs = Math.round((existing.totalCashOnProofs + cash + Number.EPSILON) * 100) / 100;
+      if (
+        proofRequiresCommissionPayout({
+          id: String(r.id),
+          type: 'payment',
+          payment_cash_amount: r.payment_cash_amount,
+          payment_credit_amount: r.payment_credit_amount,
+          payment_adjustment: r.payment_adjustment,
+          notes: asString(r.notes),
+        })
+      ) {
+        existing.cashProofCount += 1;
+      }
+      existing._proofs.push(r);
+      if (uploadedMs > existing._lastMs) {
+        existing._lastMs = uploadedMs;
+        existing.lastProofAt = uploadedAt || null;
+      }
+    }
+  }
+
+  return Array.from(byOrder.values())
+    .map(({ _lastMs: _, _proofs, ...row }) => {
+      const proofLites = _proofs.map((p) => ({
+        id: String(p.id),
+        type: 'payment',
+        payment_cash_amount: p.payment_cash_amount,
+        payment_credit_amount: p.payment_credit_amount,
+        payment_adjustment: p.payment_adjustment,
+        notes: asString(p.notes),
+        commission_paid_at: p.commission_paid_at != null ? String(p.commission_paid_at) : null,
+      }));
+      const finance = evaluateOrderFinanceCompletion({
+        totalAmount: row.totalAmount,
+        amountPaid: row.amountPaid,
+        balanceDue: row.balanceDue,
+        proofs: proofLites,
+      });
+      return {
+        ...row,
+        pendingCashCommissionCount: finance.pendingCashCommissionCount,
+        allCashCommissionsReleased: finance.allCashCommissionsReleased,
+      };
+    })
+    .sort((a, b) => {
+      const ta = a.lastProofAt ? new Date(a.lastProofAt).getTime() : 0;
+      const tb = b.lastProofAt ? new Date(b.lastProofAt).getTime() : 0;
+      return tb - ta;
+    });
+}
+
+async function fetchCustomerClientType(customerId: string | null): Promise<ClientType> {
+  if (!customerId) return 'Office';
+  const { data, error } = await supabase
+    .from('customers')
+    .select('client_type')
+    .eq('id', customerId)
+    .maybeSingle();
+  if (error || !data) return 'Office';
+  const raw = String(data.client_type ?? 'Office');
+  return raw === 'Personal' ? 'Personal' : 'Office';
+}
+
+/** Payment proofs + customer client type for commission release modal. */
+export async function fetchOrderCommissionModalData(
+  orderId: string,
+  customerId: string | null,
+): Promise<OrderCommissionModalData> {
+  const [{ data, error }, clientType] = await Promise.all([
+    supabase
+      .from('order_proof_documents')
+      .select(
+        `id, order_id, title, file_name, file_url, uploaded_at, uploaded_by, type,
+         payment_cash_amount, payment_credit_amount, payment_adjustment, notes,
+         commission_paid_at, commission_paid_by`,
+      )
+      .eq('order_id', orderId)
+      .eq('type', 'payment')
+      .order('uploaded_at', { ascending: false }),
+    fetchCustomerClientType(customerId),
+  ]);
+
+  if (error) throw error;
+
+  const proofs = ((data ?? []) as Array<Record<string, unknown>>).map((r) => {
+    const parts = proofPaymentParts({
+      id: String(r.id),
+      order_id: orderId,
+      type: 'payment',
+      title: asString(r.title),
+      file_name: asString(r.file_name),
+      file_url: String(r.file_url ?? ''),
+      file_size: null,
+      uploaded_by: asString(r.uploaded_by),
+      uploaded_by_role: null,
+      status: null,
+      notes: asString(r.notes),
+      uploaded_at: String(r.uploaded_at ?? ''),
+      payment_cash_amount: r.payment_cash_amount,
+      payment_credit_amount: r.payment_credit_amount,
+      payment_adjustment: r.payment_adjustment,
+    });
+    const requiresCommission = proofRequiresCommissionPayout({
+      id: String(r.id),
+      type: 'payment',
+      payment_cash_amount: r.payment_cash_amount,
+      payment_credit_amount: r.payment_credit_amount,
+      payment_adjustment: r.payment_adjustment,
+      notes: asString(r.notes),
+    });
+    const cashAmount = parts.cash;
+    return {
+      id: String(r.id),
+      orderId,
+      title: asString(r.title),
+      fileName: asString(r.file_name),
+      fileUrl: String(r.file_url ?? ''),
+      uploadedAt: String(r.uploaded_at ?? ''),
+      uploadedBy: asString(r.uploaded_by),
+      userNotes: extractProofUserNotes(asString(r.notes)),
+      cashAmount,
+      creditAmount: parts.credit,
+      adjustment: parts.adj,
+      requiresCommission,
+      commissionAmount: computeProofCommissionForClientType(cashAmount, clientType),
+      commissionPaidAt: r.commission_paid_at != null ? String(r.commission_paid_at) : null,
+      commissionPaidBy: asString(r.commission_paid_by),
+    };
+  });
+
+  return {
+    proofs,
+    clientType,
+    commissionPercentLabel: clientCommissionPercentLabel(clientType),
+  };
+}
+
+/** @deprecated Use fetchOrderCommissionModalData */
+export async function fetchOrderCommissionProofs(orderId: string): Promise<OrderCommissionProofRow[]> {
+  const { proofs } = await fetchOrderCommissionModalData(orderId, null);
+  return proofs;
+}
+
 /** Payment proofs (uploaded by agents, awaiting/done verification). */
 export async function fetchPaymentProofs(
   filter: 'all' | 'pending' | 'verified' | 'rejected' = 'pending',
@@ -352,7 +732,8 @@ export async function fetchPaymentProofs(
     .select(
       `id, order_id, file_name, file_url, file_size, uploaded_by, uploaded_by_role,
        uploaded_at, status, notes, rejection_reason, verified_by, verified_at,
-       orders(order_number, customer_name, agent_name, total_amount, balance_due)`,
+       orders(order_number, customer_name, agent_name, total_amount, balance_due,
+         customers(name, assigned_agent_id, employees!assigned_agent_id(employee_name)))`,
     )
     .eq('type', 'payment')
     .order('uploaded_at', { ascending: false });
@@ -364,13 +745,17 @@ export async function fetchPaymentProofs(
 
   return ((data ?? []) as Array<Record<string, unknown>>).map((r) => {
     const order = (r.orders ?? null) as Record<string, unknown> | null;
+    const custEmbed = order?.customers ?? null;
+    const assigned = assignedAgentFromCustomerEmbed(custEmbed);
+    const orderAgentName = order ? asString(order.agent_name) : null;
+    const agentName = assigned.id != null ? (assigned.name ?? '—') : orderAgentName;
     const meta = parseProofNotes(asString(r.notes));
     return {
       id: String(r.id),
       orderId: String(r.order_id),
       orderNumber: order ? asString(order.order_number) : null,
       customerName: order ? asString(order.customer_name) : null,
-      agentName: order ? asString(order.agent_name) : null,
+      agentName,
       fileName: asString(r.file_name),
       fileUrl: String(r.file_url ?? ''),
       fileSize: r.file_size == null ? null : num(r.file_size),
@@ -506,16 +891,84 @@ export async function fetchAgentCommissionsForPeriod(period: string): Promise<Ag
   });
 }
 
+function clientTypeFromProofOrderEmbed(order: Record<string, unknown> | null): ClientType {
+  if (!order) return 'Office';
+  const custEmbed = order.customers ?? null;
+  const cust = Array.isArray(custEmbed) ? custEmbed[0] : custEmbed;
+  if (!cust || typeof cust !== 'object') return 'Office';
+  const raw = String((cust as Record<string, unknown>).client_type ?? 'Office');
+  return raw === 'Personal' ? 'Personal' : 'Office';
+}
+
+/** Sum pending / paid-out commission from payment proofs (Office 0.5%, Personal 1% on cash). */
+async function fetchCommissionTotalsFromProofs(): Promise<{
+  pendingCommissions: number;
+  commissionsPaidOut: number;
+  pendingCommissionCount: number;
+}> {
+  const { data, error } = await supabase
+    .from('order_proof_documents')
+    .select(
+      `payment_cash_amount, payment_credit_amount, payment_adjustment, notes, commission_paid_at,
+       orders(customers(client_type))`,
+    )
+    .eq('type', 'payment');
+
+  if (error) throw error;
+
+  let pendingCommissions = 0;
+  let commissionsPaidOut = 0;
+  let pendingCommissionCount = 0;
+
+  for (const r of (data ?? []) as Array<Record<string, unknown>>) {
+    if (!proofRequiresCommissionPayout({
+      id: '',
+      type: 'payment',
+      payment_cash_amount: r.payment_cash_amount,
+      payment_credit_amount: r.payment_credit_amount,
+      payment_adjustment: r.payment_adjustment,
+      notes: asString(r.notes),
+    })) {
+      continue;
+    }
+
+    const cash = proofCashAmount({
+      id: '',
+      type: 'payment',
+      payment_cash_amount: r.payment_cash_amount,
+      payment_credit_amount: r.payment_credit_amount,
+      payment_adjustment: r.payment_adjustment,
+      notes: asString(r.notes),
+    });
+    const order = (r.orders ?? null) as Record<string, unknown> | null;
+    const clientType = clientTypeFromProofOrderEmbed(order);
+    const commission = computeProofCommissionForClientType(cash, clientType);
+
+    if (r.commission_paid_at) {
+      commissionsPaidOut += commission;
+    } else {
+      pendingCommissions += commission;
+      pendingCommissionCount += 1;
+    }
+  }
+
+  return {
+    pendingCommissions: Math.round((pendingCommissions + Number.EPSILON) * 100) / 100,
+    commissionsPaidOut: Math.round((commissionsPaidOut + Number.EPSILON) * 100) / 100,
+    pendingCommissionCount,
+  };
+}
+
 /** Aggregate KPIs for the page header. */
 export async function fetchFinanceMetrics(branchId?: string | null): Promise<FinanceMetrics> {
   let outQ = supabase
     .from('orders')
-    .select('balance_due, due_date, status', { count: 'exact' })
+    .select('balance_due, actual_delivery, payment_terms, payment_status, status', { count: 'exact' })
     .gt('balance_due', 0)
     .in('status', ACTIVE_ORDER_STATUSES);
   if (branchId) outQ = outQ.eq('branch_id', branchId);
 
-  const [outstandingRes, txRes, proofsRes, commRes] = await Promise.all([
+  const [outstandingRes, txRes, proofsRes, commissionTotals] = await Promise.all([
     outQ,
     supabase
       .from('payment_transactions')
@@ -528,13 +981,13 @@ export async function fetchFinanceMetrics(branchId?: string | null): Promise<Fin
       .select('id', { count: 'exact', head: true })
       .eq('type', 'payment')
       .eq('status', 'pending'),
-    supabase
-      .from('agent_commissions')
-      .select('commission_earned, status')
-      .neq('status', 'Paid'),
+    fetchCommissionTotalsFromProofs(),
   ]);
 
   if (outstandingRes.error) throw outstandingRes.error;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
 
   let totalOutstanding = 0;
   let totalOverdue = 0;
@@ -542,8 +995,13 @@ export async function fetchFinanceMetrics(branchId?: string | null): Promise<Fin
   for (const r of (outstandingRes.data ?? []) as Array<Record<string, unknown>>) {
     const balance = num(r.balance_due);
     totalOutstanding += balance;
-    const due = asString(r.due_date);
-    if (due && new Date(due).getTime() < Date.now()) {
+    const rawPay = asString(r.payment_status) ?? 'Unbilled';
+    const due = computeDueDateFromDelivery(asString(r.actual_delivery), asString(r.payment_terms));
+    const pastDue = due != null && due < today;
+    const markedOverdue = rawPay === 'Overdue';
+    const computedOverdue =
+      pastDue && OVERDUEABLE_STATUSES.includes(rawPay);
+    if (markedOverdue || computedOverdue) {
       totalOverdue += balance;
       overdueCount += 1;
     }
@@ -554,18 +1012,15 @@ export async function fetchFinanceMetrics(branchId?: string | null): Promise<Fin
     collectedThisMonth += num(t.total_paid);
   }
 
-  let pendingCommissions = 0;
-  for (const c of (commRes.data ?? []) as Array<Record<string, unknown>>) {
-    pendingCommissions += num(c.commission_earned);
-  }
-
   return {
     totalOutstanding,
     totalOverdue,
     overdueCount,
     collectedThisMonth,
     pendingProofs: proofsRes.count ?? 0,
-    pendingCommissions,
+    pendingCommissions: commissionTotals.pendingCommissions,
+    pendingCommissionCount: commissionTotals.pendingCommissionCount,
+    commissionsPaidOut: commissionTotals.commissionsPaidOut,
   };
 }
 

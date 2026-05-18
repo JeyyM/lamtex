@@ -30,3 +30,17 @@ export function blueCustomerPinIcon(): google.maps.Icon {
     labelOrigin: new google.maps.Point(Math.round(labelX), Math.round(labelY)),
   };
 }
+
+/** Content node for `AdvancedMarkerElement` (same artwork as `blueCustomerPinIcon`). */
+export function blueCustomerPinImgElement(): HTMLImageElement {
+  const icon = blueCustomerPinIcon();
+  const img = document.createElement('img');
+  img.src = icon.url;
+  const w = icon.scaledSize?.width ?? 52;
+  const h = icon.scaledSize?.height ?? 52;
+  img.width = w;
+  img.height = h;
+  img.alt = '';
+  img.draggable = false;
+  return img;
+}

@@ -8,6 +8,7 @@ import { useAppContext } from '@/src/store/AppContext';
 import { OrderDetail, OrderStatus, OrderLineItem, OrderLog, ProofDocument, OrderUrgency } from '@/src/types/orders';
 import { PaymentLink } from '@/src/types/payments';
 import { PaymentLinkModal } from '@/src/components/payments/PaymentLinkModal';
+import { OrderCustomerPortalCard } from '@/src/components/orders/OrderCustomerPortalCard';
 import {
   FulfillOrderModal,
   FulfillmentData,
@@ -57,8 +58,22 @@ import {
   Receipt,
   Route,
 } from 'lucide-react';
-
-const ORDER_PROOF_GALLERY_FOLDER = 'order-proofs';
+import {
+  ORDER_PROOF_GALLERY_FOLDER,
+  proofRowToDocument,
+  fetchPaymentProofAggregates,
+  computeOrderAmountPaidAfterProofIncrement,
+  deriveOrderPaymentFields,
+  roundMoney,
+  syncOrderPaymentsFromProofs,
+  insertOrderProofDocuments,
+  updateOrderProofDocument,
+  encodeOrderProofPaymentNotes,
+  isSchemaColumnError,
+  uploadOrderProofBinary,
+  tryExtractStoragePathFromPublicUrl,
+} from '@/src/lib/orderProofPayments';
+import { parseProofNotes } from '@/src/lib/financeData';
 
 /** Local proof uploads: images + common business documents (allowlist). */
 const ORDER_PROOF_UPLOAD_EXT =
@@ -118,17 +133,36 @@ export function OrderDetailPage() {
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
   const [showProofModal, setShowProofModal] = useState(false);
   const [showProofImageGallery, setShowProofImageGallery] = useState(false);
-  const [proofType, setProofType] = useState<'delivery' | 'payment' | 'receipt'>('delivery');
+  const [proofType, setProofType] = useState<'delivery' | 'payment' | 'other'>('delivery');
+  const [documentsProofTab, setDocumentsProofTab] = useState<'delivery' | 'payment' | 'other'>('delivery');
   /** Public URLs from Image Gallery (compressed upload); multi-select in gallery. */
   const [selectedProofGalleryUrls, setSelectedProofGalleryUrls] = useState<string[]>([]);
   /** Local PDFs and/or images (multi-select). */
   const [selectedProofLocalFiles, setSelectedProofLocalFiles] = useState<File[]>([]);
   const [proofNotes, setProofNotes] = useState('');
+  const [proofDocTitle, setProofDocTitle] = useState('');
+  const [proofMoneyPayment, setProofMoneyPayment] = useState('');
+  const [proofPaymentCredit, setProofPaymentCredit] = useState('');
+  const [customerCreditSummary, setCustomerCreditSummary] = useState<{
+    creditLimit: number;
+    outstandingBalance: number;
+    availableCredit: number;
+  } | null>(null);
+  const [customerCreditLoading, setCustomerCreditLoading] = useState(false);
   const [proofs, setProofs] = useState<ProofDocument[]>([]);
+  const [proofUploadBusy, setProofUploadBusy] = useState(false);
+  const [showProofEditModal, setShowProofEditModal] = useState(false);
+  const [editingProof, setEditingProof] = useState<ProofDocument | null>(null);
+  const [editProofTitle, setEditProofTitle] = useState('');
+  const [editProofNotes, setEditProofNotes] = useState('');
+  const [editProofMoney, setEditProofMoney] = useState('');
+  const [editProofCredit, setEditProofCredit] = useState('');
+  const [proofEditBusy, setProofEditBusy] = useState(false);
   
   // Payment link state
   const [showPaymentLinkModal, setShowPaymentLinkModal] = useState(false);
   const [paymentLinks, setPaymentLinks] = useState<PaymentLink[]>([]);
+  const [customerEmail, setCustomerEmail] = useState<string | null>(null);
 
   // Approve / Reject modal state
   const [showApproveModal, setShowApproveModal] = useState(false);
@@ -173,6 +207,17 @@ export function OrderDetailPage() {
   >([]);
   const [loading, setLoading] = useState(true);
   const [customerList, setCustomerList] = useState<{ id: string; name: string }[]>([]);
+  const [agentList, setAgentList] = useState<
+    { id: string; employee_name: string; employee_id: string; branch_name?: string }[]
+  >([]);
+
+  const patchEditedOrder = (patch: Partial<OrderDetail> | ((prev: OrderDetail) => Partial<OrderDetail>)) => {
+    setEditedOrder((prev) => {
+      if (!prev) return prev;
+      const next = typeof patch === 'function' ? patch(prev) : patch;
+      return { ...prev, ...next };
+    });
+  };
 
   useEffect(() => {
     if (!id) return;
@@ -200,7 +245,20 @@ export function OrderDetailPage() {
       if (!row) {
         setLoading(false);
         setOrderTripsWithDelayInfo([]);
+        setCustomerEmail(null);
         return;
+      }
+
+      const customerId = (row as { customer_id?: string | null }).customer_id;
+      if (customerId) {
+        const { data: custRow } = await supabase
+          .from('customers')
+          .select('email')
+          .eq('id', customerId)
+          .maybeSingle();
+        setCustomerEmail((custRow as { email?: string | null } | null)?.email ?? null);
+      } else {
+        setCustomerEmail(null);
       }
 
       // Fetch line items
@@ -298,7 +356,55 @@ export function OrderDetailPage() {
         metadata: log.metadata,
       }));
 
-      setOrder(mappedOrder);
+      const { data: proofRows } = await supabase
+        .from('order_proof_documents')
+        .select('*')
+        .eq('order_id', id)
+        .order('uploaded_at', { ascending: false });
+      setProofs(
+        (proofRows ?? []).map((pr) => proofRowToDocument(pr as any, (row as any).order_number ?? '')),
+      );
+
+      const hasPaymentProofs = (proofRows ?? []).some((pr) => pr.type === 'payment');
+      let resolvedOrder = mappedOrder;
+      if (hasPaymentProofs) {
+        await syncOrderPaymentsFromProofs(id);
+        const { data: payRow } = await supabase
+          .from('orders')
+          .select('amount_paid, balance_due, payment_status')
+          .eq('id', id)
+          .maybeSingle();
+        if (payRow) {
+          resolvedOrder = {
+            ...mappedOrder,
+            amountPaid: Number(payRow.amount_paid ?? 0),
+            balanceDue: Number(payRow.balance_due ?? 0),
+            paymentStatus: payRow.payment_status as OrderDetail['paymentStatus'],
+          };
+        }
+      } else {
+        const derived = deriveOrderPaymentFields(
+          mappedOrder.totalAmount,
+          mappedOrder.amountPaid,
+          mappedOrder.balanceDue,
+        );
+        if (
+          Math.abs(derived.amountPaid - mappedOrder.amountPaid) > 0.01 ||
+          Math.abs(derived.balanceDue - mappedOrder.balanceDue) > 0.01
+        ) {
+          await supabase
+            .from('orders')
+            .update({
+              amount_paid: derived.amountPaid,
+              balance_due: derived.balanceDue,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', id);
+          resolvedOrder = { ...mappedOrder, amountPaid: derived.amountPaid, balanceDue: derived.balanceDue };
+        }
+      }
+
+      setOrder(resolvedOrder);
       setOrderLogs(mappedLogs);
 
       const orderUuid = id as string;
@@ -340,6 +446,48 @@ export function OrderDetailPage() {
       .limit(500)
       .then(({ data }) => setCustomerList(data ?? []));
   }, [isEditing]);
+
+  useEffect(() => {
+    if (!isEditing || !order?.branchId) {
+      setAgentList([]);
+      return;
+    }
+    const branchId = order.branchId;
+    void (async () => {
+      const { data } = await supabase
+        .from('employees')
+        .select('id, employee_name, employee_id, branches(name)')
+        .eq('branch_id', branchId)
+        .eq('role', 'Sales Agent')
+        .eq('status', 'active')
+        .order('employee_name');
+      let agents = (data ?? []).map((row) => ({
+        id: row.id,
+        employee_name: row.employee_name,
+        employee_id: row.employee_id,
+        branch_name: (row as { branches?: { name?: string } | null }).branches?.name ?? undefined,
+      }));
+      if (order.agentId && !agents.some((a) => a.id === order.agentId)) {
+        const { data: current } = await supabase
+          .from('employees')
+          .select('id, employee_name, employee_id, branches(name)')
+          .eq('id', order.agentId)
+          .maybeSingle();
+        if (current) {
+          agents = [
+            {
+              id: current.id,
+              employee_name: current.employee_name,
+              employee_id: current.employee_id,
+              branch_name: (current as { branches?: { name?: string } | null }).branches?.name ?? undefined,
+            },
+            ...agents,
+          ];
+        }
+      }
+      setAgentList(agents);
+    })();
+  }, [isEditing, order?.branchId, order?.agentId]);
 
   useEffect(() => {
     if (!isEditing || !order) return;
@@ -512,6 +660,72 @@ export function OrderDetailPage() {
       setOrderLogs(prev => [newLog, ...prev]);
     }
   };
+
+  const reloadProofsFromDb = async (orderNumberForDisplay: string) => {
+    if (!id) return;
+    const { data: proofRows } = await supabase
+      .from('order_proof_documents')
+      .select('*')
+      .eq('order_id', id)
+      .order('uploaded_at', { ascending: false });
+    setProofs((proofRows ?? []).map((pr) => proofRowToDocument(pr as any, orderNumberForDisplay)));
+  };
+
+  const refreshOrderPaymentFieldsFromDb = async () => {
+    if (!id) return;
+    const { data: row, error } = await supabase
+      .from('orders')
+      .select('amount_paid, balance_due, payment_status')
+      .eq('id', id)
+      .maybeSingle();
+    if (error || !row) return;
+    setOrder((o) => {
+      if (!o) return o;
+      const derived = deriveOrderPaymentFields(
+        o.totalAmount,
+        Number(row.amount_paid ?? 0),
+        Number(row.balance_due ?? 0),
+      );
+      return {
+        ...o,
+        amountPaid: derived.amountPaid,
+        balanceDue: derived.balanceDue,
+        paymentStatus: row.payment_status as OrderDetail['paymentStatus'],
+      };
+    });
+  };
+
+  const loadCustomerCreditSummary = async (customerId: string) => {
+    setCustomerCreditLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('customers')
+        .select('credit_limit, outstanding_balance, available_credit')
+        .eq('id', customerId)
+        .maybeSingle();
+      if (error || !data) {
+        setCustomerCreditSummary(null);
+        return;
+      }
+      setCustomerCreditSummary({
+        creditLimit: Number(data.credit_limit ?? 0),
+        outstandingBalance: Number(data.outstanding_balance ?? 0),
+        availableCredit: Number(data.available_credit ?? 0),
+      });
+    } finally {
+      setCustomerCreditLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!showProofModal || proofType !== 'payment' || !order?.customerId) return;
+    void loadCustomerCreditSummary(order.customerId);
+  }, [showProofModal, proofType, order?.customerId]);
+
+  useEffect(() => {
+    if (!showProofEditModal || editingProof?.type !== 'payment' || !order?.customerId) return;
+    void loadCustomerCreditSummary(order.customerId);
+  }, [showProofEditModal, editingProof?.type, order?.customerId]);
 
   const advanceLogisticsStatus = async (
     next: OrderStatus,
@@ -743,6 +957,86 @@ export function OrderDetailPage() {
     }
   };
 
+  const getMaxProofCreditAmount = (): number => {
+    if (!order?.customerId || !customerCreditSummary || customerCreditSummary.creditLimit <= 0) {
+      return 0;
+    }
+    const balanceDue = deriveOrderPaymentFields(
+      order.totalAmount,
+      order.amountPaid,
+      order.balanceDue,
+    ).balanceDue;
+    return roundMoney(Math.max(0, Math.min(customerCreditSummary.availableCredit, balanceDue)));
+  };
+
+  const maxProofCreditAmount = getMaxProofCreditAmount();
+  const canApplyCustomerCredit =
+    Boolean(order?.customerId) &&
+    !customerCreditLoading &&
+    customerCreditSummary != null &&
+    customerCreditSummary.creditLimit > 0 &&
+    maxProofCreditAmount > 0.01;
+
+  const proofModalBalanceDue = order
+    ? deriveOrderPaymentFields(order.totalAmount, order.amountPaid, order.balanceDue).balanceDue
+    : 0;
+
+  const capProofMoney = (raw: string) => {
+    if (raw === '') {
+      setProofMoneyPayment('');
+      return;
+    }
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) return;
+    const credit = Number(proofPaymentCredit) || 0;
+    const maxMoney = Math.max(0, proofModalBalanceDue - credit);
+    setProofMoneyPayment(String(Math.min(n, maxMoney)));
+  };
+
+  const capProofCredit = (raw: string) => {
+    if (raw === '') {
+      setProofPaymentCredit('');
+      return;
+    }
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) return;
+    const money = Number(proofMoneyPayment) || 0;
+    const maxCredit = Math.min(getMaxProofCreditAmount(), Math.max(0, proofModalBalanceDue - money));
+    setProofPaymentCredit(String(Math.min(n, maxCredit)));
+  };
+
+  const editingProofPaymentTotal = editingProof
+    ? roundMoney(
+        (editingProof.paymentCashAmount ?? 0) +
+          (editingProof.paymentCreditAmount ?? 0) +
+          (editingProof.paymentAdjustment ?? 0),
+      )
+    : 0;
+  const editProofAmountPool = roundMoney(proofModalBalanceDue + editingProofPaymentTotal);
+
+  const capEditProofMoney = (raw: string) => {
+    if (raw === '') {
+      setEditProofMoney('');
+      return;
+    }
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) return;
+    const credit = Number(editProofCredit) || 0;
+    setEditProofMoney(String(Math.min(n, Math.max(0, editProofAmountPool - credit))));
+  };
+
+  const capEditProofCredit = (raw: string) => {
+    if (raw === '') {
+      setEditProofCredit('');
+      return;
+    }
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) return;
+    const money = Number(editProofMoney) || 0;
+    const maxCredit = Math.min(getMaxProofCreditAmount(), Math.max(0, editProofAmountPool - money));
+    setEditProofCredit(String(Math.min(n, maxCredit)));
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-32 gap-3 text-gray-500">
@@ -780,6 +1074,7 @@ export function OrderDetailPage() {
 
   const getPaymentBadgeVariant = (status: string): 'success' | 'warning' | 'danger' | 'neutral' => {
     if (status === 'Paid') return 'success';
+    if (status === 'On Credit') return 'success';
     if (status === 'Overdue') return 'danger';
     if (['Partially Paid', 'Invoiced'].includes(status)) return 'warning';
     return 'neutral';
@@ -902,8 +1197,7 @@ export function OrderDetailPage() {
     if (proofImageUrls.length > 0) {
       const uploaderRole: ProofDocument['uploadedByRole'] =
         role === 'Logistics' || role === 'Driver' ? 'Logistics' : 'Agent';
-      const t = Date.now();
-      const newProofs: ProofDocument[] = proofImageUrls.map((fileUrl, i) => {
+      const rows = proofImageUrls.map((fileUrl) => {
         const raw = fileUrl.split('/').pop()?.split('?')[0] ?? 'image';
         let fileName = raw;
         try {
@@ -912,33 +1206,41 @@ export function OrderDetailPage() {
           fileName = raw;
         }
         return {
-          id: `proof-${t}-${i}`,
-          orderId: order.id,
+          order_id: id,
           type: 'delivery' as const,
-          fileName,
-          fileUrl,
-          fileSize: 0,
-          uploadedBy: order.agent,
-          uploadedByRole: uploaderRole,
-          uploadedAt: new Date().toISOString(),
+          file_name: fileName,
+          file_url: fileUrl,
+          file_size: 0,
+          uploaded_by: actorLabel,
+          uploaded_by_role: uploaderRole,
           status: 'verified' as const,
+          title: `Delivery — ${fileName}`,
           notes: 'Recorded with delivery (gallery)',
+          payment_cash_amount: 0,
+          payment_credit_amount: 0,
+          payment_adjustment: 0,
         };
       });
-      setProofs((prev) => [...prev, ...newProofs]);
-      const names = newProofs.map((p) => p.fileName).join(', ');
-      await insertOrderLog(
-        'proof_uploaded',
-        `Proof of delivery: ${proofImageUrls.length} image(s) — ${names}`,
-        null,
-        null,
-        { count: proofImageUrls.length, fileNames: names, source: 'image_gallery' },
-      );
-      addAuditLog(
-        'Proof of Delivery',
-        'Order',
-        `Attached ${proofImageUrls.length} image(s) with delivery for order ${order.id}`,
-      );
+      const { error: pErr } = await insertOrderProofDocuments(rows);
+      if (pErr) {
+        console.error(pErr);
+        alert('Delivery saved but proof files could not be stored: ' + pErr);
+      } else {
+        const names = rows.map((r) => r.file_name).join(', ');
+        await insertOrderLog(
+          'proof_uploaded',
+          `Proof of delivery: ${proofImageUrls.length} image(s) — ${names}`,
+          null,
+          null,
+          { count: proofImageUrls.length, fileNames: names, source: 'image_gallery' },
+        );
+        addAuditLog(
+          'Proof of Delivery',
+          'Order',
+          `Attached ${proofImageUrls.length} image(s) with delivery for order ${order.id}`,
+        );
+        await reloadProofsFromDb(order.id);
+      }
     }
 
     setOrder({
@@ -1094,6 +1396,16 @@ export function OrderDetailPage() {
     const subtotal = editedOrder.items.reduce((sum, item) => sum + item.lineTotal, 0);
     const discountAmount = editedOrder.discountAmount ?? 0;
     const totalAmount = subtotal - discountAmount;
+    const derivedPay = deriveOrderPaymentFields(
+      totalAmount,
+      oldOrder.amountPaid,
+      oldOrder.balanceDue,
+    );
+
+    const agentIdToSave = editedOrder.agentId?.trim() || null;
+    const agentNameToSave = agentIdToSave
+      ? (agentList.find((a) => a.id === agentIdToSave)?.employee_name ?? editedOrder.agent)?.trim() || null
+      : null;
 
     // Update the order header
     const { error: orderErr } = await supabase
@@ -1104,6 +1416,8 @@ export function OrderDetailPage() {
         subtotal,
         discount_amount: discountAmount,
         total_amount: totalAmount,
+        amount_paid: derivedPay.amountPaid,
+        balance_due: derivedPay.balanceDue,
         required_date: editedOrder.requiredDate || null,
         estimated_delivery: editedOrder.estimatedDelivery || null,
         scheduled_departure_date: editedOrder.scheduledDepartureDate || null,
@@ -1112,12 +1426,26 @@ export function OrderDetailPage() {
         payment_method: editedOrder.paymentMethod,
         customer_id: editedOrder.customerId || null,
         customer_name: editedOrder.customer?.trim() ? editedOrder.customer : null,
+        agent_id: agentIdToSave,
+        agent_name: agentNameToSave,
         urgency: editedOrder.urgency ?? 'Medium',
         updated_at: new Date().toISOString(),
       })
       .eq('id', id);
 
-    if (orderErr) { alert('Failed to save order: ' + orderErr.message); return; }
+    if (orderErr) {
+      alert('Failed to save order: ' + orderErr.message);
+      return;
+    }
+
+    const { data: savedHeader, error: headerReadErr } = await supabase
+      .from('orders')
+      .select('agent_id, agent_name, customer_id, customer_name, status, payment_status')
+      .eq('id', id)
+      .maybeSingle();
+    if (headerReadErr) {
+      console.warn('Order saved but could not re-read header:', headerReadErr.message);
+    }
 
     // Delete existing line items and re-insert
     await supabase.from('order_line_items').delete().eq('order_id', id);
@@ -1144,7 +1472,13 @@ export function OrderDetailPage() {
           line_total: item.lineTotal,
           stock_hint: item.stockHint ?? 'Available',
           available_stock: item.availableStock ?? null,
-          discounts_breakdown: item.discountsBreakdown ?? null,
+          discounts_breakdown:
+            item.discountsBreakdown && item.discountsBreakdown.length > 0
+              ? item.discountsBreakdown.map((d) => ({
+                  name: d.name,
+                  percentage: Number(d.percentage),
+                }))
+              : null,
           quantity_shipped: item.quantityShipped ?? null,
           quantity_delivered: quantityDelivered,
         };
@@ -1172,6 +1506,15 @@ export function OrderDetailPage() {
         `Payment status changed from "${oldOrder.paymentStatus}" to "${editedOrder.paymentStatus}"`,
         { paymentStatus: oldOrder.paymentStatus },
         { paymentStatus: editedOrder.paymentStatus },
+      );
+    }
+
+    if (oldOrder.agentId !== editedOrder.agentId || oldOrder.agent !== editedOrder.agent) {
+      await insertOrderLog(
+        'note_added',
+        `Agent changed from "${oldOrder.agent || '—'}" to "${editedOrder.agent || '—'}"`,
+        { agentId: oldOrder.agentId || null, agentName: oldOrder.agent || null },
+        { agentId: editedOrder.agentId || null, agentName: editedOrder.agent || null },
       );
     }
 
@@ -1253,7 +1596,32 @@ export function OrderDetailPage() {
         : (item.quantityDelivered ?? null);
       return { ...item, quantityDelivered };
     });
-    setOrder({ ...editedOrder, subtotal, totalAmount, items: savedItems });
+    const savedPay = deriveOrderPaymentFields(totalAmount, oldOrder.amountPaid, oldOrder.balanceDue);
+    setOrder({
+      ...editedOrder,
+      agentId: savedHeader?.agent_id ? String(savedHeader.agent_id) : editedOrder.agentId,
+      agent: savedHeader?.agent_name ? String(savedHeader.agent_name) : editedOrder.agent,
+      customerId: savedHeader?.customer_id ? String(savedHeader.customer_id) : editedOrder.customerId,
+      customer: savedHeader?.customer_name ? String(savedHeader.customer_name) : editedOrder.customer,
+      status: (savedHeader?.status as OrderStatus) ?? editedOrder.status,
+      paymentStatus:
+        (savedHeader?.payment_status as OrderDetail['paymentStatus']) ?? editedOrder.paymentStatus,
+      subtotal,
+      totalAmount,
+      amountPaid: savedPay.amountPaid,
+      balanceDue: savedPay.balanceDue,
+      items: savedItems,
+    });
+    const { data: payProofCheck } = await supabase
+      .from('order_proof_documents')
+      .select('id')
+      .eq('order_id', id)
+      .eq('type', 'payment')
+      .limit(1);
+    if ((payProofCheck ?? []).length > 0) {
+      await syncOrderPaymentsFromProofs(id);
+      await refreshOrderPaymentFieldsFromDb();
+    }
     setDeliveredDrafts({});
     setIsEditing(false);
     setEditedOrder(null);
@@ -1307,14 +1675,14 @@ export function OrderDetailPage() {
       return item;
     });
     
-    setEditedOrder({ ...editedOrder, items: updatedItems });
+    patchEditedOrder({ items: updatedItems });
   };
 
   const handleRemoveItem = (itemId: string) => {
     if (!editedOrder) return;
     
     const updatedItems = editedOrder.items.filter(item => item.id !== itemId);
-    setEditedOrder({ ...editedOrder, items: updatedItems });
+    patchEditedOrder({ items: updatedItems });
   };
 
   const handleAddProduct = () => {
@@ -1593,14 +1961,39 @@ export function OrderDetailPage() {
     };
 
     if (editingItemId) {
-      // Replace the existing item
-      setEditedOrder({
-        ...editedOrder,
-        items: editedOrder.items.map(i => i.id === editingItemId ? updatedItem : i),
-      });
+      patchEditedOrder((prev) => ({
+        items: prev.items.map((i) => (i.id === editingItemId ? updatedItem : i)),
+      }));
     } else {
-      setEditedOrder({ ...editedOrder, items: [...editedOrder.items, updatedItem] });
+      patchEditedOrder((prev) => ({ items: [...prev.items, updatedItem] }));
     }
+
+    // Persist discount names to DB immediately so the customer portal can list each discount
+    if (id && editingItemId && isPersistedOrderLineId(editingItemId)) {
+      const breakdownPayload =
+        discountsForItem.length > 0
+          ? discountsForItem.map((d) => ({ name: d.name, percentage: d.percentage }))
+          : null;
+      void supabase
+        .from('order_line_items')
+        .update({
+          quantity: parsedQty,
+          unit_price: variantPrice,
+          discount_percent: totalDiscount,
+          discount_amount: gross - finalTotal,
+          line_total: finalTotal,
+          discounts_breakdown: breakdownPayload,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', editingItemId)
+        .eq('order_id', id)
+        .then(({ error: lineErr }) => {
+          if (lineErr) {
+            console.warn('Line item saved in editor but discount breakdown not synced:', lineErr.message);
+          }
+        });
+    }
+
     handleCloseProductModal();
   };
 
@@ -1711,100 +2104,429 @@ export function OrderDetailPage() {
   };
 
   const openProofDocumentModal = () => {
+    setProofType(documentsProofTab);
     setSelectedProofGalleryUrls([]);
     setSelectedProofLocalFiles([]);
     setProofNotes('');
+    setProofDocTitle('');
+    setProofMoneyPayment('');
+    setProofPaymentCredit('');
+    setCustomerCreditSummary(null);
+    if (order?.customerId) {
+      void loadCustomerCreditSummary(order.customerId);
+    }
     setShowProofModal(true);
+  };
+
+  const proofUserNotesFromRaw = (raw: string | undefined): string => {
+    if (!raw?.trim()) return '';
+    const parsed = parseProofNotes(raw);
+    return parsed.notes?.trim() || (parsed.amount != null ? '' : raw.trim());
+  };
+
+  const openProofEditModal = (proof: ProofDocument) => {
+    setEditingProof(proof);
+    setEditProofTitle(proof.title?.trim() || '');
+    setEditProofNotes(proofUserNotesFromRaw(proof.notes));
+    setEditProofMoney(String(proof.paymentCashAmount ?? 0));
+    setEditProofCredit(String(proof.paymentCreditAmount ?? 0));
+    setShowProofEditModal(true);
+  };
+
+  const closeProofEditModal = () => {
+    setShowProofEditModal(false);
+    setEditingProof(null);
+    setEditProofTitle('');
+    setEditProofNotes('');
+    setEditProofMoney('');
+    setEditProofCredit('');
+  };
+
+  const handleSaveProofEdit = async () => {
+    if (!id || !order || !editingProof) return;
+
+    const titleTrim = editProofTitle.trim();
+    const notesTrim = editProofNotes.trim() || null;
+    const paymentCash =
+      editingProof.type === 'payment' ? Math.max(0, Number(editProofMoney) || 0) : 0;
+    const paymentCredit =
+      editingProof.type === 'payment' ? Math.max(0, Number(editProofCredit) || 0) : 0;
+    const paymentAdj = roundMoney(editingProof.paymentAdjustment ?? 0);
+
+    if (editingProof.type === 'payment') {
+      const thisTotal = roundMoney(paymentCash + paymentCredit + paymentAdj);
+      if (thisTotal > editProofAmountPool + 0.01) {
+        alert(
+          `Payment for this proof cannot exceed ₱${editProofAmountPool.toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          })} (remaining balance plus what this proof already records).`,
+        );
+        return;
+      }
+      if (paymentCredit > 0) {
+        if (!order.customerId) {
+          alert('Link a customer to this order before applying credit.');
+          return;
+        }
+        if (!customerCreditSummary || customerCreditSummary.creditLimit <= 0) {
+          alert('This customer has no credit limit.');
+          return;
+        }
+        const maxCr = getMaxProofCreditAmount();
+        const creditHeadroom = roundMoney(maxCr + (editingProof.paymentCreditAmount ?? 0));
+        if (paymentCredit > creditHeadroom + 0.01) {
+          alert(`Credit cannot exceed ₱${creditHeadroom.toLocaleString()} for this order.`);
+          return;
+        }
+      }
+    }
+
+    let creditBefore: number | undefined;
+    if (editingProof.type === 'payment') {
+      const agg = await fetchPaymentProofAggregates(id);
+      creditBefore = agg.totalCredit;
+    }
+
+    const notesForDb =
+      editingProof.type === 'payment'
+        ? encodeOrderProofPaymentNotes({
+            cash: paymentCash,
+            credit: paymentCredit,
+            adjustment: paymentAdj,
+            userNotes: notesTrim,
+          })
+        : notesTrim;
+
+    setProofEditBusy(true);
+    try {
+      const { error: upErr } = await updateOrderProofDocument(
+        editingProof.id,
+        {
+          title: titleTrim || null,
+          notes: notesForDb,
+          payment_cash_amount: editingProof.type === 'payment' ? paymentCash : undefined,
+          payment_credit_amount: editingProof.type === 'payment' ? paymentCredit : undefined,
+          payment_adjustment: editingProof.type === 'payment' ? paymentAdj : undefined,
+        },
+        {
+          proofType: editingProof.type,
+          userNotes: notesTrim,
+        },
+      );
+      if (upErr) {
+        alert(
+          upErr +
+            (isSchemaColumnError(upErr)
+              ? '\n\nRun database/order_proof_payment_extension.sql in Supabase to enable payment amounts on proofs.'
+              : ''),
+        );
+        return;
+      }
+
+      if (editingProof.type === 'payment') {
+        const s = await syncOrderPaymentsFromProofs(id, { creditAppliedBefore: creditBefore });
+        if (s.ok === false) {
+          alert(s.error);
+          return;
+        }
+        await refreshOrderPaymentFieldsFromDb();
+        if (order.customerId) {
+          await loadCustomerCreditSummary(order.customerId);
+        }
+      }
+
+      await insertOrderLog(
+        'proof_updated',
+        `Updated ${editingProof.type} proof: ${editingProof.fileName}`,
+        {
+          title: editingProof.title ?? null,
+          notes: editingProof.notes ?? null,
+          paymentCashAmount: editingProof.paymentCashAmount ?? 0,
+          paymentCreditAmount: editingProof.paymentCreditAmount ?? 0,
+        },
+        {
+          title: titleTrim || null,
+          notes: notesTrim,
+          paymentCashAmount: paymentCash,
+          paymentCreditAmount: paymentCredit,
+        },
+        { proofId: editingProof.id },
+      );
+
+      closeProofEditModal();
+      await reloadProofsFromDb(order.id);
+    } finally {
+      setProofEditBusy(false);
+    }
+  };
+
+  const handleRemoveProof = async (proof: ProofDocument) => {
+    if (!id || !order) return;
+    if (!window.confirm(`Remove "${proof.title || proof.fileName}" from this order?`)) return;
+    let creditBefore: number | undefined;
+    if (proof.type === 'payment') {
+      const agg = await fetchPaymentProofAggregates(id);
+      creditBefore = agg.totalCredit;
+    }
+    const storagePath = tryExtractStoragePathFromPublicUrl(proof.fileUrl);
+    const { error: delErr } = await supabase.from('order_proof_documents').delete().eq('id', proof.id);
+    if (delErr) {
+      alert(delErr.message);
+      return;
+    }
+    if (storagePath) {
+      await supabase.storage.from('images').remove([storagePath]).catch(() => undefined);
+    }
+    await insertOrderLog(
+      'proof_removed',
+      `Removed ${proof.type} proof: ${proof.fileName}`,
+      { proofId: proof.id, type: proof.type },
+      null,
+      { proofId: proof.id, fileName: proof.fileName },
+    );
+    if (proof.type === 'payment' && creditBefore !== undefined) {
+      const s = await syncOrderPaymentsFromProofs(id, { creditAppliedBefore: creditBefore });
+      if (s.ok === false) {
+        alert(s.error);
+      } else {
+        await refreshOrderPaymentFieldsFromDb();
+      }
+      if (order.customerId) {
+        await loadCustomerCreditSummary(order.customerId);
+      }
+    }
+    await reloadProofsFromDb(order.id);
   };
 
   const handleUploadProof = async () => {
     if (!order || !id) return;
     const nGallery = selectedProofGalleryUrls.length;
     const nFiles = selectedProofLocalFiles.length;
-    if (nGallery === 0 && nFiles === 0) return;
+    if (nGallery === 0 && nFiles === 0) {
+      alert('Attach at least one image or document to save a proof, or click Cancel to skip.');
+      return;
+    }
     if (nGallery + nFiles > MAX_PROOF_BATCH) {
       alert(`You can add at most ${MAX_PROOF_BATCH} files per upload. Remove some attachments first.`);
       return;
     }
 
-    const base = Date.now();
-    const notesTrim = proofNotes.trim() || undefined;
+    const paymentCash = proofType === 'payment' ? Math.max(0, Number(proofMoneyPayment) || 0) : 0;
+    const paymentCredit = proofType === 'payment' ? Math.max(0, Number(proofPaymentCredit) || 0) : 0;
+    const paymentAdj = 0;
+
+    let proofPaidBefore = 0;
+    let creditBefore = 0;
+    if (proofType === 'payment') {
+      const agg = await fetchPaymentProofAggregates(id);
+      proofPaidBefore = agg.totalPaid;
+      creditBefore = agg.totalCredit;
+
+      const balanceRemaining = deriveOrderPaymentFields(
+        order.totalAmount,
+        order.amountPaid,
+        order.balanceDue,
+      ).balanceDue;
+      const thisPayment = roundMoney(paymentCash + paymentCredit);
+
+      const n = nGallery + nFiles;
+      if (n > 1 && thisPayment > 0) {
+        alert(
+          'Payment amounts: upload one file at a time so cash/credit apply to a single proof (or leave amounts at zero for multiple attachments).',
+        );
+        return;
+      }
+      if (thisPayment > balanceRemaining + 0.01) {
+        alert(
+          `This payment (₱${thisPayment.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}) exceeds the remaining balance of ₱${balanceRemaining.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}.`,
+        );
+        return;
+      }
+      if (paymentCredit > 0 && !order.customerId) {
+        alert('This order has no linked customer — credit cannot be applied.');
+        return;
+      }
+      if (paymentCredit > 0) {
+        if (!customerCreditSummary || customerCreditSummary.creditLimit <= 0) {
+          alert('This customer has no credit limit set.');
+          return;
+        }
+        const maxCr = getMaxProofCreditAmount();
+        if (maxCr <= 0) {
+          alert('No available customer credit for this order.');
+          return;
+        }
+        if (paymentCredit > maxCr + 0.01) {
+          alert(`Credit cannot exceed ₱${maxCr.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (available for this order).`);
+          return;
+        }
+      }
+    }
+
+    const dbType = proofType;
     const uploaderRole: ProofDocument['uploadedByRole'] =
       role === 'Logistics' || role === 'Driver' ? 'Logistics' : 'Agent';
     const uploadedBy = employeeName || session?.user?.email || order.agent;
+    const notesTrim = proofNotes.trim() || null;
+    const titleBase = proofDocTitle.trim();
+    const nowIso = new Date().toISOString();
 
-    const newProofs: ProofDocument[] = [];
+    setProofUploadBusy(true);
+    try {
+      const rows: Parameters<typeof insertOrderProofDocuments>[0] = [];
 
-    selectedProofGalleryUrls.forEach((url, i) => {
-      const raw = url.split('/').pop()?.split('?')[0] ?? 'image';
-      let fileName = raw;
-      try {
-        fileName = decodeURIComponent(raw);
-      } catch {
-        fileName = raw;
+      for (let i = 0; i < selectedProofGalleryUrls.length; i++) {
+        const url = selectedProofGalleryUrls[i]!;
+        const raw = url.split('/').pop()?.split('?')[0] ?? 'image';
+        let fileName = raw;
+        try {
+          fileName = decodeURIComponent(raw);
+        } catch {
+          fileName = raw;
+        }
+        const defaultTitle = titleBase || fileName;
+        rows.push({
+          order_id: id,
+          type: dbType,
+          file_name: fileName,
+          file_url: url,
+          file_size: 0,
+          uploaded_by: uploadedBy,
+          uploaded_by_role: uploaderRole,
+          status: 'verified',
+          title: defaultTitle,
+          notes: notesTrim,
+          payment_cash_amount: proofType === 'payment' ? paymentCash : 0,
+          payment_credit_amount: proofType === 'payment' ? paymentCredit : 0,
+          payment_adjustment: proofType === 'payment' ? paymentAdj : 0,
+        });
       }
-      newProofs.push({
-        id: `proof-${base}-g-${i}`,
-        orderId: order.id,
-        type: proofType,
-        fileName,
-        fileUrl: url,
-        fileSize: 0,
-        uploadedBy,
-        uploadedByRole: uploaderRole,
-        uploadedAt: new Date().toISOString(),
-        status: 'verified',
-        notes: notesTrim,
-      });
-    });
 
-    selectedProofLocalFiles.forEach((file, i) => {
-      newProofs.push({
-        id: `proof-${base}-f-${i}`,
-        orderId: order.id,
-        type: proofType,
-        fileName: file.name,
-        fileUrl: URL.createObjectURL(file),
-        fileSize: file.size,
-        uploadedBy,
-        uploadedByRole: uploaderRole,
-        uploadedAt: new Date().toISOString(),
-        status: 'verified',
-        notes: notesTrim,
-      });
-    });
+      for (const file of selectedProofLocalFiles) {
+        const { publicUrl } = await uploadOrderProofBinary(id, dbType, file);
+        const defaultTitle = titleBase || file.name;
+        rows.push({
+          order_id: id,
+          type: dbType,
+          file_name: file.name,
+          file_url: publicUrl,
+          file_size: file.size,
+          uploaded_by: uploadedBy,
+          uploaded_by_role: uploaderRole,
+          status: 'verified',
+          title: defaultTitle,
+          notes: notesTrim,
+          payment_cash_amount: proofType === 'payment' ? paymentCash : 0,
+          payment_credit_amount: proofType === 'payment' ? paymentCredit : 0,
+          payment_adjustment: proofType === 'payment' ? paymentAdj : 0,
+        });
+      }
 
-    setProofs((prev) => [...prev, ...newProofs]);
-    const names = newProofs.map((p) => p.fileName).join(', ');
-    const typeLabel =
-      proofType === 'delivery' ? 'Proof of Delivery' : proofType === 'payment' ? 'Proof of Payment' : 'Receipt';
-    await insertOrderLog(
-      'proof_uploaded',
-      `${typeLabel}: ${newProofs.length} file(s) — ${names}`,
-      null,
-      null,
-      { count: newProofs.length, fileNames: names, source: 'order_proof_modal' },
-    );
-    addAuditLog(typeLabel, 'Order', `Attached ${newProofs.length} file(s) to order ${order.id}`);
-    alert(`${typeLabel} added.\n\n${newProofs.length} file(s): ${names}`);
+      const { data: inserted, error: insErr } = await insertOrderProofDocuments(rows);
+      if (insErr) {
+        alert(
+          insErr +
+            (isSchemaColumnError(insErr)
+              ? '\n\nRun database/order_proof_payment_extension.sql in Supabase to enable payment amounts and titles on proofs.'
+              : ''),
+        );
+        return;
+      }
+      const insertedIds = (inserted ?? []).map((r) => r.id);
 
-    setSelectedProofGalleryUrls([]);
-    setSelectedProofLocalFiles([]);
-    setProofNotes('');
-    setShowProofModal(false);
+      if (proofType === 'payment') {
+        const prevPaid = order.amountPaid;
+        const prevBal = order.balanceDue;
+        const prevSt = order.paymentStatus;
+        const overrideTotalPaid = computeOrderAmountPaidAfterProofIncrement({
+          proofPaidBefore,
+          orderAmountPaid: order.amountPaid,
+          cashIncrement: paymentCash,
+          creditIncrement: paymentCredit,
+        });
+        const s = await syncOrderPaymentsFromProofs(id, {
+          creditAppliedBefore: creditBefore,
+          overrideTotalPaid,
+        });
+        if (s.ok === false) {
+          if (insertedIds.length) {
+            await supabase.from('order_proof_documents').delete().in('id', insertedIds);
+          }
+          alert(s.error);
+          return;
+        }
+        await refreshOrderPaymentFieldsFromDb();
+        if (order.customerId) {
+          await loadCustomerCreditSummary(order.customerId);
+        }
+        const { data: fresh } = await supabase
+          .from('orders')
+          .select('amount_paid, balance_due, payment_status')
+          .eq('id', id)
+          .maybeSingle();
+        await insertOrderLog(
+          'payment_status_changed',
+          `Payment totals updated from proof upload (cash ₱${paymentCash.toLocaleString()}, credit ₱${paymentCredit.toLocaleString()}).`,
+          {
+            amount_paid: prevPaid,
+            balance_due: prevBal,
+            paymentStatus: prevSt,
+          },
+          fresh
+            ? {
+                amount_paid: Number(fresh.amount_paid),
+                balance_due: Number(fresh.balance_due),
+                paymentStatus: fresh.payment_status,
+              }
+            : null,
+          { fileNames: rows.map((r) => r.file_name) },
+        );
+      }
+
+      const names = rows.map((r) => r.file_name).join(', ');
+      const typeLabel =
+        proofType === 'delivery' ? 'Proof of delivery' : proofType === 'payment' ? 'Proof of payment' : 'Other document';
+      await insertOrderLog(
+        'proof_uploaded',
+        `${typeLabel}: ${rows.length} file(s) — ${names}`,
+        null,
+        null,
+        { count: rows.length, fileNames: names, source: 'order_proof_modal', type: proofType },
+      );
+      addAuditLog(typeLabel, 'Order', `Attached ${rows.length} file(s) to order ${order.id}`);
+      alert(`${typeLabel} added.\n\n${rows.length} file(s): ${names}`);
+
+      setSelectedProofGalleryUrls([]);
+      setSelectedProofLocalFiles([]);
+      setProofNotes('');
+      setProofDocTitle('');
+      setProofMoneyPayment('');
+      setProofPaymentCredit('');
+      setShowProofModal(false);
+      await reloadProofsFromDb(order.id);
+    } finally {
+      setProofUploadBusy(false);
+    }
   };
 
   const handleStatusChange = (newStatus: OrderStatus) => {
-    if (!editedOrder) return;
-    setEditedOrder({ ...editedOrder, status: newStatus });
+    patchEditedOrder({ status: newStatus });
   };
 
   const handlePaymentStatusChange = (newPaymentStatus: string) => {
-    if (!editedOrder) return;
-    setEditedOrder({ ...editedOrder, paymentStatus: newPaymentStatus as any });
+    patchEditedOrder({ paymentStatus: newPaymentStatus as OrderDetail['paymentStatus'] });
   };
 
   const displayOrder = isEditing && editedOrder ? editedOrder : order;
+  const paymentSummary = displayOrder
+    ? deriveOrderPaymentFields(displayOrder.totalAmount, displayOrder.amountPaid, displayOrder.balanceDue)
+    : null;
+  const proofModalPayment = order
+    ? deriveOrderPaymentFields(order.totalAmount, order.amountPaid, order.balanceDue)
+    : null;
+
+  const documentProofsFiltered = order ? proofs.filter((p) => p.type === documentsProofTab) : [];
 
   // Compute effective discount % for a line item (fall back to amount-based calculation)
   const effectiveDiscountPct = (item: OrderLineItem) => {
@@ -1830,7 +2552,7 @@ export function OrderDetailPage() {
     'Rejected',
   ];
 
-  const allPaymentStatuses = ['Unbilled', 'Invoiced', 'Partially Paid', 'Paid', 'Overdue'];
+  const allPaymentStatuses = ['Unbilled', 'Invoiced', 'Partially Paid', 'Paid', 'Overdue', 'On Credit'];
 
   const canUseLogisticsUi = !['Agent', 'Driver', 'Customer'].includes(role ?? '');
   const LOGISTICS_FLOW_STEPS: OrderStatus[] = [
@@ -2071,13 +2793,6 @@ export function OrderDetailPage() {
                   Resubmit
                 </Button>
               )}
-              <Link
-                to="/finance"
-                className="inline-flex min-h-[2.5rem] shrink-0 items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50 sm:px-5"
-              >
-                <Receipt className="h-4 w-4 shrink-0" />
-                Payment Proofs
-              </Link>
               {!['Cancelled', 'Rejected', 'Delivered'].includes(order.status) && (
                 <button
                   type="button"
@@ -2181,7 +2896,7 @@ export function OrderDetailPage() {
                 <select
                   value={editedOrder.urgency ?? 'Medium'}
                   onChange={(e) =>
-                    setEditedOrder({ ...editedOrder, urgency: e.target.value as OrderUrgency })
+                    patchEditedOrder({ urgency: e.target.value as OrderUrgency })
                   }
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none bg-white"
                 >
@@ -2227,7 +2942,9 @@ export function OrderDetailPage() {
             </div>
             <div>
               <p className="text-sm text-gray-500 mb-2">Balance Due</p>
-              <p className="text-2xl font-bold text-gray-900">₱{displayOrder.balanceDue.toLocaleString()}</p>
+              <p className="text-2xl font-bold text-gray-900">
+                ₱{(paymentSummary?.balanceDue ?? displayOrder.balanceDue).toLocaleString()}
+              </p>
             </div>
           </div>
         </CardContent>
@@ -2270,11 +2987,11 @@ export function OrderDetailPage() {
                 <select
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
                   value={editedOrder.customerId || ''}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    const c = customerList.find((x) => x.id === v);
-                    setEditedOrder({ ...editedOrder, customerId: v, customer: c?.name ?? '' });
-                  }}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      const c = customerList.find((x) => x.id === v);
+                      patchEditedOrder({ customerId: v, customer: c?.name ?? '' });
+                    }}
                 >
                   <option value="">— Select customer —</option>
                   {customerList.map((c) => (
@@ -2294,7 +3011,16 @@ export function OrderDetailPage() {
             ) : (
               <div className="space-y-3">
                 <div>
-                  <p className="text-sm font-medium text-gray-900">{order.customer || '—'}</p>
+                  {order.customerId ? (
+                    <Link
+                      to={`/customers/${order.customerId}`}
+                      className="text-sm font-medium text-blue-600 hover:text-blue-800 hover:underline"
+                    >
+                      {order.customer || 'View customer'}
+                    </Link>
+                  ) : (
+                    <p className="text-sm font-medium text-gray-900">{order.customer || '—'}</p>
+                  )}
                 </div>
                 {order.scheduledDepartureDate ? (
                   <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5">
@@ -2353,7 +3079,7 @@ export function OrderDetailPage() {
                     type="date"
                     className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm font-medium text-gray-900 w-full sm:w-auto max-w-[12rem]"
                     value={editedOrder.requiredDate ? editedOrder.requiredDate.slice(0, 10) : ''}
-                    onChange={(e) => setEditedOrder({ ...editedOrder, requiredDate: e.target.value })}
+                    onChange={(e) => patchEditedOrder({ requiredDate: e.target.value })}
                   />
                 ) : (
                   <span className="font-medium text-gray-900">{order.requiredDate || '—'}</span>
@@ -2366,7 +3092,7 @@ export function OrderDetailPage() {
                     className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm font-medium text-gray-900 w-full sm:w-auto max-w-[12rem] bg-white"
                     value={editedOrder.urgency ?? 'Medium'}
                     onChange={(e) =>
-                      setEditedOrder({ ...editedOrder, urgency: e.target.value as OrderUrgency })
+                      patchEditedOrder({ urgency: e.target.value as OrderUrgency })
                     }
                   >
                     {ORDER_URGENCY_OPTIONS.map((u) => (
@@ -2406,16 +3132,48 @@ export function OrderDetailPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="space-y-3 text-sm">
-              <div className="flex justify-between">
-                <span className="text-gray-600">Agent:</span>
-                <span className="font-medium text-gray-900">{order.agent}</span>
+            {isEditing && editedOrder ? (
+              <div className="space-y-3 text-sm">
+                <div className="space-y-1">
+                  <label className="text-xs text-gray-500">Agent</label>
+                  <select
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none bg-white"
+                    value={editedOrder.agentId || ''}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      const a = agentList.find((x) => x.id === v);
+                      patchEditedOrder({
+                        agentId: v,
+                        agent: a?.employee_name ?? '',
+                      });
+                    }}
+                  >
+                    <option value="">— No agent assigned —</option>
+                    {agentList.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.branch_name ? `${a.branch_name} — ` : ''}
+                        {a.employee_name} ({a.employee_id})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex justify-between pt-1">
+                  <span className="text-gray-600">Branch:</span>
+                  <span className="font-medium text-gray-900">{editedOrder.branch || '—'}</span>
+                </div>
               </div>
-              <div className="flex justify-between">
-                <span className="text-gray-600">Branch:</span>
-                <span className="font-medium text-gray-900">{order.branch}</span>
+            ) : (
+              <div className="space-y-3 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Agent:</span>
+                  <span className="font-medium text-gray-900">{order.agent || '—'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Branch:</span>
+                  <span className="font-medium text-gray-900">{order.branch || '—'}</span>
+                </div>
               </div>
-            </div>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -2787,11 +3545,15 @@ export function OrderDetailPage() {
               )}
               <div>
                 <p className="text-gray-600 mb-1">Amount Paid</p>
-                <p className="font-medium text-gray-900">₱{order.amountPaid.toLocaleString()}</p>
+                <p className="font-medium text-gray-900 tabular-nums">
+                  ₱{(proofModalPayment?.amountPaid ?? order.amountPaid).toLocaleString()}
+                </p>
               </div>
               <div>
                 <p className="text-gray-600 mb-1">Balance Due</p>
-                <p className="font-bold text-gray-900">₱{order.balanceDue.toLocaleString()}</p>
+                <p className="font-bold text-gray-900 tabular-nums">
+                  ₱{(proofModalPayment?.balanceDue ?? order.balanceDue).toLocaleString()}
+                </p>
               </div>
             </div>
           </CardContent>
@@ -2816,6 +3578,12 @@ export function OrderDetailPage() {
           </div>
         </CardHeader>
         <CardContent>
+          {id && (
+            <div className="mb-6">
+              <OrderCustomerPortalCard orderUuid={id} customerEmail={customerEmail} />
+            </div>
+          )}
+
           {/* Payment Links Status */}
           {paymentLinks.length > 0 && (
             <div className="mb-6">
@@ -2886,31 +3654,52 @@ export function OrderDetailPage() {
             </div>
           )}
           
+          <div className="flex flex-wrap gap-2 mb-4 border-b border-gray-200 pb-3">
+            {(['delivery', 'payment', 'other'] as const).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setDocumentsProofTab(tab)}
+                className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+                  documentsProofTab === tab
+                    ? 'bg-red-600 text-white shadow-sm'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                {tab === 'delivery' ? 'Delivery' : tab === 'payment' ? 'Payment' : 'Other'}
+                <span className="ml-1.5 text-xs opacity-90">
+                  ({proofs.filter((p) => p.type === tab).length})
+                </span>
+              </button>
+            ))}
+          </div>
+
           {/* Proofs List */}
-          {proofs.length > 0 ? (
+          {documentProofsFiltered.length > 0 ? (
             <div className="space-y-3">
-              <h4 className="text-sm font-semibold text-gray-700 mb-3">Uploaded Proofs</h4>
-              {proofs.map((proof) => (
+              <h4 className="text-sm font-semibold text-gray-700 mb-3">Uploaded — {documentsProofTab === 'delivery' ? 'Delivery' : documentsProofTab === 'payment' ? 'Payment' : 'Other'}</h4>
+              {documentProofsFiltered.map((proof) => (
                 <div key={proof.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
                   <div className="flex items-center gap-3 min-w-0 flex-1">
                     <div className={`w-10 h-10 flex-shrink-0 rounded-lg flex items-center justify-center ${
-                      proof.type === 'delivery' ? 'bg-blue-100' : proof.type === 'payment' ? 'bg-green-100' : 'bg-purple-100'
+                      proof.type === 'delivery' ? 'bg-blue-100' : proof.type === 'payment' ? 'bg-green-100' : 'bg-amber-100'
                     }`}>
                       {orderProofFileIsImageName(proof.fileName) ? (
                         <Image className={`w-5 h-5 ${
-                          proof.type === 'delivery' ? 'text-blue-600' : proof.type === 'payment' ? 'text-green-600' : 'text-purple-600'
+                          proof.type === 'delivery' ? 'text-blue-600' : proof.type === 'payment' ? 'text-green-600' : 'text-amber-700'
                         }`} />
                       ) : (
                         <FileText className={`w-5 h-5 ${
-                          proof.type === 'delivery' ? 'text-blue-600' : proof.type === 'payment' ? 'text-green-600' : 'text-purple-600'
+                          proof.type === 'delivery' ? 'text-blue-600' : proof.type === 'payment' ? 'text-green-600' : 'text-amber-700'
                         }`} />
                       )}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="font-medium text-gray-900 truncate">{proof.fileName}</p>
+                      <p className="font-medium text-gray-900 truncate">{proof.title || proof.fileName}</p>
+                      <p className="text-xs text-gray-500 truncate">{proof.fileName}</p>
                       <div className="flex items-center gap-2 mt-1 flex-wrap">
                         <Badge className="text-xs flex-shrink-0">
-                          {proof.type === 'delivery' ? 'Delivery' : proof.type === 'payment' ? 'Payment' : 'Receipt'}
+                          {proof.type === 'delivery' ? 'Delivery' : proof.type === 'payment' ? 'Payment' : 'Other'}
                         </Badge>
                         <span className="text-xs text-gray-500">
                           {new Date(proof.uploadedAt).toLocaleString('en-US', {
@@ -2921,6 +3710,20 @@ export function OrderDetailPage() {
                           })}
                         </span>
                       </div>
+                      {proof.type === 'payment' &&
+                        (proof.paymentCashAmount || proof.paymentCreditAmount || proof.paymentAdjustment) ? (
+                        <p className="text-xs text-gray-700 mt-2">
+                          ₱
+                          {(
+                            (proof.paymentCashAmount ?? 0) +
+                            (proof.paymentCreditAmount ?? 0) +
+                            (proof.paymentAdjustment ?? 0)
+                          ).toLocaleString()}
+                          {(proof.paymentCreditAmount ?? 0) > 0
+                            ? ` (includes ₱${(proof.paymentCreditAmount ?? 0).toLocaleString()} credit)`
+                            : ''}
+                        </p>
+                      ) : null}
                       {proof.notes && (
                         <p className="text-xs text-gray-600 mt-2 pr-1 whitespace-pre-wrap border-t border-gray-200/80 pt-2">
                           {proof.notes}
@@ -2928,16 +3731,32 @@ export function OrderDetailPage() {
                       )}
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 sm:gap-3 justify-end sm:justify-start flex-shrink-0">
+                  <div className="flex flex-wrap items-center gap-2 sm:gap-3 justify-end sm:justify-start flex-shrink-0">
+                    <Button variant="outline" size="sm" onClick={() => openProofEditModal(proof)}>
+                      <Edit className="w-3.5 h-3.5 mr-1" />
+                      Edit
+                    </Button>
                     <Button variant="outline" size="sm" onClick={() => window.open(proof.fileUrl, '_blank')}>
                       View
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="text-red-700 border-red-200 hover:bg-red-50"
+                      onClick={() => void handleRemoveProof(proof)}
+                    >
+                      <Trash2 className="w-3.5 h-3.5 mr-1" />
+                      Remove
                     </Button>
                   </div>
                 </div>
               ))}
             </div>
           ) : (
-            <p className="text-sm text-gray-500 text-center py-8">No proofs uploaded yet</p>
+            <p className="text-sm text-gray-500 text-center py-8">
+              No {documentsProofTab === 'delivery' ? 'delivery' : documentsProofTab === 'payment' ? 'payment' : 'other'}{' '}
+              documents yet.
+            </p>
           )}
         </CardContent>
       </Card>
@@ -2977,6 +3796,10 @@ export function OrderDetailPage() {
                       return <PackageCheck className="w-4 h-4" />;
                     case 'proof_uploaded':
                       return <Upload className="w-4 h-4" />;
+                    case 'proof_updated':
+                      return <Edit className="w-4 h-4" />;
+                    case 'proof_removed':
+                      return <Trash2 className="w-4 h-4" />;
                     case 'proof_verified':
                       return <CheckCircle2 className="w-4 h-4" />;
                     case 'status_changed':
@@ -3006,6 +3829,10 @@ export function OrderDetailPage() {
                       return 'text-red-600 bg-red-50';
                     case 'proof_uploaded':
                       return 'text-blue-600 bg-blue-50';
+                    case 'proof_updated':
+                      return 'text-indigo-600 bg-indigo-50';
+                    case 'proof_removed':
+                      return 'text-orange-700 bg-orange-50';
                     case 'shipped':
                       return 'text-amber-600 bg-amber-50';
                     case 'created':
@@ -3639,28 +4466,105 @@ export function OrderDetailPage() {
                     <button
                       type="button"
                       onClick={() => {
-                        setProofType('receipt');
+                        setProofType('other');
                         setSelectedProofGalleryUrls([]);
                         setSelectedProofLocalFiles([]);
                       }}
                       className={`p-2 md:p-3 border-2 rounded-lg text-center transition-colors ${
-                        proofType === 'receipt'
-                          ? 'border-purple-500 bg-purple-50 text-purple-700'
+                        proofType === 'other'
+                          ? 'border-amber-500 bg-amber-50 text-amber-900'
                           : 'border-gray-200 hover:border-gray-300'
                       }`}
                     >
                       <FileText className="w-4 h-4 md:w-5 md:h-5 mx-auto mb-1" />
-                      <span className="text-xs font-medium">Receipt</span>
+                      <span className="text-xs font-medium">Other</span>
                     </button>
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Images (gallery)</label>
-                  <p className="text-xs text-gray-500 mb-2">
-                    Select one or many from the gallery (compressed uploads to storage). You can open the gallery again to
-                    extend the selection (up to {MAX_PROOF_BATCH} files total with uploads below).
-                  </p>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Title / purpose (optional)</label>
+                  <input
+                    type="text"
+                    value={proofDocTitle}
+                    onChange={(e) => setProofDocTitle(e.target.value)}
+                    placeholder="Proofs of delivery or payment"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
+                  />
+                </div>
+
+                {proofType === 'payment' && order && (
+                  <div className="rounded-lg border border-green-200 bg-green-50/60 p-4 space-y-3">
+                    <div className="flex items-baseline justify-between gap-3">
+                      <p className="text-sm font-medium text-green-900">Payment amounts (applied when you save)</p>
+                      <p className="text-sm font-semibold text-green-900 tabular-nums whitespace-nowrap">
+                        ₱{(proofModalPayment?.amountPaid ?? order.amountPaid).toLocaleString()} / ₱
+                        {order.totalAmount.toLocaleString()}
+                      </p>
+                    </div>
+                    <p className="text-xs text-gray-600 -mt-1">
+                      Paid so far / order total · Remaining ₱
+                      {proofModalBalanceDue.toLocaleString(undefined, {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
+                    </p>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                        Money payment (cash / transfer / cheque)
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.01}
+                        value={proofMoneyPayment}
+                        onChange={(e) => capProofMoney(e.target.value)}
+                        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                        placeholder="0"
+                      />
+                    </div>
+                    <div>
+                      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 mb-1">
+                        <label className="block text-xs font-medium text-gray-700">Credit payment</label>
+                        {!order.customerId ? (
+                          <span className="text-xs text-gray-500">No customer linked</span>
+                        ) : customerCreditLoading ? (
+                          <span className="text-xs text-gray-500">Loading credit…</span>
+                        ) : customerCreditSummary && customerCreditSummary.creditLimit > 0 ? (
+                          <span className="text-xs font-medium text-gray-600 tabular-nums">
+                            Used ₱{customerCreditSummary.outstandingBalance.toLocaleString()} / ₱
+                            {customerCreditSummary.creditLimit.toLocaleString()} limit
+                          </span>
+                        ) : (
+                          <span className="text-xs text-gray-500">No credit limit set</span>
+                        )}
+                      </div>
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.01}
+                        value={proofPaymentCredit}
+                        onChange={(e) => capProofCredit(e.target.value)}
+                        disabled={!canApplyCustomerCredit}
+                        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm disabled:bg-gray-100 disabled:text-gray-500"
+                        placeholder="0"
+                      />
+                      {canApplyCustomerCredit && (
+                        <p className="text-xs text-gray-600 mt-1">
+                          Up to ₱
+                          {maxProofCreditAmount.toLocaleString(undefined, {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}{' '}
+                          credit for this order.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Images</label>
                   <button
                     type="button"
                     onClick={() => setShowProofImageGallery(true)}
@@ -3711,11 +4615,7 @@ export function OrderDetailPage() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Upload documents (optional)</label>
-                  <p className="text-xs text-gray-500 mb-2">
-                    PDF, Word, Excel, PowerPoint, plain text, CSV, RTF, OpenDocument (odt/ods/odp), and images. Max 25MB per
-                    file. Hold Ctrl/Cmd to choose multiple.
-                  </p>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Upload documents (Max of 25MB)</label>
                   <input
                     type="file"
                     multiple
@@ -3760,7 +4660,7 @@ export function OrderDetailPage() {
                     value={proofNotes}
                     onChange={(e) => setProofNotes(e.target.value)}
                     rows={3}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-300 focus:border-gray-400 outline-none"
                     placeholder="Add any additional information..."
                   />
                 </div>
@@ -3781,15 +4681,140 @@ export function OrderDetailPage() {
                   variant="primary"
                   onClick={() => void handleUploadProof()}
                   disabled={
-                    selectedProofGalleryUrls.length === 0 && selectedProofLocalFiles.length === 0
+                    proofUploadBusy ||
+                    (selectedProofGalleryUrls.length === 0 && selectedProofLocalFiles.length === 0)
                   }
                   className="flex-1 gap-2"
                 >
-                  <Upload className="w-4 h-4" />
+                  {proofUploadBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
                   Add{' '}
                   {selectedProofGalleryUrls.length + selectedProofLocalFiles.length > 1
                     ? `${selectedProofGalleryUrls.length + selectedProofLocalFiles.length} proofs`
                     : 'proof'}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showProofEditModal && editingProof && order && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="border-b border-gray-200 px-6 py-4 flex items-center justify-between">
+              <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                <Edit className="w-6 h-6 text-red-600" />
+                Edit proof
+              </h2>
+              <button
+                type="button"
+                onClick={closeProofEditModal}
+                className="text-gray-400 hover:text-gray-600"
+                disabled={proofEditBusy}
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700">
+                <span className="font-medium text-gray-900">{editingProof.fileName}</span>
+                <span className="mx-2 text-gray-400">·</span>
+                <Badge className="text-xs align-middle">
+                  {editingProof.type === 'delivery'
+                    ? 'Delivery'
+                    : editingProof.type === 'payment'
+                      ? 'Payment'
+                      : 'Other'}
+                </Badge>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Title / purpose</label>
+                <input
+                  type="text"
+                  value={editProofTitle}
+                  onChange={(e) => setEditProofTitle(e.target.value)}
+                  placeholder="Proofs of delivery or payment"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
+                />
+              </div>
+
+              {editingProof.type === 'payment' && (
+                <div className="rounded-lg border border-green-200 bg-green-50/60 p-4 space-y-3">
+                  <p className="text-sm font-medium text-green-900">Payment amounts</p>
+                  <p className="text-xs text-gray-600 -mt-2">
+                    Changes apply to order totals when you save. Max for this proof: ₱
+                    {editProofAmountPool.toLocaleString(undefined, {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                  </p>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                      Money payment (cash / transfer / cheque)
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      value={editProofMoney}
+                      onChange={(e) => capEditProofMoney(e.target.value)}
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 mb-1">
+                      <label className="block text-xs font-medium text-gray-700">Credit payment</label>
+                      {!order.customerId ? (
+                        <span className="text-xs text-gray-500">No customer linked</span>
+                      ) : customerCreditLoading ? (
+                        <span className="text-xs text-gray-500">Loading credit…</span>
+                      ) : customerCreditSummary && customerCreditSummary.creditLimit > 0 ? (
+                        <span className="text-xs font-medium text-gray-600 tabular-nums">
+                          Used ₱{customerCreditSummary.outstandingBalance.toLocaleString()} / ₱
+                          {customerCreditSummary.creditLimit.toLocaleString()} limit
+                        </span>
+                      ) : (
+                        <span className="text-xs text-gray-500">No credit limit set</span>
+                      )}
+                    </div>
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      value={editProofCredit}
+                      onChange={(e) => capEditProofCredit(e.target.value)}
+                      disabled={!canApplyCustomerCredit}
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm disabled:bg-gray-100 disabled:text-gray-500"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Notes</label>
+                <textarea
+                  value={editProofNotes}
+                  onChange={(e) => setEditProofNotes(e.target.value)}
+                  rows={3}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-300 focus:border-gray-400 outline-none text-sm"
+                  placeholder="Additional information…"
+                />
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <Button variant="outline" onClick={closeProofEditModal} className="flex-1" disabled={proofEditBusy}>
+                  Cancel
+                </Button>
+                <Button
+                  variant="primary"
+                  onClick={() => void handleSaveProofEdit()}
+                  disabled={proofEditBusy}
+                  className="flex-1 gap-2"
+                >
+                  {proofEditBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                  Save changes
                 </Button>
               </div>
             </div>

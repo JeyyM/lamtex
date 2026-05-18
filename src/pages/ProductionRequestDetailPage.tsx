@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { supabase } from '@/src/lib/supabase';
 import { consumeBomForProductionLines } from '@/src/lib/bomConsumption';
+import { finishedGoodProductHref } from '@/src/lib/productRoutes';
 import { isPrExpectedOverdue } from '@/src/lib/prOverdue';
 import { addFinishedVariantUnitsAtBranch } from '@/src/lib/finishedGoodsInbound';
 import type { PRStatus } from '@/src/pages/ProductionRequestsPage';
@@ -67,7 +68,10 @@ interface PRItemRow {
     sku: string;
     size: string;
     reorder_point?: number;
-    products: { name: string } | { name: string }[] | null;
+    products:
+      | { id: string; name: string; product_categories: { slug: string } | null }
+      | { id: string; name: string; product_categories: { slug: string } | null }[]
+      | null;
   } | null;
 }
 
@@ -476,7 +480,7 @@ export function ProductionRequestDetailPage() {
       const { data, error: qErr } = await supabase
         .from('production_requests')
         .select(
-          'id, pr_number, branch_id, status, request_date, expected_completion_date, notes, created_by, accepted_by, accepted_at, rejected_by, rejection_reason, created_at, is_transfer_request, transfer_requesting_branch_id, inter_branch_request_id, branches:branches!branch_id(name), tr_branch:branches!transfer_requesting_branch_id(name), inter_branch:inter_branch_requests!inter_branch_request_id(id, ibr_number, status), production_request_items(id, product_id, product_variant_id, quantity, quantity_completed, product_variants(sku, size, reorder_point, products(name)))',
+          'id, pr_number, branch_id, status, request_date, expected_completion_date, notes, created_by, accepted_by, accepted_at, rejected_by, rejection_reason, created_at, is_transfer_request, transfer_requesting_branch_id, inter_branch_request_id, branches:branches!branch_id(name), tr_branch:branches!transfer_requesting_branch_id(name), inter_branch:inter_branch_requests!inter_branch_request_id(id, ibr_number, status), production_request_items(id, product_id, product_variant_id, quantity, quantity_completed, product_variants(sku, size, reorder_point, products(id, name, product_categories(slug))))',
         )
         .eq('id', id)
         .single();
@@ -1566,6 +1570,10 @@ export function ProductionRequestDetailPage() {
                     const pv = asOne(row.product_variants);
                     const prod = pv ? asOne(pv.products) : null;
                     const name = prod?.name ?? '—';
+                    const productHref = finishedGoodProductHref(
+                      row.product_id,
+                      prod?.product_categories?.slug ?? null,
+                    );
                     const canEditLine = ['Draft', 'Requested'].includes(pr.status) && !saving && isEditing;
                     return (
                       <div
@@ -1599,7 +1607,13 @@ export function ProductionRequestDetailPage() {
                           }
                         >
                           <div className="flex-1 min-w-0">
-                            <p className="text-sm font-semibold text-gray-900">{name}</p>
+                            <Link
+                              to={productHref}
+                              className="text-sm font-semibold text-indigo-600 underline decoration-indigo-300 underline-offset-2 hover:text-indigo-800 hover:decoration-indigo-500 inline-block text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1 rounded"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {name}
+                            </Link>
                             <p className="text-xs text-gray-500 font-mono mt-0.5">
                               {pv?.sku} · {pv?.size}
                               {canEditLine ? ' · click to edit' : ''}

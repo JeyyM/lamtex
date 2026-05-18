@@ -13,6 +13,8 @@
 
 import { supabase } from '@/src/lib/supabase';
 import { encodeProofNotes, periodKeyForDate } from '@/src/lib/financeData';
+import { proofRequiresCommissionPayout, tryMarkOrderCompletedAfterFinance } from '@/src/lib/orderCommissionCompletion';
+import { proofPaymentParts } from '@/src/lib/orderProofPayments';
 
 const STORAGE_BUCKET = 'images';
 const PROOF_FOLDER = 'payment-proofs';
@@ -409,6 +411,94 @@ export async function chargeToCredit(input: CreditChargeInput): Promise<void> {
     description: `₱${input.amount.toLocaleString()} charged to customer credit${input.notes ? ` — ${input.notes}` : ''}`,
     new_value: { amount: input.amount, method: 'Credit', balance_due: balanceDue },
   });
+}
+
+/**
+ * Executive marks agent commission as paid for a payment proof (cash portion only).
+ * May mark the parent order Completed when fully paid and all cash commissions are released.
+ */
+export async function markProofCommissionPaid(
+  proofId: string,
+  values: { paidBy: string },
+): Promise<{ orderCompleted: boolean }> {
+  const { data: proof, error: pErr } = await supabase
+    .from('order_proof_documents')
+    .select(
+      'id, order_id, type, payment_cash_amount, payment_credit_amount, payment_adjustment, notes, commission_paid_at',
+    )
+    .eq('id', proofId)
+    .maybeSingle();
+  if (pErr) throw pErr;
+  if (!proof) throw new Error('Proof not found.');
+  if (proof.type !== 'payment') throw new Error('Only payment proofs support commission release.');
+  if (!proofRequiresCommissionPayout(proof)) {
+    throw new Error('Commission release applies only to proofs with a cash (real money) payment.');
+  }
+  if (proof.commission_paid_at) throw new Error('Commission was already marked as paid for this proof.');
+
+  const cash = proofPaymentParts(proof).cash;
+  const now = ts();
+  const { error: updErr } = await supabase
+    .from('order_proof_documents')
+    .update({
+      commission_paid_at: now,
+      commission_paid_by: values.paidBy,
+    })
+    .eq('id', proofId);
+  if (updErr) throw updErr;
+
+  await supabase.from('order_logs').insert({
+    order_id: proof.order_id,
+    action: 'note_added',
+    performed_by: values.paidBy,
+    description: `Released agent commission for cash payment proof (₱${cash.toLocaleString()})`,
+  });
+
+  const orderCompleted = await tryMarkOrderCompletedAfterFinance(String(proof.order_id));
+  return { orderCompleted };
+}
+
+/** Mark all unreleased cash payment proofs on an order as commission paid. */
+export async function markAllProofCommissionsPaidForOrder(
+  orderId: string,
+  values: { paidBy: string },
+): Promise<{ orderCompleted: boolean; releasedCount: number }> {
+  const { data: proofs, error: pErr } = await supabase
+    .from('order_proof_documents')
+    .select(
+      'id, type, payment_cash_amount, payment_credit_amount, payment_adjustment, notes, commission_paid_at',
+    )
+    .eq('order_id', orderId)
+    .eq('type', 'payment');
+  if (pErr) throw pErr;
+
+  const pendingIds = (proofs ?? [])
+    .filter((p) => proofRequiresCommissionPayout(p) && !p.commission_paid_at)
+    .map((p) => String(p.id));
+
+  if (pendingIds.length === 0) {
+    return { orderCompleted: false, releasedCount: 0 };
+  }
+
+  const now = ts();
+  const { error: updErr } = await supabase
+    .from('order_proof_documents')
+    .update({
+      commission_paid_at: now,
+      commission_paid_by: values.paidBy,
+    })
+    .in('id', pendingIds);
+  if (updErr) throw updErr;
+
+  await supabase.from('order_logs').insert({
+    order_id: orderId,
+    action: 'note_added',
+    performed_by: values.paidBy,
+    description: `Released agent commission for ${pendingIds.length} cash payment proof(s)`,
+  });
+
+  const orderCompleted = await tryMarkOrderCompletedAfterFinance(orderId);
+  return { orderCompleted, releasedCount: pendingIds.length };
 }
 
 /** Mark a commission row as released to the agent. */

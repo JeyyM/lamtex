@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, Link } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
@@ -22,6 +22,7 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
 import { supabase } from '../lib/supabase';
+import { rawMaterialDetailHref } from '../lib/productRoutes';
 import { computeStockStatus } from '../lib/stockStatus';
 import { createDraftProductionRequestWithInitialLine } from '../lib/productionRequestDraft';
 import { insertProductLog, mapAppRoleToLogRole } from '../lib/domainActivityLog';
@@ -77,7 +78,14 @@ interface DisplayVariant {
   minOrderQty: number;
   specs: { label: string; value: string }[];
   /** `cost` = material master `cost_per_unit` (e.g. ₱ per kg). Line cost = quantity × cost. */
-  rawMaterials: { materialId: string; name: string; quantity: number; unit: string; cost: number }[];
+  rawMaterials: {
+    materialId: string;
+    name: string;
+    quantity: number;
+    unit: string;
+    cost: number;
+    categorySlug?: string | null;
+  }[];
   bulkDiscounts: { minQty: number; discount: number; pricePerUnit: number }[];
 }
 
@@ -102,7 +110,16 @@ interface VariantRow {
   specs: { label: string; value: string }[] | null;
   product_variant_stock: { quantity: number; branches: { code: string; name: string } | null }[];
   product_bulk_discounts?: { min_qty: number; max_qty: number | null; discount_percent: number }[];
-  product_variant_raw_materials: { raw_material_id: string; quantity_needed: number; raw_materials: { name: string; unit_of_measure: string; cost_per_unit: number } | null }[];
+  product_variant_raw_materials: {
+    raw_material_id: string;
+    quantity_needed: number;
+    raw_materials: {
+      name: string;
+      unit_of_measure: string;
+      cost_per_unit: number;
+      material_categories: { slug: string } | null;
+    } | null;
+  }[];
 }
 
 interface ProductRow {
@@ -176,6 +193,7 @@ function toDisplayVariant(v: VariantRow, selectedBranch: string): DisplayVariant
       quantity: Number(r.quantity_needed),
       unit: r.raw_materials!.unit_of_measure,
       cost: Number(r.raw_materials!.cost_per_unit),
+      categorySlug: r.raw_materials!.material_categories?.slug ?? null,
     }));
 
   const specs: { label: string; value: string }[] =
@@ -331,7 +349,7 @@ export default function ProductFamilyPage() {
           lead_time_days, min_order_qty, specs,
           product_variant_stock(quantity, branches(code, name)),
           product_bulk_discounts(min_qty, max_qty, discount_percent),
-          product_variant_raw_materials(raw_material_id, quantity_needed, raw_materials(name, unit_of_measure, cost_per_unit))
+          product_variant_raw_materials(raw_material_id, quantity_needed, raw_materials(name, unit_of_measure, cost_per_unit, material_categories(slug)))
         `)
         .eq('product_id', familyId)
         .order('size');
@@ -570,7 +588,7 @@ export default function ProductFamilyPage() {
         lead_time_days, min_order_qty, specs,
         product_variant_stock(quantity, branches(code, name)),
         product_bulk_discounts(min_qty, max_qty, discount_percent),
-        product_variant_raw_materials(raw_material_id, quantity_needed, raw_materials(name, unit_of_measure, cost_per_unit))`)
+        product_variant_raw_materials(raw_material_id, quantity_needed, raw_materials(name, unit_of_measure, cost_per_unit, material_categories(slug)))`)
         .eq('product_id', familyId)
         .order('size');
       if (varFetchErr) throw varFetchErr;
@@ -668,11 +686,17 @@ export default function ProductFamilyPage() {
 
   const handleAddMaterial = () => setShowMaterialPickerModal(true);
 
-  const handleMaterialSelected = (mat: { materialId: string; name: string; unit: string; cost: number }) => {
+  const handleMaterialSelected = (mat: {
+    materialId: string;
+    name: string;
+    unit: string;
+    cost: number;
+    categorySlug?: string | null;
+  }) => {
     if (!editedVariant) return;
     setEditedVariant({
       ...editedVariant,
-      rawMaterials: [...editedVariant.rawMaterials, { ...mat, quantity: 1 }],
+      rawMaterials: [...editedVariant.rawMaterials, { ...mat, quantity: 1, categorySlug: mat.categorySlug ?? null }],
     });
   };
 
@@ -726,7 +750,7 @@ export default function ProductFamilyPage() {
           lead_time_days, min_order_qty, specs,
           product_variant_stock(quantity, branches(code, name)),
           product_bulk_discounts(min_qty, max_qty, discount_percent),
-          product_variant_raw_materials(raw_material_id, quantity_needed, raw_materials(name, unit_of_measure, cost_per_unit))
+          product_variant_raw_materials(raw_material_id, quantity_needed, raw_materials(name, unit_of_measure, cost_per_unit, material_categories(slug)))
         `)
         .eq('product_id', familyId)
         .order('size');
@@ -1330,7 +1354,12 @@ export default function ProductFamilyPage() {
                 {displayVariant.rawMaterials.map((material, index) => (
                   <div key={material.materialId + index} className="flex items-center gap-2 p-3 bg-gray-50 rounded-lg">
                     <div className="flex-1">
-                      <p className="text-sm font-medium text-gray-900 mb-1">{material.name}</p>
+                      <Link
+                        to={rawMaterialDetailHref(material.materialId, material.categorySlug)}
+                        className="text-sm font-semibold text-indigo-600 underline decoration-indigo-300 underline-offset-2 hover:text-indigo-800 hover:decoration-indigo-500 inline-block mb-1 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1 rounded"
+                      >
+                        {material.name}
+                      </Link>
                       <div className="flex items-center gap-2">
                         {isEditingVariant ? (
                           <>

@@ -20,7 +20,8 @@ export type PaymentStatus =
   | 'Invoiced' 
   | 'Partially Paid' 
   | 'Paid' 
-  | 'Overdue';
+  | 'Overdue'
+  | 'On Credit';
 
 export type DeliveryType = 'Truck' | 'Ship' | 'Pickup';
 
@@ -141,7 +142,9 @@ export type OrderLogAction =
   | 'note_added'
   | 'proof_uploaded'
   | 'proof_verified'
-  | 'proof_rejected';
+  | 'proof_rejected'
+  | 'proof_updated'
+  | 'proof_removed';
 
 export interface OrderLog {
   id: string;
@@ -175,7 +178,7 @@ export interface ApprovalRule {
   description: string;
 }
 
-export type ProofType = 'delivery' | 'payment' | 'receipt';
+export type ProofType = 'delivery' | 'payment' | 'other';
 
 export type ProofStatus = 'pending' | 'verified' | 'rejected';
 
@@ -194,6 +197,14 @@ export interface ProofDocument {
   verifiedAt?: string;
   rejectionReason?: string;
   notes?: string;
+  /** Optional user label (DB `order_proof_documents.title`). */
+  title?: string;
+  /** Payment proof: cash / transfer amount (excludes credit). */
+  paymentCashAmount?: number;
+  /** Payment proof: customer credit applied with this proof. */
+  paymentCreditAmount?: number;
+  /** Payment proof: correction (may be negative) to recorded paid total. */
+  paymentAdjustment?: number;
 }
 
 export interface Invoice {

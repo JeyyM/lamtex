@@ -1,6 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { getGoogleMapsApiKey, loadGoogleMapsJs } from '@/src/lib/maps';
-import { blueCustomerPinIcon } from '@/src/lib/customerMapPinIcon';
+import {
+  getGoogleMapsApiKey,
+  getGoogleMapsMapId,
+  importMapsMarkerLibrary,
+  loadGoogleMapsJs,
+  type AdvancedMarkerLike,
+} from '@/src/lib/maps';
+import { blueCustomerPinImgElement } from '@/src/lib/customerMapPinIcon';
 
 type Props = {
   customerLat: number;
@@ -27,8 +33,8 @@ export function CustomerLocationMapPreview({
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<google.maps.Map | null>(null);
-  const customerMarkerRef = useRef<google.maps.Marker | null>(null);
-  const storeMarkerRef = useRef<google.maps.Marker | null>(null);
+  const customerMarkerRef = useRef<AdvancedMarkerLike | null>(null);
+  const storeMarkerRef = useRef<AdvancedMarkerLike | null>(null);
 
   const [loadError, setLoadError] = useState<'missing_key' | 'load_failed' | null>(null);
   const [loading, setLoading] = useState(true);
@@ -47,11 +53,13 @@ export function CustomerLocationMapPreview({
     let cancelled = false;
 
     loadGoogleMapsJs()
-      .then(() => {
+      .then(async () => {
         if (cancelled || !containerRef.current) return;
+        const { AdvancedMarkerElement } = await importMapsMarkerLibrary();
         const map = new google.maps.Map(containerRef.current, {
           center: { lat: customerLat, lng: customerLng },
           zoom: 16,
+          mapId: getGoogleMapsMapId(),
           mapTypeControl: true,
           streetViewControl: false,
           fullscreenControl: true,
@@ -59,12 +67,11 @@ export function CustomerLocationMapPreview({
         });
         mapRef.current = map;
 
-        customerMarkerRef.current = new google.maps.Marker({
+        customerMarkerRef.current = new AdvancedMarkerElement({
           map,
           position: { lat: customerLat, lng: customerLng },
-          draggable: false,
           title: customerTitle,
-          icon: blueCustomerPinIcon(),
+          content: blueCustomerPinImgElement(),
           zIndex: 2,
         });
 
@@ -73,10 +80,9 @@ export function CustomerLocationMapPreview({
         const hasStore = Number.isFinite(sLat) && Number.isFinite(sLng);
 
         if (hasStore) {
-          storeMarkerRef.current = new google.maps.Marker({
+          storeMarkerRef.current = new AdvancedMarkerElement({
             map,
             position: { lat: sLat, lng: sLng },
-            draggable: false,
             title: storeTitle,
             zIndex: 1,
           });
@@ -100,9 +106,11 @@ export function CustomerLocationMapPreview({
 
     return () => {
       cancelled = true;
-      customerMarkerRef.current?.setMap(null);
+      const cm = customerMarkerRef.current;
+      if (cm) cm.map = null;
       customerMarkerRef.current = null;
-      storeMarkerRef.current?.setMap(null);
+      const sm = storeMarkerRef.current;
+      if (sm) sm.map = null;
       storeMarkerRef.current = null;
       mapRef.current = null;
       if (el) el.innerHTML = '';

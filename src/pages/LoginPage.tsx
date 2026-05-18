@@ -6,6 +6,7 @@ import lamtexLogo from '@/src/assets/Lamtex Logo.png';
 import {
   LAMTEX_BRANCH_CALABARZON,
   LAMTEX_BRANCH_NCR,
+  LAMTEX_BRANCH_QUEZON,
   LAMTEX_BRANCH_VISAYAS,
 } from '@/src/constants/lamtexBranches';
 
@@ -45,6 +46,14 @@ const ACCOUNTS: AccountEntry[] = [
   { branch: LAMTEX_BRANCH_CALABARZON, id: 'LOG-BTG-002', name: 'Cynthia Bautista', email: 'cynthia.bautista.batangas@lamtex.com', role: 'Logistics', password: 'Lamtex@2026' },
   { branch: LAMTEX_BRANCH_CALABARZON, id: 'WH-BTG-001', name: 'Roberto Mendoza', email: 'roberto.mendoza.batangas@lamtex.com', role: 'Warehouse', password: 'Lamtex@2026' },
   { branch: LAMTEX_BRANCH_CALABARZON, id: 'WH-BTG-002', name: 'Luz Aguilar', email: 'luz.aguilar.batangas@lamtex.com', role: 'Warehouse', password: 'Lamtex@2026' },
+  // Quezon
+  { branch: LAMTEX_BRANCH_QUEZON, id: 'AGT-QZN-001', name: 'Ina Morales', email: 'ina.morales.quezon@lamtex.com', role: 'Agent', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_QUEZON, id: 'AGT-QZN-002', name: 'Gabriel Ramos', email: 'gabriel.ramos.quezon@lamtex.com', role: 'Agent', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_QUEZON, id: 'AGT-QZN-003', name: 'Michelle Dy', email: 'michelle.dy.quezon@lamtex.com', role: 'Agent', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_QUEZON, id: 'LOG-QZN-001', name: 'Armand Vergara', email: 'armand.vergara.quezon@lamtex.com', role: 'Logistics', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_QUEZON, id: 'LOG-QZN-002', name: 'Denise Lopez', email: 'denise.lopez.quezon@lamtex.com', role: 'Logistics', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_QUEZON, id: 'WH-QZN-001', name: 'Warren Castro', email: 'warren.castro.quezon@lamtex.com', role: 'Warehouse', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_QUEZON, id: 'WH-QZN-002', name: 'Hannah Torres', email: 'hannah.torres.quezon@lamtex.com', role: 'Warehouse', password: 'Lamtex@2026' },
 ];
 
 const BRANCH_COLORS: Record<string, string> = {
@@ -52,6 +61,7 @@ const BRANCH_COLORS: Record<string, string> = {
   [LAMTEX_BRANCH_NCR]:        'bg-blue-100 text-blue-700 border-blue-200',
   [LAMTEX_BRANCH_VISAYAS]:   'bg-teal-100 text-teal-700 border-teal-200',
   [LAMTEX_BRANCH_CALABARZON]: 'bg-orange-100 text-orange-700 border-orange-200',
+  [LAMTEX_BRANCH_QUEZON]:     'bg-violet-100 text-violet-800 border-violet-200',
 };
 
 const ROLE_COLORS: Record<string, string> = {
@@ -61,7 +71,12 @@ const ROLE_COLORS: Record<string, string> = {
   Warehouse: 'text-rose-600',
 };
 
-const BRANCH_OPTIONS = [LAMTEX_BRANCH_NCR, LAMTEX_BRANCH_VISAYAS, LAMTEX_BRANCH_CALABARZON] as const;
+const BRANCH_OPTIONS = [
+  LAMTEX_BRANCH_NCR,
+  LAMTEX_BRANCH_VISAYAS,
+  LAMTEX_BRANCH_CALABARZON,
+  LAMTEX_BRANCH_QUEZON,
+] as const;
 
 export default function LoginPage() {
   const navigate = useNavigate();
