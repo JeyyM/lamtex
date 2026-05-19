@@ -83,7 +83,10 @@ export interface AgentRevenueRow {
 }
 
 export interface AgentLeaderboardRow {
+  /** UUID (`employees.id`) — joins, commissions */
   agentId: string;
+  /** HR code (`employees.employee_id`), e.g. AGT-BTG-001 — use for `/employees/:employeeId` links */
+  employeePublicId: string;
   agentName: string;
   branchId: string | null;
   branchName: string | null;
@@ -104,7 +107,7 @@ export interface AgentLeaderboardRow {
   overdueOrders: number;
   overdueBalance: number;
 
-  // Quota
+  // Quota (leaderboard uses branch_sales_targets only — stepped monthly quota carried to calendar month of filter end)
   monthlyTarget: number;
   quarterlyTarget: number;
   effectiveTarget: number; // matches selected period
@@ -197,6 +200,60 @@ export interface AgentAnalyticsBundle {
   alerts: AgentAlertRow[];
   /** Same branch filter passed into fetchAgentAnalyticsBundle (null = all branches). */
   filterBranchId: string | null;
+  /**
+   * When `filterBranchId` is null: per-branch collected revenue for each `monthlyTrend` month (same order / length 12).
+   * Used for multi-line trends. Null when a single branch is filtered.
+   */
+  branchRevenueTrendLines: BranchRevenueTrendLine[] | null;
+}
+
+/** Per-branch monthly revenue series aligned with `monthlyTrend` indices (0..11). */
+export interface BranchRevenueTrendLine {
+  branchId: string;
+  branchName: string;
+  monthlyRevenue: number[];
+}
+
+/** Completed calendar month where collected revenue was below branch monthly quota. */
+export interface AgentQuotaMissMonth {
+  periodKey: string;
+  displayLabel: string;
+  quota: number;
+  revenue: number;
+  attainmentPct: number;
+}
+
+/** Agents with ≥1 quota miss in the lookback window (for Trends history UI). */
+export interface AgentQuotaMissHistoryRow {
+  agentId: string;
+  employeePublicId: string;
+  agentName: string;
+  branchName: string | null;
+  misses: AgentQuotaMissMonth[];
+}
+
+/** Distinct colors for branch bars/lines (overview + trends). */
+export const BRANCH_CHART_COLORS = [
+  '#2563EB',
+  '#059669',
+  '#D97706',
+  '#DC2626',
+  '#7C3AED',
+  '#DB2777',
+  '#0D9488',
+  '#EA580C',
+  '#4F46E5',
+  '#65A30D',
+];
+
+export function branchChartColorAt(index: number): string {
+  return BRANCH_CHART_COLORS[index % BRANCH_CHART_COLORS.length];
+}
+
+/** `/employees/:employeeId` — prefers HR `employee_id`; falls back to UUID if missing. */
+export function employeeProfilePathFromAgent(employeePublicId: string, agentUuid: string): string {
+  const code = employeePublicId.trim();
+  return `/employees/${encodeURIComponent(code || agentUuid)}`;
 }
 
 export interface AgentAlertRow {
@@ -255,6 +312,32 @@ export function quotaAttainmentScale(range: PeriodRange): number {
   const e = new Date(range.end + 'T12:00:00');
   const days = Math.max(1, Math.round((e.getTime() - s.getTime()) / 86400000) + 1);
   return days / 30;
+}
+
+/**
+ * Carried monthly quota for `branch_id` at `periodEnd` (`YYYY-MM`), same step logic as analytics.
+ * `hasSteps` is true when there is at least one `branch_sales_targets` row on or before that month.
+ */
+export async function fetchBranchMonthlyQuotaCarried(
+  branchId: string,
+  periodEnd: string,
+): Promise<{ value: number; hasSteps: boolean }> {
+  const { data, error } = await supabase
+    .from('branch_sales_targets')
+    .select('period, monthly_sales_target')
+    .eq('branch_id', branchId);
+  if (error || !data?.length) return { value: 0, hasSteps: false };
+  const rows = (data as Record<string, unknown>[])
+    .map((r) => ({
+      p: String(r.period ?? '').trim(),
+      m: Number(r.monthly_sales_target ?? 0),
+    }))
+    .filter((r) => r.p && r.p <= periodEnd);
+  if (rows.length === 0) return { value: 0, hasSteps: false };
+  rows.sort((a, b) => a.p.localeCompare(b.p));
+  let last = 0;
+  for (const r of rows) last = r.m;
+  return { value: last, hasSteps: true };
 }
 
 function startOfMonth(d: Date): Date {
@@ -693,56 +776,101 @@ async function fetchRevenueRows(start: string, end: string): Promise<AgentRevenu
   }));
 }
 
-async function fetchTargetsForPeriod(periodLabel: string): Promise<Map<string, AgentTargetRow>> {
-  const { data, error } = await supabase
-    .from('agent_targets')
-    .select('id, employee_id, period, monthly_sales_target, quarterly_sales_target, stretch_goal_status, updated_at')
-    .eq('period', periodLabel);
-  const map = new Map<string, AgentTargetRow>();
-  if (error) {
-    console.warn('[agentAnalytics] fetchTargetsForPeriod', error);
-    return map;
-  }
-  for (const r of (data ?? []) as Record<string, unknown>[]) {
-    const employeeId = String(r.employee_id ?? '');
-    map.set(employeeId, {
-      id: String(r.id ?? ''),
-      employeeId,
-      period: String(r.period ?? ''),
-      monthlyTarget: Number(r.monthly_sales_target ?? 0),
-      quarterlyTarget: Number(r.quarterly_sales_target ?? 0),
-      stretchGoal: r.stretch_goal_status ? String(r.stretch_goal_status) : null,
-      updatedAt: String(r.updated_at ?? ''),
-    });
+type BranchTargetCell = { monthly: number; quarterly: number; stretch: string | null };
+
+/**
+ * Demo quota steps — keep in sync with `database/seed_branch_sales_targets_history.sql`.
+ * Used only when Supabase returns no `branch_sales_targets` rows (empty DB, RLS, or network).
+ */
+const DEMO_BRANCH_SALES_TARGETS_BY_CODE: Record<
+  string,
+  Array<{ period: string; monthly: number; quarterly: number; stretch: string | null }>
+> = {
+  MNL: [
+    { period: '2025-06', monthly: 850_000, quarterly: 2_550_000, stretch: '110% of monthly target' },
+    { period: '2025-09', monthly: 1_000_000, quarterly: 3_000_000, stretch: '110% of monthly target' },
+    { period: '2026-01', monthly: 1_150_000, quarterly: 3_450_000, stretch: '115% of monthly target' },
+    { period: '2026-04', monthly: 1_080_000, quarterly: 3_240_000, stretch: '115% of monthly target' },
+  ],
+  CEB: [
+    { period: '2025-06', monthly: 720_000, quarterly: 2_160_000, stretch: '110% of monthly target' },
+    { period: '2025-08', monthly: 880_000, quarterly: 2_640_000, stretch: '110% of monthly target' },
+    { period: '2025-12', monthly: 770_000, quarterly: 2_310_000, stretch: '110% of monthly target' },
+    { period: '2026-03', monthly: 920_000, quarterly: 2_760_000, stretch: '115% of monthly target' },
+  ],
+  BTG: [
+    { period: '2025-06', monthly: 680_000, quarterly: 2_040_000, stretch: '110% of monthly target' },
+    { period: '2025-11', monthly: 790_000, quarterly: 2_370_000, stretch: '110% of monthly target' },
+    { period: '2026-02', monthly: 910_000, quarterly: 2_730_000, stretch: '115% of monthly target' },
+  ],
+  QZN: [
+    { period: '2025-06', monthly: 600_000, quarterly: 1_800_000, stretch: '110% of monthly target' },
+    { period: '2025-10', monthly: 750_000, quarterly: 2_250_000, stretch: '110% of monthly target' },
+    { period: '2026-03', monthly: 820_000, quarterly: 2_460_000, stretch: '115% of monthly target' },
+  ],
+};
+
+/**
+ * Demo carried monthly quota by branch code when `branch_sales_targets` is empty — mirrors
+ * `database/seed_branch_sales_targets_history.sql`.
+ */
+export function demoBranchMonthlyCarried(branchCode: string | null | undefined, periodEnd: string): number {
+  if (!branchCode?.trim()) return 0;
+  const code = branchCode.trim().toUpperCase();
+  const steps = DEMO_BRANCH_SALES_TARGETS_BY_CODE[code];
+  if (!steps?.length) return 0;
+  const end = periodEnd.trim();
+  const sorted = steps.filter((s) => s.period <= end).sort((a, b) => a.period.localeCompare(b.period));
+  let last = 0;
+  for (const s of sorted) last = s.monthly;
+  return last;
+}
+
+function buildDemoBranchTargetsFlat(branches: BranchOption[]): Map<string, BranchTargetCell> {
+  const map = new Map<string, BranchTargetCell>();
+  for (const b of branches) {
+    const rows = DEMO_BRANCH_SALES_TARGETS_BY_CODE[b.code.trim().toUpperCase()] ?? DEMO_BRANCH_SALES_TARGETS_BY_CODE[b.code];
+    if (!rows) continue;
+    for (const r of rows) {
+      map.set(`${b.id}|${r.period}`, {
+        monthly: r.monthly,
+        quarterly: r.quarterly,
+        stretch: r.stretch,
+      });
+    }
   }
   return map;
 }
 
-type BranchTargetCell = { monthly: number; quarterly: number; stretch: string | null };
-
-async function fetchBranchSalesTargetsForPeriods(
-  branchIds: string[],
-  periods: string[],
-): Promise<Map<string, BranchTargetCell>> {
+/** Paginated load of all branch quota rows (avoids `.in(branch_id, …)` mismatches and Supabase row caps). */
+async function fetchAllBranchSalesTargets(): Promise<Map<string, BranchTargetCell>> {
   const map = new Map<string, BranchTargetCell>();
-  if (branchIds.length === 0 || periods.length === 0) return map;
-  const { data, error } = await supabase
-    .from('branch_sales_targets')
-    .select('branch_id, period, monthly_sales_target, quarterly_sales_target, stretch_goal_status')
-    .in('branch_id', branchIds)
-    .in('period', periods);
-  if (error) {
-    console.warn('[agentAnalytics] fetchBranchSalesTargetsForPeriods', error);
-    return map;
-  }
-  for (const r of (data ?? []) as Record<string, unknown>[]) {
-    const bid = String(r.branch_id ?? '');
-    const period = String(r.period ?? '');
-    map.set(`${bid}|${period}`, {
-      monthly: Number(r.monthly_sales_target ?? 0),
-      quarterly: Number(r.quarterly_sales_target ?? 0),
-      stretch: r.stretch_goal_status ? String(r.stretch_goal_status) : null,
-    });
+  const pageSize = 500;
+  let from = 0;
+  for (;;) {
+    const { data, error } = await supabase
+      .from('branch_sales_targets')
+      .select('branch_id, period, monthly_sales_target, quarterly_sales_target, stretch_goal_status')
+      .order('branch_id', { ascending: true })
+      .order('period', { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (error) {
+      console.warn('[agentAnalytics] fetchAllBranchSalesTargets', error);
+      break;
+    }
+    const rows = (data ?? []) as Record<string, unknown>[];
+    for (const r of rows) {
+      const bid = String(r.branch_id ?? '').trim();
+      const period = String(r.period ?? '').trim();
+      if (!bid || !period) continue;
+      map.set(`${bid}|${period}`, {
+        monthly: Number(r.monthly_sales_target ?? 0),
+        quarterly: Number(r.quarterly_sales_target ?? 0),
+        stretch: r.stretch_goal_status ? String(r.stretch_goal_status) : null,
+      });
+    }
+    if (rows.length < pageSize) break;
+    from += pageSize;
   }
   return map;
 }
@@ -762,6 +890,31 @@ function nestBranchTargetsByBranch(
   return out;
 }
 
+/** Branch quota steps forward by calendar month (`YYYY-MM`); value holds until a newer row replaces it. */
+function branchQuotaCarriedToPeriod(
+  branchId: string,
+  periodEnd: string,
+  byBranch: Map<string, Map<string, BranchTargetCell>>,
+): BranchTargetCell {
+  const inner = byBranch.get(branchId);
+  if (!inner || inner.size === 0) {
+    return { monthly: 0, quarterly: 0, stretch: null };
+  }
+  const sorted = [...inner.keys()].filter((k) => k <= periodEnd).sort();
+  let last: BranchTargetCell = { monthly: 0, quarterly: 0, stretch: null };
+  for (const p of sorted) {
+    const cell = inner.get(p);
+    if (cell !== undefined) {
+      last = {
+        monthly: cell.monthly,
+        quarterly: cell.quarterly,
+        stretch: cell.stretch,
+      };
+    }
+  }
+  return last;
+}
+
 /** Step-style monthly quota: value holds until a row exists for a later month with a new amount. */
 function carriedMonthlySeriesForBranch(
   branchId: string,
@@ -770,10 +923,37 @@ function carriedMonthlySeriesForBranch(
 ): number[] {
   const inner = byBranch.get(branchId);
   let last = 0;
+  const first = orderedPeriods[0];
+  if (inner && first !== undefined) {
+    for (const p of [...inner.keys()].filter((k) => k < first).sort()) {
+      const cell = inner.get(p);
+      if (cell !== undefined) last = cell.monthly;
+    }
+  }
   return orderedPeriods.map((p) => {
     const cell = inner?.get(p);
     if (cell !== undefined) last = cell.monthly;
     return last;
+  });
+}
+
+/**
+ * When no sales agents have `branch_id`, still plot quotas: mean carried monthly target across branches
+ * that have rows in `branch_sales_targets`.
+ */
+function meanBranchQuotaSeriesAcrossBranches(
+  orderedPeriods: string[],
+  byBranch: Map<string, Map<string, BranchTargetCell>>,
+): number[] {
+  const branchIds = [...byBranch.keys()];
+  if (branchIds.length === 0) return orderedPeriods.map(() => 0);
+  const perBranch = branchIds.map((bid) =>
+    carriedMonthlySeriesForBranch(bid, orderedPeriods, byBranch),
+  );
+  return orderedPeriods.map((_, i) => {
+    let sum = 0;
+    for (const series of perBranch) sum += series[i] ?? 0;
+    return sum / branchIds.length;
   });
 }
 
@@ -784,6 +964,9 @@ function weightedQuotaMonthlySeries(
   byBranch: Map<string, Map<string, BranchTargetCell>>,
 ): number[] {
   const branchIds = [...new Set(agents.map((a) => a.branchId).filter(Boolean))] as string[];
+  if (branchIds.length === 0) {
+    return meanBranchQuotaSeriesAcrossBranches(orderedPeriods, byBranch);
+  }
   const countByBranch = new Map<string, number>();
   for (const a of agents) {
     if (!a.branchId) continue;
@@ -793,6 +976,7 @@ function weightedQuotaMonthlySeries(
   for (const bid of branchIds) {
     carriedByBranch.set(bid, carriedMonthlySeriesForBranch(bid, orderedPeriods, byBranch));
   }
+  const fallback = meanBranchQuotaSeriesAcrossBranches(orderedPeriods, byBranch);
   return orderedPeriods.map((_, i) => {
     let num = 0;
     let den = 0;
@@ -803,8 +987,101 @@ function weightedQuotaMonthlySeries(
       num += q * n;
       den += n;
     }
-    return den > 0 ? num / den : 0;
+    if (den === 0) return fallback[i] ?? 0;
+    const weighted = num / den;
+    if (weighted > 0) return weighted;
+    return fallback[i] ?? 0;
   });
+}
+
+const QUOTA_MISS_HISTORY_MONTHS_DEFAULT = 12;
+
+/**
+ * Per-agent quota misses over completed calendar months: compares KPI revenue (same as leaderboard)
+ * to branch carried monthly quota (`branch_sales_targets` steps) for the agent's current branch.
+ * Excludes the current month (only closed months). Respects `branchId` filter like analytics.
+ */
+export async function fetchAgentQuotaMissHistory(opts: {
+  branchId?: string | null;
+  months?: number;
+}): Promise<AgentQuotaMissHistoryRow[]> {
+  const months = opts.months ?? QUOTA_MISS_HISTORY_MONTHS_DEFAULT;
+  const branchFilter = opts.branchId ?? null;
+
+  const [agents, branches] = await Promise.all([fetchAgents(branchFilter), fetchBranches()]);
+  const branchesById = new Map(branches.map((b) => [b.id, b]));
+
+  let branchTargetsFlat = await fetchAllBranchSalesTargets();
+  if (branchTargetsFlat.size === 0 && branches.length > 0) {
+    branchTargetsFlat = buildDemoBranchTargetsFlat(branches);
+  }
+  const branchNest = nestBranchTargetsByBranch(branchTargetsFlat);
+
+  const today = new Date();
+  const periodKeys: string[] = [];
+  for (let i = months - 1; i >= 0; i--) {
+    const d = new Date(today.getFullYear(), today.getMonth() - 1 - i, 1);
+    periodKeys.push(`${d.getFullYear()}-${pad2(d.getMonth() + 1)}`);
+  }
+  if (periodKeys.length === 0) return [];
+
+  const periodKeySet = new Set(periodKeys);
+  const first = periodKeys[0];
+  const last = periodKeys[periodKeys.length - 1];
+  const rangeStart = `${first}-01`;
+  const [ly, lm] = last.split('-').map(Number);
+  const rangeEnd = isoDate(new Date(ly, lm, 0));
+
+  const revRows = await fetchRevenueRows(rangeStart, rangeEnd);
+  const revenueMap = new Map<string, number>();
+  for (const r of revRows) {
+    if (branchFilter && r.branchId !== branchFilter) continue;
+    const pk = `${r.year}-${pad2(r.month)}`;
+    if (!periodKeySet.has(pk)) continue;
+    const key = `${r.agentId}|${pk}`;
+    revenueMap.set(key, (revenueMap.get(key) ?? 0) + r.revenue);
+  }
+
+  const rowsOut: AgentQuotaMissHistoryRow[] = [];
+  for (const a of agents) {
+    if (!a.branchId) continue;
+    const misses: AgentQuotaMissMonth[] = [];
+    for (const pk of periodKeys) {
+      const carried = branchQuotaCarriedToPeriod(a.branchId, pk, branchNest);
+      const quota = carried.monthly;
+      if (quota <= 0) continue;
+      const rev = revenueMap.get(`${a.id}|${pk}`) ?? 0;
+      if (rev < quota) {
+        const [ys, ms] = pk.split('-').map(Number);
+        const displayLabel = `${monthLabels[ms - 1]} '${String(ys).slice(2)}`;
+        misses.push({
+          periodKey: pk,
+          displayLabel,
+          quota,
+          revenue: rev,
+          attainmentPct: (rev / quota) * 100,
+        });
+      }
+    }
+    if (misses.length > 0) {
+      misses.sort((x, y) => y.periodKey.localeCompare(x.periodKey));
+      rowsOut.push({
+        agentId: a.id,
+        employeePublicId: a.employeeId.trim(),
+        agentName: a.name,
+        branchName: a.branchName ?? branchesById.get(a.branchId)?.name ?? null,
+        misses,
+      });
+    }
+  }
+
+  rowsOut.sort((a, b) => {
+    const aRecent = a.misses[0]?.periodKey ?? '';
+    const bRecent = b.misses[0]?.periodKey ?? '';
+    if (aRecent !== bRecent) return bRecent.localeCompare(aRecent);
+    return b.misses.length - a.misses.length;
+  });
+  return rowsOut;
 }
 
 /**
@@ -1186,7 +1463,6 @@ export async function fetchAgentAnalyticsBundle(opts: {
     branches,
     currentRows,
     prevRows,
-    targets,
     commissionsOrderPeriod,
     commissionsPaidOutPeriod,
     newCustomers,
@@ -1199,7 +1475,6 @@ export async function fetchAgentAnalyticsBundle(opts: {
     fetchBranches(),
     fetchRevenueRows(range.start, range.end),
     fetchRevenueRows(prevRange.start, prevRange.end),
-    fetchTargetsForPeriod(quotaMonthKey),
     fetchProofCommissionsByAgentForOrderPeriod(range.start, range.end, branchFilter),
     fetchProofCommissionsPaidOutByPayoutPeriod(range.start, range.end, branchFilter),
     fetchNewCustomersByAgent(range.start, range.end),
@@ -1218,9 +1493,10 @@ export async function fetchAgentAnalyticsBundle(opts: {
     const dKey = new Date(trendStart.getFullYear(), trendStart.getMonth() + ti, 1);
     trendPeriodKeys.push(`${dKey.getFullYear()}-${pad2(dKey.getMonth() + 1)}`);
   }
-  const branchIdsInScope = [...new Set(agents.map((a) => a.branchId).filter(Boolean))] as string[];
-  const periodsForBranchTargets = [...new Set([quotaMonthKey, ...trendPeriodKeys])];
-  const branchTargetsFlat = await fetchBranchSalesTargetsForPeriods(branchIdsInScope, periodsForBranchTargets);
+  let branchTargetsFlat = await fetchAllBranchSalesTargets();
+  if (branchTargetsFlat.size === 0 && branches.length > 0) {
+    branchTargetsFlat = buildDemoBranchTargetsFlat(branches);
+  }
   const branchNest = nestBranchTargetsByBranch(branchTargetsFlat);
 
   // Aggregate revenue rows per agent
@@ -1267,10 +1543,9 @@ export async function fetchAgentAnalyticsBundle(opts: {
   const attainmentScale = quotaAttainmentScale(range);
   const rows: AgentLeaderboardRow[] = agents.map((a) => {
     const cur = aggCurrent.get(a.id);
-    const t = targets.get(a.id);
-    const bt = a.branchId ? branchTargetsFlat.get(`${a.branchId}|${quotaMonthKey}`) : undefined;
-    const monthlyTarget = bt?.monthly ?? t?.monthlyTarget ?? 0;
-    const quarterlyTarget = bt?.quarterly ?? t?.quarterlyTarget ?? 0;
+    const carried = a.branchId ? branchQuotaCarriedToPeriod(a.branchId, quotaMonthKey, branchNest) : null;
+    const monthlyTarget = carried?.monthly ?? 0;
+    const quarterlyTarget = carried?.quarterly ?? 0;
     const effectiveTarget = monthlyTarget > 0 ? monthlyTarget * attainmentScale : 0;
 
     const revenue = cur?.revenue ?? 0;
@@ -1292,6 +1567,7 @@ export async function fetchAgentAnalyticsBundle(opts: {
 
     return {
       agentId: a.id,
+      employeePublicId: a.employeeId.trim(),
       agentName: a.name,
       branchId: a.branchId,
       branchName: a.branchName ?? (a.branchId ? branchesById.get(a.branchId)?.name ?? null : null),
@@ -1316,7 +1592,7 @@ export async function fetchAgentAnalyticsBundle(opts: {
       pacingPct,
       expectedRevenueToDate,
       revenueGap,
-      stretchGoal: bt?.stretch ?? t?.stretchGoal ?? null,
+      stretchGoal: carried?.stretch ?? null,
 
       commissionEarned: com?.earned ?? 0,
       commissionPaid: paidOut,
@@ -1410,6 +1686,22 @@ export async function fetchAgentAnalyticsBundle(opts: {
     });
   }
 
+  let branchRevenueTrendLines: BranchRevenueTrendLine[] | null = null;
+  if (!branchFilter && branchesArr.length > 0) {
+    branchRevenueTrendLines = branchesArr.map((b) => ({
+      branchId: b.branchId,
+      branchName: b.branchName,
+      monthlyRevenue: Array.from({ length: 12 }, (_, i) => {
+        const d = new Date(trendStart.getFullYear(), trendStart.getMonth() + i, 1);
+        const y = d.getFullYear();
+        const mo = d.getMonth() + 1;
+        return trendRows
+          .filter((r) => r.year === y && r.month === mo && r.branchId === b.branchId)
+          .reduce((acc, r) => acc + r.revenue, 0);
+      }),
+    }));
+  }
+
   // Summary
   const aboveQuota = rows.filter((r) => r.attainmentPct >= 100).length;
   const onTrack = rows.filter((r) => r.attainmentPct >= 80 && r.attainmentPct < 100).length;
@@ -1460,6 +1752,7 @@ export async function fetchAgentAnalyticsBundle(opts: {
     monthlyTrend,
     alerts,
     filterBranchId: branchFilter,
+    branchRevenueTrendLines,
   };
 }
 

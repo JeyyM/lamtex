@@ -15,6 +15,8 @@ import {
   AgentLeaderboardRow,
   PeriodRange,
   bulkUpsertAgentTargets,
+  demoBranchMonthlyCarried,
+  fetchBranchMonthlyQuotaCarried,
   fetchQuotaHistory,
   formatCurrency,
   formatCurrencyShort,
@@ -39,9 +41,10 @@ interface Props {
   branchLabel?: string | null;
 }
 
-function BranchQuotaPanel({
+export function BranchQuotaPanel({
   branchId,
   branchLabel,
+  branchCode,
   periodLabel,
   changedByEmail,
   changedByName,
@@ -49,6 +52,8 @@ function BranchQuotaPanel({
 }: {
   branchId: string | null;
   branchLabel: string | null;
+  /** Used to autofill from demo seed when Supabase has no rows for this branch. */
+  branchCode?: string | null;
   periodLabel: string;
   changedByEmail: string;
   changedByName: string;
@@ -63,25 +68,33 @@ function BranchQuotaPanel({
     if (!branchId) return;
     let cancelled = false;
     setLoading(true);
-    void supabase
-      .from('branch_sales_targets')
-      .select('monthly_sales_target')
-      .eq('branch_id', branchId)
-      .eq('period', periodLabel)
-      .maybeSingle()
-      .then(({ data, error: qErr }) => {
+    void (async () => {
+      try {
+        const { value, hasSteps } = await fetchBranchMonthlyQuotaCarried(branchId, periodLabel);
         if (cancelled) return;
-        setLoading(false);
-        if (qErr || !data) {
-          setMonthly('');
+        if (hasSteps) {
+          const v = Number.isFinite(value) ? value : 0;
+          setMonthly(Number.isInteger(v) ? String(Math.round(v)) : String(v));
           return;
         }
-        setMonthly(String(data.monthly_sales_target ?? ''));
-      });
+        const demo = branchCode ? demoBranchMonthlyCarried(branchCode, periodLabel) : 0;
+        if (demo > 0) {
+          setMonthly(String(Math.round(demo)));
+          return;
+        }
+        setMonthly('');
+      } catch {
+        if (cancelled) return;
+        const demo = branchCode ? demoBranchMonthlyCarried(branchCode, periodLabel) : 0;
+        setMonthly(demo > 0 ? String(Math.round(demo)) : '');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
     return () => {
       cancelled = true;
     };
-  }, [branchId, periodLabel]);
+  }, [branchId, branchCode, periodLabel]);
 
   if (!branchId) {
     return (
@@ -119,11 +132,6 @@ function BranchQuotaPanel({
         <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
           <Target className="w-4 h-4 text-indigo-600" /> Branch quota ({branchLabel ?? 'branch'})
         </h3>
-        <p className="text-xs text-gray-600 mt-0.5">
-          Monthly quota for calendar month{' '}
-          <span className="font-mono bg-gray-100 px-1 rounded">{periodLabel}</span> (matches leaderboard / analytics).
-          Syncs to every active Sales Agent in the branch.
-        </p>
       </div>
       {loading ? (
         <div className="flex items-center gap-2 text-sm text-gray-500">

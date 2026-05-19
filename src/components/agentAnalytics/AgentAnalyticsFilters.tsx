@@ -33,6 +33,8 @@ interface Props {
   customEnd: string;
   onCustomStartChange: (v: string) => void;
   onCustomEndChange: (v: string) => void;
+  /** Shown on the right (e.g. Executive "Manage Quotas"). */
+  headerActions?: React.ReactNode;
 }
 
 export function AgentAnalyticsFilters({
@@ -45,28 +47,30 @@ export function AgentAnalyticsFilters({
   customEnd,
   onCustomStartChange,
   onCustomEndChange,
+  headerActions,
 }: Props) {
   const maxDate = useMemo(() => todayIso(), []);
 
   return (
     <div className="bg-white border border-gray-200 rounded-xl p-3 sm:p-4 flex flex-col gap-3">
-      <div className="flex flex-col lg:flex-row lg:items-end gap-3 lg:gap-6 flex-wrap">
-        <div className="flex items-center gap-2 min-w-[200px]">
-          <MapPin className="w-4 h-4 text-gray-500 shrink-0" aria-hidden />
-          <label className="text-xs font-semibold text-gray-600 uppercase tracking-wide shrink-0">Branch</label>
-          <select
-            value={branchId ?? ''}
-            onChange={(e) => onBranchChange(e.target.value ? e.target.value : null)}
-            className="flex-1 min-w-[12rem] text-sm border border-gray-300 rounded-lg shadow-sm py-2 px-3 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-          >
-            <option value="">All branches</option>
-            {branches.map((b) => (
-              <option key={b.id} value={b.id}>
-                {b.name}
-              </option>
-            ))}
-          </select>
-        </div>
+      <div className="flex flex-col xl:flex-row xl:items-end gap-3 xl:gap-6 xl:justify-between w-full">
+        <div className="flex flex-col lg:flex-row lg:items-end gap-3 lg:gap-6 flex-wrap flex-1 min-w-0">
+          <div className="flex items-center gap-2 min-w-[200px]">
+            <MapPin className="w-4 h-4 text-gray-500 shrink-0" aria-hidden />
+            <label className="text-xs font-semibold text-gray-600 uppercase tracking-wide shrink-0">Branch</label>
+            <select
+              value={branchId ?? ''}
+              onChange={(e) => onBranchChange(e.target.value ? e.target.value : null)}
+              className="flex-1 min-w-[12rem] text-sm border border-gray-300 rounded-lg shadow-sm py-2 px-3 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            >
+              <option value="">All branches</option>
+              {branches.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
+                </option>
+              ))}
+            </select>
+          </div>
 
         <div className="flex flex-col gap-2 flex-1 min-w-0">
           <div className="flex items-center gap-2 text-xs font-semibold text-gray-600 uppercase tracking-wide">
@@ -125,6 +129,11 @@ export function AgentAnalyticsFilters({
             </div>
           )}
         </div>
+        </div>
+
+        {headerActions ? (
+          <div className="flex items-center shrink-0 xl:justify-end">{headerActions}</div>
+        ) : null}
       </div>
     </div>
   );

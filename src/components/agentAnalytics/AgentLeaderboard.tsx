@@ -1,15 +1,15 @@
 import React, { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import {
   ArrowUp,
   ArrowDown,
   Minus,
   Download,
-  Trophy,
   ArrowUpDown,
 } from 'lucide-react';
 import {
   AgentLeaderboardRow,
+  employeeProfilePathFromAgent,
   formatCurrencyShort,
   formatNumber,
   formatPercent,
@@ -54,7 +54,6 @@ function attainmentBadgeClass(pct: number) {
 }
 
 export function AgentLeaderboard({ rows, title = 'Leaderboard' }: Props) {
-  const navigate = useNavigate();
   const [search, setSearch] = useState('');
   const [sortField, setSortField] = useState<SortField>('attainment');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
@@ -176,23 +175,19 @@ export function AgentLeaderboard({ rows, title = 'Leaderboard' }: Props) {
               <SortHeader label="AOV" field="aov" />
               <SortHeader label="Collection" field="collection" />
               <SortHeader label="New Cust." field="newCustomers" />
-              <th className="px-3 py-2 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                Rank
-              </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-200">
-            {sorted.map((r, idx) => (
-              <tr
-                key={r.agentId}
-                className="hover:bg-gray-50 transition-colors cursor-pointer"
-                onClick={() => navigate(`/agents/${r.agentId}`)}
-              >
+            {sorted.map((r) => (
+              <tr key={r.agentId} className="hover:bg-gray-50 transition-colors">
                 <td className="px-4 py-2.5">
-                  <div>
-                    <div className="font-semibold text-blue-700 hover:text-blue-900 hover:underline">{r.agentName}</div>
-                    <div className="text-xs text-gray-600">{r.branchName ?? '—'}</div>
-                  </div>
+                  <Link
+                    to={employeeProfilePathFromAgent(r.employeePublicId, r.agentId)}
+                    className="block rounded-md -mx-1 px-1 py-0.5 text-left hover:bg-blue-50/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-0"
+                  >
+                    <span className="font-semibold text-blue-700 hover:underline">{r.agentName}</span>
+                    <span className="block text-xs text-gray-600">{r.branchName ?? '—'}</span>
+                  </Link>
                 </td>
                 <td className="px-3 py-2.5 text-right font-semibold text-gray-900 tabular-nums">
                   {formatCurrencyShort(r.revenue)}
@@ -239,16 +234,11 @@ export function AgentLeaderboard({ rows, title = 'Leaderboard' }: Props) {
                   </span>
                 </td>
                 <td className="px-3 py-2.5 text-right tabular-nums text-gray-900">{r.newCustomers}</td>
-                <td className="px-3 py-2.5 text-center">
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded-full font-bold text-xs">
-                    <Trophy className="w-3 h-3" />#{idx + 1}
-                  </span>
-                </td>
               </tr>
             ))}
             {sorted.length === 0 && (
               <tr>
-                <td colSpan={9} className="px-4 py-8 text-center text-gray-500 text-sm">
+                <td colSpan={8} className="px-4 py-8 text-center text-gray-500 text-sm">
                   No agents match the current filters.
                 </td>
               </tr>

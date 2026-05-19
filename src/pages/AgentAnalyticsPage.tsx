@@ -1,12 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  BarChart3,
-  Loader2,
-  MapPin,
-  Target,
-  TrendingUp,
-  AlertTriangle,
-} from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { BarChart3, Loader2, TrendingUp, Target } from 'lucide-react';
 import { useAppContext } from '@/src/store/AppContext';
 import {
   AgentAnalyticsBundle,
@@ -16,33 +9,24 @@ import {
   fetchAgentAnalyticsBundle,
   fetchBranches,
   getPeriodRange,
+  quotaMonthPeriodKey,
 } from '@/src/lib/agentAnalytics';
 import { AgentKpiStrip } from '@/src/components/agentAnalytics/AgentKpiStrip';
 import { AgentLeaderboard } from '@/src/components/agentAnalytics/AgentLeaderboard';
 import { BranchComparison } from '@/src/components/agentAnalytics/BranchComparison';
-import { QuotasManager } from '@/src/components/agentAnalytics/QuotasManager';
 import { TrendsCharts } from '@/src/components/agentAnalytics/TrendsCharts';
-import { ActionPanels } from '@/src/components/agentAnalytics/ActionPanels';
 import { AgentAnalyticsFilters } from '@/src/components/agentAnalytics/AgentAnalyticsFilters';
+import { ManageBranchQuotasModal } from '@/src/components/agentAnalytics/ManageBranchQuotasModal';
 
-type Tab = 'overview' | 'quotas' | 'branches' | 'trends' | 'actions';
+type Tab = 'overview' | 'trends';
 
 const TAB_ORDER: Array<{ id: Tab; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { id: 'overview', label: 'Overview', icon: BarChart3 },
-  { id: 'quotas', label: 'Quotas', icon: Target },
-  { id: 'branches', label: 'Branches', icon: MapPin },
   { id: 'trends', label: 'Trends', icon: TrendingUp },
-  { id: 'actions', label: 'Actions', icon: AlertTriangle },
 ];
 
 const AgentAnalyticsPage: React.FC = () => {
-  const { role, session, employeeName, branch: navbarBranch } = useAppContext();
-  const allowedTabs: Tab[] = useMemo(() => {
-    // Only Executives can manage quotas (single source of truth for now).
-    if (role === 'Executive') return TAB_ORDER.map((t) => t.id);
-    if (role === 'Agent' || role === 'Driver') return ['overview', 'branches', 'trends'];
-    return ['overview', 'branches', 'trends', 'actions'];
-  }, [role]);
+  const { role, session, employeeName } = useAppContext();
 
   const [tab, setTab] = useState<Tab>('overview');
   const [branches, setBranches] = useState<BranchOption[]>([]);
@@ -51,11 +35,12 @@ const AgentAnalyticsPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   /** Page-local branch filter (navbar branch is hidden on /agents). */
   const [analyticsBranchId, setAnalyticsBranchId] = useState<string | null>(null);
-  const branchInitDone = useRef(false);
 
   const [periodKind, setPeriodKind] = useState<PeriodKey>('month');
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
+
+  const [manageQuotasOpen, setManageQuotasOpen] = useState(false);
 
   const range: PeriodRange = useMemo(() => {
     if (periodKind === 'custom') {
@@ -66,18 +51,6 @@ const AgentAnalyticsPage: React.FC = () => {
     }
     return getPeriodRange(periodKind);
   }, [periodKind, customStart, customEnd]);
-
-  useEffect(() => {
-    if (branches.length === 0 || branchInitDone.current) return;
-    branchInitDone.current = true;
-    const nav = (navbarBranch ?? '').trim();
-    if (!nav) {
-      setAnalyticsBranchId(null);
-      return;
-    }
-    const hit = branches.find((b) => b.name.trim().toLowerCase() === nav.toLowerCase());
-    setAnalyticsBranchId(hit?.id ?? null);
-  }, [branches, navbarBranch]);
 
   const handlePeriodKindChange = useCallback((kind: PeriodKey) => {
     setPeriodKind(kind);
@@ -90,11 +63,6 @@ const AgentAnalyticsPage: React.FC = () => {
       setCustomEnd(iso);
     }
   }, []);
-
-  // Fall back to first allowed tab if current selection isn't permitted.
-  useEffect(() => {
-    if (!allowedTabs.includes(tab)) setTab(allowedTabs[0] ?? 'overview');
-  }, [allowedTabs, tab]);
 
   useEffect(() => {
     fetchBranches().then(setBranches);
@@ -119,9 +87,6 @@ const AgentAnalyticsPage: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [range.start, range.end, analyticsBranchId]);
 
-  const changedByEmail = session?.user?.email ?? '';
-  const changedByName = employeeName ?? '';
-
   return (
     <div className="p-3 sm:p-4 md:p-6 space-y-5">
       {/* Header */}
@@ -133,7 +98,7 @@ const AgentAnalyticsPage: React.FC = () => {
 
       {/* Tabs */}
       <div className="flex flex-wrap gap-1 border-b border-gray-200">
-        {TAB_ORDER.filter((t) => allowedTabs.includes(t.id)).map((t) => {
+        {TAB_ORDER.map((t) => {
           const Icon = t.icon;
           const active = tab === t.id;
           return (
@@ -163,6 +128,32 @@ const AgentAnalyticsPage: React.FC = () => {
           customEnd={customEnd}
           onCustomStartChange={setCustomStart}
           onCustomEndChange={setCustomEnd}
+          headerActions={
+            role === 'Executive' && tab === 'trends' ? (
+              <button
+                type="button"
+                onClick={() => setManageQuotasOpen(true)}
+                className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 shadow-sm"
+              >
+                <Target className="w-4 h-4 shrink-0" />
+                Manage Quotas
+              </button>
+            ) : undefined
+          }
+        />
+      )}
+
+      {role === 'Executive' && branches.length > 0 && (
+        <ManageBranchQuotasModal
+          open={manageQuotasOpen}
+          onClose={() => setManageQuotasOpen(false)}
+          branches={branches}
+          quotaPeriodKey={quotaMonthPeriodKey(range)}
+          changedByEmail={session?.user?.email ?? ''}
+          changedByName={employeeName ?? ''}
+          onSaved={() => {
+            void load();
+          }}
         />
       )}
 
@@ -188,29 +179,7 @@ const AgentAnalyticsPage: React.FC = () => {
             </div>
           )}
 
-          {tab === 'quotas' && (
-            <QuotasManager
-              rows={bundle.agents}
-              range={range}
-              changedByEmail={changedByEmail}
-              changedByName={changedByName}
-              onChanged={load}
-              branchId={analyticsBranchId}
-              branchLabel={analyticsBranchId ? branches.find((b) => b.id === analyticsBranchId)?.name ?? null : null}
-            />
-          )}
-
-          {tab === 'branches' && (
-            <BranchComparison
-              branches={bundle.branches}
-              selectedBranchId={analyticsBranchId}
-              onSelectBranch={setAnalyticsBranchId}
-            />
-          )}
-
           {tab === 'trends' && <TrendsCharts bundle={bundle} />}
-
-          {tab === 'actions' && <ActionPanels bundle={bundle} onChanged={load} />}
         </>
       )}
     </div>

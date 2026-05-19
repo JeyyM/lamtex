@@ -13,6 +13,7 @@ import {
 import { MapPin, Trophy, ArrowUp, ArrowDown, Minus } from 'lucide-react';
 import {
   BranchAnalyticsRow,
+  branchChartColorAt,
   formatCurrencyShort,
   formatNumber,
   formatPercent,
@@ -41,12 +42,12 @@ function deltaIcon(value: number) {
 export function BranchComparison({ branches, selectedBranchId, onSelectBranch }: Props) {
   const chartData = useMemo(
     () =>
-      branches.map((b) => ({
+      branches.map((b, i) => ({
         branch: b.branchName,
         Revenue: Math.round(b.revenue),
         Target: Math.round(b.totalTarget),
-        attainment: b.attainmentPct,
         id: b.branchId,
+        colorIndex: i,
       })),
     [branches],
   );
@@ -60,17 +61,17 @@ export function BranchComparison({ branches, selectedBranchId, onSelectBranch }:
             <MapPin className="w-5 h-5 text-blue-600" />
             Branch Performance Comparison
           </h2>
-          <p className="text-sm text-gray-600 mt-1">
-            Click any branch to filter the entire page to that branch only.
-            {selectedBranchId && (
+          {selectedBranchId && (
+            <p className="text-sm text-gray-600 mt-1">
               <button
+                type="button"
                 onClick={() => onSelectBranch(null)}
-                className="ml-2 text-blue-600 hover:text-blue-800 underline"
+                className="text-blue-600 hover:text-blue-800 underline"
               >
                 Clear branch filter
               </button>
-            )}
-          </p>
+            </p>
+          )}
         </div>
       </div>
 
@@ -92,13 +93,7 @@ export function BranchComparison({ branches, selectedBranchId, onSelectBranch }:
               {chartData.map((d) => (
                 <Cell
                   key={d.id}
-                  fill={
-                    d.attainment >= 100
-                      ? '#10B981'
-                      : d.attainment >= 80
-                      ? '#F59E0B'
-                      : '#EF4444'
-                  }
+                  fill={branchChartColorAt(d.colorIndex)}
                   cursor="pointer"
                   onClick={() => onSelectBranch(d.id)}
                 />
@@ -123,7 +118,6 @@ export function BranchComparison({ branches, selectedBranchId, onSelectBranch }:
                 <th className="text-right px-3 py-2 text-xs font-semibold text-gray-600 uppercase">Δ vs prev</th>
                 <th className="text-right px-3 py-2 text-xs font-semibold text-gray-600 uppercase">Orders</th>
                 <th className="text-right px-3 py-2 text-xs font-semibold text-gray-600 uppercase">AOV</th>
-                <th className="text-center px-3 py-2 text-xs font-semibold text-gray-600 uppercase">Attainment</th>
                 <th className="text-center px-3 py-2 text-xs font-semibold text-gray-600 uppercase">Collection</th>
                 <th className="text-center px-3 py-2 text-xs font-semibold text-gray-600 uppercase">Profit mg.</th>
                 <th className="text-center px-3 py-2 text-xs font-semibold text-gray-600 uppercase">Rank</th>
@@ -157,11 +151,6 @@ export function BranchComparison({ branches, selectedBranchId, onSelectBranch }:
                     <td className="px-3 py-2.5 text-right tabular-nums">{formatNumber(b.orderCount)}</td>
                     <td className="px-3 py-2.5 text-right tabular-nums">{formatCurrencyShort(b.averageOrderValue)}</td>
                     <td className="px-3 py-2.5 text-center">
-                      <span className={`inline-block min-w-[60px] px-2 py-1 rounded text-xs font-semibold ${heatColor(b.attainmentPct)}`}>
-                        {formatPercent(b.attainmentPct)}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2.5 text-center">
                       <span className={`inline-block min-w-[60px] px-2 py-1 rounded text-xs font-semibold ${heatColor(b.collectionRate)}`}>
                         {formatPercent(b.collectionRate, 0)}
                       </span>
@@ -181,17 +170,13 @@ export function BranchComparison({ branches, selectedBranchId, onSelectBranch }:
               })}
               {branches.length === 0 && (
                 <tr>
-                  <td colSpan={10} className="px-4 py-8 text-center text-gray-500">
+                  <td colSpan={9} className="px-4 py-8 text-center text-gray-500">
                     No branch data for the current filter.
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
-        </div>
-        <div className="px-4 py-2 text-xs text-gray-500 bg-gray-50 border-t border-gray-100">
-          Profit margin = branch gross profit ÷ collected revenue (amount paid). Profit uses order line totals after discounts minus{' '}
-          <code className="text-gray-600">product_variants.cost_price</code> × qty.
         </div>
       </div>
     </div>
