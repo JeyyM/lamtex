@@ -4,6 +4,7 @@ import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { Trip } from '@/src/types/logistics';
 import { supabase } from '@/src/lib/supabase';
+import { deriveOrderDueDateForPersistence } from '@/src/lib/financeData';
 import { MarkInTransitModal } from '@/src/components/orders/MarkInTransitModal';
 import { FulfillOrderModal, type FulfillmentData } from '@/src/components/orders/FulfillOrderModal';
 import { CancelOrderModal, type CancellationData } from '@/src/components/orders/CancelOrderModal';
@@ -289,6 +290,37 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
 
     const updatePayload: Record<string, unknown> = { status: newStatus, updated_at: now };
     if (isComplete) updatePayload.actual_delivery = now.slice(0, 10);
+
+    const { data: tripOrdMeta } = await supabase
+      .from('orders')
+      .select('order_date, payment_terms, actual_delivery, customer_id')
+      .eq('id', orderId)
+      .maybeSingle();
+
+    let tripCustTerms: string | null = null;
+    if (tripOrdMeta?.customer_id) {
+      const { data: cr } = await supabase
+        .from('customers')
+        .select('payment_terms')
+        .eq('id', tripOrdMeta.customer_id)
+        .maybeSingle();
+      tripCustTerms = typeof cr?.payment_terms === 'string' ? cr.payment_terms.trim() || null : null;
+    }
+
+    const mergedActualTrip = isComplete
+      ? now.slice(0, 10)
+      : tripOrdMeta?.actual_delivery != null && String(tripOrdMeta.actual_delivery).trim() !== ''
+        ? String(tripOrdMeta.actual_delivery).slice(0, 10)
+        : null;
+
+    const tripPersistedDue = deriveOrderDueDateForPersistence({
+      order_date: tripOrdMeta?.order_date ?? null,
+      actual_delivery: mergedActualTrip,
+      payment_terms: tripOrdMeta?.payment_terms ?? null,
+      customer_payment_terms: tripCustTerms,
+    });
+    if (tripPersistedDue) updatePayload.due_date = tripPersistedDue;
+
     await supabase.from('orders').update(updatePayload).eq('id', orderId);
 
     addAuditLog?.(`Recorded delivery for order ${target?.order.orderNumber ?? orderId} (Trip ${trip.tripNumber}) → ${newStatus}`, 'order');

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useMatch } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
-import { Bell, Search, Menu, Calendar, X, Settings } from 'lucide-react';
+import { Bell, Menu, Settings } from 'lucide-react';
 import { UserRole, Branch } from '@/src/types';
 import { NotificationsDrawer } from '../dashboard/NotificationsDrawer';
 import { getNotificationsByBranch } from '@/src/mock/executiveDashboard';
@@ -12,19 +12,14 @@ import { LAMTEX_BRANCHES_CHANGED_EVENT } from '@/src/lib/branches';
 export function Topbar() {
   const { role, setRole, branch, setBranch, isMobileMenuOpen, setIsMobileMenuOpen, hideBranchSelector } = useAppContext();
   const agentAnalyticsRoute = useMatch({ path: '/agents', end: true });
-  const hideHeaderBranchAndDate = Boolean(agentAnalyticsRoute);
+  const hideBranchOnAgentAnalytics = Boolean(agentAnalyticsRoute);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [isMobileSettingsOpen, setIsMobileSettingsOpen] = useState(false);
   const [notifications, setNotifications] = useState(getNotificationsByBranch(branch));
-  const [showDatePicker, setShowDatePicker] = useState(false);
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
-  const [dateError, setDateError] = useState('');
 
   const roles: UserRole[] = ['Executive', 'Warehouse', 'Logistics', 'Agent', 'Driver'];
   const [branches, setBranches] = useState<Branch[]>([]);
 
-  // Fetch active branches from Supabase; default branch when none selected
   useEffect(() => {
     let cancelled = false;
     const loadBranches = () => {
@@ -54,91 +49,19 @@ export function Topbar() {
     }
   }, [branches, branch, setBranch]);
 
-  // Get today's date in YYYY-MM-DD format
-  const getTodayDate = () => {
-    const today = new Date();
-    return today.toISOString().split('T')[0];
-  };
-
-  // Update notifications when branch changes
   useEffect(() => {
     setNotifications(getNotificationsByBranch(branch));
   }, [branch]);
 
-  const unreadCount = notifications.filter(n => !n.read).length;
+  const unreadCount = notifications.filter((n) => !n.read).length;
 
   const handleMarkRead = (id: string) => {
-    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
-  };
-
-  const validateDateRange = (from: string, to: string) => {
-    const today = getTodayDate();
-    
-    if (!from || !to) {
-      setDateError('Both dates are required');
-      return false;
-    }
-
-    if (from > today) {
-      setDateError('From date cannot be in the future');
-      return false;
-    }
-
-    if (to > today) {
-      setDateError('To date cannot be in the future');
-      return false;
-    }
-
-    if (from > to) {
-      setDateError('From date must be before To date');
-      return false;
-    }
-
-    setDateError('');
-    return true;
-  };
-
-  const handleDateFromChange = (value: string) => {
-    setDateFrom(value);
-    if (dateTo) {
-      validateDateRange(value, dateTo);
-    }
-  };
-
-  const handleDateToChange = (value: string) => {
-    setDateTo(value);
-    if (dateFrom) {
-      validateDateRange(dateFrom, value);
-    }
-  };
-
-  const applyDateRange = () => {
-    if (validateDateRange(dateFrom, dateTo)) {
-      setShowDatePicker(false);
-      // Here you would typically dispatch this to your app context or state management
-      console.log('Date range applied:', { from: dateFrom, to: dateTo });
-    }
-  };
-
-  const clearDateRange = () => {
-    setDateFrom('');
-    setDateTo('');
-    setDateError('');
-  };
-
-  const formatDateRange = () => {
-    if (dateFrom && dateTo) {
-      const from = new Date(dateFrom);
-      const to = new Date(dateTo);
-      return `${from.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${to.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
-    }
-    return 'Select Date Range';
+    setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
   };
 
   return (
     <>
       <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-4 md:px-6 sticky top-0 z-10 ml-0 lg:ml-64">
-        {/* Mobile: Hamburger Menu (Opens Sidebar Only) */}
         <button
           onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
           className="lg:hidden p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
@@ -147,124 +70,49 @@ export function Topbar() {
           <Menu className="w-5 h-5" />
         </button>
 
-        {/* Logo - visible on mobile when sidebar is hidden */}
         <div className="lg:hidden flex items-center">
           <img src={lamtexLogo} alt="Lamtex Logo" className="h-8 w-auto" />
         </div>
 
-        {/* Spacer to push controls to the right */}
         <div className="flex-1"></div>
 
-        {/* Desktop Controls */}
         <div className="hidden md:flex items-center gap-4 lg:gap-6">
-          {/* Date Range Selector — hidden on Agent Analytics (/agents) which uses its own controls */}
-          {!hideHeaderBranchAndDate && (
-          <div className="relative">
-            <button
-              onClick={() => setShowDatePicker(!showDatePicker)}
-              className="flex items-center gap-2 text-sm text-gray-600 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-100 transition-colors"
-            >
-              <Calendar className="w-4 h-4 text-gray-400" />
-              <span className="font-medium">{formatDateRange()}</span>
-            </button>
-
-            {showDatePicker && (
-              <div className="absolute top-full mt-2 right-0 bg-white rounded-lg shadow-lg border border-gray-200 p-4 z-50 w-[calc(100vw-2rem)] max-w-[320px] md:w-auto md:min-w-[320px]">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-sm font-semibold text-gray-900">Select Date Range</h3>
-                  <button
-                    onClick={() => setShowDatePicker(false)}
-                    className="text-gray-400 hover:text-gray-600"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">From Date</label>
-                    <input
-                      type="date"
-                      value={dateFrom}
-                      onChange={(e) => handleDateFromChange(e.target.value)}
-                      max={getTodayDate()}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">To Date</label>
-                    <input
-                      type="date"
-                      value={dateTo}
-                      onChange={(e) => handleDateToChange(e.target.value)}
-                      min={dateFrom || undefined}
-                      max={getTodayDate()}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                    />
-                  </div>
-
-                  {dateError && (
-                    <div className="text-xs text-red-600 bg-red-50 px-2 py-1 rounded">
-                      {dateError}
-                    </div>
-                  )}
-
-                  <div className="flex items-center gap-2 pt-2">
-                    <button
-                      onClick={applyDateRange}
-                      disabled={!dateFrom || !dateTo || !!dateError}
-                      className="flex-1 px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
-                    >
-                      Apply
-                    </button>
-                    <button
-                      onClick={clearDateRange}
-                      className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors"
-                    >
-                      Clear
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
+          {!hideBranchSelector && !hideBranchOnAgentAnalytics && (
+            <div className="hidden lg:flex items-center gap-2">
+              <span className="text-xs font-medium text-gray-500 uppercase tracking-wider">Branch:</span>
+              <select
+                value={branch}
+                onChange={(e) => setBranch(e.target.value as Branch)}
+                className="text-sm border-gray-300 rounded-md shadow-sm focus:border-red-500 focus:ring-red-500 py-1.5 pl-3 pr-8"
+              >
+                {branches.map((b) => (
+                  <option key={b} value={b}>
+                    {b}
+                  </option>
+                ))}
+              </select>
+            </div>
           )}
 
-          {/* Branch Switcher */}
-          {!hideBranchSelector && !hideHeaderBranchAndDate && (
-          <div className="hidden lg:flex items-center gap-2">
-            <span className="text-xs font-medium text-gray-500 uppercase tracking-wider">Branch:</span>
-            <select 
-              value={branch}
-              onChange={(e) => setBranch(e.target.value as Branch)}
-              className="text-sm border-gray-300 rounded-md shadow-sm focus:border-red-500 focus:ring-red-500 py-1.5 pl-3 pr-8"
-            >
-              {branches.map(b => (
-                <option key={b} value={b}>{b}</option>
-              ))}
-            </select>
-          </div>
-          )}
-
-          {/* Role Switcher (For Prototype) */}
           <div className="hidden lg:flex items-center gap-2 bg-red-50 px-3 py-1.5 rounded-lg border border-red-100">
             <span className="text-xs font-medium text-red-800 uppercase tracking-wider">Simulate Role:</span>
-            <select 
+            <select
               value={role}
               onChange={(e) => setRole(e.target.value as UserRole)}
               className="text-sm bg-transparent border-none text-red-900 font-semibold focus:ring-0 py-0 pl-1 pr-6 cursor-pointer"
             >
-              {roles.map(r => (
-                <option key={r} value={r}>{r}</option>
+              {roles.map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
               ))}
             </select>
           </div>
 
-          {/* Notifications */}
-          <button 
+          <button
             className="relative p-2 text-gray-500 hover:bg-gray-100 rounded-full transition-colors"
             onClick={() => setIsNotificationsOpen(true)}
+            aria-label="Notifications"
           >
             <Bell className="w-5 h-5" />
             {unreadCount > 0 && (
@@ -273,10 +121,8 @@ export function Topbar() {
           </button>
         </div>
 
-        {/* Mobile: Settings & Notifications */}
         <div className="md:hidden flex items-center gap-2">
-          {/* Prototype Settings Button (Mobile Only) */}
-          <button 
+          <button
             className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
             onClick={() => setIsMobileSettingsOpen(!isMobileSettingsOpen)}
             aria-label="Toggle settings"
@@ -284,10 +130,10 @@ export function Topbar() {
             <Settings className="w-5 h-5" />
           </button>
 
-          {/* Notifications */}
-          <button 
+          <button
             className="relative p-2 text-gray-500 hover:bg-gray-100 rounded-full transition-colors"
             onClick={() => setIsNotificationsOpen(true)}
+            aria-label="Notifications"
           >
             <Bell className="w-5 h-5" />
             {unreadCount > 0 && (
@@ -297,115 +143,40 @@ export function Topbar() {
         </div>
       </header>
 
-      {/* Mobile Controls Menu (Settings Panel) */}
       {isMobileSettingsOpen && (
         <div className="lg:hidden fixed inset-0 z-40 bg-black/50" onClick={() => setIsMobileSettingsOpen(false)}>
-          <div 
+          <div
             className="absolute top-16 left-0 right-0 bg-white border-b border-gray-200 shadow-lg p-4 space-y-4"
             onClick={(e) => e.stopPropagation()}
           >
-            {!hideHeaderBranchAndDate && (
-              <>
-                {/* Date Range Selector - Mobile */}
-                <div className="relative">
-                  <button
-                    onClick={() => setShowDatePicker(!showDatePicker)}
-                    className="w-full flex items-center justify-between gap-2 text-sm text-gray-600 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200 hover:bg-gray-100 transition-colors"
-                  >
-                    <div className="flex items-center gap-2">
-                      <Calendar className="w-4 h-4 text-gray-400" />
-                      <span className="font-medium">{formatDateRange()}</span>
-                    </div>
-                  </button>
-
-                  {showDatePicker && (
-                    <div className="mt-2 bg-white rounded-lg border border-gray-200 p-4">
-                      <div className="flex items-center justify-between mb-3">
-                        <h3 className="text-sm font-semibold text-gray-900">Select Date Range</h3>
-                        <button
-                          onClick={() => setShowDatePicker(false)}
-                          className="text-gray-400 hover:text-gray-600"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
-                      </div>
-
-                      <div className="space-y-3">
-                        <div>
-                          <label className="block text-xs font-medium text-gray-700 mb-1">From Date</label>
-                          <input
-                            type="date"
-                            value={dateFrom}
-                            onChange={(e) => handleDateFromChange(e.target.value)}
-                            max={getTodayDate()}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-medium text-gray-700 mb-1">To Date</label>
-                          <input
-                            type="date"
-                            value={dateTo}
-                            onChange={(e) => handleDateToChange(e.target.value)}
-                            min={dateFrom || undefined}
-                            max={getTodayDate()}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                          />
-                        </div>
-
-                        {dateError && (
-                          <div className="text-xs text-red-600 bg-red-50 px-2 py-1 rounded">
-                            {dateError}
-                          </div>
-                        )}
-
-                        <div className="flex items-center gap-2 pt-2">
-                          <button
-                            onClick={applyDateRange}
-                            disabled={!dateFrom || !dateTo || !!dateError}
-                            className="flex-1 px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
-                          >
-                            Apply
-                          </button>
-                          <button
-                            onClick={clearDateRange}
-                            className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors"
-                          >
-                            Clear
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* Branch Switcher - Mobile */}
-                <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">Branch</label>
-                  <select 
-                    value={branch}
-                    onChange={(e) => setBranch(e.target.value as Branch)}
-                    className="w-full text-sm border-gray-300 rounded-lg shadow-sm focus:border-red-500 focus:ring-red-500 py-2 px-3"
-                  >
-                    {branches.map(b => (
-                      <option key={b} value={b}>{b}</option>
-                    ))}
-                  </select>
-                </div>
-              </>
+            {!hideBranchSelector && !hideBranchOnAgentAnalytics && (
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Branch</label>
+                <select
+                  value={branch}
+                  onChange={(e) => setBranch(e.target.value as Branch)}
+                  className="w-full text-sm border-gray-300 rounded-lg shadow-sm focus:border-red-500 focus:ring-red-500 py-2 px-3"
+                >
+                  {branches.map((b) => (
+                    <option key={b} value={b}>
+                      {b}
+                    </option>
+                  ))}
+                </select>
+              </div>
             )}
 
-            {/* Role Switcher - Mobile */}
             <div>
               <label className="block text-xs font-medium text-gray-700 mb-1">Simulate Role</label>
-              <select 
+              <select
                 value={role}
                 onChange={(e) => setRole(e.target.value as UserRole)}
                 className="w-full text-sm border-gray-300 rounded-lg shadow-sm focus:border-red-500 focus:ring-red-500 py-2 px-3"
               >
-                {roles.map(r => (
-                  <option key={r} value={r}>{r}</option>
+                {roles.map((r) => (
+                  <option key={r} value={r}>
+                    {r}
+                  </option>
                 ))}
               </select>
             </div>
@@ -414,9 +185,9 @@ export function Topbar() {
       )}
 
       {isNotificationsOpen && (
-        <NotificationsDrawer 
-          isOpen={isNotificationsOpen} 
-          onClose={() => setIsNotificationsOpen(false)} 
+        <NotificationsDrawer
+          isOpen={isNotificationsOpen}
+          onClose={() => setIsNotificationsOpen(false)}
           notifications={notifications}
           onMarkRead={handleMarkRead}
         />

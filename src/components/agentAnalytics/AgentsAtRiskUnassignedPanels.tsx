@@ -32,7 +32,7 @@ export function AgentsHistoryUnassignedPanels({ bundle }: Props) {
           </h3>
           <button
             type="button"
-            onClick={() => navigate('/customers?filter=unassigned')}
+            onClick={() => navigate('/customers')}
             className="text-xs text-blue-600 hover:text-blue-800 inline-flex items-center gap-1"
           >
             Manage <ArrowRight className="w-3 h-3" />
@@ -46,14 +46,48 @@ export function AgentsHistoryUnassignedPanels({ bundle }: Props) {
             </div>
           ) : (
             <>
-              <div className="text-3xl font-bold text-blue-700">{bundle.summary.customersUnassigned}</div>
-              <div className="text-sm text-gray-600">customers without an owning agent</div>
+              <div className="text-sm text-gray-600 mb-3">
+                <span className="text-2xl font-bold text-blue-700 tabular-nums">
+                  {bundle.summary.customersUnassigned}
+                </span>{' '}
+                {bundle.summary.customersUnassigned === 1 ? 'customer' : 'customers'} without an owning agent
+              </div>
+              <ul className="divide-y divide-gray-100 rounded-lg border border-gray-200 max-h-56 overflow-y-auto">
+                {bundle.unassignedCustomers.map((c) => (
+                  <li key={c.id}>
+                    <Link
+                      to={`/customers/${c.id}/edit`}
+                      className="flex items-start justify-between gap-3 px-3 py-2.5 hover:bg-blue-50/60 transition-colors"
+                    >
+                      <div className="min-w-0">
+                        <p className="font-medium text-gray-900 truncate">{c.name}</p>
+                        <p className="text-xs text-gray-500 truncate">
+                          {[c.type, c.city, c.branchName].filter(Boolean).join(' · ') || 'No details'}
+                        </p>
+                      </div>
+                      <span className="shrink-0 text-xs font-medium text-blue-600">Assign</span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+              {bundle.summary.customersUnassigned > bundle.unassignedCustomers.length && (
+                <p className="text-xs text-gray-500 mt-2">
+                  Showing {bundle.unassignedCustomers.length} of {bundle.summary.customersUnassigned}.{' '}
+                  <button
+                    type="button"
+                    onClick={() => navigate('/customers')}
+                    className="text-blue-600 hover:text-blue-800 underline"
+                  >
+                    View all customers
+                  </button>
+                </p>
+              )}
               <button
                 type="button"
-                onClick={() => navigate('/customers?filter=unassigned')}
-                className="mt-3 px-3 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700"
+                onClick={() => navigate('/customers')}
+                className="mt-3 w-full px-3 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700"
               >
-                Assign now
+                Open customers
               </button>
             </>
           )}

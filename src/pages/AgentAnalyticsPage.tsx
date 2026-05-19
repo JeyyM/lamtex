@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { BarChart3, Loader2, TrendingUp, Target } from 'lucide-react';
 import { useAppContext } from '@/src/store/AppContext';
-import {
+import { 
   AgentAnalyticsBundle,
   BranchOption,
   PeriodKey,
@@ -168,7 +168,7 @@ const AgentAnalyticsPage: React.FC = () => {
       ) : (
         <>
           {tab === 'overview' && (
-            <div className="space-y-6">
+                <div className="space-y-6">
               <AgentKpiStrip summary={bundle.summary} />
               <AgentLeaderboard rows={bundle.agents.slice(0, 10)} title="Top agents" />
               <BranchComparison

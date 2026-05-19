@@ -192,12 +192,22 @@ export interface MonthlyTrendPoint {
   avgAgentRevenue: number;
 }
 
+export interface UnassignedCustomerRow {
+  id: string;
+  name: string;
+  city: string | null;
+  branchName: string | null;
+  type: string | null;
+}
+
 export interface AgentAnalyticsBundle {
   summary: AnalyticsSummary;
   agents: AgentLeaderboardRow[];
   branches: BranchAnalyticsRow[];
   monthlyTrend: MonthlyTrendPoint[];
   alerts: AgentAlertRow[];
+  /** Customers with no `assigned_agent_id` (respects branch filter). */
+  unassignedCustomers: UnassignedCustomerRow[];
   /** Same branch filter passed into fetchAgentAnalyticsBundle (null = all branches). */
   filterBranchId: string | null;
   /**
@@ -782,31 +792,32 @@ type BranchTargetCell = { monthly: number; quarterly: number; stretch: string | 
  * Demo quota steps — keep in sync with `database/seed_branch_sales_targets_history.sql`.
  * Used only when Supabase returns no `branch_sales_targets` rows (empty DB, RLS, or network).
  */
+/** Seed values ÷ 16 — keep in sync with `database/apply_scaled_branch_quotas.sql`. */
 const DEMO_BRANCH_SALES_TARGETS_BY_CODE: Record<
   string,
   Array<{ period: string; monthly: number; quarterly: number; stretch: string | null }>
 > = {
   MNL: [
-    { period: '2025-06', monthly: 850_000, quarterly: 2_550_000, stretch: '110% of monthly target' },
-    { period: '2025-09', monthly: 1_000_000, quarterly: 3_000_000, stretch: '110% of monthly target' },
-    { period: '2026-01', monthly: 1_150_000, quarterly: 3_450_000, stretch: '115% of monthly target' },
-    { period: '2026-04', monthly: 1_080_000, quarterly: 3_240_000, stretch: '115% of monthly target' },
+    { period: '2025-06', monthly: 53_125, quarterly: 159_375, stretch: '110% of monthly target' },
+    { period: '2025-09', monthly: 62_500, quarterly: 187_500, stretch: '110% of monthly target' },
+    { period: '2026-01', monthly: 71_875, quarterly: 215_625, stretch: '115% of monthly target' },
+    { period: '2026-04', monthly: 67_500, quarterly: 202_500, stretch: '115% of monthly target' },
   ],
   CEB: [
-    { period: '2025-06', monthly: 720_000, quarterly: 2_160_000, stretch: '110% of monthly target' },
-    { period: '2025-08', monthly: 880_000, quarterly: 2_640_000, stretch: '110% of monthly target' },
-    { period: '2025-12', monthly: 770_000, quarterly: 2_310_000, stretch: '110% of monthly target' },
-    { period: '2026-03', monthly: 920_000, quarterly: 2_760_000, stretch: '115% of monthly target' },
+    { period: '2025-06', monthly: 45_000, quarterly: 135_000, stretch: '110% of monthly target' },
+    { period: '2025-08', monthly: 55_000, quarterly: 165_000, stretch: '110% of monthly target' },
+    { period: '2025-12', monthly: 48_125, quarterly: 144_375, stretch: '110% of monthly target' },
+    { period: '2026-03', monthly: 57_500, quarterly: 172_500, stretch: '115% of monthly target' },
   ],
   BTG: [
-    { period: '2025-06', monthly: 680_000, quarterly: 2_040_000, stretch: '110% of monthly target' },
-    { period: '2025-11', monthly: 790_000, quarterly: 2_370_000, stretch: '110% of monthly target' },
-    { period: '2026-02', monthly: 910_000, quarterly: 2_730_000, stretch: '115% of monthly target' },
+    { period: '2025-06', monthly: 42_500, quarterly: 127_500, stretch: '110% of monthly target' },
+    { period: '2025-11', monthly: 49_375, quarterly: 148_125, stretch: '110% of monthly target' },
+    { period: '2026-02', monthly: 56_875, quarterly: 170_625, stretch: '115% of monthly target' },
   ],
   QZN: [
-    { period: '2025-06', monthly: 600_000, quarterly: 1_800_000, stretch: '110% of monthly target' },
-    { period: '2025-10', monthly: 750_000, quarterly: 2_250_000, stretch: '110% of monthly target' },
-    { period: '2026-03', monthly: 820_000, quarterly: 2_460_000, stretch: '115% of monthly target' },
+    { period: '2025-06', monthly: 37_500, quarterly: 112_500, stretch: '110% of monthly target' },
+    { period: '2025-10', monthly: 46_875, quarterly: 140_625, stretch: '110% of monthly target' },
+    { period: '2026-03', monthly: 51_250, quarterly: 153_750, stretch: '115% of monthly target' },
   ],
 };
 
@@ -1323,15 +1334,41 @@ async function fetchActiveAlerts(): Promise<AgentAlertRow[]> {
   }));
 }
 
-async function countUnassignedCustomers(): Promise<number> {
-  const { count, error } = await supabase
+/** Customers without an owning agent (`assigned_agent_id` IS NULL). */
+export async function fetchUnassignedCustomers(
+  branchId?: string | null,
+  limit = 50,
+): Promise<UnassignedCustomerRow[]> {
+  let q = supabase
     .from('customers')
-    .select('id', { count: 'exact', head: true })
-    .is('assigned_agent_id', null);
+    .select('id, name, city, type, branches(name)')
+    .is('assigned_agent_id', null)
+    .order('name', { ascending: true })
+    .limit(limit);
+  if (branchId) q = q.eq('branch_id', branchId);
+
+  const { data, error } = await q;
   if (error) {
-    return 0;
+    console.warn('[agentAnalytics] fetchUnassignedCustomers', error);
+    return [];
   }
-  return count ?? 0;
+
+  return (data ?? []).map((r) => {
+    const raw = r as Record<string, unknown>;
+    const branchEmbed = raw.branches;
+    const branchRow = Array.isArray(branchEmbed) ? branchEmbed[0] : branchEmbed;
+    const branchName =
+      branchRow && typeof branchRow === 'object'
+        ? String((branchRow as Record<string, unknown>).name ?? '').trim() || null
+        : null;
+    return {
+      id: String(raw.id ?? ''),
+      name: String(raw.name ?? '—'),
+      city: raw.city != null ? String(raw.city) : null,
+      branchName,
+      type: raw.type != null ? String(raw.type) : null,
+    };
+  });
 }
 
 /**
@@ -1467,7 +1504,7 @@ export async function fetchAgentAnalyticsBundle(opts: {
     commissionsPaidOutPeriod,
     newCustomers,
     alerts,
-    unassigned,
+    unassignedCustomers,
     profitByAgent,
     profitPrevByAgent,
   ] = await Promise.all([
@@ -1479,7 +1516,7 @@ export async function fetchAgentAnalyticsBundle(opts: {
     fetchProofCommissionsPaidOutByPayoutPeriod(range.start, range.end, branchFilter),
     fetchNewCustomersByAgent(range.start, range.end),
     fetchActiveAlerts(),
-    countUnassignedCustomers(),
+    fetchUnassignedCustomers(branchFilter),
     fetchAgentProfitByAgent(range.start, range.end, branchFilter),
     fetchAgentProfitByAgent(prevRange.start, prevRange.end, branchFilter),
   ]);
@@ -1742,7 +1779,7 @@ export async function fetchAgentAnalyticsBundle(opts: {
           ? 100
           : 0,
     profitMarginPct: totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0,
-    customersUnassigned: unassigned,
+    customersUnassigned: unassignedCustomers.length,
   };
 
   return {
@@ -1751,6 +1788,7 @@ export async function fetchAgentAnalyticsBundle(opts: {
     branches: branchesArr,
     monthlyTrend,
     alerts,
+    unassignedCustomers,
     filterBranchId: branchFilter,
     branchRevenueTrendLines,
   };

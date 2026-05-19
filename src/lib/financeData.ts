@@ -244,11 +244,39 @@ function diffDaysFromToday(iso: string | null | undefined): number {
   return Math.floor((today - d.getTime()) / 86_400_000);
 }
 
-function formatDateOnlyLocal(d: Date): string {
+export function formatDateOnlyLocal(d: Date): string {
   const y = d.getFullYear();
   const mo = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${mo}-${day}`;
+}
+
+/**
+ * Persistable `orders.due_date` from payment terms (+ optional customer default terms)
+ * and `actual_delivery` when set, otherwise `order_date`.
+ * Ignores any previously stored due_date — use when saving after terms or delivery dates change.
+ */
+export function deriveOrderDueDateForPersistence(params: {
+  order_date: string | null | undefined;
+  actual_delivery: string | null | undefined;
+  payment_terms: string | null | undefined;
+  customer_payment_terms: string | null | undefined;
+}): string | null {
+  const terms = params.payment_terms ?? params.customer_payment_terms ?? null;
+  const fromDelivery = computeDueDateFromDelivery(params.actual_delivery ?? null, terms);
+  if (fromDelivery) return formatDateOnlyLocal(fromDelivery);
+
+  const base = parseDateOnly(params.order_date ?? null);
+  if (!base) return null;
+  const termsUp = (terms ?? 'COD').trim().toUpperCase();
+  const d = new Date(base.getFullYear(), base.getMonth(), base.getDate());
+  if (termsUp === 'COD' || termsUp.includes('COD')) {
+    d.setDate(d.getDate() + 1);
+  } else {
+    const m = termsUp.match(/\d+/);
+    d.setDate(d.getDate() + (m ? parseInt(m[0], 10) : 30));
+  }
+  return formatDateOnlyLocal(d);
 }
 
 /**

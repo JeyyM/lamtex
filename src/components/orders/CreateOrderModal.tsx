@@ -5,6 +5,7 @@ import { Button } from '@/src/components/ui/Button';
 import { Badge } from '@/src/components/ui/Badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { supabase } from '@/src/lib/supabase';
+import { deriveOrderDueDateForPersistence } from '@/src/lib/financeData';
 import type { OrderUrgency } from '@/src/types/orders';
 import {
   X,
@@ -479,6 +480,24 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
       const orderNumber = `ORD-${Date.now().toString(36).toUpperCase()}`;
       const subtotal = calculateTotal();
 
+      const orderDateStr = new Date().toISOString().split('T')[0];
+
+      const { data: createCustRow } = await supabase
+        .from('customers')
+        .select('payment_terms')
+        .eq('id', selectedCustomerId)
+        .maybeSingle();
+      const createCustomerTerms =
+        typeof createCustRow?.payment_terms === 'string'
+          ? createCustRow.payment_terms.trim() || null
+          : null;
+      const initialDueDate = deriveOrderDueDateForPersistence({
+        order_date: orderDateStr,
+        actual_delivery: null,
+        payment_terms: null,
+        customer_payment_terms: createCustomerTerms,
+      });
+
       // Insert order
       const { data: newOrder, error: orderError } = await supabase
         .from('orders')
@@ -489,7 +508,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
           agent_id:         selectedAgentId || null,
           agent_name:       selectedAgentName || null,
           branch_id:        branchData?.id ?? null,
-          order_date:       new Date().toISOString().split('T')[0],
+          order_date:       orderDateStr,
           required_date:    deliveryDate,
           estimated_delivery: deliveryDate,
           delivery_address: deliveryAddress || null,
@@ -498,6 +517,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
           subtotal,
           total_amount:     subtotal,
           urgency:          orderUrgency,
+          due_date:         initialDueDate,
         })
         .select('id')
         .single();

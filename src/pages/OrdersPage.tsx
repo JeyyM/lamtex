@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Card, CardContent, CardHeader } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
@@ -7,6 +7,7 @@ import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagin
 import { ProofOfDeliveryModal } from '@/src/components/orders/ProofOfDeliveryModal';
 import { useAppContext } from '@/src/store/AppContext';
 import { supabase } from '@/src/lib/supabase';
+import { getPeriodRange, type PeriodKey } from '@/src/lib/agentAnalytics';
 import type { OrderUrgency } from '@/src/types/orders';
 
 const orderLogRoleMap: Record<string, 'Agent' | 'Warehouse Staff' | 'Manager' | 'Admin' | 'System' | 'Logistics'> = {
@@ -20,7 +21,6 @@ const orderLogRoleMap: Record<string, 'Agent' | 'Warehouse Staff' | 'Manager' | 
 };
 import {
   Search,
-  Filter,
   Plus,
   AlertTriangle,
   CheckCircle,
@@ -33,10 +33,13 @@ import {
   Camera,
   MapPin,
   Calendar,
+  CalendarRange,
   Loader2,
   ArrowUp,
   ArrowDown,
   ArrowUpDown,
+  Download,
+  X,
 } from 'lucide-react';
 
 type OrderTab = 'all' | 'draft' | 'pending' | 'approved' | 'intransit' | 'delivered' | 'rejected';
@@ -46,63 +49,600 @@ interface OrderRow {
   order_number: string;
   customer_id: string | null;
   customer_name: string | null;
+  /** Display / CSV: tax_id or business_registration from customers (no short code in DB). */
+  customer_reference: string | null;
+  agent_id: string | null;
   agent_name: string | null;
+  /** CSV: employees.employee_id e.g. EMP-001 */
+  agent_employee_id: string | null;
+  branch_id: string | null;
+  /** CSV: branches.code e.g. MNL */
+  branch_code: string | null;
   order_date: string | null;
   required_date: string | null;
-  total_amount: number;
+  scheduled_departure_date: string | null;
+  estimated_delivery: string | null;
+  actual_delivery: string | null;
+  due_date: string | null;
+  subtotal: number;
   discount_percent: number;
+  discount_amount: number;
+  total_amount: number;
+  amount_paid: number;
+  balance_due: number;
   status: string;
   payment_status: string;
   requires_approval: boolean;
   delivery_address: string | null;
   urgency: string | null;
+  /** Sum of `order_line_items.discount_amount` (CSV + accurate discount peso). */
+  line_items_discount_amount_total: number;
+  /**
+   * Effective line discount %: 100 × sum(discount_amount) / sum(line_total + discount_amount)
+   * when denominator is positive (pre-discount extended subtotal per line).
+   */
+  line_items_discount_percent_effective: number;
+}
+
+/** Prefer aggregated line-item discount % when present (matches CSV); else header `discount_percent`. */
+function resolvedOrderDiscountPercentForList(o: OrderRow): number {
+  return o.line_items_discount_percent_effective > 1e-6 ? o.line_items_discount_percent_effective : o.discount_percent;
+}
+
+type OrdersPeriodKind = PeriodKey | 'all';
+
+function pad2Local(n: number) {
+  return String(n).padStart(2, '0');
+}
+
+function todayIsoLocal(): string {
+  const t = new Date();
+  return `${t.getFullYear()}-${pad2Local(t.getMonth() + 1)}-${pad2Local(t.getDate())}`;
+}
+
+/** Period modal presets: Agent Analytics ranges + All time + Custom (same date logic). */
+const ORDERS_PERIOD_OPTIONS: { kind: OrdersPeriodKind; label: string }[] = [
+  { kind: 'all', label: 'All time' },
+  { kind: 'day', label: '1 day' },
+  { kind: 'week', label: '1 week' },
+  { kind: 'month', label: '1 month' },
+  { kind: 'sixMonths', label: '6 months' },
+  { kind: 'ytd', label: 'YTD' },
+  { kind: 'year', label: '1 year' },
+  { kind: 'custom', label: 'Custom range' },
+];
+
+function roundMoney(n: number): number {
+  return Math.round((n + Number.EPSILON) * 100) / 100;
+}
+
+/** Batch-load line discounts for list + export totals. */
+async function fetchOrderLineDiscountAggregates(
+  orderIds: string[],
+): Promise<Map<string, { sumDiscountAmount: number; sumPreDiscountSubtotal: number }>> {
+  const map = new Map<string, { sumDiscountAmount: number; sumPreDiscountSubtotal: number }>();
+  const uniq = [...new Set(orderIds)].filter(Boolean);
+  if (uniq.length === 0) return map;
+
+  const { data, error } = await supabase
+    .from('order_line_items')
+    .select('order_id, discount_amount, line_total')
+    .in('order_id', uniq);
+
+  if (error || !data) return map;
+
+  for (const row of data as { order_id: string; discount_amount?: unknown; line_total?: unknown }[]) {
+    const oid = row.order_id;
+    const disc = Number(row.discount_amount ?? 0);
+    const lt = Number(row.line_total ?? 0);
+    const d = Number.isFinite(disc) ? disc : 0;
+    const lineTot = Number.isFinite(lt) ? lt : 0;
+    const prev = map.get(oid) ?? { sumDiscountAmount: 0, sumPreDiscountSubtotal: 0 };
+    prev.sumDiscountAmount += d;
+    prev.sumPreDiscountSubtotal += lineTot + d;
+    map.set(oid, prev);
+  }
+  return map;
+}
+
+/** Line rows for Excel “Line items” sheet (same filters as order list export). */
+interface OrderLineExportRow {
+  id: string;
+  order_id: string;
+  sku: string | null;
+  product_name: string | null;
+  variant_description: string | null;
+  quantity: number;
+  unit_price: number;
+  original_price: number | null;
+  negotiated_price: number | null;
+  discount_percent: number | null;
+  discount_amount: number | null;
+  batch_discount: number | null;
+  line_total: number;
+  stock_hint: string | null;
+  available_stock: number | null;
+  quantity_shipped: number | null;
+  quantity_delivered: number | null;
+}
+
+async function fetchOrderLineItemsForExport(orderIds: string[]): Promise<OrderLineExportRow[]> {
+  const uniq = [...new Set(orderIds)].filter(Boolean);
+  const out: OrderLineExportRow[] = [];
+  const chunkSize = 150;
+  for (let i = 0; i < uniq.length; i += chunkSize) {
+    const chunk = uniq.slice(i, i + chunkSize);
+    const { data, error } = await supabase
+      .from('order_line_items')
+      .select(
+        [
+          'id',
+          'order_id',
+          'sku',
+          'product_name',
+          'variant_description',
+          'quantity',
+          'unit_price',
+          'original_price',
+          'negotiated_price',
+          'discount_percent',
+          'discount_amount',
+          'batch_discount',
+          'line_total',
+          'stock_hint',
+          'available_stock',
+          'quantity_shipped',
+          'quantity_delivered',
+        ].join(','),
+      )
+      .in('order_id', chunk);
+    if (error) throw new Error(error.message);
+    if (data) out.push(...(data as unknown as OrderLineExportRow[]));
+  }
+  return out;
+}
+
+function xlsxOptionalNumber(v: number | string | null | undefined): number | '' {
+  if (v == null || v === '') return '';
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n : '';
+}
+
+/** YYYY-MM-DD for DATE / timestamptz exports (avoids messy ISO timestamps in spreadsheets). */
+function csvDateOnlyIso(v: string | null | undefined): string {
+  if (v == null || v === '') return '';
+  const s = String(v).trim();
+  if (!s) return '';
+  const datePart = s.includes('T') ? s.split('T')[0]! : s.slice(0, 10);
+  return datePart.length >= 10 ? datePart.slice(0, 10) : s;
+}
+
+/**
+ * Order detail shows "no agent" when `agent_name` is empty. Some rows still carry a stale
+ * `agent_id`; exports must not show that employee's code (e.g. AGT-MNL-001) in that case.
+ */
+function agentEmployeeIdWhenAssigned(
+  agentId: unknown,
+  agentName: unknown,
+  joinedEmployeeCode: string | null | undefined,
+): string | null {
+  const id = agentId != null ? String(agentId).trim() : '';
+  const name = typeof agentName === 'string' ? agentName.trim() : '';
+  if (!id || !name) return null;
+  const code = joinedEmployeeCode != null ? String(joinedEmployeeCode).trim() : '';
+  return code || null;
+}
+
+function mapFetchedOrderRow(
+  raw: Record<string, unknown>,
+  lineDiscount: { sumDiscountAmount: number; effectiveDiscountPercent: number },
+): OrderRow {
+  const br = raw.branches as { code?: string } | null | undefined;
+  const emp = raw.employees as { employee_id?: string } | null | undefined;
+  const cust = raw.customers as { tax_id?: string | null; business_registration?: string | null } | null | undefined;
+  const tax = typeof cust?.tax_id === 'string' ? cust.tax_id.trim() : '';
+  const reg = typeof cust?.business_registration === 'string' ? cust.business_registration.trim() : '';
+
+  return {
+    id: String(raw.id ?? ''),
+    order_number: String(raw.order_number ?? ''),
+    customer_id: (raw.customer_id as string | null) ?? null,
+    customer_name: (raw.customer_name as string | null) ?? null,
+    customer_reference: tax || reg || null,
+    agent_id: (raw.agent_id as string | null) ?? null,
+    agent_name: (raw.agent_name as string | null) ?? null,
+    agent_employee_id: agentEmployeeIdWhenAssigned(raw.agent_id, raw.agent_name, emp?.employee_id),
+    branch_id: (raw.branch_id as string | null) ?? null,
+    branch_code: br?.code ?? null,
+    order_date: (raw.order_date as string | null) ?? null,
+    required_date: (raw.required_date as string | null) ?? null,
+    scheduled_departure_date: (raw.scheduled_departure_date as string | null) ?? null,
+    estimated_delivery: (raw.estimated_delivery as string | null) ?? null,
+    actual_delivery: (raw.actual_delivery as string | null) ?? null,
+    due_date: (raw.due_date as string | null) ?? null,
+    subtotal: Number(raw.subtotal ?? 0),
+    discount_percent: Number(raw.discount_percent ?? 0),
+    discount_amount: Number(raw.discount_amount ?? 0),
+    total_amount: Number(raw.total_amount ?? 0),
+    amount_paid: Number(raw.amount_paid ?? 0),
+    balance_due: Number(raw.balance_due ?? 0),
+    status: String(raw.status ?? ''),
+    payment_status: String(raw.payment_status ?? ''),
+    requires_approval: Boolean(raw.requires_approval),
+    delivery_address: (raw.delivery_address as string | null) ?? null,
+    urgency: (raw.urgency as string | null) ?? null,
+    line_items_discount_amount_total: roundMoney(lineDiscount.sumDiscountAmount),
+    line_items_discount_percent_effective: lineDiscount.effectiveDiscountPercent,
+  };
+}
+
+async function downloadOrdersWorkbook(rows: OrderRow[], lineRows: OrderLineExportRow[], branchLabel: string) {
+  const XLSX = await import('xlsx');
+  const wb = XLSX.utils.book_new();
+
+  const orderHeaders = [
+    'Order Number',
+    'Customer ID',
+    'Customer Name',
+    'Agent ID',
+    'Agent Name',
+    'Branch Code',
+    'Order Date',
+    'Required Date',
+    'Scheduled Departure Date',
+    'Estimated Delivery',
+    'Actual Delivery',
+    'Due Date',
+    'Subtotal',
+    'Discount % (line items)',
+    'Discount Amount (line items)',
+    'Total Amount',
+    'Amount Paid',
+    'Balance Due',
+    'Status',
+    'Payment',
+    'Urgency',
+  ];
+  const orderAoA: unknown[][] = [
+    orderHeaders,
+    ...rows.map((o) => [
+      o.order_number,
+      o.customer_reference ?? '',
+      o.customer_name ?? '',
+      o.agent_employee_id ?? '',
+      o.agent_name ?? '',
+      o.branch_code ?? '',
+      csvDateOnlyIso(o.order_date),
+      csvDateOnlyIso(o.required_date),
+      csvDateOnlyIso(o.scheduled_departure_date),
+      csvDateOnlyIso(o.estimated_delivery),
+      csvDateOnlyIso(o.actual_delivery),
+      csvDateOnlyIso(o.due_date),
+      o.subtotal,
+      o.line_items_discount_percent_effective,
+      o.line_items_discount_amount_total,
+      o.total_amount,
+      o.amount_paid,
+      o.balance_due,
+      o.status ?? '',
+      o.payment_status ?? '',
+      o.urgency ?? '',
+    ]),
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(orderAoA), 'Orders');
+
+  const orderNumById = new Map(rows.map((r) => [r.id, r.order_number]));
+  const sortedLines = [...lineRows].sort((a, b) => {
+    const na = String(orderNumById.get(a.order_id) ?? '');
+    const nb = String(orderNumById.get(b.order_id) ?? '');
+    const byOrder = na.localeCompare(nb, undefined, { numeric: true });
+    if (byOrder !== 0) return byOrder;
+    return String(a.sku ?? '').localeCompare(String(b.sku ?? ''));
+  });
+
+  const lineHeaders = [
+    'Order Number',
+    'Order UUID',
+    'Line UUID',
+    'SKU',
+    'Product Name',
+    'Variant Description',
+    'Quantity',
+    'Unit Price',
+    'Original Price',
+    'Negotiated Price',
+    'Discount %',
+    'Discount Amount',
+    'Batch Discount %',
+    'Line Total',
+    'Available Stock',
+    'Qty Shipped',
+    'Qty Delivered',
+    'Stock Hint',
+  ];
+  const lineAoA: unknown[][] = [
+    lineHeaders,
+    ...sortedLines.map((li) => [
+      orderNumById.get(li.order_id) ?? '',
+      li.order_id,
+      li.id,
+      li.sku ?? '',
+      li.product_name ?? '',
+      li.variant_description ?? '',
+      li.quantity,
+      xlsxOptionalNumber(li.unit_price),
+      xlsxOptionalNumber(li.original_price),
+      xlsxOptionalNumber(li.negotiated_price),
+      xlsxOptionalNumber(li.discount_percent),
+      xlsxOptionalNumber(li.discount_amount),
+      xlsxOptionalNumber(li.batch_discount),
+      xlsxOptionalNumber(li.line_total),
+      xlsxOptionalNumber(li.available_stock),
+      xlsxOptionalNumber(li.quantity_shipped),
+      xlsxOptionalNumber(li.quantity_delivered),
+      li.stock_hint ?? '',
+    ]),
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(lineAoA), 'Line items');
+
+  const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  const blob = new Blob([buf], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const safeBranch = branchLabel.replace(/[^\w.-]+/g, '_').slice(0, 40);
+  a.download = `orders-${safeBranch || 'export'}-${new Date().toISOString().slice(0, 10)}.xlsx`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 export function OrdersPage() {
   const navigate = useNavigate();
   const { branch, addAuditLog, role, employeeName, session } = useAppContext();
-  const [searchTerm, setSearchTerm] = useState('');  const [creating, setCreating] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [creating, setCreating] = useState(false);
   const [showProofModal, setShowProofModal] = useState(false);
   const [selectedOrderForProof, setSelectedOrderForProof] = useState<{ id: string; customer: string } | null>(null);
   const [allOrders, setAllOrders] = useState<OrderRow[]>([]);
+  /** UUID from `branches` for the navbar branch; export only rows matching this (avoids stale cross-branch data). */
+  const [resolvedBranchIdForList, setResolvedBranchIdForList] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [exportingOrders, setExportingOrders] = useState(false);
+  /** Ignore stale responses when branch/period changes while a fetch is in flight. */
+  const ordersFetchSeqRef = useRef(0);
   const [sortKey, setSortKey] = useState<string>('order_date');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [tablePage, setTablePage] = useState(1);
   /** '' = all values (column filter on orders table) */
   const [headerStatusFilter, setHeaderStatusFilter] = useState('');
   const [headerPaymentFilter, setHeaderPaymentFilter] = useState('');
+  /** Mirrors Agent Analytics period presets (+ All time). */
+  const [periodKind, setPeriodKind] = useState<OrdersPeriodKind>('month');
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
+  const [periodModalOpen, setPeriodModalOpen] = useState(false);
+  const [draftPeriodKind, setDraftPeriodKind] = useState<OrdersPeriodKind>('month');
+  const [draftCustomStart, setDraftCustomStart] = useState('');
+  const [draftCustomEnd, setDraftCustomEnd] = useState('');
 
-  const fetchOrders = async () => {
+  const maxCustomDate = useMemo(() => todayIsoLocal(), []);
+
+  const ordersPeriodTriggerLabel = useMemo(() => {
+    const opt = ORDERS_PERIOD_OPTIONS.find((o) => o.kind === periodKind);
+    if (periodKind === 'custom') {
+      if (customStart && customEnd && customStart <= customEnd) {
+        return `${customStart} → ${customEnd}`;
+      }
+      if (customStart || customEnd) return 'Custom (invalid range)';
+      return 'Custom range';
+    }
+    return opt?.label ?? 'Period';
+  }, [periodKind, customStart, customEnd]);
+
+  const orderQueryDates = useMemo(() => {
+    if (periodKind === 'all') {
+      return { from: '', to: '', invalid: false };
+    }
+    if (periodKind === 'custom') {
+      if (customStart && customEnd && customStart > customEnd) {
+        return { from: '', to: '', invalid: true };
+      }
+      if (customStart && customEnd && customStart <= customEnd) {
+        return { from: customStart, to: customEnd, invalid: false };
+      }
+      const fb = getPeriodRange('month');
+      return { from: fb.start, to: fb.end, invalid: false };
+    }
+    const r = getPeriodRange(periodKind);
+    return { from: r.start, to: r.end, invalid: false };
+  }, [periodKind, customStart, customEnd]);
+
+  const dateFrom = orderQueryDates.from;
+  const dateTo = orderQueryDates.to;
+  const dateRangeInvalid = orderQueryDates.invalid;
+
+  const fetchOrders = useCallback(async () => {
+    const seq = ++ordersFetchSeqRef.current;
+    const isStale = () => seq !== ordersFetchSeqRef.current;
+
     setLoading(true);
-    const { data: branchData } = await supabase
+    const branchTrimmed = typeof branch === 'string' ? branch.trim() : '';
+    if (!branchTrimmed) {
+      if (!isStale()) {
+        setAllOrders([]);
+        setResolvedBranchIdForList(null);
+        setLoading(false);
+      }
+      return;
+    }
+
+    const { data: branchData, error: branchLookupError } = await supabase
       .from('branches')
       .select('id')
-      .eq('name', branch)
-      .single();
+      .eq('name', branchTrimmed)
+      .maybeSingle();
 
-    if (!branchData) { setLoading(false); return; }
+    if (branchLookupError || !branchData?.id) {
+      if (!isStale()) {
+        setAllOrders([]);
+        setResolvedBranchIdForList(null);
+        setLoading(false);
+      }
+      return;
+    }
 
-    const { data } = await supabase
+    let q = supabase
       .from('orders')
-      .select('id, order_number, customer_id, customer_name, agent_name, order_date, required_date, total_amount, discount_percent, status, payment_status, requires_approval, delivery_address, urgency')
-      .eq('branch_id', branchData.id)
-      .order('created_at', { ascending: false });
+      .select(
+        `
+          id,
+          order_number,
+          customer_id,
+          customer_name,
+          agent_id,
+          agent_name,
+          branch_id,
+          order_date,
+          required_date,
+          scheduled_departure_date,
+          estimated_delivery,
+          actual_delivery,
+          due_date,
+          subtotal,
+          discount_percent,
+          discount_amount,
+          total_amount,
+          amount_paid,
+          balance_due,
+          status,
+          payment_status,
+          requires_approval,
+          delivery_address,
+          urgency,
+          branches!branch_id(code),
+          employees!agent_id(employee_id),
+          customers!customer_id(tax_id, business_registration)
+        `,
+      )
+      .eq('branch_id', branchData.id);
 
-    setAllOrders((data ?? []) as OrderRow[]);
+    if (!dateRangeInvalid) {
+      if (dateFrom) q = q.gte('order_date', dateFrom);
+      if (dateTo) q = q.lte('order_date', dateTo);
+    }
+
+    const { data, error: ordersError } = await q.order('created_at', { ascending: false });
+
+    if (ordersError) {
+      console.error(ordersError);
+      if (!isStale()) {
+        setAllOrders([]);
+        setResolvedBranchIdForList(null);
+        setLoading(false);
+      }
+      return;
+    }
+
+    if (isStale()) return;
+
+    const orderRows = (data ?? []) as Record<string, unknown>[];
+    const ids = orderRows.map((r) => String(r.id ?? '')).filter(Boolean);
+    const aggByOrder = await fetchOrderLineDiscountAggregates(ids);
+
+    if (isStale()) return;
+
+    setAllOrders(
+      orderRows.map((raw) => {
+        const id = String(raw.id ?? '');
+        const agg = aggByOrder.get(id) ?? { sumDiscountAmount: 0, sumPreDiscountSubtotal: 0 };
+        const effectivePct =
+          agg.sumPreDiscountSubtotal > 1e-9
+            ? Math.round((agg.sumDiscountAmount / agg.sumPreDiscountSubtotal) * 1_000_000) / 10000
+            : 0;
+        return mapFetchedOrderRow(raw, {
+          sumDiscountAmount: agg.sumDiscountAmount,
+          effectiveDiscountPercent: effectivePct,
+        });
+      }),
+    );
+    setResolvedBranchIdForList(branchData.id);
     setLoading(false);
+  }, [branch, dateFrom, dateTo, dateRangeInvalid]);
+
+  const handleOrdersPeriodChange = (kind: OrdersPeriodKind) => {
+    setPeriodKind(kind);
+    if (kind === 'custom') {
+      const t = new Date();
+      const iso = `${t.getFullYear()}-${pad2Local(t.getMonth() + 1)}-${pad2Local(t.getDate())}`;
+      const start = `${t.getFullYear()}-${pad2Local(t.getMonth() + 1)}-01`;
+      setCustomStart(start);
+      setCustomEnd(iso);
+    }
   };
 
-  useEffect(() => { fetchOrders(); }, [branch]);
+  const openOrdersPeriodModal = () => {
+    setDraftPeriodKind(periodKind);
+    setDraftCustomStart(customStart);
+    setDraftCustomEnd(customEnd);
+    setPeriodModalOpen(true);
+  };
+
+  const handleModalPresetPick = (kind: OrdersPeriodKind) => {
+    if (kind !== 'custom') {
+      handleOrdersPeriodChange(kind);
+      setPeriodModalOpen(false);
+      return;
+    }
+    setDraftPeriodKind('custom');
+    const t = new Date();
+    const iso = `${t.getFullYear()}-${pad2Local(t.getMonth() + 1)}-${pad2Local(t.getDate())}`;
+    const start = `${t.getFullYear()}-${pad2Local(t.getMonth() + 1)}-01`;
+    setDraftCustomStart((prev) => prev || customStart || start);
+    setDraftCustomEnd((prev) => prev || customEnd || iso);
+  };
+
+  const applyModalCustomRange = () => {
+    setPeriodKind('custom');
+    setCustomStart(draftCustomStart);
+    setCustomEnd(draftCustomEnd);
+    setPeriodModalOpen(false);
+  };
+
+  const draftCustomInvalid =
+    Boolean(draftCustomStart && draftCustomEnd && draftCustomStart > draftCustomEnd);
 
   useEffect(() => {
+    void fetchOrders();
+  }, [fetchOrders]);
+
+  useEffect(() => {
+    setAllOrders([]);
+    setResolvedBranchIdForList(null);
     setHeaderStatusFilter('');
     setHeaderPaymentFilter('');
+    setPeriodKind('month');
+    setPeriodModalOpen(false);
+    const t = new Date();
+    const iso = `${t.getFullYear()}-${pad2Local(t.getMonth() + 1)}-${pad2Local(t.getDate())}`;
+    const start = `${t.getFullYear()}-${pad2Local(t.getMonth() + 1)}-01`;
+    setCustomStart(start);
+    setCustomEnd(iso);
   }, [branch]);
 
   useEffect(() => {
+    if (!periodModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPeriodModalOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [periodModalOpen]);
+
+  useEffect(() => {
     setTablePage(1);
-  }, [searchTerm, branch, headerStatusFilter, headerPaymentFilter]);
+  }, [searchTerm, branch, headerStatusFilter, headerPaymentFilter, periodKind, customStart, customEnd]);
 
   /** Consistent list order: Approved → … → logistics pipeline (not alphabetical). */
   const orderStatusListOrder: string[] = useMemo(
@@ -433,38 +973,105 @@ export function OrdersPage() {
 
       <Card>
         <CardHeader>
-          <div className="flex flex-col gap-3">
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-              <div className="relative flex-1 sm:max-w-md">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                <input type="text" placeholder="Search by customer or order #..." value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none" />
-              </div>
-              <select
-                aria-label="Filter by status"
-                value={headerStatusFilter}
-                onChange={(e) => setHeaderStatusFilter(e.target.value)}
-                className="text-sm text-gray-900 border border-gray-300 rounded-lg px-3 py-2 bg-white focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
-              >
-                <option value="">All Statuses</option>
-                {distinctOrderStatuses.map((s) => (
-                  <option key={s} value={s}>{s}</option>
-                ))}
-              </select>
-              <select
-                aria-label="Filter by payment"
-                value={headerPaymentFilter}
-                onChange={(e) => setHeaderPaymentFilter(e.target.value)}
-                className="text-sm text-gray-900 border border-gray-300 rounded-lg px-3 py-2 bg-white focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
-              >
-                <option value="">All Payments</option>
-                {distinctPaymentStatuses.map((p) => (
-                  <option key={p} value={p}>{p}</option>
-                ))}
-              </select>
+          <div className="flex flex-nowrap items-center gap-3 w-full min-w-0 overflow-x-auto">
+            <div className="relative flex-1 min-w-0">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Search by customer or order #..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full min-w-0 pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
+              />
             </div>
+            <select
+              aria-label="Filter by status"
+              value={headerStatusFilter}
+              onChange={(e) => setHeaderStatusFilter(e.target.value)}
+              className="text-sm text-gray-900 border border-gray-300 rounded-lg px-3 py-2 bg-white focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none shrink-0 min-w-[10.5rem]"
+            >
+              <option value="">All Statuses</option>
+              {distinctOrderStatuses.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label="Filter by payment"
+              value={headerPaymentFilter}
+              onChange={(e) => setHeaderPaymentFilter(e.target.value)}
+              className="text-sm text-gray-900 border border-gray-300 rounded-lg px-3 py-2 bg-white focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none shrink-0 min-w-[10.5rem]"
+            >
+              <option value="">All Payments</option>
+              {distinctPaymentStatuses.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+            <Button
+              type="button"
+              variant="outline"
+              className="gap-2 shrink-0 border-gray-300 bg-white max-w-[18rem]"
+              aria-haspopup="dialog"
+              aria-expanded={periodModalOpen}
+              aria-label="Choose order period"
+              onClick={openOrdersPeriodModal}
+            >
+              <CalendarRange className="w-4 h-4 shrink-0 text-gray-600" aria-hidden />
+              <span className="truncate text-left text-sm font-normal">{ordersPeriodTriggerLabel}</span>
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="gap-2 shrink-0 border-gray-300 bg-white sm:ml-auto"
+              disabled={sortedOrders.length === 0 || exportingOrders || loading || resolvedBranchIdForList == null}
+              onClick={async () => {
+                if (
+                  sortedOrders.length === 0 ||
+                  exportingOrders ||
+                  loading ||
+                  resolvedBranchIdForList == null
+                ) {
+                  return;
+                }
+                const ordersForExport = sortedOrders.filter((o) => o.branch_id === resolvedBranchIdForList);
+                if (ordersForExport.length === 0) {
+                  window.alert('No orders match the selected branch. Refresh the list and try again.');
+                  return;
+                }
+                setExportingOrders(true);
+                try {
+                  const ids = ordersForExport.map((o) => o.id);
+                  const lines = await fetchOrderLineItemsForExport(ids);
+                  await downloadOrdersWorkbook(ordersForExport, lines, branch ?? 'orders');
+                  addAuditLog(
+                    'Exported orders Excel',
+                    'Order',
+                    `${ordersForExport.length} orders, ${lines.length} line items (${branch ?? 'branch'})`,
+                  );
+                } catch (e) {
+                  console.error(e);
+                  window.alert(e instanceof Error ? e.message : 'Export failed.');
+                } finally {
+                  setExportingOrders(false);
+                }
+              }}
+            >
+              {exportingOrders ? (
+                <Loader2 className="w-4 h-4 animate-spin" aria-hidden />
+              ) : (
+                <Download className="w-4 h-4" aria-hidden />
+              )}
+              {exportingOrders ? 'Exporting…' : 'Export Excel'}
+            </Button>
           </div>
+          {dateRangeInvalid && (
+            <p className="text-xs text-red-600 mt-2">
+              Start date must be on or before end date. Date filters were ignored for this load.
+            </p>
+          )}
         </CardHeader>
         <CardContent className="p-0">
           {loading ? (
@@ -519,7 +1126,11 @@ export function OrdersPage() {
                       <div className="flex items-center justify-between gap-2 pt-2 border-t border-gray-100">
                         <div>
                           <div className="font-semibold text-gray-900">₱{order.total_amount.toLocaleString()}</div>
-                          {order.discount_percent > 0 && <div className="text-xs text-gray-500">-{order.discount_percent.toFixed(1)}% discount</div>}
+                          {resolvedOrderDiscountPercentForList(order) > 0 && (
+                            <div className="text-xs text-gray-500">
+                              -{resolvedOrderDiscountPercentForList(order).toFixed(1)}% discount
+                            </div>
+                          )}
                         </div>
                         <Badge variant={getPaymentBadgeVariant(order.payment_status)} className="text-xs flex-shrink-0">{order.payment_status}</Badge>
                       </div>
@@ -641,7 +1252,11 @@ export function OrdersPage() {
                           {rowOverlay({})}
                           <div className="relative z-10 pointer-events-none">
                             <div className="font-medium text-gray-900">₱{order.total_amount.toLocaleString()}</div>
-                            {order.discount_percent > 0 && <div className="text-xs text-gray-500">-{order.discount_percent.toFixed(1)}% discount</div>}
+                            {resolvedOrderDiscountPercentForList(order) > 0 && (
+                              <div className="text-xs text-gray-500">
+                                -{resolvedOrderDiscountPercentForList(order).toFixed(1)}% discount
+                              </div>
+                            )}
                           </div>
                         </td>
                         <td className="relative px-6 py-4 align-top">
@@ -687,6 +1302,93 @@ export function OrdersPage() {
           )}
         </CardContent>
       </Card>
+
+      {periodModalOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+          role="presentation"
+          onClick={() => setPeriodModalOpen(false)}
+        >
+          <div
+            className="bg-white rounded-lg shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="orders-period-modal-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-4 border-b border-gray-200 sticky top-0 bg-white z-10">
+              <h2 id="orders-period-modal-title" className="text-lg font-semibold text-gray-900">
+                Order period
+              </h2>
+              <button
+                type="button"
+                className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+                aria-label="Close"
+                onClick={() => setPeriodModalOpen(false)}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <p className="text-sm text-gray-600">Choose a preset or set a custom date range.</p>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {ORDERS_PERIOD_OPTIONS.map(({ kind, label }) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    onClick={() => handleModalPresetPick(kind)}
+                    className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
+                      draftPeriodKind === kind
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-white text-gray-800 border-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {draftPeriodKind === 'custom' && (
+                <div className="space-y-2 pt-1 border-t border-gray-100">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="text-xs font-medium text-gray-600 w-full sm:w-auto">From</label>
+                    <input
+                      type="date"
+                      value={draftCustomStart}
+                      max={maxCustomDate}
+                      onChange={(e) => setDraftCustomStart(e.target.value)}
+                      className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    />
+                    <label className="text-xs font-medium text-gray-600">To</label>
+                    <input
+                      type="date"
+                      value={draftCustomEnd}
+                      min={draftCustomStart || undefined}
+                      max={maxCustomDate}
+                      onChange={(e) => setDraftCustomEnd(e.target.value)}
+                      className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    />
+                  </div>
+                  {draftCustomInvalid && (
+                    <p className="text-xs text-red-600">
+                      Start must be on or before end. You can still apply—orders will load without a date filter until fixed.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 p-4 border-t border-gray-200 bg-gray-50">
+              <Button type="button" variant="outline" className="border-gray-300 bg-white" onClick={() => setPeriodModalOpen(false)}>
+                Cancel
+              </Button>
+              {draftPeriodKind === 'custom' && (
+                <Button type="button" variant="primary" onClick={applyModalCustomRange}>
+                  Apply range
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {showProofModal && selectedOrderForProof && (
         <ProofOfDeliveryModal orderId={selectedOrderForProof.id} customerName={selectedOrderForProof.customer}

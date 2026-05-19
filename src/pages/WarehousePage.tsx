@@ -24,6 +24,7 @@ import {
 } from '@/src/lib/logisticsScheduling';
 import { fetchFleetTrucksForBranch } from '@/src/lib/fleetTrucks';
 import { supabase } from '@/src/lib/supabase';
+import { deriveOrderDueDateForPersistence } from '@/src/lib/financeData';
 import { useAppContext } from '@/src/store/AppContext';
 import { computeStockStatus } from '@/src/lib/stockStatus';
 import { finishedGoodProductHref } from '@/src/lib/productRoutes';
@@ -2216,6 +2217,36 @@ export default function WarehousePage() {
 
     const updatePayload: Record<string, unknown> = { status: newStatus, updated_at: now };
     if (isComplete) updatePayload.actual_delivery = now.slice(0, 10);
+
+    const { data: ordMeta } = await supabase
+      .from('orders')
+      .select('order_date, payment_terms, actual_delivery, customer_id')
+      .eq('id', orderId)
+      .maybeSingle();
+
+    let whCustomerTerms: string | null = null;
+    if (ordMeta?.customer_id) {
+      const { data: cr } = await supabase
+        .from('customers')
+        .select('payment_terms')
+        .eq('id', ordMeta.customer_id)
+        .maybeSingle();
+      whCustomerTerms = typeof cr?.payment_terms === 'string' ? cr.payment_terms.trim() || null : null;
+    }
+
+    const mergedActualDeliveryWh = isComplete
+      ? now.slice(0, 10)
+      : ordMeta?.actual_delivery != null && String(ordMeta.actual_delivery).trim() !== ''
+        ? String(ordMeta.actual_delivery).slice(0, 10)
+        : null;
+
+    const whPersistedDue = deriveOrderDueDateForPersistence({
+      order_date: ordMeta?.order_date ?? null,
+      actual_delivery: mergedActualDeliveryWh,
+      payment_terms: ordMeta?.payment_terms ?? null,
+      customer_payment_terms: whCustomerTerms,
+    });
+    if (whPersistedDue) updatePayload.due_date = whPersistedDue;
 
     const { error: ordErr } = await supabase.from('orders').update(updatePayload).eq('id', orderId);
     if (ordErr) { alert('Failed to record delivery: ' + ordErr.message); return; }

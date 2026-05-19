@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
@@ -73,7 +73,7 @@ import {
   uploadOrderProofBinary,
   tryExtractStoragePathFromPublicUrl,
 } from '@/src/lib/orderProofPayments';
-import { parseProofNotes } from '@/src/lib/financeData';
+import { deriveOrderDueDateForPersistence, parseProofNotes } from '@/src/lib/financeData';
 
 /** Local proof uploads: images + common business documents (allowlist). */
 const ORDER_PROOF_UPLOAD_EXT =
@@ -104,7 +104,7 @@ function isPersistedOrderLineId(id: string): boolean {
 export function OrderDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { branch, addAuditLog, role, session, employeeName } = useAppContext();
+  const { branch, addAuditLog, role, session, employeeName, setHideBranchSelector } = useAppContext();
   const [isEditing, setIsEditing] = useState(false);
   const [editedOrder, setEditedOrder] = useState<OrderDetail | null>(null);
 
@@ -206,10 +206,14 @@ export function OrderDetailPage() {
     Array<{ id: string; tripNumber: string; status: string; delayReason: string | null }>
   >([]);
   const [loading, setLoading] = useState(true);
-  const [customerList, setCustomerList] = useState<{ id: string; name: string }[]>([]);
+  const [customerList, setCustomerList] = useState<
+    { id: string; name: string; email: string | null; contact_person: string | null }[]
+  >([]);
+  const [customerSearchQuery, setCustomerSearchQuery] = useState('');
   const [agentList, setAgentList] = useState<
     { id: string; employee_name: string; employee_id: string; branch_name?: string }[]
   >([]);
+  const [branchList, setBranchList] = useState<{ id: string; name: string }[]>([]);
 
   const patchEditedOrder = (patch: Partial<OrderDetail> | ((prev: OrderDetail) => Partial<OrderDetail>)) => {
     setEditedOrder((prev) => {
@@ -431,28 +435,91 @@ export function OrderDetailPage() {
     fetchOrder();
   }, [id]);
 
+  useEffect(() => {
+    setHideBranchSelector(true);
+    return () => setHideBranchSelector(false);
+  }, [setHideBranchSelector]);
+
   // ── Pre-fetch all products for existing order items when edit mode starts ──
   // Must be declared here (before any early returns) to satisfy Rules of Hooks.
   // This mirrors CreateOrderModal: products (with image_url, variants, stock) are
   // loaded into productCache BEFORE the user clicks an item, so handleEditItem
   // can be synchronous — no async lookup needed on click.
   useEffect(() => {
-    if (!isEditing) return;
-    void supabase
-      .from('customers')
-      .select('id, name')
-      .eq('status', 'Active')
-      .order('name')
-      .limit(500)
-      .then(({ data }) => setCustomerList(data ?? []));
-  }, [isEditing]);
+    if (!isEditing) {
+      setCustomerSearchQuery('');
+      setCustomerList([]);
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      let branchUuid: string | null =
+        typeof editedOrder?.branchId === 'string' && editedOrder.branchId.trim() !== ''
+          ? editedOrder.branchId.trim()
+          : typeof order?.branchId === 'string' && order.branchId.trim() !== ''
+            ? order.branchId.trim()
+            : null;
+      if (!branchUuid) {
+        const b = (branch ?? '').trim();
+        if (b) {
+          const { data: bd } = await supabase.from('branches').select('id').eq('name', b).maybeSingle();
+          branchUuid = bd?.id ?? null;
+        }
+      }
+      if (!branchUuid) {
+        if (!cancelled) setCustomerList([]);
+        return;
+      }
+      const { data, error } = await supabase
+        .from('customers')
+        .select('id, name, email, contact_person')
+        .eq('status', 'Active')
+        .eq('branch_id', branchUuid)
+        .order('name')
+        .limit(500);
+      if (!cancelled) {
+        setCustomerList(
+          !error && data
+            ? (data as { id: string; name: string; email?: string | null; contact_person?: string | null }[]).map(
+                (r) => ({
+                  id: r.id,
+                  name: String(r.name ?? ''),
+                  email: r.email ?? null,
+                  contact_person: r.contact_person ?? null,
+                }),
+              )
+            : [],
+        );
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isEditing, editedOrder?.branchId, order?.branchId, branch]);
 
   useEffect(() => {
-    if (!isEditing || !order?.branchId) {
+    if (!isEditing) return;
+    void supabase
+      .from('branches')
+      .select('id, name')
+      .eq('is_active', true)
+      .order('name')
+      .then(({ data }) => setBranchList(data ?? []));
+  }, [isEditing]);
+
+  const branchIdForAgents =
+    isEditing && editedOrder?.branchId ? editedOrder.branchId : order?.branchId;
+  const agentIdForAgentList =
+    isEditing && editedOrder ? editedOrder.agentId : order?.agentId;
+
+  useEffect(() => {
+    if (!isEditing || !branchIdForAgents) {
       setAgentList([]);
       return;
     }
-    const branchId = order.branchId;
+    const branchId = branchIdForAgents;
     void (async () => {
       const { data } = await supabase
         .from('employees')
@@ -467,11 +534,11 @@ export function OrderDetailPage() {
         employee_id: row.employee_id,
         branch_name: (row as { branches?: { name?: string } | null }).branches?.name ?? undefined,
       }));
-      if (order.agentId && !agents.some((a) => a.id === order.agentId)) {
+      if (agentIdForAgentList && !agents.some((a) => a.id === agentIdForAgentList)) {
         const { data: current } = await supabase
           .from('employees')
           .select('id, employee_name, employee_id, branches(name)')
-          .eq('id', order.agentId)
+          .eq('id', agentIdForAgentList)
           .maybeSingle();
         if (current) {
           agents = [
@@ -487,7 +554,7 @@ export function OrderDetailPage() {
       }
       setAgentList(agents);
     })();
-  }, [isEditing, order?.branchId, order?.agentId]);
+  }, [isEditing, branchIdForAgents, agentIdForAgentList]);
 
   useEffect(() => {
     if (!isEditing || !order) return;
@@ -528,11 +595,11 @@ export function OrderDetailPage() {
       // 3. Batch-fetch branch-specific stock
       const allVariantIds = productsData.flatMap((p: any) => p.product_variants?.map((v: any) => v.id) ?? []);
       const stockMap: Record<string, number> = {};
-      const { data: branchRow } = await supabase.from('branches').select('id').eq('name', branch).maybeSingle();
-      if (branchRow?.id && allVariantIds.length > 0) {
+      const stockBranchId = order.branchId;
+      if (stockBranchId && allVariantIds.length > 0) {
         const { data: stockData } = await supabase
           .from('product_variant_stock').select('variant_id, quantity')
-          .eq('branch_id', branchRow.id).in('variant_id', allVariantIds);
+          .eq('branch_id', stockBranchId).in('variant_id', allVariantIds);
         (stockData ?? []).forEach((s: any) => { stockMap[s.variant_id] = s.quantity; });
       }
 
@@ -574,10 +641,10 @@ export function OrderDetailPage() {
           if (productsByName && productsByName.length > 0) {
             const allFallbackVariantIds = productsByName.flatMap((p: any) => p.product_variants?.map((v: any) => v.id) ?? []);
             const fallbackStockMap: Record<string, number> = {};
-            if (branchRow?.id && allFallbackVariantIds.length > 0) {
+            if (stockBranchId && allFallbackVariantIds.length > 0) {
               const { data: fallbackStock } = await supabase
                 .from('product_variant_stock').select('variant_id, quantity')
-                .eq('branch_id', branchRow.id).in('variant_id', allFallbackVariantIds);
+                .eq('branch_id', stockBranchId).in('variant_id', allFallbackVariantIds);
               (fallbackStock ?? []).forEach((s: any) => { fallbackStockMap[s.variant_id] = s.quantity; });
             }
 
@@ -609,7 +676,26 @@ export function OrderDetailPage() {
     };
 
     prefetchProducts();
-  }, [isEditing, order, branch]);
+  }, [isEditing, order]);
+
+  const filteredCustomersForSelect = useMemo(() => {
+    const q = customerSearchQuery.trim().toLowerCase();
+    let rows = customerList;
+    if (q) {
+      rows = customerList.filter(
+        (c) =>
+          c.name.toLowerCase().includes(q) ||
+          (c.email ?? '').toLowerCase().includes(q) ||
+          (c.contact_person ?? '').toLowerCase().includes(q),
+      );
+    }
+    const selId = editedOrder?.customerId?.trim();
+    if (selId && !rows.some((c) => c.id === selId)) {
+      const sel = customerList.find((c) => c.id === selId);
+      if (sel) rows = [sel, ...rows];
+    }
+    return rows;
+  }, [customerList, customerSearchQuery, editedOrder?.customerId]);
 
   // ── Order log helper ──────────────────────────────────────────────────────
   // Maps UserRole → order_log_role enum
@@ -745,6 +831,27 @@ export function OrderDetailPage() {
     if (extra?.actual_delivery !== undefined) {
       updatePayload.actual_delivery = extra.actual_delivery;
     }
+
+    const mergedActualDelivery =
+      extra?.actual_delivery !== undefined ? extra.actual_delivery || null : order.actualDelivery ?? null;
+    let logisticsCustomerTerms: string | null = null;
+    if (order.customerId) {
+      const { data: lcust } = await supabase
+        .from('customers')
+        .select('payment_terms')
+        .eq('id', order.customerId)
+        .maybeSingle();
+      logisticsCustomerTerms =
+        typeof lcust?.payment_terms === 'string' ? lcust.payment_terms.trim() || null : null;
+    }
+    const logisticsDueDate = deriveOrderDueDateForPersistence({
+      order_date: order.orderDate,
+      actual_delivery: mergedActualDelivery,
+      payment_terms: order.paymentTerms,
+      customer_payment_terms: logisticsCustomerTerms,
+    });
+    if (logisticsDueDate) updatePayload.due_date = logisticsDueDate;
+
     try {
       const { error } = await supabase.from('orders').update(updatePayload).eq('id', id);
       if (error) throw error;
@@ -763,6 +870,7 @@ export function OrderDetailPage() {
         if (extra?.actual_delivery !== undefined) {
           n.actualDelivery = extra.actual_delivery || undefined;
         }
+        if (logisticsDueDate) n.dueDate = logisticsDueDate;
         return n;
       });
       return true;
@@ -1402,10 +1510,35 @@ export function OrderDetailPage() {
       oldOrder.balanceDue,
     );
 
+    const branchIdToSave = editedOrder.branchId?.trim();
+    if (!branchIdToSave) {
+      alert('Please select a branch for this order.');
+      return;
+    }
+
     const agentIdToSave = editedOrder.agentId?.trim() || null;
     const agentNameToSave = agentIdToSave
       ? (agentList.find((a) => a.id === agentIdToSave)?.employee_name ?? editedOrder.agent)?.trim() || null
       : null;
+
+    let customerDefaultTerms: string | null = null;
+    const cid = editedOrder.customerId?.trim();
+    if (cid) {
+      const { data: custTermsRow } = await supabase
+        .from('customers')
+        .select('payment_terms')
+        .eq('id', cid)
+        .maybeSingle();
+      customerDefaultTerms =
+        typeof custTermsRow?.payment_terms === 'string' ? custTermsRow.payment_terms.trim() || null : null;
+    }
+
+    const persistedDueDate = deriveOrderDueDateForPersistence({
+      order_date: editedOrder.orderDate,
+      actual_delivery: editedOrder.actualDelivery ?? null,
+      payment_terms: editedOrder.paymentTerms,
+      customer_payment_terms: customerDefaultTerms,
+    });
 
     // Update the order header
     const { error: orderErr } = await supabase
@@ -1426,9 +1559,11 @@ export function OrderDetailPage() {
         payment_method: editedOrder.paymentMethod,
         customer_id: editedOrder.customerId || null,
         customer_name: editedOrder.customer?.trim() ? editedOrder.customer : null,
+        branch_id: branchIdToSave,
         agent_id: agentIdToSave,
         agent_name: agentNameToSave,
         urgency: editedOrder.urgency ?? 'Medium',
+        due_date: persistedDueDate,
         updated_at: new Date().toISOString(),
       })
       .eq('id', id);
@@ -1506,6 +1641,15 @@ export function OrderDetailPage() {
         `Payment status changed from "${oldOrder.paymentStatus}" to "${editedOrder.paymentStatus}"`,
         { paymentStatus: oldOrder.paymentStatus },
         { paymentStatus: editedOrder.paymentStatus },
+      );
+    }
+
+    if ((oldOrder.branchId ?? '') !== (editedOrder.branchId ?? '')) {
+      await insertOrderLog(
+        'note_added',
+        `Branch changed from "${oldOrder.branch || '—'}" to "${editedOrder.branch || '—'}"`,
+        { branchId: oldOrder.branchId ?? null, branchName: oldOrder.branch || null },
+        { branchId: editedOrder.branchId ?? null, branchName: editedOrder.branch || null },
       );
     }
 
@@ -1610,6 +1754,7 @@ export function OrderDetailPage() {
       totalAmount,
       amountPaid: savedPay.amountPaid,
       balanceDue: savedPay.balanceDue,
+      dueDate: persistedDueDate ?? editedOrder.dueDate,
       items: savedItems,
     });
     const { data: payProofCheck } = await supabase
@@ -2303,8 +2448,16 @@ export function OrderDetailPage() {
     if (!order || !id) return;
     const nGallery = selectedProofGalleryUrls.length;
     const nFiles = selectedProofLocalFiles.length;
-    if (nGallery === 0 && nFiles === 0) {
-      alert('Attach at least one image or document to save a proof, or click Cancel to skip.');
+    const paymentCashEarly = proofType === 'payment' ? Math.max(0, Number(proofMoneyPayment) || 0) : 0;
+    const paymentCreditEarly = proofType === 'payment' ? Math.max(0, Number(proofPaymentCredit) || 0) : 0;
+    const paymentOnlyNoFiles =
+      proofType === 'payment' && nGallery === 0 && nFiles === 0 && paymentCashEarly + paymentCreditEarly > 0;
+    if (nGallery === 0 && nFiles === 0 && !paymentOnlyNoFiles) {
+      alert(
+        proofType === 'payment'
+          ? 'Attach a file, or enter a cash/credit payment amount to record payment without an attachment.'
+          : 'Attach at least one image or document to save a proof, or click Cancel to skip.',
+      );
       return;
     }
     if (nGallery + nFiles > MAX_PROOF_BATCH) {
@@ -2420,6 +2573,24 @@ export function OrderDetailPage() {
           payment_cash_amount: proofType === 'payment' ? paymentCash : 0,
           payment_credit_amount: proofType === 'payment' ? paymentCredit : 0,
           payment_adjustment: proofType === 'payment' ? paymentAdj : 0,
+        });
+      }
+
+      if (paymentOnlyNoFiles) {
+        rows.push({
+          order_id: id,
+          type: dbType,
+          file_name: 'Payment record (no attachment)',
+          file_url: '',
+          file_size: 0,
+          uploaded_by: uploadedBy,
+          uploaded_by_role: uploaderRole,
+          status: 'verified',
+          title: titleBase || 'Payment record',
+          notes: notesTrim,
+          payment_cash_amount: paymentCash,
+          payment_credit_amount: paymentCredit,
+          payment_adjustment: paymentAdj,
         });
       }
 
@@ -3021,23 +3192,43 @@ export function OrderDetailPage() {
           <CardContent>
             {isEditing && editedOrder ? (
               <div className="space-y-2">
-                <label className="text-xs text-gray-500">Customer</label>
+                <label className="text-xs text-gray-500" htmlFor="order-customer-search">
+                  Search customers
+                </label>
+                <input
+                  id="order-customer-search"
+                  type="search"
+                  placeholder="Search by name, email, or contact…"
+                  value={customerSearchQuery}
+                  onChange={(e) => setCustomerSearchQuery(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none bg-white"
+                  autoComplete="off"
+                />
+                <label className="text-xs text-gray-500 pt-1 block" htmlFor="order-customer-select">
+                  Customer
+                </label>
                 <select
+                  id="order-customer-select"
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
                   value={editedOrder.customerId || ''}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      const c = customerList.find((x) => x.id === v);
-                      patchEditedOrder({ customerId: v, customer: c?.name ?? '' });
-                    }}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    const c = customerList.find((x) => x.id === v);
+                    patchEditedOrder({ customerId: v, customer: c?.name ?? '' });
+                  }}
                 >
                   <option value="">— Select customer —</option>
-                  {customerList.map((c) => (
+                  {filteredCustomersForSelect.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.name}
                     </option>
                   ))}
                 </select>
+                {customerList.length === 0 && (
+                  <p className="text-xs text-amber-700">
+                    No active customers for this branch. Set branch in Agent &amp; Branch or add customers for this branch in Customers.
+                  </p>
+                )}
                 <div className="pt-2">
                   <p className="text-xs text-gray-500">
                     Planned departure is set in{' '}
@@ -3173,6 +3364,30 @@ export function OrderDetailPage() {
             {isEditing && editedOrder ? (
               <div className="space-y-3 text-sm">
                 <div className="space-y-1">
+                  <label className="text-xs text-gray-500">Branch</label>
+                  <select
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none bg-white"
+                    value={editedOrder.branchId || ''}
+                    onChange={(e) => {
+                      const bid = e.target.value;
+                      const b = branchList.find((x) => x.id === bid);
+                      patchEditedOrder({
+                        branchId: bid || undefined,
+                        branch: b?.name ?? '',
+                        agentId: '',
+                        agent: '',
+                      });
+                    }}
+                  >
+                    <option value="">— Select branch —</option>
+                    {branchList.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1">
                   <label className="text-xs text-gray-500">Agent</label>
                   <select
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none bg-white"
@@ -3195,20 +3410,16 @@ export function OrderDetailPage() {
                     ))}
                   </select>
                 </div>
-                <div className="flex justify-between pt-1">
-                  <span className="text-gray-600">Branch:</span>
-                  <span className="font-medium text-gray-900">{editedOrder.branch || '—'}</span>
-                </div>
               </div>
             ) : (
               <div className="space-y-3 text-sm">
                 <div className="flex justify-between">
-                  <span className="text-gray-600">Agent:</span>
-                  <span className="font-medium text-gray-900">{order.agent || '—'}</span>
-                </div>
-                <div className="flex justify-between">
                   <span className="text-gray-600">Branch:</span>
                   <span className="font-medium text-gray-900">{order.branch || '—'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Agent:</span>
+                  <span className="font-medium text-gray-900">{order.agent || '—'}</span>
                 </div>
               </div>
             )}
@@ -4595,6 +4806,7 @@ export function OrderDetailPage() {
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2,
                       })}
+                      . Attachments are optional — enter cash or credit only if you have no receipt.
                     </p>
                     <div>
                       <label className="block text-xs font-medium text-gray-700 mb-1">
@@ -4651,7 +4863,9 @@ export function OrderDetailPage() {
                 )}
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Images</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    {proofType === 'payment' ? 'Images (optional)' : 'Images'}
+                  </label>
                   <button
                     type="button"
                     onClick={() => setShowProofImageGallery(true)}
@@ -4702,7 +4916,9 @@ export function OrderDetailPage() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Upload documents (Max of 25MB)</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    {proofType === 'payment' ? 'Upload documents (optional, max 25MB)' : 'Upload documents (Max of 25MB)'}
+                  </label>
                   <input
                     type="file"
                     multiple
@@ -4769,7 +4985,12 @@ export function OrderDetailPage() {
                   onClick={() => void handleUploadProof()}
                   disabled={
                     proofUploadBusy ||
-                    (selectedProofGalleryUrls.length === 0 && selectedProofLocalFiles.length === 0)
+                    (selectedProofGalleryUrls.length === 0 &&
+                      selectedProofLocalFiles.length === 0 &&
+                      !(
+                        proofType === 'payment' &&
+                        (Number(proofMoneyPayment) || 0) + (Number(proofPaymentCredit) || 0) > 0
+                      ))
                   }
                   className="flex-1 gap-2"
                 >
