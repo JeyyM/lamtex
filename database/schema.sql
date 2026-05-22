@@ -585,6 +585,7 @@ CREATE TABLE IF NOT EXISTS product_categories (
   id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   name        VARCHAR(200) NOT NULL,
   slug        VARCHAR(200) NOT NULL UNIQUE,
+  category_code VARCHAR(50),
   description TEXT,
   image_url   TEXT,
   sort_order  INT DEFAULT 0,
@@ -593,6 +594,92 @@ CREATE TABLE IF NOT EXISTS product_categories (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- 5a-i: Category code (CAT-{BRANCH}-{NNNNNN}) — Source: database/category_code.sql
+ALTER TABLE product_categories ADD COLUMN IF NOT EXISTS category_code VARCHAR(50);
+
+CREATE OR REPLACE FUNCTION public.product_category_branch_code(
+  p_branch_name TEXT,
+  p_slug        TEXT
+)
+RETURNS TEXT
+LANGUAGE plpgsql
+STABLE
+SET search_path = public
+AS $$
+DECLARE
+  v_code TEXT;
+BEGIN
+  IF p_branch_name IS NOT NULL AND TRIM(p_branch_name) <> '' THEN
+    SELECT b.code INTO v_code FROM branches b WHERE b.name = TRIM(p_branch_name);
+    IF v_code IS NOT NULL AND TRIM(v_code) <> '' THEN
+      RETURN TRIM(v_code);
+    END IF;
+  END IF;
+
+  IF p_slug IS NOT NULL THEN
+    IF p_slug LIKE 'm-%' THEN RETURN 'MNL'; END IF;
+    IF p_slug LIKE 'c-%' THEN RETURN 'CEB'; END IF;
+    IF p_slug LIKE 'b-%' THEN RETURN 'BTG'; END IF;
+  END IF;
+
+  RETURN 'GEN';
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.next_category_code(p_branch_name TEXT, p_slug TEXT)
+RETURNS TEXT
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_branch_code TEXT;
+  v_prefix      TEXT;
+  v_next        INT;
+BEGIN
+  v_branch_code := public.product_category_branch_code(p_branch_name, p_slug);
+  v_prefix := 'CAT-' || v_branch_code || '-';
+
+  SELECT COALESCE(
+    MAX(
+      NULLIF(
+        regexp_replace(substring(pc.category_code FROM char_length(v_prefix) + 1), '[^0-9]', '', 'g'),
+        ''
+      )::INT
+    ),
+    0
+  ) + 1
+  INTO v_next
+  FROM product_categories pc
+  WHERE pc.category_code LIKE v_prefix || '%';
+
+  RETURN v_prefix || lpad(v_next::TEXT, 6, '0');
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.next_category_code(TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.next_category_code(TEXT, TEXT) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.trg_product_categories_assign_category_code()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF NEW.category_code IS NULL OR TRIM(NEW.category_code) = '' THEN
+    NEW.category_code := public.next_category_code(NEW.branch, NEW.slug);
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS product_categories_assign_category_code ON product_categories;
+CREATE TRIGGER product_categories_assign_category_code
+  BEFORE INSERT ON product_categories
+  FOR EACH ROW
+  EXECUTE FUNCTION public.trg_product_categories_assign_category_code();
 
 -- 5b: Products
 CREATE TABLE IF NOT EXISTS products (
@@ -613,9 +700,13 @@ CREATE TABLE IF NOT EXISTS products (
   total_units_sold INT DEFAULT 0,            -- YTD
   
   branch          VARCHAR(100),              -- optional branch filter (matches `branches.name` when set)
+  is_hidden       BOOLEAN NOT NULL DEFAULT FALSE,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- 5b-i: Product catalog visibility — Source: database/product_catalog_visibility.sql
+ALTER TABLE products ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- 5c: Product variants (SKU level)
 CREATE TABLE IF NOT EXISTS product_variants (
@@ -661,10 +752,14 @@ CREATE TABLE IF NOT EXISTS product_variants (
   min_order_qty   INT NOT NULL DEFAULT 100,
   
   branch          VARCHAR(100),              -- denormalized; matches `branches.name` when set
+  is_hidden       BOOLEAN NOT NULL DEFAULT FALSE,
   last_restocked  TIMESTAMPTZ,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- 5c-i: Variant catalog visibility — Source: database/variant_catalog_visibility.sql
+ALTER TABLE product_variants ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- 5d: Bulk / batch pricing discounts
 CREATE TABLE IF NOT EXISTS product_bulk_discounts (
@@ -820,6 +915,23 @@ CREATE TABLE IF NOT EXISTS raw_material_logs (
   created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 6b-i-b: Warehouse manager catalog scope (product families + raw materials)
+CREATE TABLE IF NOT EXISTS employee_product_assignments (
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  employee_id     UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  product_id      UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (employee_id, product_id)
+);
+
+CREATE TABLE IF NOT EXISTS employee_material_assignments (
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  employee_id     UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  material_id     UUID NOT NULL REFERENCES raw_materials(id) ON DELETE CASCADE,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (employee_id, material_id)
+);
+
 -- Add FK from BOM table to raw_materials
 DO $$ BEGIN
   ALTER TABLE product_variant_raw_materials
@@ -966,6 +1078,7 @@ CREATE TABLE IF NOT EXISTS material_consumption (
 
 CREATE TABLE IF NOT EXISTS customers (
   id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  customer_code         VARCHAR(50),
   name                  VARCHAR(300) NOT NULL,
   type                  customer_type,
   client_type           client_type DEFAULT 'Office',  -- Office=0.5% comm, Personal=1%
@@ -1018,6 +1131,65 @@ CREATE TABLE IF NOT EXISTS customers (
   created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- 7a: Customer code (CUS-{BRANCH}-{NNNNNN}) — Source: database/customer_code.sql
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS customer_code VARCHAR(50);
+
+CREATE OR REPLACE FUNCTION public.next_customer_code(p_branch_id UUID)
+RETURNS TEXT
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_branch_code TEXT;
+  v_prefix      TEXT;
+  v_next        INT;
+BEGIN
+  IF p_branch_id IS NOT NULL THEN
+    SELECT b.code INTO v_branch_code FROM branches b WHERE b.id = p_branch_id;
+  END IF;
+  v_prefix := 'CUS-' || COALESCE(NULLIF(TRIM(v_branch_code), ''), 'GEN') || '-';
+
+  SELECT COALESCE(
+    MAX(
+      NULLIF(
+        regexp_replace(substring(c.customer_code FROM char_length(v_prefix) + 1), '[^0-9]', '', 'g'),
+        ''
+      )::INT
+    ),
+    0
+  ) + 1
+  INTO v_next
+  FROM customers c
+  WHERE c.customer_code LIKE v_prefix || '%';
+
+  RETURN v_prefix || lpad(v_next::TEXT, 6, '0');
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.next_customer_code(UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.next_customer_code(UUID) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.trg_customers_assign_customer_code()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF NEW.customer_code IS NULL OR TRIM(NEW.customer_code) = '' THEN
+    NEW.customer_code := public.next_customer_code(NEW.branch_id);
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS customers_assign_customer_code ON customers;
+CREATE TRIGGER customers_assign_customer_code
+  BEFORE INSERT ON customers
+  FOR EACH ROW
+  EXECUTE FUNCTION public.trg_customers_assign_customer_code();
 
 -- Add FK from customer_assignments
 DO $$ BEGIN
@@ -2737,6 +2909,12 @@ CREATE INDEX IF NOT EXISTS idx_employees_auth_user ON employees(auth_user_id);
 CREATE INDEX IF NOT EXISTS idx_products_category ON products(category_id);
 CREATE INDEX IF NOT EXISTS idx_products_status ON products(status);
 CREATE INDEX IF NOT EXISTS idx_product_variants_product ON product_variants(product_id);
+CREATE INDEX IF NOT EXISTS idx_products_is_hidden
+  ON products(is_hidden)
+  WHERE is_hidden = TRUE;
+CREATE INDEX IF NOT EXISTS idx_product_variants_is_hidden
+  ON product_variants(is_hidden)
+  WHERE is_hidden = TRUE;
 CREATE INDEX IF NOT EXISTS idx_product_variants_sku ON product_variants(sku);
 CREATE INDEX IF NOT EXISTS idx_product_variants_supplier ON product_variants(supplier_id);
 CREATE INDEX IF NOT EXISTS idx_product_stock_movements_variant ON product_stock_movements(variant_id);
@@ -2754,6 +2932,13 @@ CREATE INDEX IF NOT EXISTS idx_material_consumption_material ON material_consump
 
 -- Customers
 CREATE INDEX IF NOT EXISTS idx_customers_status ON customers(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_customers_customer_code
+  ON customers(customer_code)
+  WHERE customer_code IS NOT NULL AND TRIM(customer_code) <> '';
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_product_categories_category_code
+  ON product_categories(category_code)
+  WHERE category_code IS NOT NULL AND TRIM(category_code) <> '';
 CREATE INDEX IF NOT EXISTS idx_customers_agent ON customers(assigned_agent_id);
 CREATE INDEX IF NOT EXISTS idx_customers_branch ON customers(branch_id);
 CREATE INDEX IF NOT EXISTS idx_customers_risk ON customers(risk_level);
@@ -2909,6 +3094,50 @@ CREATE INDEX IF NOT EXISTS idx_agent_targets_employee ON agent_targets(employee_
 CREATE INDEX IF NOT EXISTS idx_agent_commissions_employee ON agent_commissions(employee_id);
 CREATE INDEX IF NOT EXISTS idx_customer_assignments_employee ON customer_assignments(employee_id);
 CREATE INDEX IF NOT EXISTS idx_customer_assignments_customer ON customer_assignments(customer_id);
+CREATE INDEX IF NOT EXISTS idx_employee_product_assignments_employee ON employee_product_assignments(employee_id);
+CREATE INDEX IF NOT EXISTS idx_employee_product_assignments_product ON employee_product_assignments(product_id);
+CREATE INDEX IF NOT EXISTS idx_employee_material_assignments_employee ON employee_material_assignments(employee_id);
+CREATE INDEX IF NOT EXISTS idx_employee_material_assignments_material ON employee_material_assignments(material_id);
+
+ALTER TABLE employee_product_assignments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE employee_material_assignments ENABLE ROW LEVEL SECURITY;
+
+DO $$
+DECLARE
+  tbl text;
+BEGIN
+  FOREACH tbl IN ARRAY ARRAY['employee_product_assignments', 'employee_material_assignments']
+  LOOP
+    BEGIN
+      EXECUTE format(
+        'CREATE POLICY %I ON %I FOR SELECT USING (auth.uid() IS NOT NULL)',
+        'auth_select_' || tbl, tbl
+      );
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END;
+    BEGIN
+      EXECUTE format(
+        'CREATE POLICY %I ON %I FOR INSERT WITH CHECK (auth.uid() IS NOT NULL)',
+        'auth_insert_' || tbl, tbl
+      );
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END;
+    BEGIN
+      EXECUTE format(
+        'CREATE POLICY %I ON %I FOR UPDATE USING (auth.uid() IS NOT NULL)',
+        'auth_update_' || tbl, tbl
+      );
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END;
+    BEGIN
+      EXECUTE format(
+        'CREATE POLICY %I ON %I FOR DELETE USING (auth.uid() IS NOT NULL)',
+        'auth_delete_' || tbl, tbl
+      );
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END;
+  END LOOP;
+END $$;
 CREATE INDEX IF NOT EXISTS idx_agent_purchase_requests_agent ON agent_purchase_requests(agent_id);
 CREATE INDEX IF NOT EXISTS idx_pod_collections_order ON pod_collections(order_id);
 CREATE INDEX IF NOT EXISTS idx_pod_collections_agent ON pod_collections(agent_id);

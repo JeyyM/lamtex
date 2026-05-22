@@ -49,7 +49,9 @@ interface OrderRow {
   order_number: string;
   customer_id: string | null;
   customer_name: string | null;
-  /** Display / CSV: tax_id or business_registration from customers (no short code in DB). */
+  /** Business ID: CUS-{BRANCH}-{NNNNNN} */
+  customer_code: string | null;
+  /** Tax ID or business registration from customers (optional). */
   customer_reference: string | null;
   agent_id: string | null;
   agent_name: string | null;
@@ -147,23 +149,48 @@ async function fetchOrderLineDiscountAggregates(
 
 /** Line rows for Excel “Line items” sheet (same filters as order list export). */
 interface OrderLineExportRow {
-  id: string;
   order_id: string;
   sku: string | null;
   product_name: string | null;
-  variant_description: string | null;
+  variant_name: string | null;
+  category_code: string | null;
+  category_name: string | null;
   quantity: number;
-  unit_price: number;
   original_price: number | null;
   negotiated_price: number | null;
   discount_percent: number | null;
   discount_amount: number | null;
-  batch_discount: number | null;
   line_total: number;
-  stock_hint: string | null;
-  available_stock: number | null;
   quantity_shipped: number | null;
   quantity_delivered: number | null;
+}
+
+function categoryFromLineEmbed(raw: Record<string, unknown>): {
+  category_code: string | null;
+  category_name: string | null;
+} {
+  const pv = raw.product_variants;
+  const pvRow = Array.isArray(pv) ? pv[0] : pv;
+  if (!pvRow || typeof pvRow !== 'object') {
+    return { category_code: null, category_name: null };
+  }
+  const prod = (pvRow as Record<string, unknown>).products;
+  const prodRow = Array.isArray(prod) ? prod[0] : prod;
+  if (!prodRow || typeof prodRow !== 'object') {
+    return { category_code: null, category_name: null };
+  }
+  const p = prodRow as Record<string, unknown>;
+  const catEmbed = p.product_categories;
+  const catRow = Array.isArray(catEmbed) ? catEmbed[0] : catEmbed;
+  const category_code =
+    catRow && typeof catRow === 'object'
+      ? String((catRow as Record<string, unknown>).category_code ?? '').trim() || null
+      : null;
+  const category_name =
+    catRow && typeof catRow === 'object'
+      ? String((catRow as Record<string, unknown>).name ?? '').trim() || null
+      : null;
+  return { category_code, category_name };
 }
 
 async function fetchOrderLineItemsForExport(orderIds: string[]): Promise<OrderLineExportRow[]> {
@@ -176,28 +203,42 @@ async function fetchOrderLineItemsForExport(orderIds: string[]): Promise<OrderLi
       .from('order_line_items')
       .select(
         [
-          'id',
           'order_id',
           'sku',
           'product_name',
           'variant_description',
           'quantity',
-          'unit_price',
           'original_price',
           'negotiated_price',
           'discount_percent',
           'discount_amount',
-          'batch_discount',
           'line_total',
-          'stock_hint',
-          'available_stock',
           'quantity_shipped',
           'quantity_delivered',
+          'product_variants(products(product_categories(category_code, name)))',
         ].join(','),
       )
       .in('order_id', chunk);
     if (error) throw new Error(error.message);
-    if (data) out.push(...(data as unknown as OrderLineExportRow[]));
+    for (const row of (data ?? []) as Record<string, unknown>[]) {
+      const { category_code, category_name } = categoryFromLineEmbed(row);
+      out.push({
+        order_id: String(row.order_id ?? ''),
+        sku: (row.sku as string | null) ?? null,
+        product_name: (row.product_name as string | null) ?? null,
+        variant_name: (row.variant_description as string | null) ?? null,
+        category_code,
+        category_name,
+        quantity: Number(row.quantity ?? 0),
+        original_price: row.original_price != null ? Number(row.original_price) : null,
+        negotiated_price: row.negotiated_price != null ? Number(row.negotiated_price) : null,
+        discount_percent: row.discount_percent != null ? Number(row.discount_percent) : null,
+        discount_amount: row.discount_amount != null ? Number(row.discount_amount) : null,
+        line_total: Number(row.line_total ?? 0),
+        quantity_shipped: row.quantity_shipped != null ? Number(row.quantity_shipped) : null,
+        quantity_delivered: row.quantity_delivered != null ? Number(row.quantity_delivered) : null,
+      });
+    }
   }
   return out;
 }
@@ -239,15 +280,20 @@ function mapFetchedOrderRow(
 ): OrderRow {
   const br = raw.branches as { code?: string } | null | undefined;
   const emp = raw.employees as { employee_id?: string } | null | undefined;
-  const cust = raw.customers as { tax_id?: string | null; business_registration?: string | null } | null | undefined;
+  const cust = raw.customers as { tax_id?: string | null; business_registration?: string | null; customer_code?: string | null } | null | undefined;
   const tax = typeof cust?.tax_id === 'string' ? cust.tax_id.trim() : '';
   const reg = typeof cust?.business_registration === 'string' ? cust.business_registration.trim() : '';
+  const customerCode =
+    typeof cust?.customer_code === 'string' && cust.customer_code.trim() !== ''
+      ? cust.customer_code.trim()
+      : null;
 
   return {
     id: String(raw.id ?? ''),
     order_number: String(raw.order_number ?? ''),
     customer_id: (raw.customer_id as string | null) ?? null,
     customer_name: (raw.customer_name as string | null) ?? null,
+    customer_code: customerCode,
     customer_reference: tax || reg || null,
     agent_id: (raw.agent_id as string | null) ?? null,
     agent_name: (raw.agent_name as string | null) ?? null,
@@ -307,7 +353,7 @@ async function downloadOrdersWorkbook(rows: OrderRow[], lineRows: OrderLineExpor
     orderHeaders,
     ...rows.map((o) => [
       o.order_number,
-      o.customer_reference ?? '',
+      o.customer_code ?? o.customer_id ?? '',
       o.customer_name ?? '',
       o.agent_employee_id ?? '',
       o.agent_name ?? '',
@@ -332,6 +378,10 @@ async function downloadOrdersWorkbook(rows: OrderRow[], lineRows: OrderLineExpor
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(orderAoA), 'Orders');
 
   const orderNumById = new Map(rows.map((r) => [r.id, r.order_number]));
+  const customerCodeByOrderId = new Map(
+    rows.map((r) => [r.id, r.customer_code ?? r.customer_id ?? '']),
+  );
+  const customerNameByOrderId = new Map(rows.map((r) => [r.id, r.customer_name ?? '']));
   const sortedLines = [...lineRows].sort((a, b) => {
     const na = String(orderNumById.get(a.order_id) ?? '');
     const nb = String(orderNumById.get(b.order_id) ?? '');
@@ -342,45 +392,41 @@ async function downloadOrdersWorkbook(rows: OrderRow[], lineRows: OrderLineExpor
 
   const lineHeaders = [
     'Order Number',
-    'Order UUID',
-    'Line UUID',
+    'Customer ID',
+    'Customer Name',
+    'Category Code',
+    'Category Name',
     'SKU',
     'Product Name',
-    'Variant Description',
+    'Variant Name',
     'Quantity',
-    'Unit Price',
     'Original Price',
     'Negotiated Price',
     'Discount %',
     'Discount Amount',
-    'Batch Discount %',
     'Line Total',
-    'Available Stock',
     'Qty Shipped',
     'Qty Delivered',
-    'Stock Hint',
   ];
   const lineAoA: unknown[][] = [
     lineHeaders,
     ...sortedLines.map((li) => [
       orderNumById.get(li.order_id) ?? '',
-      li.order_id,
-      li.id,
+      customerCodeByOrderId.get(li.order_id) ?? '',
+      customerNameByOrderId.get(li.order_id) ?? '',
+      li.category_code ?? '',
+      li.category_name ?? '',
       li.sku ?? '',
       li.product_name ?? '',
-      li.variant_description ?? '',
+      li.variant_name ?? '',
       li.quantity,
-      xlsxOptionalNumber(li.unit_price),
       xlsxOptionalNumber(li.original_price),
       xlsxOptionalNumber(li.negotiated_price),
       xlsxOptionalNumber(li.discount_percent),
       xlsxOptionalNumber(li.discount_amount),
-      xlsxOptionalNumber(li.batch_discount),
       xlsxOptionalNumber(li.line_total),
-      xlsxOptionalNumber(li.available_stock),
       xlsxOptionalNumber(li.quantity_shipped),
       xlsxOptionalNumber(li.quantity_delivered),
-      li.stock_hint ?? '',
     ]),
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(lineAoA), 'Line items');
@@ -523,7 +569,7 @@ export function OrdersPage() {
           urgency,
           branches!branch_id(code),
           employees!agent_id(employee_id),
-          customers!customer_id(tax_id, business_registration)
+          customers!customer_id(customer_code, tax_id, business_registration)
         `,
       )
       .eq('branch_id', branchData.id);
@@ -1064,7 +1110,7 @@ export function OrdersPage() {
               ) : (
                 <Download className="w-4 h-4" aria-hidden />
               )}
-              {exportingOrders ? 'Exporting…' : 'Export Excel'}
+              {exportingOrders ? 'Exporting…' : 'Export'}
             </Button>
           </div>
           {dateRangeInvalid && (

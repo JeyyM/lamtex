@@ -17,6 +17,8 @@ export interface CategoryFormData {
   description: string;
   imageUrl: string;
   icon?: string;
+  /** When false, category is hidden from order pickers and shown greyed out in catalog. */
+  isVisible: boolean;
 }
 
 const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
@@ -31,20 +33,25 @@ const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
     name: '',
     description: '',
     imageUrl: '',
-    icon: 'category'
+    icon: 'category',
+    isVisible: true,
   });
   
   // Update form data when initialData changes (for edit mode)
   useEffect(() => {
     if (initialData && isEditMode) {
-      setFormData(initialData);
+      setFormData({
+        ...initialData,
+        isVisible: initialData.isVisible ?? true,
+      });
     } else {
       // Reset to empty when not in edit mode
       setFormData({
         name: '',
         description: '',
         imageUrl: '',
-        icon: 'category'
+        icon: 'category',
+        isVisible: true,
       });
     }
   }, [initialData, isEditMode, isOpen]);
@@ -52,7 +59,7 @@ const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
   const [showIconModal, setShowIconModal] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  const handleInputChange = (field: keyof CategoryFormData, value: string) => {
+  const handleInputChange = (field: keyof CategoryFormData, value: string | boolean) => {
     setFormData(prev => ({ ...prev, [field]: value }));
     // Clear error when user starts typing
     if (errors[field]) {
@@ -82,10 +89,6 @@ const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
       newErrors.description = 'Description must be at least 10 characters';
     }
 
-    if (!formData.imageUrl) {
-      newErrors.imageUrl = 'Please select a category image';
-    }
-
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -109,7 +112,8 @@ const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
       name: '',
       description: '',
       imageUrl: '',
-      icon: 'category'
+      icon: 'category',
+      isVisible: true,
     });
     setErrors({});
   };
@@ -216,7 +220,7 @@ const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
             {/* Category Image */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Category Image <span className="text-red-600">*</span>
+                Category Image <span className="text-gray-400 text-xs font-normal">(Optional)</span>
               </label>
               <div className="space-y-3">
                 {/* Image Preview or Placeholder */}
@@ -292,6 +296,24 @@ const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
                 <span className="material-symbols-outlined text-gray-400">chevron_right</span>
               </button>
             </div>
+
+            {isEditMode ? (
+              <div className="p-4 border border-gray-200 rounded-lg bg-gray-50 space-y-2">
+                <p className="text-sm font-medium text-gray-900">Visible in catalog</p>
+                <div className="flex items-start justify-between gap-4">
+                  <p className="text-xs text-gray-500 flex-1 min-w-0">
+                    When hidden, this category and all products in it are greyed out and excluded from new orders.
+                  </p>
+                  <input
+                    type="checkbox"
+                    checked={formData.isVisible}
+                    onChange={(e) => handleInputChange('isVisible', e.target.checked)}
+                    className="h-4 w-4 shrink-0 rounded border-gray-300 text-red-600 focus:ring-red-500 m-0 mt-0.5"
+                    aria-label="Visible in catalog"
+                  />
+                </div>
+              </div>
+            ) : null}
 
             {/* Info Box */}
             <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">

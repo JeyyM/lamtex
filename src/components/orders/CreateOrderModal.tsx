@@ -181,7 +181,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
     const b = (branch ?? '').trim();
     let pQuery = supabase
       .from('products')
-      .select('id, name, image_url, product_variants(id, size, description, unit_price, total_stock, product_bulk_discounts(min_qty, max_qty, discount_percent, is_active))')
+      .select('id, name, image_url, product_variants(id, size, description, unit_price, total_stock, is_hidden, product_bulk_discounts(min_qty, max_qty, discount_percent, is_active))')
       .eq('category_id', cat.id)
       .eq('status', 'Active');
     if (b) {
@@ -203,12 +203,15 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
       (stockData ?? []).forEach((s: any) => { stockMap[s.variant_id] = s.quantity; });
     }
 
-    const mapped: DBProduct[] = productsData.map((p: any) => ({
-      id: p.id,
-      name: p.name,
-      category_id: cat.id,
-      image_url: p.image_url ?? null,
-      variants: (p.product_variants ?? []).map((v: any) => ({
+    const mapped: DBProduct[] = productsData
+      .map((p: any) => ({
+        id: p.id,
+        name: p.name,
+        category_id: cat.id,
+        image_url: p.image_url ?? null,
+        variants: (p.product_variants ?? [])
+          .filter((v: any) => v.is_hidden !== true)
+          .map((v: any) => ({
         id: v.id,
         size: v.size,
         description: v.description ?? null,
@@ -218,7 +221,8 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
           .filter((d: any) => d.is_active)
           .map((d: any) => ({ min_qty: d.min_qty, max_qty: d.max_qty, discount_percent: Number(d.discount_percent) })),
       })),
-    }));
+    }))
+      .filter((p) => p.variants.length > 0);
 
     setCategoryProducts(mapped);
     // Add to cache

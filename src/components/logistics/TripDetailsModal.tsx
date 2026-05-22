@@ -623,10 +623,12 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
                 Report Delay
               </Button>
             )}
-            <Button onClick={onEdit} variant="outline" size="sm" className="hidden sm:inline-flex">
-              <Edit className="w-4 h-4 mr-2" />
-              Edit Trip Info
-            </Button>
+            {role !== 'Driver' && (
+              <Button onClick={onEdit} variant="outline" size="sm" className="hidden sm:inline-flex">
+                <Edit className="w-4 h-4 mr-2" />
+                Edit Trip Info
+              </Button>
+            )}
             <button
               onClick={onClose}
               className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
@@ -1051,10 +1053,12 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
               <Button variant="outline" onClick={onClose} className="w-full sm:w-auto justify-center">
                 Close
               </Button>
-              <Button variant="primary" onClick={onEdit} className="w-full sm:w-auto justify-center">
-                <Edit className="w-4 h-4 mr-2" />
-                Edit Trip Details
-              </Button>
+              {role !== 'Driver' && (
+                <Button variant="primary" onClick={onEdit} className="w-full sm:w-auto justify-center">
+                  <Edit className="w-4 h-4 mr-2" />
+                  Edit Trip Details
+                </Button>
+              )}
             </div>
           </div>
         </div>

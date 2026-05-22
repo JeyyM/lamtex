@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Badge } from '@/src/components/ui/Badge';
 import { Loader2, Printer, Truck, User, Package, History, Phone, Mail } from 'lucide-react';
@@ -379,7 +379,12 @@ export function OrderCustomerViewPage() {
                 <>
                   {s.agent.name}
                   {s.agent.phone ? ` (${s.agent.phone})` : ''}
-                  {s.agent.email ? ` Â· ${s.agent.email}` : ''}
+                  {s.agent.email ? (
+                    <>
+                      {' \u00B7 '}
+                      {s.agent.email}
+                    </>
+                  ) : null}
                   {' or '}
                 </>
               ) : null}

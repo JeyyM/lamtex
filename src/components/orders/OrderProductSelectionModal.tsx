@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useAppContext } from '@/src/store/AppContext';
+import { scopedProductIdList } from '@/src/lib/warehouseScope';
 import { Button } from '@/src/components/ui/Button';
 import { supabase } from '@/src/lib/supabase';
 import { getVariantIdsWithStockAtBothBranches } from '@/src/lib/interBranchRequest';
@@ -56,11 +57,14 @@ function mapRowsToProducts(
   productsData: any[],
   stockMap: Record<string, number>,
 ): DBProduct[] {
-  return productsData.map((p: any) => ({
-    id: p.id,
-    name: p.name,
-    image_url: p.image_url ?? null,
-    variants: (p.product_variants ?? []).map((v: any) => ({
+  return productsData
+    .map((p: any) => ({
+      id: p.id,
+      name: p.name,
+      image_url: p.image_url ?? null,
+      variants: (p.product_variants ?? [])
+        .filter((v: any) => v.is_hidden !== true)
+        .map((v: any) => ({
       id: v.id,
       sku: v.sku ?? '',
       size: v.size,
@@ -78,8 +82,9 @@ function mapRowsToProducts(
           max_qty: d.max_qty,
           discount_percent: Number(d.discount_percent),
         })),
-    })),
-  }));
+        })),
+    }))
+    .filter((p) => p.variants.length > 0);
 }
 
 /** Branch stock level for production signals (re-stocking / priority). */
@@ -239,7 +244,7 @@ export interface OrderProductSelectionConfirm {
 }
 
 const VARIANT_SELECT = `
-  id, sku, size, description, unit_price, total_stock, reorder_point,
+  id, sku, size, description, unit_price, total_stock, reorder_point, is_hidden,
   weight_kg, length_m, volume_cbm,
   product_bulk_discounts(min_qty, max_qty, discount_percent, is_active)
 `;
@@ -286,7 +291,8 @@ export function OrderProductSelectionModal({
   initialEdit = null,
   confirmBusy = false,
 }: OrderProductSelectionModalProps) {
-  const { branch } = useAppContext();
+  const { branch, warehouseScope } = useAppContext();
+  const scopedProductIds = scopedProductIdList(warehouseScope);
   const navbarBranch = (branch ?? '').trim();
 
   const useDualBranchFilter = Boolean(
@@ -532,14 +538,25 @@ export function OrderProductSelectionModal({
       }
       const { data } = await cq.order('sort_order');
       if (!cancelled) {
-        setCategories(data ?? []);
+        let rows = data ?? [];
+        if (scopedProductIds && scopedProductIds.length > 0 && scopedProductIds[0] !== '00000000-0000-0000-0000-000000000000') {
+          const { data: scopedRows } = await supabase
+            .from('products')
+            .select('category_id')
+            .in('id', scopedProductIds);
+          const allowed = new Set((scopedRows ?? []).map(r => r.category_id).filter(Boolean));
+          rows = rows.filter(c => allowed.has(c.id));
+        } else if (scopedProductIds) {
+          rows = [];
+        }
+        setCategories(rows);
         setCategoriesLoading(false);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [open, navbarBranch]);
+  }, [open, navbarBranch, scopedProductIds?.join('|') ?? '']);
 
   const applyDualVariantFilter = useCallback(
     (list: DBProduct[]): DBProduct[] => {
@@ -569,6 +586,7 @@ export function OrderProductSelectionModal({
       if (navbarBranch) {
         pQuery = pQuery.or(`branch.eq.${navbarBranch},branch.is.null`);
       }
+      if (scopedProductIds) pQuery = pQuery.in('id', scopedProductIds);
       const { data: productsData } = await pQuery.order('name');
 
       if (!productsData) {
@@ -597,6 +615,7 @@ export function OrderProductSelectionModal({
       interBranchRequestingBranchId,
       interBranchFulfillingBranchId,
       navbarBranch,
+      scopedProductIds?.join('|') ?? '',
     ],
   );
 
@@ -624,6 +643,7 @@ export function OrderProductSelectionModal({
         if (navbarBranch) {
           searchQ = searchQ.or(`branch.eq.${navbarBranch},branch.is.null`);
         }
+        if (scopedProductIds) searchQ = searchQ.in('id', scopedProductIds);
         const { data: productsData } = await searchQ
           .ilike('name', `%${q}%`)
           .order('name')

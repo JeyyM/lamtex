@@ -1961,48 +1961,6 @@ export async function sendAgentCoachingNudge(input: {
 }
 
 // ---------------------------------------------------------------------------
-// CSV export (leaderboard)
-// ---------------------------------------------------------------------------
-
-export function rowsToCsv(rows: AgentLeaderboardRow[]): string {
-  const headers = [
-    'Agent',
-    'Branch',
-    'Revenue (paid)',
-    'Orders',
-    'AOV',
-    'Attainment %',
-    'Quota',
-    'Revenue Gap',
-    'Collection %',
-    'New Customers',
-    'Δ vs prev period %',
-  ];
-  const escape = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
-  const lines = [headers.join(',')];
-  for (const r of rows) {
-    lines.push(
-      [
-        r.agentName,
-        r.branchName ?? '',
-        r.revenue.toFixed(2),
-        r.orderCount,
-        r.averageOrderValue.toFixed(2),
-        r.attainmentPct.toFixed(1),
-        r.effectiveTarget.toFixed(2),
-        r.revenueGap.toFixed(2),
-        r.collectionRate.toFixed(1),
-        r.newCustomers,
-        r.revenueDeltaPct.toFixed(1),
-      ]
-        .map((x) => escape(String(x ?? '')))
-        .join(','),
-    );
-  }
-  return lines.join('\n');
-}
-
-// ---------------------------------------------------------------------------
 // Saved views (localStorage)
 // ---------------------------------------------------------------------------
 

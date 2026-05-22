@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
+import { scopedMaterialIdList, warehouseScopeEmptyMessage } from '@/src/lib/warehouseScope';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
@@ -19,11 +20,17 @@ import {
   Users,
   Edit,
   Loader2,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { getAllRawMaterials } from '@/src/mock/rawMaterials';
 import type { MaterialCategory, MaterialStatus, StockOutRisk } from '@/src/types/materials';
 import AddMaterialCategoryModal, { MaterialCategoryFormData } from '@/src/components/materials/AddMaterialCategoryModal';
 import { supabase } from '@/src/lib/supabase';
+import {
+  downloadRawMaterialsWorkbook,
+  fetchRawMaterialsCatalogForExport,
+} from '@/src/lib/rawMaterialsExport';
 
 // Import raw material images (local fallbacks)
 import whitePelletsImg from '@/src/assets/raw-materials/White Pellets.webp';
@@ -66,7 +73,8 @@ export function RawMaterialsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('All');
   const [riskFilter, setRiskFilter] = useState<string>('All');
-  const { role, branch } = useAppContext();
+  const { role, branch, addAuditLog, warehouseScope, warehouseScopeLoading } = useAppContext();
+  const scopedMaterialIds = scopedMaterialIdList(warehouseScope);
   
   // Modal states
   const [showAddCategoryModal, setShowAddCategoryModal] = useState(false);
@@ -81,7 +89,7 @@ export function RawMaterialsPage() {
   const [categoriesError, setCategoriesError] = useState<string | null>(null);
 
   // Live material counts per category from Supabase
-  interface MaterialCountRow { category_id: string; status: string; }
+  interface MaterialCountRow { id: string; category_id: string; status: string; }
   const [materialCounts, setMaterialCounts] = useState<MaterialCountRow[]>([]);
 
   // Live summary stats from Supabase (branch-aware)
@@ -111,6 +119,8 @@ export function RawMaterialsPage() {
   }
   const [dbAlertMaterials, setDbAlertMaterials] = useState<AlertMaterial[]>([]);
   const [alertsLoading, setAlertsLoading] = useState(true);
+  const [stockAlertsExpanded, setStockAlertsExpanded] = useState(true);
+  const [exportingMaterials, setExportingMaterials] = useState(false);
 
   const allMaterials = getAllRawMaterials();
 
@@ -127,7 +137,7 @@ export function RawMaterialsPage() {
         .order('sort_order', { ascending: true }),
       supabase
         .from('raw_materials')
-        .select('category_id, status'),
+        .select('id, category_id, status'),
     ]);
 
     if (catResult.error) {
@@ -138,7 +148,12 @@ export function RawMaterialsPage() {
     }
 
     if (!countResult.error) {
-      setMaterialCounts(countResult.data ?? []);
+      let rows = (countResult.data ?? []) as MaterialCountRow[];
+      if (scopedMaterialIds) {
+        const allowed = new Set(scopedMaterialIds);
+        rows = rows.filter(row => allowed.has(row.id));
+      }
+      setMaterialCounts(rows);
     }
 
     setCategoriesLoading(false);
@@ -159,10 +174,12 @@ export function RawMaterialsPage() {
       return;
     }
 
-    const { data, error } = await supabase
+    let q = supabase
       .from('raw_materials')
-      .select('total_stock, cost_per_unit, reorder_point, status, category_id')
+      .select('id, total_stock, cost_per_unit, reorder_point, status, category_id')
       .in('category_id', branchCategoryIds);
+    if (scopedMaterialIds) q = q.in('id', scopedMaterialIds);
+    const { data, error } = await q;
 
     if (error || !data) {
       setSummaryLoading(false);
@@ -192,10 +209,12 @@ export function RawMaterialsPage() {
       return;
     }
 
-    const { data, error } = await supabase
+    let q = supabase
       .from('raw_materials')
       .select('id, name, total_stock, reorder_point, monthly_consumption, status')
       .in('category_id', branchCategoryIds);
+    if (scopedMaterialIds) q = q.in('id', scopedMaterialIds);
+    const { data, error } = await q;
 
     if (error || !data) {
       setAlertsLoading(false);
@@ -223,19 +242,28 @@ export function RawMaterialsPage() {
   };
 
   useEffect(() => {
-    fetchCategories();
-  }, []);
+    void fetchCategories();
+  }, [scopedMaterialIds?.join('|') ?? '']);
 
   useEffect(() => {
     if (branch) {
-      fetchSummaryStats(branch, categories);
-      fetchAlertMaterials(branch, categories);
+      void fetchSummaryStats(branch, categories);
+      void fetchAlertMaterials(branch, categories);
     }
-  }, [branch, categories]);
+  }, [branch, categories, scopedMaterialIds?.join('|') ?? '']);
 
-  const visibleCategories = branch
-    ? categories.filter(c => c.branches?.name === branch)
-    : categories;
+  const scopedCategoryIds = useMemo(() => {
+    if (!scopedMaterialIds) return null;
+    return new Set(materialCounts.map(m => m.category_id));
+  }, [materialCounts, scopedMaterialIds]);
+
+  const visibleCategories = useMemo(() => {
+    let cats = branch ? categories.filter(c => c.branches?.name === branch) : categories;
+    if (scopedCategoryIds) {
+      cats = cats.filter(c => scopedCategoryIds.has(c.id));
+    }
+    return cats;
+  }, [branch, categories, scopedCategoryIds]);
 
   // Resolve image: use image_url from DB if set, otherwise fall back to local asset map
   const getCategoryImage = (cat: MaterialCategoryRow): string => {
@@ -451,10 +479,38 @@ export function RawMaterialsPage() {
           <p className="text-sm text-gray-500 mt-1">Browse materials by category</p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <Button variant="outline" onClick={() => {/* TODO: Export materials data */}} className="flex-1 sm:flex-none">
-            <Download className="w-4 h-4 mr-2" />
-            <span className="hidden sm:inline">Export</span>
-            <span className="sm:hidden">Export</span>
+          <Button
+            variant="outline"
+            className="flex-1 sm:flex-none"
+            disabled={exportingMaterials || categoriesLoading || !branch}
+            onClick={async () => {
+              if (exportingMaterials || categoriesLoading || !branch) return;
+              setExportingMaterials(true);
+              try {
+                const exported = await fetchRawMaterialsCatalogForExport(branch);
+                await downloadRawMaterialsWorkbook(
+                  exported.branch,
+                  exported.categories,
+                  exported.materials,
+                );
+                addAuditLog(
+                  'Exported raw materials workbook',
+                  'Raw Materials',
+                  `${exported.categories.length} categories, ${exported.materials.length} materials (${branch})`,
+                );
+              } catch (e) {
+                window.alert(e instanceof Error ? e.message : 'Export failed.');
+              } finally {
+                setExportingMaterials(false);
+              }
+            }}
+          >
+            {exportingMaterials ? (
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" aria-hidden />
+            ) : (
+              <Download className="w-4 h-4 mr-2" />
+            )}
+            {exportingMaterials ? 'Exporting…' : 'Export'}
           </Button>
 
           <Button variant="outline" onClick={() => navigate('/purchase-orders')} className="flex-1 sm:flex-none">
@@ -552,28 +608,41 @@ export function RawMaterialsPage() {
             </Card>
           ) : (criticalAlerts.length > 0 || warningAlerts.length > 0) && (
             <Card className="border-l-4 border-l-orange-500 shadow-sm">
-              <CardHeader className="pb-3">
-                <CardTitle className="flex items-center gap-2 text-lg">
-                  <AlertTriangle className="w-5 h-5 text-orange-600" />
-                  Stock Alerts
-                  <Badge variant="danger" className="ml-2">
-                    {criticalAlerts.length + warningAlerts.length}
-                  </Badge>
-                </CardTitle>
+              <CardHeader className={stockAlertsExpanded ? 'pb-3' : 'pb-6'}>
+                <button
+                  type="button"
+                  onClick={() => setStockAlertsExpanded((v) => !v)}
+                  className="w-full flex items-center justify-between gap-3 text-left"
+                  aria-expanded={stockAlertsExpanded}
+                >
+                  <CardTitle className="flex items-center gap-2 text-lg">
+                    <AlertTriangle className="w-5 h-5 text-orange-600" />
+                    Stock Alerts
+                    <Badge variant="danger" className="ml-2">
+                      {criticalAlerts.length + warningAlerts.length}
+                    </Badge>
+                  </CardTitle>
+                  {stockAlertsExpanded ? (
+                    <ChevronUp className="w-5 h-5 text-gray-400 shrink-0" aria-hidden />
+                  ) : (
+                    <ChevronDown className="w-5 h-5 text-gray-400 shrink-0" aria-hidden />
+                  )}
+                </button>
               </CardHeader>
+              {stockAlertsExpanded && (
               <CardContent>
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  {/* Critical Alerts Column */}
+                <div className="space-y-6">
+                  {/* Critical Alerts */}
                   {criticalAlerts.length > 0 && (
                     <div className="space-y-3">
-                      <div className="flex items-center gap-2 mb-3">
-                        <div className="h-2 w-2 rounded-full bg-red-500"></div>
+                      <div className="flex items-center gap-2">
+                        <div className="h-2 w-2 rounded-full bg-red-500" />
                         <h4 className="text-sm font-semibold text-red-700 uppercase tracking-wide">
                           Critical ({criticalAlerts.length})
                         </h4>
                       </div>
-                      <div className="space-y-2">
-                        {criticalAlerts.slice(0, 3).map((m) => (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {criticalAlerts.map((m) => (
                           <div
                             key={m.id}
                             className="border border-red-200 rounded-lg p-3 bg-red-50 hover:bg-red-100 transition-colors"
@@ -587,14 +656,14 @@ export function RawMaterialsPage() {
                                   ⚠ {isFinite(m.daysOfCover) ? `${m.daysOfCover.toFixed(1)} days remaining` : `${m.total_stock} units · no consumption data`}
                                 </p>
                               </div>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => navigate(`/materials/${m.id}`)}
-                                className="flex-shrink-0 text-xs"
+                              <Link
+                                to={`/materials/${m.id}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex-shrink-0 text-xs inline-flex items-center justify-center h-8 px-3 rounded-md border border-gray-300 bg-white hover:bg-gray-50 font-medium text-gray-700"
                               >
                                 View
-                              </Button>
+                              </Link>
                             </div>
                           </div>
                         ))}
@@ -602,17 +671,17 @@ export function RawMaterialsPage() {
                     </div>
                   )}
 
-                  {/* Warning Alerts Column */}
+                  {/* Warning Alerts */}
                   {warningAlerts.length > 0 && (
                     <div className="space-y-3">
-                      <div className="flex items-center gap-2 mb-3">
-                        <div className="h-2 w-2 rounded-full bg-yellow-500"></div>
+                      <div className="flex items-center gap-2">
+                        <div className="h-2 w-2 rounded-full bg-yellow-500" />
                         <h4 className="text-sm font-semibold text-yellow-700 uppercase tracking-wide">
                           Warning ({warningAlerts.length})
                         </h4>
                       </div>
-                      <div className="space-y-2">
-                        {warningAlerts.slice(0, 3).map((m) => (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {warningAlerts.map((m) => (
                           <div
                             key={m.id}
                             className="border border-yellow-200 rounded-lg p-3 bg-yellow-50 hover:bg-yellow-100 transition-colors"
@@ -626,14 +695,14 @@ export function RawMaterialsPage() {
                                   {isFinite(m.daysOfCover) ? `${m.daysOfCover.toFixed(1)} days remaining` : `${m.total_stock} units · no consumption data`}
                                 </p>
                               </div>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => navigate(`/materials/${m.id}`)}
-                                className="flex-shrink-0 text-xs"
+                              <Link
+                                to={`/materials/${m.id}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex-shrink-0 text-xs inline-flex items-center justify-center h-8 px-3 rounded-md border border-gray-300 bg-white hover:bg-gray-50 font-medium text-gray-700"
                               >
                                 Review
-                              </Button>
+                              </Link>
                             </div>
                           </div>
                         ))}
@@ -642,6 +711,7 @@ export function RawMaterialsPage() {
                   )}
                 </div>
               </CardContent>
+              )}
             </Card>
           )}
 

@@ -266,6 +266,21 @@ export type CustomerPortfolioRow = {
   lastOrderDate: string | null;
 };
 
+/** Orders attributed to a sales agent (`orders.agent_id`). */
+export type EmployeeAgentOrderRow = {
+  id: string;
+  orderNumber: string;
+  customerId: string | null;
+  customerName: string | null;
+  orderDate: string | null;
+  requiredDate: string | null;
+  status: string;
+  paymentStatus: string;
+  totalAmount: number;
+  amountPaid: number;
+  balanceDue: number;
+};
+
 export type EmployeeFullProfile = {
   personal: EmployeePersonalFull | null;
   contact: EmployeeContactFull | null;
@@ -636,7 +651,7 @@ async function fetchCrossModuleLogsPerformedBy(performedBy: string[]): Promise<{
     return { orderLogs: [], poLogs: [], ibrLogs: [], prLogs: [], productLogs: [], materialLogs: [] };
   }
   const selOrder = `id, order_id, action, description, timestamp, orders(order_number, branches(name))`;
-  const selPo = `id, order_id, action, description, created_at, purchase_orders(po_number, branches(name))`;
+  const selPo = `id, order_id, action, description, created_at, purchase_orders(po_number, branches:branches!branch_id(name))`;
   const selIbr = `id, action, description, created_at, inter_branch_requests(ibr_number)`;
   const selPr = `id, action, description, created_at`;
   const selProd = `id, action, description, created_at, products(name)`;
@@ -960,6 +975,174 @@ function buildCustomerPortfolio(
   }
 
   return rows;
+}
+
+export async function fetchAgentOrders(agentEmployeeId: string): Promise<EmployeeAgentOrderRow[]> {
+  const id = agentEmployeeId.trim();
+  if (!id) return [];
+
+  const { data, error } = await supabase
+    .from('orders')
+    .select(
+      'id, order_number, customer_id, customer_name, order_date, required_date, status, payment_status, total_amount, amount_paid, balance_due, created_at',
+    )
+    .eq('agent_id', id)
+    .order('order_date', { ascending: false })
+    .order('created_at', { ascending: false });
+
+  if (error) throw new Error(error.message);
+
+  return ((data ?? []) as Array<Record<string, unknown>>).map(row => ({
+    id: String(row.id),
+    orderNumber: row.order_number != null ? String(row.order_number) : String(row.id),
+    customerId: row.customer_id != null ? String(row.customer_id) : null,
+    customerName: row.customer_name != null ? String(row.customer_name) : null,
+    orderDate: row.order_date != null ? String(row.order_date) : null,
+    requiredDate: row.required_date != null ? String(row.required_date) : null,
+    status: row.status != null ? String(row.status) : '—',
+    paymentStatus: row.payment_status != null ? String(row.payment_status) : '—',
+    totalAmount: Number(row.total_amount) || 0,
+    amountPaid: Number(row.amount_paid) || 0,
+    balanceDue: Number(row.balance_due) || 0,
+  }));
+}
+
+export type EmployeeProductionRequestRow = {
+  id: string;
+  prNumber: string;
+  requestDate: string | null;
+  expectedCompletionDate: string | null;
+  status: string;
+  branchName: string | null;
+  itemCount: number;
+};
+
+export type EmployeePurchaseOrderRow = {
+  id: string;
+  poNumber: string;
+  orderDate: string | null;
+  expectedDeliveryDate: string | null;
+  status: string;
+  paymentStatus: string;
+  totalAmount: number;
+  supplierName: string | null;
+  branchName: string | null;
+  itemCount: number;
+};
+
+export type EmployeeWarehouseRequestsBundle = {
+  productionRequests: EmployeeProductionRequestRow[];
+  purchaseOrders: EmployeePurchaseOrderRow[];
+};
+
+function nestedRecordName(parent: unknown): string | null {
+  if (!parent || typeof parent !== 'object') return null;
+  const row = parent as Record<string, unknown>;
+  const name = row.name;
+  return name != null && String(name).trim() ? String(name).trim() : null;
+}
+
+function isIbrFlowProductionRequest(prNumber: string, interBranchRequestId: string | null): boolean {
+  return interBranchRequestId != null || prNumber.startsWith('PR-IBR-');
+}
+
+function hideFromMainPurchaseOrderList(
+  poNumber: string,
+  interBranchRequestId: string | null,
+  isTransferRequest: boolean,
+): boolean {
+  return interBranchRequestId != null || poNumber.startsWith('PO-IBR-') || isTransferRequest;
+}
+
+async function resolveCreatedByMatchers(employeeUuid: string): Promise<string[]> {
+  const { data, error } = await supabase
+    .from('employees')
+    .select('employee_name, email')
+    .eq('id', employeeUuid.trim())
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return performedByMatchList(
+    (data?.employee_name as string | null | undefined) ?? null,
+    (data?.email as string | null | undefined) ?? null,
+  );
+}
+
+export async function fetchWarehouseManagerRequests(
+  employeeUuid: string,
+): Promise<EmployeeWarehouseRequestsBundle> {
+  const id = employeeUuid.trim();
+  if (!id) return { productionRequests: [], purchaseOrders: [] };
+
+  const matchers = await resolveCreatedByMatchers(id);
+  if (matchers.length === 0) return { productionRequests: [], purchaseOrders: [] };
+
+  const [prRes, poRes] = await Promise.all([
+    supabase
+      .from('production_requests')
+      .select(
+        'id, pr_number, status, request_date, expected_completion_date, created_at, inter_branch_request_id, branches:branches!branch_id(name), production_request_items(id)',
+      )
+      .in('created_by', matchers)
+      .order('request_date', { ascending: false })
+      .order('created_at', { ascending: false }),
+    supabase
+      .from('purchase_orders')
+      .select(
+        'id, po_number, status, order_date, expected_delivery_date, total_amount, payment_status, created_at, is_transfer_request, inter_branch_request_id, suppliers(name), branches:branches!branch_id(name), purchase_order_items(id)',
+      )
+      .in('created_by', matchers)
+      .order('order_date', { ascending: false })
+      .order('created_at', { ascending: false }),
+  ]);
+
+  if (prRes.error) throw new Error(prRes.error.message);
+  if (poRes.error) throw new Error(poRes.error.message);
+
+  const productionRequests = ((prRes.data ?? []) as Array<Record<string, unknown>>)
+    .map(row => {
+      const prNumber = row.pr_number != null ? String(row.pr_number) : String(row.id);
+      const interBranchRequestId = row.inter_branch_request_id != null ? String(row.inter_branch_request_id) : null;
+      if (isIbrFlowProductionRequest(prNumber, interBranchRequestId)) return null;
+      const items = row.production_request_items;
+      const itemCount = Array.isArray(items) ? items.length : 0;
+      return {
+        id: String(row.id),
+        prNumber,
+        requestDate: row.request_date != null ? String(row.request_date) : null,
+        expectedCompletionDate:
+          row.expected_completion_date != null ? String(row.expected_completion_date) : null,
+        status: row.status != null ? String(row.status) : '—',
+        branchName: nestedRecordName(row.branches),
+        itemCount,
+      } satisfies EmployeeProductionRequestRow;
+    })
+    .filter((row): row is EmployeeProductionRequestRow => row != null);
+
+  const purchaseOrders = ((poRes.data ?? []) as Array<Record<string, unknown>>)
+    .map(row => {
+      const poNumber = row.po_number != null ? String(row.po_number) : String(row.id);
+      const interBranchRequestId = row.inter_branch_request_id != null ? String(row.inter_branch_request_id) : null;
+      const isTransferRequest = row.is_transfer_request === true;
+      if (hideFromMainPurchaseOrderList(poNumber, interBranchRequestId, isTransferRequest)) return null;
+      const items = row.purchase_order_items;
+      const itemCount = Array.isArray(items) ? items.length : 0;
+      return {
+        id: String(row.id),
+        poNumber,
+        orderDate: row.order_date != null ? String(row.order_date) : null,
+        expectedDeliveryDate:
+          row.expected_delivery_date != null ? String(row.expected_delivery_date) : null,
+        status: row.status != null ? String(row.status) : '—',
+        paymentStatus: row.payment_status != null ? String(row.payment_status) : '—',
+        totalAmount: Number(row.total_amount) || 0,
+        supplierName: nestedRecordName(row.suppliers),
+        branchName: nestedRecordName(row.branches),
+        itemCount,
+      } satisfies EmployeePurchaseOrderRow;
+    })
+    .filter((row): row is EmployeePurchaseOrderRow => row != null);
+
+  return { productionRequests, purchaseOrders };
 }
 
 export async function fetchEmployeeFullProfile(employeeUuid: string): Promise<EmployeeFullProfile> {

@@ -4,7 +4,6 @@ import {
   ArrowUp,
   ArrowDown,
   Minus,
-  Download,
   ArrowUpDown,
 } from 'lucide-react';
 import {
@@ -13,7 +12,6 @@ import {
   formatCurrencyShort,
   formatNumber,
   formatPercent,
-  rowsToCsv,
 } from '@/src/lib/agentAnalytics';
 
 type SortField =
@@ -100,16 +98,6 @@ export function AgentLeaderboard({ rows, title = 'Leaderboard' }: Props) {
     }
   };
 
-  const downloadCsv = () => {
-    const blob = new Blob([rowsToCsv(sorted)], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `agent-leaderboard-${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
   const SortHeader = ({
     label,
     field,
@@ -142,23 +130,14 @@ export function AgentLeaderboard({ rows, title = 'Leaderboard' }: Props) {
       <div className="px-4 py-3 border-b border-gray-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
         <h3 className="text-sm font-semibold text-gray-900">{title}</h3>
       </div>
-      <div className="p-3 sm:p-4 border-b border-gray-200 flex flex-col sm:flex-row gap-3 sm:items-center">
-        <div className="flex-1 min-w-0">
-          <input
-            type="text"
-            placeholder="Search agents…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          />
-        </div>
-        <button
-          type="button"
-          onClick={downloadCsv}
-          className="shrink-0 inline-flex items-center justify-center gap-1 px-3 py-2 text-xs rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 sm:h-[38px]"
-        >
-          <Download className="w-3 h-3" /> CSV
-        </button>
+      <div className="p-3 sm:p-4 border-b border-gray-200">
+        <input
+          type="text"
+          placeholder="Search agents…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+        />
       </div>
 
       <div className="overflow-x-auto">

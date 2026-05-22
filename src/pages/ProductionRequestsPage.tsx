@@ -9,6 +9,19 @@ import { supabase } from '@/src/lib/supabase';
 import { createDraftProductionRequest, prLogRoleMap } from '@/src/lib/productionRequestDraft';
 import { isPrExpectedOverdue } from '@/src/lib/prOverdue';
 import {
+  DATE_PERIOD_OPTIONS,
+  inDatePeriodRange,
+  periodTriggerLabel,
+  resolveDatePeriodQuery,
+  todayIsoLocal,
+  type DatePeriodKind,
+} from '@/src/lib/datePeriodQuery';
+import {
+  downloadProductionRequestsWorkbook,
+  fetchProductionRequestLinesForExport,
+  type ProductionRequestHeaderExportRow,
+} from '@/src/lib/productionRequestsExport';
+import {
   Search,
   Plus,
   Factory,
@@ -26,6 +39,9 @@ import {
   Ban,
   FileText,
   ArrowRightLeft,
+  CalendarRange,
+  Download,
+  X,
 } from 'lucide-react';
 
 export type PRStatus = 'Draft' | 'Requested' | 'Rejected' | 'Accepted' | 'In Progress' | 'Completed' | 'Cancelled';
@@ -78,7 +94,7 @@ const getPRStatusIcon = (status: PRStatus) => {
 };
 
 export function ProductionRequestsPage() {
-  const { branch, employeeName, role, session } = useAppContext();
+  const { branch, employeeName, role, session, addAuditLog } = useAppContext();
   const navigate = useNavigate();
 
   const [rows, setRows] = useState<PRRow[]>([]);
@@ -91,6 +107,15 @@ export function ProductionRequestsPage() {
   const [prSortKey, setPrSortKey] = useState<string>('request_date');
   const [prSortDir, setPrSortDir] = useState<'asc' | 'desc'>('desc');
   const [tablePage, setTablePage] = useState(1);
+
+  const [exportPeriodKind, setExportPeriodKind] = useState<DatePeriodKind>('month');
+  const [exportCustomStart, setExportCustomStart] = useState('');
+  const [exportCustomEnd, setExportCustomEnd] = useState('');
+  const [exportPeriodModalOpen, setExportPeriodModalOpen] = useState(false);
+  const [draftExportPeriodKind, setDraftExportPeriodKind] = useState<DatePeriodKind>('month');
+  const [draftExportCustomStart, setDraftExportCustomStart] = useState('');
+  const [draftExportCustomEnd, setDraftExportCustomEnd] = useState('');
+  const [exportingRequests, setExportingRequests] = useState(false);
 
   const fetchRows = useCallback(async () => {
     setLoading(true);
@@ -123,6 +148,65 @@ export function ProductionRequestsPage() {
     void fetchRows();
   }, [fetchRows]);
 
+  const exportQueryDates = useMemo(
+    () => resolveDatePeriodQuery(exportPeriodKind, exportCustomStart, exportCustomEnd),
+    [exportPeriodKind, exportCustomStart, exportCustomEnd],
+  );
+
+  const maxExportCustomDate = useMemo(() => todayIsoLocal(), []);
+
+  const draftExportCustomInvalid = Boolean(
+    draftExportCustomStart && draftExportCustomEnd && draftExportCustomStart > draftExportCustomEnd,
+  );
+
+  const openExportPeriodModal = () => {
+    setDraftExportPeriodKind(exportPeriodKind);
+    setDraftExportCustomStart(exportCustomStart);
+    setDraftExportCustomEnd(exportCustomEnd);
+    setExportPeriodModalOpen(true);
+  };
+
+  const handleExportPeriodChange = (kind: DatePeriodKind) => {
+    setExportPeriodKind(kind);
+    if (kind === 'custom') {
+      const t = new Date();
+      const iso = todayIsoLocal();
+      const start = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-01`;
+      setExportCustomStart(start);
+      setExportCustomEnd(iso);
+    }
+  };
+
+  const handleExportModalPresetPick = (kind: DatePeriodKind) => {
+    if (kind !== 'custom') {
+      handleExportPeriodChange(kind);
+      setExportPeriodModalOpen(false);
+      return;
+    }
+    setDraftExportPeriodKind('custom');
+    const t = new Date();
+    const iso = todayIsoLocal();
+    const start = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-01`;
+    setDraftExportCustomStart((prev) => prev || exportCustomStart || start);
+    setDraftExportCustomEnd((prev) => prev || exportCustomEnd || iso);
+  };
+
+  const applyExportModalCustomRange = () => {
+    setExportPeriodKind('custom');
+    setExportCustomStart(draftExportCustomStart);
+    setExportCustomEnd(draftExportCustomEnd);
+    setExportPeriodModalOpen(false);
+  };
+
+  useEffect(() => {
+    if (!exportPeriodModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setExportPeriodModalOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [exportPeriodModalOpen]);
+
   useEffect(() => {
     setStatusFilter('');
   }, [branch]);
@@ -134,12 +218,19 @@ export function ProductionRequestsPage() {
     [branchFiltered],
   );
 
-  const distinctStatuses = useMemo((): string[] => {
-    const s = new Set<string>(prRowsExcludingIbr.map((r) => String(r.status)).filter(Boolean));
-    return Array.from(s).sort((a, b) => a.localeCompare(b));
-  }, [prRowsExcludingIbr]);
+  const dateFilteredProductionRequests = useMemo(() => {
+    if (exportQueryDates.invalid) return prRowsExcludingIbr;
+    return prRowsExcludingIbr.filter((r) =>
+      inDatePeriodRange(r.request_date, exportQueryDates.from, exportQueryDates.to),
+    );
+  }, [prRowsExcludingIbr, exportQueryDates]);
 
-  const filtered = prRowsExcludingIbr.filter((r) => {
+  const distinctStatuses = useMemo((): string[] => {
+    const s = new Set<string>(dateFilteredProductionRequests.map((r) => String(r.status)).filter(Boolean));
+    return Array.from(s).sort((a, b) => a.localeCompare(b));
+  }, [dateFilteredProductionRequests]);
+
+  const filtered = dateFilteredProductionRequests.filter((r) => {
     const q = searchQuery.toLowerCase();
     const matchesSearch =
       r.pr_number.toLowerCase().includes(q) ||
@@ -223,13 +314,13 @@ export function ProductionRequestsPage() {
 
   useEffect(() => {
     setTablePage(1);
-  }, [searchQuery, statusFilter, resolvedBranchId]);
+  }, [searchQuery, statusFilter, resolvedBranchId, exportPeriodKind, exportCustomStart, exportCustomEnd]);
 
-  const totalPRs = prRowsExcludingIbr.length;
-  const drafts = prRowsExcludingIbr.filter((r) => r.status === 'Draft').length;
-  const awaiting = prRowsExcludingIbr.filter((r) => r.status === 'Requested').length;
-  const inProgress = prRowsExcludingIbr.filter((r) => r.status === 'In Progress').length;
-  const completed = prRowsExcludingIbr.filter((r) => r.status === 'Completed').length;
+  const totalPRs = dateFilteredProductionRequests.length;
+  const drafts = dateFilteredProductionRequests.filter((r) => r.status === 'Draft').length;
+  const awaiting = dateFilteredProductionRequests.filter((r) => r.status === 'Requested').length;
+  const inProgress = dateFilteredProductionRequests.filter((r) => r.status === 'In Progress').length;
+  const completed = dateFilteredProductionRequests.filter((r) => r.status === 'Completed').length;
 
   const handleNewPR = async () => {
     setCreating(true);
@@ -282,7 +373,6 @@ export function ProductionRequestsPage() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Production Requests</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Inter-branch “send” PRs are managed from Inter-branch requests, not this list.</p>
         </div>
         <div className="flex flex-col sm:flex-row flex-wrap gap-2 w-full sm:w-auto">
           <Button
@@ -397,7 +487,72 @@ export function ProductionRequestsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Production Requests — {filtered.length} result{filtered.length !== 1 ? 's' : ''}</CardTitle>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <CardTitle>
+              Production Requests — {filtered.length} result{filtered.length !== 1 ? 's' : ''}
+            </CardTitle>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                className="gap-2 border-gray-300 bg-white max-w-[18rem]"
+                aria-haspopup="dialog"
+                aria-expanded={exportPeriodModalOpen}
+                aria-label="Choose export period"
+                onClick={openExportPeriodModal}
+              >
+                <CalendarRange className="w-4 h-4 shrink-0 text-gray-600" aria-hidden />
+                <span className="truncate text-left text-sm font-normal">
+                  {periodTriggerLabel(exportPeriodKind, exportCustomStart, exportCustomEnd)}
+                </span>
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="gap-2 border-gray-300 bg-white"
+                disabled={exportingRequests || loading || exportQueryDates.invalid}
+                onClick={async () => {
+                  if (exportingRequests || loading || exportQueryDates.invalid) return;
+                  if (filtered.length === 0) {
+                    window.alert('No production requests match the current filters and date range.');
+                    return;
+                  }
+                  setExportingRequests(true);
+                  try {
+                    const headerRows: ProductionRequestHeaderExportRow[] = filtered.map((r) => ({
+                      pr_number: r.pr_number,
+                      request_date: r.request_date.slice(0, 10),
+                      branch: r.branches?.name ?? '',
+                      line_count: r.production_request_items.length,
+                      expected_completion_date: r.expected_completion_date
+                        ? r.expected_completion_date.slice(0, 10)
+                        : '',
+                      status: r.status,
+                      created_by: r.created_by ?? '',
+                    }));
+                    const lines = await fetchProductionRequestLinesForExport(filtered.map((r) => r.id));
+                    await downloadProductionRequestsWorkbook(branch ?? 'All branches', headerRows, lines);
+                    addAuditLog(
+                      'Exported production requests workbook',
+                      'Production',
+                      `${filtered.length} requests · ${exportQueryDates.displayLabel}`,
+                    );
+                  } catch (e) {
+                    window.alert(e instanceof Error ? e.message : 'Export failed.');
+                  } finally {
+                    setExportingRequests(false);
+                  }
+                }}
+              >
+                {exportingRequests ? (
+                  <Loader2 className="w-4 h-4 animate-spin" aria-hidden />
+                ) : (
+                  <Download className="w-4 h-4" aria-hidden />
+                )}
+                {exportingRequests ? 'Exporting…' : 'Export'}
+              </Button>
+            </div>
+          </div>
         </CardHeader>
         <CardContent className="p-0">
           {filtered.length === 0 ? (
@@ -586,6 +741,102 @@ export function ProductionRequestsPage() {
         </CardContent>
       </Card>
 
+      {exportPeriodModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40"
+          role="presentation"
+          onClick={() => setExportPeriodModalOpen(false)}
+        >
+          <div
+            className="bg-white w-full sm:max-w-lg sm:rounded-xl shadow-xl max-h-[90vh] overflow-y-auto"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="pr-export-period-modal-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-4 border-b border-gray-200 sticky top-0 bg-white z-10">
+              <h2 id="pr-export-period-modal-title" className="text-lg font-semibold text-gray-900">
+                Export period
+              </h2>
+              <button
+                type="button"
+                className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+                aria-label="Close"
+                onClick={() => setExportPeriodModalOpen(false)}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <p className="text-sm text-gray-600">
+                Choose a preset or custom range. The list, summary cards, and export all use this period. It stays the same when you switch branches.
+              </p>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {DATE_PERIOD_OPTIONS.map(({ kind, label }) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    onClick={() => handleExportModalPresetPick(kind)}
+                    className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
+                      draftExportPeriodKind === kind
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-white text-gray-800 border-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {draftExportPeriodKind === 'custom' && (
+                <div className="space-y-2 pt-1 border-t border-gray-100">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="text-xs font-medium text-gray-600 w-full sm:w-auto">From</label>
+                    <input
+                      type="date"
+                      value={draftExportCustomStart}
+                      max={maxExportCustomDate}
+                      onChange={(e) => setDraftExportCustomStart(e.target.value)}
+                      className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    />
+                    <label className="text-xs font-medium text-gray-600">To</label>
+                    <input
+                      type="date"
+                      value={draftExportCustomEnd}
+                      min={draftExportCustomStart || undefined}
+                      max={maxExportCustomDate}
+                      onChange={(e) => setDraftExportCustomEnd(e.target.value)}
+                      className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    />
+                  </div>
+                  {draftExportCustomInvalid && (
+                    <p className="text-xs text-red-600">Start must be on or before end.</p>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 p-4 border-t border-gray-200 bg-gray-50">
+              <Button
+                type="button"
+                variant="outline"
+                className="border-gray-300 bg-white"
+                onClick={() => setExportPeriodModalOpen(false)}
+              >
+                Cancel
+              </Button>
+              {draftExportPeriodKind === 'custom' && (
+                <Button
+                  type="button"
+                  variant="primary"
+                  disabled={draftExportCustomInvalid}
+                  onClick={applyExportModalCustomRange}
+                >
+                  Apply range
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

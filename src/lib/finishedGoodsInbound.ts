@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { computeStockStatus } from '@/src/lib/stockStatus';
+import { computePersistedStockStatus } from '@/src/lib/stockStatus';
 import { refreshParentProductStatus } from '@/src/lib/productAggregateStatus';
 
 /**
@@ -50,7 +50,7 @@ export async function addFinishedVariantUnitsAtBranch(
     (s, r) => s + (Number((r as { quantity: number }).quantity) || 0),
     0,
   );
-  const newStatus = computeStockStatus(sumTotal, reorderPoint);
+  const newStatus = computePersistedStockStatus(sumTotal, reorderPoint);
   const now = new Date().toISOString();
   const { error: varErr } = await supabase
     .from('product_variants')

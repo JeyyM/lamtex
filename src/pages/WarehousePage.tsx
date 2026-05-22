@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { Package, FileText, Truck, Calendar, History, Search, AlertTriangle, CheckCircle, X, Factory, ShoppingCart, Clock, TrendingUp, Activity, RefreshCw, GitBranch, Loader2, ArrowUp, ArrowDown, ArrowUpDown, ChevronLeft, ChevronRight, Camera, CheckCircle2, Box, DollarSign } from 'lucide-react';
+import { Package, FileText, Truck, Calendar, History, Search, AlertTriangle, CheckCircle, X, Factory, ShoppingCart, Clock, TrendingUp, Activity, RefreshCw, GitBranch, Loader2, ArrowUp, ArrowDown, ArrowUpDown, ChevronLeft, ChevronRight, Camera, CheckCircle2, Box, DollarSign, CalendarRange } from 'lucide-react';
 import { FulfillOrderModal, type FulfillmentData } from '@/src/components/orders/FulfillOrderModal';
 import { MarkInTransitModal } from '@/src/components/orders/MarkInTransitModal';
 import type { OrderLineItem } from '@/src/types/orders';
@@ -26,6 +26,7 @@ import { fetchFleetTrucksForBranch } from '@/src/lib/fleetTrucks';
 import { supabase } from '@/src/lib/supabase';
 import { deriveOrderDueDateForPersistence } from '@/src/lib/financeData';
 import { useAppContext } from '@/src/store/AppContext';
+import { scopedMaterialIdList, scopedProductIdList } from '@/src/lib/warehouseScope';
 import { computeStockStatus } from '@/src/lib/stockStatus';
 import { finishedGoodProductHref } from '@/src/lib/productRoutes';
 import {
@@ -46,6 +47,14 @@ import {
   type VariantInvolvedOrderRow,
   type MaterialUsageRow,
 } from '@/src/lib/warehouseMovementsData';
+import {
+  DATE_PERIOD_OPTIONS,
+  inDatePeriodRange,
+  periodTriggerLabel,
+  resolveDatePeriodQuery,
+  todayIsoLocal,
+  type DatePeriodKind,
+} from '@/src/lib/datePeriodQuery';
 
 type TabType = 'inventory' | 'requests' | 'orders' | 'movements';
 type StockStatus = 'healthy' | 'warning' | 'critical';
@@ -721,7 +730,9 @@ function stockComputeToUi(computed: string): StockStatus {
 
 export default function WarehousePage() {
   const navigate = useNavigate();
-  const { branch, addAuditLog, session, employeeName, role } = useAppContext();
+  const { branch, addAuditLog, session, employeeName, role, warehouseScope } = useAppContext();
+  const scopedProductIds = scopedProductIdList(warehouseScope);
+  const scopedMaterialIds = scopedMaterialIdList(warehouseScope);
   const [activeTab, setActiveTab] = useState<TabType>('inventory');
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
@@ -738,6 +749,13 @@ export default function WarehousePage() {
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [scheduleSearch, setScheduleSearch] = useState('');
   const [scheduleStatusFilter, setScheduleStatusFilter] = useState('');
+  const [schedulePeriodKind, setSchedulePeriodKind] = useState<DatePeriodKind>('month');
+  const [scheduleCustomStart, setScheduleCustomStart] = useState('');
+  const [scheduleCustomEnd, setScheduleCustomEnd] = useState('');
+  const [schedulePeriodModalOpen, setSchedulePeriodModalOpen] = useState(false);
+  const [draftSchedulePeriodKind, setDraftSchedulePeriodKind] = useState<DatePeriodKind>('month');
+  const [draftScheduleCustomStart, setDraftScheduleCustomStart] = useState('');
+  const [draftScheduleCustomEnd, setDraftScheduleCustomEnd] = useState('');
   const [prScheduleSortKey, setPrScheduleSortKey] = useState('requestDateIso');
   const [prScheduleSortDir, setPrScheduleSortDir] = useState<'asc' | 'desc'>('desc');
   const [poScheduleSortKey, setPoScheduleSortKey] = useState('orderDateIso');
@@ -921,6 +939,7 @@ export default function WarehousePage() {
         `)
         .neq('status', 'Discontinued');
       if (branch) pQuery = pQuery.eq('branch', branch);
+      if (scopedProductIds) pQuery = pQuery.in('id', scopedProductIds);
       const { data: prodRows, error: prodErr } = await pQuery;
       if (prodErr) throw prodErr;
 
@@ -1027,7 +1046,7 @@ export default function WarehousePage() {
 
       let rawList: RawMaterial[] = [];
       if (branchCategoryIds.length > 0) {
-        const { data: matRows, error: matErr } = await supabase
+        let matQuery = supabase
           .from('raw_materials')
           .select(`
             id,
@@ -1042,6 +1061,8 @@ export default function WarehousePage() {
           `)
           .in('category_id', branchCategoryIds)
           .neq('status', 'Discontinued');
+        if (scopedMaterialIds) matQuery = matQuery.in('id', scopedMaterialIds);
+        const { data: matRows, error: matErr } = await matQuery;
 
         if (!matErr && matRows) {
           const matIds = matRows.map((m: { id: string }) => m.id);
@@ -1092,7 +1113,7 @@ export default function WarehousePage() {
     } finally {
       setInventoryLoading(false);
     }
-  }, [branch]);
+  }, [branch, scopedProductIds?.join('|') ?? '', scopedMaterialIds?.join('|') ?? '']);
 
   const fetchSchedule = useCallback(async () => {
     setScheduleLoading(true);
@@ -2468,11 +2489,73 @@ export default function WarehousePage() {
   useEffect(() => {
     setPrSchedulePage(1);
     setPoSchedulePage(1);
-  }, [scheduleSearch, scheduleStatusFilter]);
+  }, [scheduleSearch, scheduleStatusFilter, schedulePeriodKind, scheduleCustomStart, scheduleCustomEnd]);
+
+  const schedulePeriodQuery = useMemo(
+    () => resolveDatePeriodQuery(schedulePeriodKind, scheduleCustomStart, scheduleCustomEnd),
+    [schedulePeriodKind, scheduleCustomStart, scheduleCustomEnd],
+  );
+
+  const maxScheduleCustomDate = useMemo(() => todayIsoLocal(), []);
+
+  const draftScheduleCustomInvalid = Boolean(
+    draftScheduleCustomStart && draftScheduleCustomEnd && draftScheduleCustomStart > draftScheduleCustomEnd,
+  );
+
+  const openSchedulePeriodModal = () => {
+    setDraftSchedulePeriodKind(schedulePeriodKind);
+    setDraftScheduleCustomStart(scheduleCustomStart);
+    setDraftScheduleCustomEnd(scheduleCustomEnd);
+    setSchedulePeriodModalOpen(true);
+  };
+
+  const handleSchedulePeriodChange = (kind: DatePeriodKind) => {
+    setSchedulePeriodKind(kind);
+    if (kind === 'custom') {
+      const t = new Date();
+      const iso = todayIsoLocal();
+      const start = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-01`;
+      setScheduleCustomStart(start);
+      setScheduleCustomEnd(iso);
+    }
+  };
+
+  const handleScheduleModalPresetPick = (kind: DatePeriodKind) => {
+    if (kind !== 'custom') {
+      handleSchedulePeriodChange(kind);
+      setSchedulePeriodModalOpen(false);
+      return;
+    }
+    setDraftSchedulePeriodKind('custom');
+    const t = new Date();
+    const iso = todayIsoLocal();
+    const start = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-01`;
+    setDraftScheduleCustomStart((prev) => prev || scheduleCustomStart || start);
+    setDraftScheduleCustomEnd((prev) => prev || scheduleCustomEnd || iso);
+  };
+
+  const applyScheduleModalCustomRange = () => {
+    setSchedulePeriodKind('custom');
+    setScheduleCustomStart(draftScheduleCustomStart);
+    setScheduleCustomEnd(draftScheduleCustomEnd);
+    setSchedulePeriodModalOpen(false);
+  };
+
+  useEffect(() => {
+    if (!schedulePeriodModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSchedulePeriodModalOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [schedulePeriodModalOpen]);
 
   const filteredSchedulePr = useMemo(() => {
     const q = scheduleSearch.trim().toLowerCase();
     return schedulePrLines.filter((r) => {
+      const matchesDate =
+        schedulePeriodQuery.invalid ||
+        inDatePeriodRange(r.requestDateIso, schedulePeriodQuery.from, schedulePeriodQuery.to);
       const matchesSearch =
         !q ||
         r.productName.toLowerCase().includes(q) ||
@@ -2480,13 +2563,16 @@ export default function WarehousePage() {
         r.prNumber.toLowerCase().includes(q) ||
         r.requestedBy.toLowerCase().includes(q);
       const matchesStatus = scheduleStatusFilter === '' || r.status === scheduleStatusFilter;
-      return matchesSearch && matchesStatus;
+      return matchesDate && matchesSearch && matchesStatus;
     });
-  }, [schedulePrLines, scheduleSearch, scheduleStatusFilter]);
+  }, [schedulePrLines, scheduleSearch, scheduleStatusFilter, schedulePeriodQuery]);
 
   const filteredSchedulePo = useMemo(() => {
     const q = scheduleSearch.trim().toLowerCase();
     return schedulePoLines.filter((r) => {
+      const matchesDate =
+        schedulePeriodQuery.invalid ||
+        inDatePeriodRange(r.orderDateIso, schedulePeriodQuery.from, schedulePeriodQuery.to);
       const matchesSearch =
         !q ||
         r.materialName.toLowerCase().includes(q) ||
@@ -2495,9 +2581,9 @@ export default function WarehousePage() {
         r.supplier.toLowerCase().includes(q) ||
         r.requestedBy.toLowerCase().includes(q);
       const matchesStatus = scheduleStatusFilter === '' || r.status === scheduleStatusFilter;
-      return matchesSearch && matchesStatus;
+      return matchesDate && matchesSearch && matchesStatus;
     });
-  }, [schedulePoLines, scheduleSearch, scheduleStatusFilter]);
+  }, [schedulePoLines, scheduleSearch, scheduleStatusFilter, schedulePeriodQuery]);
 
   const schedulePrStatusOptions = useMemo(() => {
     const s = new Set(schedulePrLines.map((r) => r.status).filter(Boolean));
@@ -3404,6 +3490,20 @@ export default function WarehousePage() {
                   <Calendar className="w-4 h-4 text-gray-600" />
                   View calendar
                 </button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="gap-2 border-gray-300 bg-white max-w-[18rem]"
+                  aria-haspopup="dialog"
+                  aria-expanded={schedulePeriodModalOpen}
+                  aria-label="Choose schedule period"
+                  onClick={openSchedulePeriodModal}
+                >
+                  <CalendarRange className="w-4 h-4 shrink-0 text-gray-600" aria-hidden />
+                  <span className="truncate text-left text-sm font-normal">
+                    {periodTriggerLabel(schedulePeriodKind, scheduleCustomStart, scheduleCustomEnd)}
+                  </span>
+                </Button>
               </div>
 
               <div className="mt-6 pt-6 border-t border-gray-200">
@@ -5202,6 +5302,103 @@ export default function WarehousePage() {
           </div>
         );
       })()}
+
+      {schedulePeriodModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40"
+          role="presentation"
+          onClick={() => setSchedulePeriodModalOpen(false)}
+        >
+          <div
+            className="bg-white w-full sm:max-w-lg sm:rounded-xl shadow-xl max-h-[90vh] overflow-y-auto"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="warehouse-schedule-period-modal-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-4 border-b border-gray-200 sticky top-0 bg-white z-10">
+              <h2 id="warehouse-schedule-period-modal-title" className="text-lg font-semibold text-gray-900">
+                Schedule period
+              </h2>
+              <button
+                type="button"
+                className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+                aria-label="Close"
+                onClick={() => setSchedulePeriodModalOpen(false)}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <p className="text-sm text-gray-600">
+                Filter production and purchase schedule lines by request or order date. The period stays the same when you switch branches.
+              </p>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {DATE_PERIOD_OPTIONS.map(({ kind, label }) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    onClick={() => handleScheduleModalPresetPick(kind)}
+                    className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
+                      draftSchedulePeriodKind === kind
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-white text-gray-800 border-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {draftSchedulePeriodKind === 'custom' && (
+                <div className="space-y-2 pt-1 border-t border-gray-100">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="text-xs font-medium text-gray-600 w-full sm:w-auto">From</label>
+                    <input
+                      type="date"
+                      value={draftScheduleCustomStart}
+                      max={maxScheduleCustomDate}
+                      onChange={(e) => setDraftScheduleCustomStart(e.target.value)}
+                      className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    />
+                    <label className="text-xs font-medium text-gray-600">To</label>
+                    <input
+                      type="date"
+                      value={draftScheduleCustomEnd}
+                      min={draftScheduleCustomStart || undefined}
+                      max={maxScheduleCustomDate}
+                      onChange={(e) => setDraftScheduleCustomEnd(e.target.value)}
+                      className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    />
+                  </div>
+                  {draftScheduleCustomInvalid && (
+                    <p className="text-xs text-red-600">Start must be on or before end.</p>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 p-4 border-t border-gray-200 bg-gray-50">
+              <Button
+                type="button"
+                variant="outline"
+                className="border-gray-300 bg-white"
+                onClick={() => setSchedulePeriodModalOpen(false)}
+              >
+                Cancel
+              </Button>
+              {draftSchedulePeriodKind === 'custom' && (
+                <Button
+                  type="button"
+                  variant="primary"
+                  disabled={draftScheduleCustomInvalid}
+                  onClick={applyScheduleModalCustomRange}
+                >
+                  Apply range
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Full warehouse schedule calendar (month view; includes IBR) */}
       {scheduleCalendarModalOpen && (

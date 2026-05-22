@@ -3,6 +3,7 @@
  * **Approved** and **Partially Fulfilled** orders (not on an active trip) appear for scheduling.
  */
 import { supabase } from '@/src/lib/supabase';
+import { resolveBranchIdByName } from '@/src/lib/branchCompanySettings';
 import { fetchBranchDepotPinByBranchName } from '@/src/lib/companyAddressesSettings';
 import type { OrderReadyForDispatch, Trip, DriverOption } from '@/src/types/logistics';
 
@@ -52,6 +53,47 @@ function num(n: unknown, fallback = 0): number {
 function fmtDate(d: string | null | undefined): string {
   if (!d) return '';
   return String(d).slice(0, 10);
+}
+
+/** Attach customer / order-number labels from linked orders for dispatch search + columns. */
+async function enrichTripsWithOrderCustomers(trips: Trip[]): Promise<Trip[]> {
+  const allOrderIds = [...new Set(trips.flatMap((t) => t.orders))];
+  if (!allOrderIds.length) return trips;
+
+  const { data: orderRows, error } = await supabase
+    .from('orders')
+    .select('id, customer_name, order_number')
+    .in('id', allOrderIds);
+  if (error || !orderRows?.length) return trips;
+
+  const byId = new Map(
+    orderRows.map((r) => [
+      r.id as string,
+      { customer_name: (r.customer_name as string | null) ?? '', order_number: (r.order_number as string | null) ?? '' },
+    ]),
+  );
+
+  return trips.map((trip) => {
+    const names: string[] = [];
+    const orderNums: string[] = [];
+    for (const oid of trip.orders) {
+      const row = byId.get(oid);
+      if (!row) continue;
+      if (row.customer_name.trim()) names.push(row.customer_name.trim());
+      if (row.order_number.trim()) orderNums.push(row.order_number.trim());
+    }
+    const uniqueNames = [...new Set(names)];
+    let customerLabel = '—';
+    if (uniqueNames.length === 1) customerLabel = uniqueNames[0]!;
+    else if (uniqueNames.length > 1) customerLabel = `${uniqueNames[0]} +${uniqueNames.length - 1}`;
+
+    return {
+      ...trip,
+      customerNames: uniqueNames,
+      customerLabel,
+      orderNumbers: orderNums,
+    };
+  });
 }
 
 function mapDbTripStatus(s: string): Trip['status'] {
@@ -139,12 +181,35 @@ export async function fetchLogisticsOrderQueue(branchName: string): Promise<{
   const { data: orders, error } = await supabase
     .from('orders')
     .select(
-      'id, order_number, customer_id, customer_name, required_date, delivery_address, urgency, volume_cbm, weight_kg, status, branches(name), customers(map_lat, map_lng)',
+      'id, order_number, customer_id, customer_name, required_date, delivery_address, urgency, volume_cbm, weight_kg, status, branches(name)',
     )
     .eq('branch_id', bid)
     .in('status', [...QUEUE_STATUSES]);
 
   if (error) return { orders: [], error: error.message };
+
+  const customerIds = [
+    ...new Set(
+      (orders ?? [])
+        .map((o) => (o as { customer_id?: string | null }).customer_id)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0),
+    ),
+  ];
+  const coordsByCustomerId = new Map<string, { lat: number; lng: number }>();
+  if (customerIds.length) {
+    const { data: custRows, error: custErr } = await supabase
+      .from('customers')
+      .select('id, map_lat, map_lng')
+      .in('id', customerIds);
+    if (custErr) return { orders: [], error: custErr.message };
+    for (const c of custRows ?? []) {
+      const lat = c.map_lat != null ? Number(c.map_lat) : NaN;
+      const lng = c.map_lng != null ? Number(c.map_lng) : NaN;
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        coordsByCustomerId.set(c.id as string, { lat, lng });
+      }
+    }
+  }
 
   const partialIds = (orders ?? [])
     .filter((o) => String((o as { status?: string }).status ?? '').trim() === 'Partially Fulfilled')
@@ -182,9 +247,8 @@ export async function fetchLogisticsOrderQueue(branchName: string): Promise<{
       urgRaw === 'High' || urgRaw === 'Critical' ? 'High' : urgRaw === 'Low' ? 'Low' : 'Medium';
     const branchLabel =
       (o.branches as { name?: string } | null)?.name ?? branchName;
-    const custRow = o.customers as { map_lat?: unknown; map_lng?: unknown } | null;
-    const mLa = custRow?.map_lat != null ? Number(custRow.map_lat) : NaN;
-    const mLn = custRow?.map_lng != null ? Number(custRow.map_lng) : NaN;
+    const custId = (o.customer_id as string | null) ?? null;
+    const coords = custId ? coordsByCustomerId.get(custId) : undefined;
 
     const st = String((o as { status?: string }).status ?? '').trim();
     let volume = Math.max(0.01, num(o.volume_cbm, 0.05));
@@ -205,8 +269,8 @@ export async function fetchLogisticsOrderQueue(branchName: string): Promise<{
       orderNumber: o.order_number as string,
       customer: (o.customer_name as string) ?? '—',
       customerId: (o.customer_id as string) ?? null,
-      mapLat: Number.isFinite(mLa) ? mLa : null,
-      mapLng: Number.isFinite(mLn) ? mLn : null,
+      mapLat: coords?.lat ?? null,
+      mapLng: coords?.lng ?? null,
       branch: branchLabel,
       destination: dest,
       requiredDate: fmtDate(o.required_date as string | null),
@@ -298,7 +362,8 @@ export async function fetchTripsForBranch(branchName: string): Promise<{ trips: 
     };
   });
 
-  return { trips };
+  const enriched = await enrichTripsWithOrderCustomers(trips);
+  return { trips: enriched };
 }
 
 async function tripRowRecordToTrip(r: Record<string, unknown>): Promise<Trip> {

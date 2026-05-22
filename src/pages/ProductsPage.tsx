@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
+import { scopedProductIdList, warehouseScopeEmptyMessage } from '@/src/lib/warehouseScope';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
@@ -18,6 +19,7 @@ import {
 } from 'lucide-react';
 import AddCategoryModal, { CategoryFormData } from '@/src/components/products/AddCategoryModal';
 import { supabase } from '@/src/lib/supabase';
+import { isCategoryCatalogHidden, CATALOG_HIDDEN_CLASS } from '@/src/lib/productCatalogVisibility';
 
 // Local fallback images per category slug
 import hdpePipeImg     from '@/src/assets/product-images/HDPE Pipe.webp';
@@ -71,6 +73,7 @@ interface CategoryRow {
   id: string;
   name: string;
   slug: string;
+  category_code: string | null;
   description: string | null;
   image_url: string | null;
   sort_order: number;
@@ -78,6 +81,7 @@ interface CategoryRow {
 }
 
 interface ProductStatRow {
+  id: string;
   category_id: string | null;
   status: string;
   total_variants: number;
@@ -91,9 +95,174 @@ interface SummaryStats {
   totalRevenue: number;
 }
 
+interface CategoryExportRow {
+  category_code: string | null;
+  name: string;
+  description: string | null;
+  sort_order: number;
+  product_family_count: number;
+}
+
+interface ProductVariantExportRow {
+  category_code: string | null;
+  category_name: string | null;
+  product_name: string;
+  sku: string;
+  variant_name: string;
+  unit_price: number;
+  status: string;
+  total_stock: number;
+}
+
+function embedOne<T extends Record<string, unknown>>(v: unknown): T | null {
+  if (v == null) return null;
+  if (Array.isArray(v)) return (v[0] as T | undefined) ?? null;
+  if (typeof v === 'object') return v as T;
+  return null;
+}
+
+function xlsxOptionalNumber(v: number | string | null | undefined): number | '' {
+  if (v == null || v === '') return '';
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n : '';
+}
+
+async function fetchProductCatalogForExport(branchName: string): Promise<{
+  categories: CategoryExportRow[];
+  variants: ProductVariantExportRow[];
+}> {
+  let catQ = supabase
+    .from('product_categories')
+    .select('id, category_code, name, description, sort_order, is_active')
+    .order('sort_order', { ascending: true });
+  if (branchName) catQ = catQ.eq('branch', branchName);
+
+  let prodQ = supabase
+    .from('products')
+    .select(
+      'name, category_id, product_categories(category_code, name), product_variants(sku, size, unit_price, status, total_stock)',
+    )
+    .order('name', { ascending: true });
+  if (branchName) prodQ = prodQ.eq('branch', branchName);
+
+  const [{ data: catData, error: catErr }, { data: prodData, error: prodErr }] = await Promise.all([
+    catQ,
+    prodQ,
+  ]);
+  if (catErr) throw new Error(catErr.message);
+  if (prodErr) throw new Error(prodErr.message);
+
+  const familyCountByCategory = new Map<string, number>();
+  for (const row of prodData ?? []) {
+    const categoryId = row.category_id as string | null;
+    if (!categoryId) continue;
+    familyCountByCategory.set(categoryId, (familyCountByCategory.get(categoryId) ?? 0) + 1);
+  }
+
+  const categories: CategoryExportRow[] = (catData ?? []).map((c) => ({
+    category_code: c.category_code ? String(c.category_code) : null,
+    name: String(c.name ?? ''),
+    description: c.description ? String(c.description) : null,
+    sort_order: Number(c.sort_order ?? 0),
+    product_family_count: familyCountByCategory.get(String(c.id)) ?? 0,
+  }));
+
+  const variants: ProductVariantExportRow[] = [];
+  for (const row of prodData ?? []) {
+    const cat = embedOne<{ category_code?: string | null; name?: string | null }>(row.product_categories);
+    const category_code = cat?.category_code ? String(cat.category_code) : null;
+    const category_name = cat?.name ? String(cat.name) : null;
+    const product_name = String(row.name ?? '');
+    const variantRows = row.product_variants;
+    const list = Array.isArray(variantRows) ? variantRows : variantRows ? [variantRows] : [];
+    for (const v of list) {
+      const variant = v as Record<string, unknown>;
+      variants.push({
+        category_code,
+        category_name,
+        product_name,
+        sku: String(variant.sku ?? ''),
+        variant_name: String(variant.size ?? ''),
+        unit_price: Number(variant.unit_price ?? 0),
+        status: String(variant.status ?? ''),
+        total_stock: Number(variant.total_stock ?? 0),
+      });
+    }
+  }
+
+  variants.sort((a, b) => {
+    const byCat = (a.category_code ?? '').localeCompare(b.category_code ?? '');
+    if (byCat !== 0) return byCat;
+    const byProduct = a.product_name.localeCompare(b.product_name);
+    if (byProduct !== 0) return byProduct;
+    return a.sku.localeCompare(b.sku);
+  });
+
+  return { categories, variants };
+}
+
+async function downloadProductsWorkbook(
+  categories: CategoryExportRow[],
+  variants: ProductVariantExportRow[],
+  branchLabel: string,
+) {
+  const XLSX = await import('xlsx');
+  const wb = XLSX.utils.book_new();
+
+  const categoryHeaders = ['Category Code', 'Category Name', 'Description', 'Product Families'];
+  const categoryAoA: unknown[][] = [
+    categoryHeaders,
+    ...categories.map((c) => [
+      c.category_code ?? '',
+      c.name,
+      c.description ?? '',
+      c.product_family_count,
+    ]),
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(categoryAoA), 'Categories');
+
+  const productHeaders = [
+    'Category Code',
+    'Category Name',
+    'Product Name',
+    'SKU',
+    'Variant Name',
+    'Unit Price',
+    'Status',
+    'Total Stock',
+  ];
+  const productAoA: unknown[][] = [
+    productHeaders,
+    ...variants.map((v) => [
+      v.category_code ?? '',
+      v.category_name ?? '',
+      v.product_name,
+      v.sku,
+      v.variant_name,
+      xlsxOptionalNumber(v.unit_price),
+      v.status,
+      v.total_stock,
+    ]),
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(productAoA), 'Products');
+
+  const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  const blob = new Blob([buf], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const safeBranch = branchLabel.replace(/[^\w.-]+/g, '_').slice(0, 40);
+  a.download = `products-${safeBranch || 'export'}-${new Date().toISOString().slice(0, 10)}.xlsx`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export function ProductsPage() {
   const navigate = useNavigate();
-  const { branch } = useAppContext();
+  const { branch, addAuditLog, warehouseScope, warehouseScopeLoading } = useAppContext();
+  const scopedProductIds = scopedProductIdList(warehouseScope);
 
   const [searchQuery, setSearchQuery]             = useState('');
   const [categories, setCategories]               = useState<CategoryRow[]>([]);
@@ -109,6 +278,7 @@ export function ProductsPage() {
   const [editingCategoryId, setEditingCategoryId]       = useState<string | null>(null);
   const [isEditMode, setIsEditMode]                     = useState(false);
   const [saving, setSaving]                             = useState(false);
+  const [exportingProducts, setExportingProducts]       = useState(false);
 
   // â”€â”€ Fetch categories â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const fetchCategories = async () => {
@@ -116,7 +286,6 @@ export function ProductsPage() {
     let q = supabase
       .from('product_categories')
       .select('*')
-      .eq('is_active', true)
       .order('sort_order', { ascending: true });
     if (branch) q = q.eq('branch', branch);
     const { data, error } = await q;
@@ -127,10 +296,17 @@ export function ProductsPage() {
   // â”€â”€ Fetch product stats (branch-aware) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const fetchProductStats = async (currentBranch: string) => {
     setSummaryLoading(true);
+    if (scopedProductIds && scopedProductIds.length === 1 && scopedProductIds[0] === '00000000-0000-0000-0000-000000000000') {
+      setProductStats([]);
+      setSummaryStats({ totalProducts: 0, totalVariants: 0, lowStockCount: 0, totalRevenue: 0 });
+      setSummaryLoading(false);
+      return;
+    }
     let q = supabase
       .from('products')
-      .select('category_id, status, total_variants, total_revenue');
+      .select('id, category_id, status, total_variants, total_revenue');
     if (currentBranch) q = q.eq('branch', currentBranch);
+    if (scopedProductIds) q = q.in('id', scopedProductIds);
     const { data } = await q;
     if (data) {
       setProductStats(data as ProductStatRow[]);
@@ -145,7 +321,12 @@ export function ProductsPage() {
   };
 
   useEffect(() => { fetchCategories(); }, [branch]);
-  useEffect(() => { fetchProductStats(branch); }, [branch]);
+  useEffect(() => { fetchProductStats(branch); }, [branch, scopedProductIds?.join('|') ?? '']);
+
+  const scopedCategoryIds = useMemo(() => {
+    if (!scopedProductIds) return null;
+    return new Set(productStats.map(p => p.category_id).filter(Boolean) as string[]);
+  }, [productStats, scopedProductIds]);
 
   const getCategoryImage = (cat: CategoryRow) =>
     cat.image_url ?? categoryImageMap[cat.slug] ?? hdpePipeImg;
@@ -158,14 +339,21 @@ export function ProductsPage() {
     };
   };
 
-  const filteredCategories = categories.filter(cat =>
-    cat.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredCategories = categories.filter(cat => {
+    if (scopedCategoryIds && !scopedCategoryIds.has(cat.id)) return false;
+    return cat.name.toLowerCase().includes(searchQuery.toLowerCase());
+  });
 
   // â”€â”€ Category CRUD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const handleEditCategory = (cat: CategoryRow, e: React.MouseEvent) => {
     e.stopPropagation();
-    setEditingCategory({ name: cat.name, description: cat.description ?? '', imageUrl: cat.image_url ?? '', icon: 'category' });
+    setEditingCategory({
+      name: cat.name,
+      description: cat.description ?? '',
+      imageUrl: cat.image_url ?? '',
+      icon: 'category',
+      isVisible: cat.is_active,
+    });
     setEditingCategoryId(cat.id);
     setIsEditMode(true);
     setShowAddCategoryModal(true);
@@ -186,6 +374,7 @@ export function ProductsPage() {
           name: formData.name.trim(),
           description: formData.description?.trim() || null,
           image_url: formData.imageUrl || null,
+          is_active: formData.isVisible,
           updated_at: new Date().toISOString(),
         }).eq('id', editingCategoryId);
         if (error) throw error;
@@ -248,9 +437,34 @@ export function ProductsPage() {
             <Factory className="w-4 h-4 mr-2" />
             Production requests
           </Button>
-          <Button variant="outline" className="flex-1 sm:flex-none">
-            <Download className="w-4 h-4 mr-2" />
-            Export
+          <Button
+            variant="outline"
+            className="flex-1 sm:flex-none"
+            disabled={exportingProducts || categoriesLoading || !branch}
+            onClick={async () => {
+              if (exportingProducts || categoriesLoading || !branch) return;
+              setExportingProducts(true);
+              try {
+                const { categories: exportCategories, variants } = await fetchProductCatalogForExport(branch);
+                await downloadProductsWorkbook(exportCategories, variants, branch);
+                addAuditLog(
+                  'Exported products workbook',
+                  'Product',
+                  `${exportCategories.length} categories, ${variants.length} variants (${branch})`,
+                );
+              } catch (e) {
+                window.alert(e instanceof Error ? e.message : 'Export failed.');
+              } finally {
+                setExportingProducts(false);
+              }
+            }}
+          >
+            {exportingProducts ? (
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" aria-hidden />
+            ) : (
+              <Download className="w-4 h-4 mr-2" />
+            )}
+            {exportingProducts ? 'Exporting…' : 'Export'}
           </Button>
         </div>
       </div>
@@ -339,24 +553,29 @@ export function ProductsPage() {
           </div>
         </CardHeader>
         <CardContent>
-          {categoriesLoading ? (
+          {categoriesLoading || warehouseScopeLoading ? (
             <div className="flex items-center justify-center py-12 gap-2 text-gray-500">
               <Loader2 className="w-5 h-5 animate-spin" />
-              <span>Loading categories...</span>
+              <span>{warehouseScopeLoading ? 'Loading your catalog access…' : 'Loading categories...'}</span>
             </div>
           ) : filteredCategories.length === 0 ? (
             <div className="text-center py-12 text-gray-400">
               <Package className="w-12 h-12 mx-auto mb-3" />
-              <p>No categories found</p>
+              <p>{scopedProductIds ? warehouseScopeEmptyMessage('products') : 'No categories found'}</p>
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
               {filteredCategories.map((cat) => {
                 const stats = getStatsForCategory(cat.id);
+                const hidden = isCategoryCatalogHidden(cat.is_active);
                 return (
                   <div
                     key={cat.id}
-                    className="group relative overflow-hidden border-2 border-gray-200 rounded-lg hover:border-red-500 hover:shadow-lg transition-all duration-200"
+                    className={`group relative overflow-hidden border-2 rounded-lg hover:shadow-lg transition-all duration-200 ${
+                      hidden
+                        ? `border-gray-300 ${CATALOG_HIDDEN_CLASS}`
+                        : 'border-gray-200 hover:border-red-500'
+                    }`}
                   >
                     <button
                       onClick={(e) => handleEditCategory(cat, e)}
@@ -377,9 +596,16 @@ export function ProductsPage() {
                         />
                       </div>
                       <div className="p-3 sm:p-4">
-                        <h3 className="font-semibold text-gray-900 group-hover:text-red-600 transition-colors">
-                          {cat.name}
-                        </h3>
+                        <div className="flex items-start justify-between gap-2">
+                          <h3 className={`font-semibold transition-colors ${hidden ? 'text-gray-600' : 'text-gray-900 group-hover:text-red-600'}`}>
+                            {cat.name}
+                          </h3>
+                          {hidden ? (
+                            <span className="text-[10px] uppercase tracking-wide font-semibold text-gray-500 bg-gray-200 px-1.5 py-0.5 rounded flex-shrink-0">
+                              Hidden
+                            </span>
+                          ) : null}
+                        </div>
                         <p className="text-sm text-gray-500 mt-1">
                           {stats.count} {stats.count === 1 ? 'product family' : 'product families'}
                         </p>

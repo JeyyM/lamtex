@@ -27,8 +27,10 @@ export type OutstandingOrderRow = {
   id: string;
   orderNumber: string;
   customerId: string | null;
+  customerCode: string | null;
   customerName: string | null;
   agentId: string | null;
+  agentCode: string | null;
   agentName: string | null;
   branchId: string | null;
   branchName: string | null;
@@ -42,8 +44,6 @@ export type OutstandingOrderRow = {
   amountPaid: number;
   balanceDue: number;
   daysOverdue: number;
-  /** Number of pending payment proofs awaiting verification. */
-  pendingProofs: number;
 };
 
 export type CustomerCreditRow = {
@@ -360,16 +360,16 @@ function nestedName(value: unknown): string | null {
 
 function assignedAgentFromCustomerEmbed(
   cust: unknown,
-): { id: string | null; name: string | null } {
-  if (!cust || typeof cust !== 'object') return { id: null, name: null };
+): { id: string | null; name: string | null; code: string | null } {
+  if (!cust || typeof cust !== 'object') return { id: null, name: null, code: null };
   const c = cust as Record<string, unknown>;
   const id = asString(c.assigned_agent_id);
   const emb = c.employees;
   if (emb && typeof emb === 'object') {
     const e = emb as Record<string, unknown>;
-    return { id, name: asString(e.employee_name) };
+    return { id, name: asString(e.employee_name), code: asString(e.employee_id) };
   }
-  return { id, name: null };
+  return { id, name: null, code: null };
 }
 
 const FINANCE_ORDER_PAYMENT_STATUSES = [
@@ -396,7 +396,7 @@ export async function fetchOutstandingOrders(branchId?: string | null): Promise<
        order_date, due_date, actual_delivery, payment_terms, payment_method, status, payment_status,
        total_amount, amount_paid, balance_due,
        branches(name),
-       customers(name, assigned_agent_id, employees!assigned_agent_id(id, employee_name))`,
+       customers(customer_code, name, assigned_agent_id, employees!assigned_agent_id(id, employee_name, employee_id))`,
     )
     .in('status', [...FINANCE_DELIVERED_ORDER_STATUSES])
     .in('payment_status', [...FINANCE_ORDER_PAYMENT_STATUSES])
@@ -420,24 +420,15 @@ export async function fetchOutstandingOrders(branchId?: string | null): Promise<
     })),
   );
 
-  const orderIds = rows.map((r) => String(r.id));
-  const { data: proofs } = await supabase
-    .from('order_proof_documents')
-    .select('order_id, status')
-    .in('order_id', orderIds)
-    .eq('type', 'payment')
-    .eq('status', 'pending');
-  const pendingByOrder = new Map<string, number>();
-  for (const p of (proofs ?? []) as Array<Record<string, unknown>>) {
-    const id = String(p.order_id);
-    pendingByOrder.set(id, (pendingByOrder.get(id) ?? 0) + 1);
-  }
-
   const mapped = rows.map((r) => {
     const branch = nestedName(r.branches);
     const custEmbed = r.customers;
     const cust = assignedAgentFromCustomerEmbed(custEmbed);
     const customerName = nestedName(custEmbed) ?? asString(r.customer_name);
+    const customerCode =
+      custEmbed && typeof custEmbed === 'object'
+        ? asString((custEmbed as Record<string, unknown>).customer_code)
+        : null;
     const delivery = asString(r.actual_delivery);
     const terms = asString(r.payment_terms);
     const computedDueDt = computeDueDateFromDelivery(delivery, terms);
@@ -448,13 +439,16 @@ export async function fetchOutstandingOrders(branchId?: string | null): Promise<
 
     const agentId = cust.id;
     const agentName = cust.id ? (cust.name ?? '—') : null;
+    const agentCode = cust.code;
 
     return {
       id: String(r.id),
       orderNumber: asString(r.order_number) ?? String(r.id),
       customerId: asString(r.customer_id),
+      customerCode,
       customerName,
       agentId,
+      agentCode,
       agentName,
       branchId: asString(r.branch_id),
       branchName: branch,
@@ -468,7 +462,6 @@ export async function fetchOutstandingOrders(branchId?: string | null): Promise<
       amountPaid: num(r.amount_paid),
       balanceDue: num(r.balance_due),
       daysOverdue: due ? Math.max(0, diffDaysFromToday(due)) : 0,
-      pendingProofs: pendingByOrder.get(String(r.id)) ?? 0,
     };
   });
 

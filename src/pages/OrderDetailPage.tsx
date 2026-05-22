@@ -1855,7 +1855,7 @@ export function OrderDetailPage() {
     const { data: branchRow } = await supabase.from('branches').select('id').eq('name', branch).single();
     const { data: productsData } = await supabase
       .from('products')
-      .select('id, name, image_url, product_variants(id, size, description, unit_price, total_stock, product_bulk_discounts(min_qty, max_qty, discount_percent, is_active))')
+      .select('id, name, image_url, product_variants(id, size, description, unit_price, total_stock, is_hidden, product_bulk_discounts(min_qty, max_qty, discount_percent, is_active))')
       .eq('category_id', cat.id)
       .eq('status', 'Active')
       .order('name');
@@ -1870,11 +1870,14 @@ export function OrderDetailPage() {
         .in('variant_id', allVariantIds);
       (stockData ?? []).forEach((s: any) => { stockMap[s.variant_id] = s.quantity; });
     }
-    const mapped: DBProductDet[] = productsData.map((p: any) => ({
-      id: p.id,
-      name: p.name,
-      image_url: p.image_url ?? null,
-      variants: (p.product_variants ?? []).map((v: any) => ({
+    const mapped: DBProductDet[] = productsData
+      .map((p: any) => ({
+        id: p.id,
+        name: p.name,
+        image_url: p.image_url ?? null,
+        variants: (p.product_variants ?? [])
+          .filter((v: any) => v.is_hidden !== true)
+          .map((v: any) => ({
         id: v.id,
         size: v.size,
         description: v.description ?? null,
@@ -1884,7 +1887,8 @@ export function OrderDetailPage() {
           .filter((d: any) => d.is_active)
           .map((d: any) => ({ min_qty: d.min_qty, max_qty: d.max_qty, discount_percent: Number(d.discount_percent) })),
       })),
-    }));
+    }))
+      .filter((p) => p.variants.length > 0);
     setCategoryProducts(mapped);
     setProductCache(prev => {
       const next = { ...prev };
@@ -2360,11 +2364,13 @@ export function OrderDetailPage() {
         },
       );
       if (upErr) {
+        if (isSchemaColumnError(upErr)) {
+          console.error('[OrderDetailPage] proof update schema', upErr);
+        }
         alert(
-          upErr +
-            (isSchemaColumnError(upErr)
-              ? '\n\nRun database/order_proof_payment_extension.sql in Supabase to enable payment amounts on proofs.'
-              : ''),
+          isSchemaColumnError(upErr)
+            ? 'Unable to save this proof. Please contact your administrator.'
+            : upErr,
         );
         return;
       }
@@ -2596,11 +2602,13 @@ export function OrderDetailPage() {
 
       const { data: inserted, error: insErr } = await insertOrderProofDocuments(rows);
       if (insErr) {
+        if (isSchemaColumnError(insErr)) {
+          console.error('[OrderDetailPage] proof insert schema', insErr);
+        }
         alert(
-          insErr +
-            (isSchemaColumnError(insErr)
-              ? '\n\nRun database/order_proof_payment_extension.sql in Supabase to enable payment amounts and titles on proofs.'
-              : ''),
+          isSchemaColumnError(insErr)
+            ? 'Unable to save this proof. Please contact your administrator.'
+            : insErr,
         );
         return;
       }

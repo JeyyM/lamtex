@@ -1,6 +1,8 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import { UserRole, Branch, AuditLog } from '../types';
 import { supabase } from '@/src/lib/supabase';
+import { fetchWarehouseAssignmentIds } from '@/src/lib/warehouseAssignments';
+import { buildWarehouseAssignmentScope, type WarehouseAssignmentScope } from '@/src/lib/warehouseScope';
 import type { Session } from '@supabase/supabase-js';
 
 interface AppContextType {
@@ -16,12 +18,16 @@ interface AppContextType {
   setIsMobileMenuOpen: (open: boolean) => void;
   hideBranchSelector: boolean;
   setHideBranchSelector: (hidden: boolean) => void;
-  // Auth
   session: Session | null;
   sessionLoading: boolean;
   signOut: () => Promise<void>;
-  // Employee profile
   employeeName: string;
+  employeeId: string | null;
+  assignedProductIds: string[] | null;
+  assignedMaterialIds: string[] | null;
+  warehouseScope: WarehouseAssignmentScope;
+  warehouseScopeLoading: boolean;
+  refreshWarehouseScope: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -35,6 +41,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [session, setSession] = useState<Session | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
   const [employeeName, setEmployeeName] = useState<string>('');
+  const [employeeId, setEmployeeId] = useState<string | null>(null);
+  const [assignedProductIds, setAssignedProductIds] = useState<string[] | null>(null);
+  const [assignedMaterialIds, setAssignedMaterialIds] = useState<string[] | null>(null);
+  const [warehouseScopeLoading, setWarehouseScopeLoading] = useState(false);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([
     {
       id: '1',
@@ -47,37 +57,76 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   ]);
 
-  const fetchEmployeeName = async (email: string) => {
+  const loadWarehouseScope = useCallback(async (empId: string | null, currentRole: UserRole) => {
+    if (currentRole !== 'Warehouse' || !empId) {
+      setAssignedProductIds(null);
+      setAssignedMaterialIds(null);
+      setWarehouseScopeLoading(false);
+      return;
+    }
+    setWarehouseScopeLoading(true);
+    try {
+      const { productIds, materialIds } = await fetchWarehouseAssignmentIds(empId);
+      setAssignedProductIds(productIds);
+      setAssignedMaterialIds(materialIds);
+    } catch (e) {
+      if (import.meta.env.DEV) {
+        console.warn('[warehouse scope]', e);
+      }
+      setAssignedProductIds([]);
+      setAssignedMaterialIds([]);
+    } finally {
+      setWarehouseScopeLoading(false);
+    }
+  }, []);
+
+  const refreshWarehouseScope = useCallback(async () => {
+    await loadWarehouseScope(employeeId, role);
+  }, [employeeId, loadWarehouseScope, role]);
+
+  const fetchEmployeeSession = async (email: string) => {
     const { data } = await supabase
       .from('employees')
-      .select('employee_name')
+      .select('id, employee_name')
       .eq('email', email)
-      .single();
+      .maybeSingle();
     setEmployeeName(data?.employee_name ?? email);
+    setEmployeeId(data?.id ?? null);
   };
 
-  // Listen for Supabase auth state changes
   useEffect(() => {
-    // Get initial session
     supabase.auth.getSession().then(({ data: { session: s } }) => {
       setSession(s);
       setSessionLoading(false);
-      if (s?.user?.email) fetchEmployeeName(s.user.email);
+      if (s?.user?.email) void fetchEmployeeSession(s.user.email);
+      else {
+        setEmployeeName('');
+        setEmployeeId(null);
+      }
     });
 
-    // Subscribe to changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
       setSession(s);
-      if (s?.user?.email) fetchEmployeeName(s.user.email);
-      else setEmployeeName('');
+      if (s?.user?.email) void fetchEmployeeSession(s.user.email);
+      else {
+        setEmployeeName('');
+        setEmployeeId(null);
+      }
     });
 
     return () => subscription.unsubscribe();
   }, []);
 
+  useEffect(() => {
+    void loadWarehouseScope(employeeId, role);
+  }, [employeeId, role, loadWarehouseScope]);
+
   const signOut = async () => {
     await supabase.auth.signOut();
     setSession(null);
+    setEmployeeId(null);
+    setAssignedProductIds(null);
+    setAssignedMaterialIds(null);
   };
 
   const addAuditLog = (action: string, entity: string, details: string) => {
@@ -93,11 +142,38 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setAuditLogs((prev) => [newLog, ...prev]);
   };
 
+  const warehouseScope = buildWarehouseAssignmentScope(role, assignedProductIds, assignedMaterialIds);
+
   return (
-    <AppContext.Provider value={{ role, setRole, branch, setBranch, auditLogs, addAuditLog, isSidebarCollapsed, setIsSidebarCollapsed, isMobileMenuOpen, setIsMobileMenuOpen, hideBranchSelector, setHideBranchSelector, session, sessionLoading, signOut, employeeName }}>
+    <AppContext.Provider
+      value={{
+        role,
+        setRole,
+        branch,
+        setBranch,
+        auditLogs,
+        addAuditLog,
+        isSidebarCollapsed,
+        setIsSidebarCollapsed,
+        isMobileMenuOpen,
+        setIsMobileMenuOpen,
+        hideBranchSelector,
+        setHideBranchSelector,
+        session,
+        sessionLoading,
+        signOut,
+        employeeName,
+        employeeId,
+        assignedProductIds,
+        assignedMaterialIds,
+        warehouseScope,
+        warehouseScopeLoading,
+        refreshWarehouseScope,
+      }}
+    >
       {children}
     </AppContext.Provider>
-  );  
+  );
 };
 
 export const useAppContext = () => {
@@ -105,6 +181,5 @@ export const useAppContext = () => {
   if (context === undefined) {
     throw new Error('useAppContext must be used within an AppProvider');
   }
-  // selectedBranch is an alias for branch (used by material pages)
   return { ...context, selectedBranch: context.branch };
 };

@@ -1,5 +1,5 @@
 import React from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { 
   LayoutDashboard, 
@@ -26,13 +26,20 @@ import lamtexLogo from '../../assets/Lamtex Logo.png';
 export function Sidebar() {
   const { role, isSidebarCollapsed, setIsSidebarCollapsed, isMobileMenuOpen, setIsMobileMenuOpen, session, signOut } = useAppContext();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const navItems = [
     { name: 'Dashboard', path: '/', icon: LayoutDashboard, roles: ['Executive', 'Warehouse', 'Logistics', 'Agent', 'Finance', 'Production', 'Manager'] },
     { name: 'Orders', path: '/orders', icon: ShoppingCart, roles: ['Executive', 'Agent', 'Warehouse', 'Logistics', 'Finance', 'Manager', 'Driver'] },
     { name: 'Products', path: '/products', icon: Package, roles: ['Executive', 'Warehouse', 'Agent', 'Production', 'Manager'] },
     { name: 'Raw Materials', path: '/materials', icon: Box, roles: ['Executive', 'Warehouse', 'Production', 'Manager'] },
-    { name: 'Warehouse', path: '/warehouse', icon: Warehouse, roles: ['Executive', 'Warehouse', 'Manager'] },
+    {
+      name: 'Warehouse',
+      path: '/warehouse',
+      icon: Warehouse,
+      roles: ['Executive', 'Warehouse', 'Manager'],
+      alsoActiveOn: ['/production-requests', '/purchase-orders', '/inter-branch-requests'],
+    },
     { name: 'Logistics', path: '/logistics', icon: Truck, roles: ['Executive', 'Logistics', 'Manager'] },
     { name: 'Chats', path: '/chats', icon: MessageCircle, roles: ['Executive', 'Warehouse', 'Logistics', 'Agent', 'Finance', 'Production', 'Manager'] },
     { name: 'Customers', path: '/customers', icon: Users, roles: ['Executive', 'Agent', 'Manager'] },
@@ -110,15 +117,22 @@ export function Sidebar() {
             <NavLink
               key={item.name}
               to={item.path}
+              end={item.path === '/'}
               title={isSidebarCollapsed ? item.name : ''}
               onClick={() => setIsMobileMenuOpen(false)}
-              className={({ isActive }) => cn(
-                "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors",
-                isActive 
-                  ? "bg-red-50 text-red-700" 
-                  : "text-gray-600 hover:bg-gray-50 hover:text-gray-900",
-                isSidebarCollapsed && "lg:justify-center"
-              )}
+              className={({ isActive }) => {
+                const alsoActive =
+                  'alsoActiveOn' in item &&
+                  item.alsoActiveOn?.some(
+                    (p) => location.pathname === p || location.pathname.startsWith(`${p}/`),
+                  );
+                const active = isActive || Boolean(alsoActive);
+                return cn(
+                  'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
+                  active ? 'bg-red-50 text-red-700' : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900',
+                  isSidebarCollapsed && 'lg:justify-center',
+                );
+              }}
             >
               <item.icon className="w-5 h-5 flex-shrink-0" />
               <span className={cn(

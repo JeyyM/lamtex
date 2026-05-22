@@ -4,6 +4,7 @@ import { ExecutiveDashboard } from './ExecutiveDashboard';
 import { WarehouseDashboard } from './WarehouseDashboard';
 import { LogisticsDashboard } from './LogisticsDashboard';
 import { AgentDashboard } from './AgentDashboard';
+import { DriverDashboard } from './DriverDashboard';
 
 export function Dashboard() {
   const { role, branch } = useAppContext();
@@ -12,6 +13,7 @@ export function Dashboard() {
   if (role === 'Executive') return <ExecutiveDashboard />;
   if (role === 'Warehouse') return <WarehouseDashboard />;
   if (role === 'Logistics') return <LogisticsDashboard />;
+  if (role === 'Driver') return <DriverDashboard />;
   if (role === 'Agent') return <AgentDashboard />;
   
   return (

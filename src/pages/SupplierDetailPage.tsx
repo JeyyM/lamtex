@@ -27,7 +27,25 @@ import {
   Award,
   ShoppingCart,
   Search,
+  Download,
+  ChevronDown,
+  ChevronUp,
+  CalendarRange,
+  X,
 } from 'lucide-react';
+import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagination';
+import {
+  DATE_PERIOD_OPTIONS,
+  inDatePeriodRange,
+  periodTriggerLabel,
+  resolveDatePeriodQuery,
+  todayIsoLocal,
+  type DatePeriodKind,
+} from '@/src/lib/datePeriodQuery';
+import {
+  buildSupplierDetailExportBundle,
+  downloadSupplierDetailWorkbook,
+} from '@/src/lib/supplierDetailExport';
 import {
   SUPPLIER_DETAIL_SELECT,
   type SupplierBranchRow,
@@ -131,7 +149,7 @@ function formatPoDate(date: string | null): string {
 export function SupplierDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { branch: navbarBranch } = useAppContext();
+  const { branch: navbarBranch, addAuditLog } = useAppContext();
 
   const [supplier, setSupplier] = useState<SupplierRow | null>(null);
   const [loading, setLoading] = useState(true);
@@ -159,6 +177,17 @@ export function SupplierDetailPage() {
   const [poHistory, setPoHistory] = useState<SupplierPOHistoryRow[]>([]);
   const [poHistoryLoading, setPoHistoryLoading] = useState(false);
   const [poHistoryError, setPoHistoryError] = useState<string | null>(null);
+  const [poTablePage, setPoTablePage] = useState(1);
+  const [exportingSupplier, setExportingSupplier] = useState(false);
+  const [exportPeriodKind, setExportPeriodKind] = useState<DatePeriodKind>('all');
+  const [exportCustomStart, setExportCustomStart] = useState('');
+  const [exportCustomEnd, setExportCustomEnd] = useState('');
+  const [exportPeriodModalOpen, setExportPeriodModalOpen] = useState(false);
+  const [draftExportPeriodKind, setDraftExportPeriodKind] = useState<DatePeriodKind>('all');
+  const [draftExportCustomStart, setDraftExportCustomStart] = useState('');
+  const [draftExportCustomEnd, setDraftExportCustomEnd] = useState('');
+  const [materialsExpanded, setMaterialsExpanded] = useState(false);
+  const [materialSearchQuery, setMaterialSearchQuery] = useState('');
 
   /** Same rules as Suppliers list: exclude non-commitment statuses; YTD = calendar year. */
   const spendFromPoHistory = useMemo(() => {
@@ -182,6 +211,121 @@ export function SupplierDetailPage() {
     }
     return { ytd, ytdN, lifetime, n };
   }, [poHistory]);
+
+  const exportQueryDates = useMemo(
+    () => resolveDatePeriodQuery(exportPeriodKind, exportCustomStart, exportCustomEnd),
+    [exportPeriodKind, exportCustomStart, exportCustomEnd],
+  );
+
+  const maxExportCustomDate = useMemo(() => todayIsoLocal(), []);
+
+  const draftExportCustomInvalid = Boolean(
+    draftExportCustomStart && draftExportCustomEnd && draftExportCustomStart > draftExportCustomEnd,
+  );
+
+  const filteredPoHistory = useMemo(() => {
+    if (exportQueryDates.invalid) return poHistory;
+    return poHistory.filter(po =>
+      inDatePeriodRange(po.order_date, exportQueryDates.from, exportQueryDates.to),
+    );
+  }, [poHistory, exportQueryDates]);
+
+  const filteredMaterials = useMemo(() => {
+    const q = materialSearchQuery.trim().toLowerCase();
+    if (!q) return supplier?.supplier_materials ?? [];
+    return (supplier?.supplier_materials ?? []).filter(sm => {
+      const name = sm.raw_materials?.name?.toLowerCase() ?? '';
+      const sku = sm.raw_materials?.sku?.toLowerCase() ?? '';
+      return name.includes(q) || sku.includes(q);
+    });
+  }, [supplier?.supplier_materials, materialSearchQuery]);
+
+  const poTableTotalPages = Math.max(1, Math.ceil(filteredPoHistory.length / TABLE_PAGE_SIZE) || 1);
+  const safePoTablePage = Math.min(Math.max(1, poTablePage), poTableTotalPages);
+  const paginatedPoHistory = useMemo(
+    () => filteredPoHistory.slice((safePoTablePage - 1) * TABLE_PAGE_SIZE, safePoTablePage * TABLE_PAGE_SIZE),
+    [filteredPoHistory, safePoTablePage],
+  );
+
+  useEffect(() => {
+    setPoTablePage(1);
+  }, [filteredPoHistory.length, id, exportQueryDates.from, exportQueryDates.to, exportQueryDates.invalid]);
+
+  const openExportPeriodModal = () => {
+    setDraftExportPeriodKind(exportPeriodKind);
+    setDraftExportCustomStart(exportCustomStart);
+    setDraftExportCustomEnd(exportCustomEnd);
+    setExportPeriodModalOpen(true);
+  };
+
+  const handleExportPeriodChange = (kind: DatePeriodKind) => {
+    setExportPeriodKind(kind);
+    if (kind === 'custom') {
+      const t = new Date();
+      const iso = todayIsoLocal();
+      const start = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-01`;
+      setExportCustomStart(start);
+      setExportCustomEnd(iso);
+    }
+  };
+
+  const handleExportModalPresetPick = (kind: DatePeriodKind) => {
+    if (kind !== 'custom') {
+      handleExportPeriodChange(kind);
+      setExportPeriodModalOpen(false);
+      return;
+    }
+    setDraftExportPeriodKind('custom');
+    const t = new Date();
+    const iso = todayIsoLocal();
+    const start = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-01`;
+    setDraftExportCustomStart(prev => prev || exportCustomStart || start);
+    setDraftExportCustomEnd(prev => prev || exportCustomEnd || iso);
+  };
+
+  const applyExportModalCustomRange = () => {
+    setExportPeriodKind('custom');
+    setExportCustomStart(draftExportCustomStart);
+    setExportCustomEnd(draftExportCustomEnd);
+    setExportPeriodModalOpen(false);
+  };
+
+  useEffect(() => {
+    if (!exportPeriodModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setExportPeriodModalOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [exportPeriodModalOpen]);
+
+  const handleExportSupplier = async () => {
+    if (!supplier || exportingSupplier || exportQueryDates.invalid) return;
+    setExportingSupplier(true);
+    try {
+      const bundle = await buildSupplierDetailExportBundle(
+        supplier.id,
+        exportQueryDates.from,
+        exportQueryDates.to,
+      );
+      await downloadSupplierDetailWorkbook({
+        supplier: bundle.supplier,
+        materials: bundle.materials,
+        purchaseOrders: bundle.purchaseOrders,
+        lines: bundle.lines,
+        periodLabel: exportQueryDates.displayLabel,
+      });
+      addAuditLog(
+        'Exported supplier workbook',
+        'Supplier',
+        `${supplier.name} · ${bundle.purchaseOrders.length} PO${bundle.purchaseOrders.length !== 1 ? 's' : ''} · ${exportQueryDates.displayLabel}`,
+      );
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Export failed.');
+    } finally {
+      setExportingSupplier(false);
+    }
+  };
 
   const fetchSupplier = useCallback(async () => {
     if (!id) {
@@ -616,13 +760,32 @@ export function SupplierDetailPage() {
 
               <div>
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-3">
-                  <h2 className="text-sm font-semibold text-gray-700">Linked Raw Materials</h2>
+                  <button
+                    type="button"
+                    onClick={() => setMaterialsExpanded(v => !v)}
+                    className="flex items-center gap-2 text-sm font-semibold text-gray-700 hover:text-gray-900 text-left"
+                    aria-expanded={materialsExpanded}
+                  >
+                    <Package className="w-4 h-4 shrink-0" />
+                    Linked Raw Materials
+                    <span className="text-xs font-normal text-gray-500 tabular-nums">
+                      ({supplier.supplier_materials.length})
+                    </span>
+                    {materialsExpanded ? (
+                      <ChevronUp className="w-4 h-4 text-gray-400 shrink-0" aria-hidden />
+                    ) : (
+                      <ChevronDown className="w-4 h-4 text-gray-400 shrink-0" aria-hidden />
+                    )}
+                  </button>
                   {!isEditing && (
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
-                      onClick={() => setShowAddMaterialPicker(true)}
+                      onClick={() => {
+                        setMaterialsExpanded(true);
+                        setShowAddMaterialPicker(true);
+                      }}
                       className="gap-1.5 w-full sm:w-auto shrink-0"
                     >
                       <Plus className="w-4 h-4" />
@@ -630,6 +793,21 @@ export function SupplierDetailPage() {
                     </Button>
                   )}
                 </div>
+
+                {materialsExpanded && (
+                  <>
+                    {supplier.supplier_materials.length > 0 && (
+                      <div className="relative mb-3">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                        <input
+                          type="text"
+                          placeholder="Search by name or SKU…"
+                          value={materialSearchQuery}
+                          onChange={e => setMaterialSearchQuery(e.target.value)}
+                          className="w-full pl-10 pr-4 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                        />
+                      </div>
+                    )}
 
                 {addMatId && !isEditing && (
                   <div className="mb-4 rounded-xl border border-indigo-200 bg-indigo-50/40 p-4 space-y-3">
@@ -723,9 +901,11 @@ export function SupplierDetailPage() {
 
                 {supplier.supplier_materials.length === 0 && !addMatId ? (
                   <p className="text-sm text-gray-500">No materials linked yet. Use Add material to link one.</p>
+                ) : filteredMaterials.length === 0 ? (
+                  <p className="text-sm text-gray-500">No materials match your search.</p>
                 ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {supplier.supplier_materials.map(sm => (
+                    {filteredMaterials.map(sm => (
                       <Link
                         key={sm.id}
                         to={`/materials/${sm.material_id}`}
@@ -757,6 +937,8 @@ export function SupplierDetailPage() {
                       </Link>
                     ))}
                   </div>
+                )}
+                  </>
                 )}
               </div>
 
@@ -1132,13 +1314,50 @@ export function SupplierDetailPage() {
 
       <Card className="overflow-hidden">
         <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base sm:text-lg">
-            <ShoppingCart className="w-5 h-5 text-red-600" />
-            Raw material purchase orders
-          </CardTitle>
-          <p className="text-xs text-gray-500 font-normal mt-1">
-            Newest first. Inter-branch transfer POs are tracked under Inter-branch requests, not here.
-          </p>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2 text-base sm:text-lg">
+                <ShoppingCart className="w-5 h-5 text-red-600" />
+                Raw material purchase orders
+                {exportQueryDates.invalid ? '' : ` — ${filteredPoHistory.length} in ${exportQueryDates.displayLabel}`}
+              </CardTitle>
+              <p className="text-xs text-gray-500 font-normal mt-1">
+                Newest first. Inter-branch transfer POs are tracked under Inter-branch requests, not here.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-2 border-gray-300 bg-white max-w-[18rem] justify-start"
+                aria-haspopup="dialog"
+                aria-expanded={exportPeriodModalOpen}
+                aria-label="Choose purchase order period"
+                onClick={openExportPeriodModal}
+              >
+                <CalendarRange className="w-4 h-4 shrink-0 text-gray-600" aria-hidden />
+                <span className="truncate text-left text-sm font-normal">
+                  {periodTriggerLabel(exportPeriodKind, exportCustomStart, exportCustomEnd)}
+                </span>
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-2 border-gray-300 bg-white"
+                disabled={exportingSupplier || exportQueryDates.invalid}
+                onClick={() => void handleExportSupplier()}
+              >
+                {exportingSupplier ? (
+                  <Loader2 className="w-4 h-4 animate-spin" aria-hidden />
+                ) : (
+                  <Download className="w-4 h-4" aria-hidden />
+                )}
+                {exportingSupplier ? 'Exporting…' : 'Export'}
+              </Button>
+            </div>
+          </div>
         </CardHeader>
         <CardContent className="pt-0">
           {poHistoryLoading ? (
@@ -1149,6 +1368,8 @@ export function SupplierDetailPage() {
             <p className="text-sm text-red-600 py-4">{poHistoryError}</p>
           ) : poHistory.length === 0 ? (
             <p className="text-sm text-gray-500 py-8 text-center">No purchase orders recorded for this supplier yet.</p>
+          ) : filteredPoHistory.length === 0 ? (
+            <p className="text-sm text-gray-500 py-8 text-center">No purchase orders match the selected date range.</p>
           ) : (
             <div className="overflow-x-auto -mx-1">
               <table className="w-full min-w-[640px] text-sm border-collapse">
@@ -1165,7 +1386,7 @@ export function SupplierDetailPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {poHistory.map(po => {
+                  {paginatedPoHistory.map(po => {
                     const poTo = `/purchase-orders/${po.id}`;
                     return (
                       <tr
@@ -1203,10 +1424,110 @@ export function SupplierDetailPage() {
                   })}
                 </tbody>
               </table>
+              {filteredPoHistory.length > TABLE_PAGE_SIZE && (
+                <TablePagination
+                  page={safePoTablePage}
+                  total={filteredPoHistory.length}
+                  onPageChange={setPoTablePage}
+                  className="-mx-1 rounded-b-lg"
+                />
+              )}
             </div>
           )}
         </CardContent>
       </Card>
+
+      {exportPeriodModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40"
+          role="presentation"
+          onClick={() => setExportPeriodModalOpen(false)}
+        >
+          <div
+            className="bg-white w-full sm:max-w-lg sm:rounded-xl shadow-xl max-h-[90vh] overflow-y-auto"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="supplier-export-period-modal-title"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-4 border-b border-gray-200 sticky top-0 bg-white z-10">
+              <h2 id="supplier-export-period-modal-title" className="text-lg font-semibold text-gray-900">
+                Purchase order period
+              </h2>
+              <button
+                type="button"
+                className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+                aria-label="Close"
+                onClick={() => setExportPeriodModalOpen(false)}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <p className="text-sm text-gray-600">
+                Choose a preset or custom range. The PO list and export both use this period.
+              </p>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {DATE_PERIOD_OPTIONS.map(({ kind, label }) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    onClick={() => handleExportModalPresetPick(kind)}
+                    className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
+                      draftExportPeriodKind === kind
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-white text-gray-800 border-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {draftExportPeriodKind === 'custom' && (
+                <div className="space-y-2 pt-1 border-t border-gray-100">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="text-xs font-medium text-gray-600 w-full sm:w-auto">From</label>
+                    <input
+                      type="date"
+                      value={draftExportCustomStart}
+                      max={maxExportCustomDate}
+                      onChange={e => setDraftExportCustomStart(e.target.value)}
+                      className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    />
+                    <label className="text-xs font-medium text-gray-600">To</label>
+                    <input
+                      type="date"
+                      value={draftExportCustomEnd}
+                      min={draftExportCustomStart || undefined}
+                      max={maxExportCustomDate}
+                      onChange={e => setDraftExportCustomEnd(e.target.value)}
+                      className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    />
+                  </div>
+                  {draftExportCustomInvalid && (
+                    <p className="text-xs text-red-600">Start must be on or before end.</p>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 p-4 border-t border-gray-200">
+              <Button type="button" variant="outline" onClick={() => setExportPeriodModalOpen(false)}>
+                Cancel
+              </Button>
+              {draftExportPeriodKind === 'custom' && (
+                <Button
+                  type="button"
+                  variant="primary"
+                  disabled={draftExportCustomInvalid || !draftExportCustomStart || !draftExportCustomEnd}
+                  onClick={applyExportModalCustomRange}
+                >
+                  Apply range
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       <RawMaterialPickerModal
         isOpen={showAddMaterialPicker}

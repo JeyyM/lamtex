@@ -224,6 +224,34 @@ export async function fetchPortalForOrder(orderId: string): Promise<OrderCustome
   return data ? mapPortalRow(data as Record<string, unknown>) : null;
 }
 
+function isDuplicatePortalOrderError(message: string): boolean {
+  const m = message.toLowerCase();
+  return (
+    m.includes('duplicate key') ||
+    m.includes('23505') ||
+    m.includes('order_customer_portals_order_id_key')
+  );
+}
+
+/** Non-technical copy for staff UI when portal setup fails. */
+export function customerPortalStaffErrorMessage(): string {
+  return 'We could not prepare the customer link right now. Please refresh the page or try again in a moment.';
+}
+
+async function syncPortalCustomerEmail(
+  portal: OrderCustomerPortalRow,
+  customerEmail?: string | null,
+): Promise<OrderCustomerPortalRow> {
+  if (customerEmail && customerEmail !== portal.customerEmail) {
+    await supabase
+      .from('order_customer_portals')
+      .update({ customer_email: customerEmail, updated_at: new Date().toISOString() })
+      .eq('id', portal.id);
+    return { ...portal, customerEmail };
+  }
+  return portal;
+}
+
 /** Creates or returns the stable customer link for an order (staff, authenticated). */
 export async function ensureOrderCustomerPortal(
   orderId: string,
@@ -231,14 +259,7 @@ export async function ensureOrderCustomerPortal(
 ): Promise<{ portal: OrderCustomerPortalRow | null; error?: string }> {
   const existing = await fetchPortalForOrder(orderId);
   if (existing) {
-    if (customerEmail && customerEmail !== existing.customerEmail) {
-      await supabase
-        .from('order_customer_portals')
-        .update({ customer_email: customerEmail, updated_at: new Date().toISOString() })
-        .eq('id', existing.id);
-      return { portal: { ...existing, customerEmail } };
-    }
-    return { portal: existing };
+    return { portal: await syncPortalCustomerEmail(existing, customerEmail) };
   }
 
   const expiresAt = new Date();
@@ -256,6 +277,13 @@ export async function ensureOrderCustomerPortal(
     .single();
 
   if (error) {
+    if (isDuplicatePortalOrderError(error.message)) {
+      const retry = await fetchPortalForOrder(orderId);
+      if (retry) {
+        return { portal: await syncPortalCustomerEmail(retry, customerEmail) };
+      }
+    }
+    console.error('ensureOrderCustomerPortal', error);
     return { portal: null, error: error.message };
   }
   return { portal: mapPortalRow(data as Record<string, unknown>) };

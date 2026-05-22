@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, Plus, Minus, Package, AlertCircle, CheckCircle, User } from 'lucide-react';
 import { computeStockStatus } from '@/src/lib/stockStatus';
 
@@ -22,7 +22,7 @@ interface StockAdjustmentModalProps {
     type: AdjustmentType;
     quantity: number;
     notes: string;
-  }) => void;
+  }) => void | Promise<void>;
   itemType: 'finished-good' | 'raw-material';
 }
 
@@ -38,6 +38,20 @@ export default function StockAdjustmentModal({
   const [notes, setNotes] = useState('');
   const [showConfirmation, setShowConfirmation] = useState(false);
   const [showPreConfirmation, setShowPreConfirmation] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setAdjustmentType('add');
+      setQuantity('');
+      setNotes('');
+      setShowConfirmation(false);
+      setShowPreConfirmation(false);
+      setSubmitting(false);
+      setSubmitError(null);
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -52,26 +66,23 @@ export default function StockAdjustmentModal({
   const stockChange = adjustmentType === 'add' ? `+${numericQuantity}` : `-${numericQuantity}`;
   const stockChangeColor = adjustmentType === 'add' ? 'text-green-600' : 'text-red-600';
 
-  const handleSubmit = () => {
-    if (!isValidAdjustment) return;
-    
-    onAdjust({
-      type: adjustmentType,
-      quantity: numericQuantity,
-      notes,
-    });
+  const handleSubmit = async () => {
+    if (!isValidAdjustment || submitting) return;
 
-    // Reset form
-    setQuantity('');
-    setNotes('');
-    setShowPreConfirmation(false);
-    setShowConfirmation(true);
-
-    // Auto-close after success
-    setTimeout(() => {
-      setShowConfirmation(false);
-      onClose();
-    }, 2000);
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      await onAdjust({
+        type: adjustmentType,
+        quantity: numericQuantity,
+        notes,
+      });
+      handleClose();
+    } catch (err: unknown) {
+      setSubmitError(err instanceof Error ? err.message : 'Failed to adjust stock');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const handleConfirmClick = () => {
@@ -107,6 +118,8 @@ export default function StockAdjustmentModal({
   const handleClose = () => {
     setShowPreConfirmation(false);
     setShowConfirmation(false);
+    setSubmitError(null);
+    setSubmitting(false);
     setQuantity('');
     setNotes('');
     onClose();
@@ -238,21 +251,33 @@ export default function StockAdjustmentModal({
               </div>
             )}
 
+            {submitError && (
+              <div className="mb-4 flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg">
+                <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+                <p className="text-sm text-red-800">{submitError}</p>
+              </div>
+            )}
+
             {/* Action Buttons */}
             <div className="flex gap-3">
               <button
                 type="button"
-                onClick={() => setShowPreConfirmation(false)}
-                className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium transition-colors"
+                onClick={() => {
+                  setShowPreConfirmation(false);
+                  setSubmitError(null);
+                }}
+                disabled={submitting}
+                className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium transition-colors disabled:opacity-50"
               >
                 Go Back
               </button>
               <button
                 type="button"
-                onClick={handleSubmit}
-                className="flex-1 px-4 py-2.5 bg-red-600 text-white rounded-lg hover:bg-red-700 font-medium transition-colors"
+                onClick={() => void handleSubmit()}
+                disabled={submitting}
+                className="flex-1 px-4 py-2.5 bg-red-600 text-white rounded-lg hover:bg-red-700 font-medium transition-colors disabled:opacity-50"
               >
-                Confirm & Submit
+                {submitting ? 'Saving…' : 'Confirm & Submit'}
               </button>
             </div>
           </div>

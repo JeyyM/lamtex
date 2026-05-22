@@ -722,6 +722,286 @@ export async function fetchTruckFormById(
   return { form: vehicleRowToTruckForm(data as VehicleRow) };
 }
 
+export type BranchTripHistoryRecord = TripHistoryRecord & {
+  vehicleId: string;
+  vehicleName: string;
+  arrivalTime?: string | null;
+  delayReason?: string | null;
+  customerLabel?: string;
+  orderNumbers?: string[];
+};
+
+type BranchLiveTripRow = {
+  id: string;
+  trip_number: string | null;
+  scheduled_date: string | null;
+  driver_id?: string | null;
+  driver_name: string | null;
+  destinations: string[] | null;
+  order_ids: string[] | null;
+  status: string | null;
+  capacity_used_percent: number | string | null;
+  vehicle_id: string | null;
+  vehicle_name: string | null;
+  actual_arrival: string | null;
+  delay_reason: string | null;
+};
+
+type BranchHistTripRow = {
+  id: string;
+  trip_id: string | null;
+  trip_number: string | null;
+  scheduled_date: string | null;
+  driver_name: string | null;
+  destinations: string[] | null;
+  orders_count: number | null;
+  status: string | null;
+  delivery_success_rate: number | string | null;
+  vehicle_id: string | null;
+  vehicle_name: string | null;
+  arrival_time: string | null;
+};
+
+function liveTripRowToBranchHistoryRecord(row: BranchLiveTripRow): BranchTripHistoryRecord {
+  const base = liveTripRowToHistoryRecord(row);
+  return {
+    ...base,
+    vehicleId: row.vehicle_id ?? '',
+    vehicleName: row.vehicle_name?.trim() || '—',
+    arrivalTime: row.actual_arrival,
+    delayReason: row.delay_reason?.trim() ? row.delay_reason : null,
+  };
+}
+
+function mapTripRowToBranchHistory(row: BranchHistTripRow): BranchTripHistoryRecord {
+  const base = mapTripRowToHistory(row);
+  return {
+    ...base,
+    vehicleId: row.vehicle_id ?? '',
+    vehicleName: row.vehicle_name?.trim() || '—',
+    arrivalTime: row.arrival_time,
+  };
+}
+
+async function enrichBranchHistoryOrders(
+  records: BranchTripHistoryRecord[],
+  liveRows: BranchLiveTripRow[],
+): Promise<BranchTripHistoryRecord[]> {
+  const orderIdsByTripId = new Map<string, string[]>();
+  for (const row of liveRows) {
+    orderIdsByTripId.set(row.id, ((row.order_ids ?? []) as string[]).filter(Boolean));
+  }
+  const allOrderIds = [...new Set([...orderIdsByTripId.values()].flat())];
+  if (!allOrderIds.length) return records;
+
+  const { data: orders } = await supabase
+    .from('orders')
+    .select('id, order_number, customer_name')
+    .in('id', allOrderIds);
+
+  const byId = new Map(
+    ((orders ?? []) as { id: string; order_number?: string | null; customer_name?: string | null }[]).map(o => [
+      o.id,
+      o,
+    ]),
+  );
+
+  return records.map(rec => {
+    const oids = rec.tripId ? orderIdsByTripId.get(rec.tripId) ?? [] : [];
+    if (!oids.length) return rec;
+    const names = [
+      ...new Set(
+        oids
+          .map(id => byId.get(id)?.customer_name)
+          .filter((n): n is string => Boolean(n && String(n).trim())),
+      ),
+    ];
+    const orderNumbers = oids
+      .map(id => byId.get(id)?.order_number)
+      .filter((n): n is string => Boolean(n && String(n).trim()));
+    let customerLabel = '—';
+    if (names.length === 1) customerLabel = names[0]!;
+    else if (names.length > 1) customerLabel = `${names[0]} +${names.length - 1}`;
+    return { ...rec, customerLabel, orderNumbers };
+  });
+}
+
+/** Branch-wide finished trips for logistics managers (merges live terminal rows + trip_history). */
+export async function fetchBranchTripHistory(branchName: string): Promise<{
+  records: BranchTripHistoryRecord[];
+  error?: string;
+}> {
+  const bid = await resolveBranchIdByName(branchName.trim());
+  if (!bid) {
+    return { records: [], error: 'Could not resolve branch for trip history.' };
+  }
+
+  const terminalStatuses = ['Completed', 'Failed', 'Delayed'] as const;
+
+  const [{ data: liveTrips, error: liveErr }, { data: histRows, error: histErr }] = await Promise.all([
+    supabase
+      .from('trips')
+      .select(
+        'id, trip_number, scheduled_date, driver_id, driver_name, destinations, order_ids, status, capacity_used_percent, vehicle_id, vehicle_name, actual_arrival, delay_reason',
+      )
+      .eq('branch_id', bid)
+      .in('status', [...terminalStatuses])
+      .order('scheduled_date', { ascending: false })
+      .order('created_at', { ascending: false }),
+    supabase
+      .from('trip_history')
+      .select(
+        'id, trip_id, trip_number, scheduled_date, driver_name, destinations, orders_count, status, delivery_success_rate, vehicle_id, vehicle_name, arrival_time',
+      )
+      .eq('branch_id', bid)
+      .in('status', [...terminalStatuses])
+      .order('scheduled_date', { ascending: false })
+      .order('created_at', { ascending: false }),
+  ]);
+
+  if (liveErr) return { records: [], error: liveErr.message };
+  if (histErr) return { records: [], error: histErr.message };
+
+  const liveRows = (liveTrips ?? []) as BranchLiveTripRow[];
+  const liveById = new Set(liveRows.map(t => t.id));
+  const histOnly = ((histRows ?? []) as BranchHistTripRow[]).filter(h => {
+    const tid = h.trip_id;
+    if (tid == null || tid === '') return true;
+    return !liveById.has(tid);
+  });
+
+  const merged = [
+    ...liveRows.map(liveTripRowToBranchHistoryRecord),
+    ...histOnly.map(mapTripRowToBranchHistory),
+  ].sort((a, b) => {
+    const d = b.date.localeCompare(a.date);
+    if (d !== 0) return d;
+    return (b.tripNumber || '').localeCompare(a.tripNumber || '');
+  });
+
+  const records = await enrichBranchHistoryOrders(merged, liveRows);
+  return { records };
+}
+
+function driverNamesMatch(stored: string | null | undefined, expected: string): boolean {
+  const a = (stored ?? '').trim().toLowerCase();
+  const b = expected.trim().toLowerCase();
+  return Boolean(a && b && a === b);
+}
+
+function liveTripMatchesDriver(
+  row: BranchLiveTripRow,
+  driverId: string,
+  driverName: string,
+): boolean {
+  if (row.driver_id && row.driver_id === driverId) return true;
+  return driverNamesMatch(row.driver_name, driverName);
+}
+
+/** Trips completed by a specific driver (live terminal rows + trip_history). */
+export async function fetchDriverTripHistory(params: {
+  driverId: string;
+  driverName: string;
+  branchName?: string | null;
+}): Promise<{
+  records: BranchTripHistoryRecord[];
+  error?: string;
+}> {
+  const driverId = params.driverId.trim();
+  const driverName = params.driverName.trim();
+  if (!driverId) {
+    return { records: [], error: 'Driver id is required.' };
+  }
+
+  const bid = params.branchName?.trim()
+    ? await resolveBranchIdByName(params.branchName.trim())
+    : null;
+
+  const terminalStatuses = ['Completed', 'Failed', 'Delayed'] as const;
+
+  let liveByIdQuery = supabase
+    .from('trips')
+    .select(
+      'id, trip_number, scheduled_date, driver_id, driver_name, destinations, order_ids, status, capacity_used_percent, vehicle_id, vehicle_name, actual_arrival, delay_reason',
+    )
+    .eq('driver_id', driverId)
+    .in('status', [...terminalStatuses])
+    .order('scheduled_date', { ascending: false })
+    .order('created_at', { ascending: false });
+
+  if (bid) liveByIdQuery = liveByIdQuery.eq('branch_id', bid);
+
+  let histQuery = supabase
+    .from('trip_history')
+    .select(
+      'id, trip_id, trip_number, scheduled_date, driver_name, destinations, orders_count, status, delivery_success_rate, vehicle_id, vehicle_name, arrival_time',
+    )
+    .in('status', [...terminalStatuses])
+    .order('scheduled_date', { ascending: false })
+    .order('created_at', { ascending: false });
+
+  if (bid) histQuery = histQuery.eq('branch_id', bid);
+
+  const [{ data: liveById, error: liveErr }, { data: histRows, error: histErr }] = await Promise.all([
+    liveByIdQuery,
+    histQuery,
+  ]);
+
+  if (liveErr) return { records: [], error: liveErr.message };
+  if (histErr) return { records: [], error: histErr.message };
+
+  const liveRowMap = new Map<string, BranchLiveTripRow>();
+  for (const row of (liveById ?? []) as BranchLiveTripRow[]) {
+    liveRowMap.set(row.id, row);
+  }
+
+  // Legacy / seed rows may only have driver_name (no driver_id).
+  if (driverName) {
+    let liveByNameQuery = supabase
+      .from('trips')
+      .select(
+        'id, trip_number, scheduled_date, driver_id, driver_name, destinations, order_ids, status, capacity_used_percent, vehicle_id, vehicle_name, actual_arrival, delay_reason',
+      )
+      .in('status', [...terminalStatuses])
+      .ilike('driver_name', driverName)
+      .order('scheduled_date', { ascending: false })
+      .order('created_at', { ascending: false });
+
+    if (bid) liveByNameQuery = liveByNameQuery.eq('branch_id', bid);
+
+    const { data: liveByName, error: nameErr } = await liveByNameQuery;
+    if (nameErr) return { records: [], error: nameErr.message };
+
+    for (const row of (liveByName ?? []) as BranchLiveTripRow[]) {
+      if (liveTripMatchesDriver(row, driverId, driverName)) {
+        liveRowMap.set(row.id, row);
+      }
+    }
+  }
+
+  const liveRows = [...liveRowMap.values()];
+  const liveByIdSet = new Set(liveRows.map(t => t.id));
+
+  const histOnly = ((histRows ?? []) as BranchHistTripRow[]).filter(h => {
+    if (!driverNamesMatch(h.driver_name, driverName)) return false;
+    const tid = h.trip_id;
+    if (tid == null || tid === '') return true;
+    return !liveByIdSet.has(tid);
+  });
+
+  const merged = [
+    ...liveRows.map(liveTripRowToBranchHistoryRecord),
+    ...histOnly.map(mapTripRowToBranchHistory),
+  ].sort((a, b) => {
+    const d = b.date.localeCompare(a.date);
+    if (d !== 0) return d;
+    return (b.tripNumber || '').localeCompare(a.tripNumber || '');
+  });
+
+  const records = await enrichBranchHistoryOrders(merged, liveRows);
+  return { records };
+}
+
 /** Full detail for `TruckDetailPage` from Supabase (vehicle primary key UUID). */
 export async function fetchTruckDetailBundle(vehicleUuid: string): Promise<{
   truck: TruckDetails | null;

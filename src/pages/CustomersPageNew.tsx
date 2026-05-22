@@ -6,6 +6,8 @@ import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagination';
 import { supabase } from '@/src/lib/supabase';
+import { downloadCustomersWorkbook, fetchCustomersExportByIds } from '@/src/lib/customersExport';
+import { employeeProfilePathFromAgent } from '@/src/lib/agentAnalytics';
 import { getOrdersByCustomer } from '@/src/mock/orders';
 import {
   User,
@@ -25,6 +27,7 @@ import {
   FileText,
   Search,
   Filter,
+  Download,
   Plus,
   Eye,
   Star,
@@ -56,6 +59,7 @@ import {
 
 interface CustomerRow {
   id: string;
+  customer_code: string | null;
   name: string;
   type: string;
   status: string;
@@ -70,8 +74,53 @@ interface CustomerRow {
   order_count: number;
   last_order_date: string | null;
   assigned_agent_id: string | null;
-  employees: { employee_name: string } | null;
+  employees: { employee_id: string; employee_name: string } | null;
 }
+
+function AssignedAgentLine({ customer }: { customer: CustomerRow }) {
+  if (!customer.assigned_agent_id) {
+    return <div className="text-xs text-gray-400 italic mt-0.5">No agent assigned</div>;
+  }
+
+  const agentPath = employeeProfilePathFromAgent(
+    customer.employees?.employee_id ?? '',
+    customer.assigned_agent_id,
+  );
+  const agentName = customer.employees?.employee_name?.trim() || 'View agent';
+
+  return (
+    <div className="relative z-[2] pointer-events-auto text-xs mt-0.5">
+      <Link
+        to={agentPath}
+        className="text-blue-600 hover:text-blue-800 hover:underline font-medium"
+      >
+        {agentName}
+      </Link>
+    </div>
+  );
+}
+
+function CustomerRowLink({
+  customerId,
+  customerName,
+  primary = false,
+}: {
+  customerId: string;
+  customerName: string;
+  primary?: boolean;
+}) {
+  return (
+    <Link
+      to={`/customers/${customerId}`}
+      className="absolute inset-0 z-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-inset"
+      aria-label={primary ? `View ${customerName}` : undefined}
+      aria-hidden={primary ? undefined : true}
+      tabIndex={primary ? 0 : -1}
+    />
+  );
+}
+
+const customerRowCellContentClass = 'relative z-[1] pointer-events-none';
 
 type CustomerTab = 'all' | 'active' | 'atrisk' | 'dormant';
 
@@ -90,6 +139,7 @@ export function CustomersPage() {
   const [tablePage, setTablePage] = useState(1);
   const [allCustomers, setAllCustomers] = useState<CustomerRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [exportingCustomers, setExportingCustomers] = useState(false);
 
   // Fetch customers from Supabase whenever branch changes
   useEffect(() => {
@@ -99,12 +149,12 @@ export function CustomersPage() {
         let query = supabase
           .from('customers')
           .select(`
-            id, name, type, status, risk_level, payment_behavior,
+            id, customer_code, name, type, status, risk_level, payment_behavior,
             contact_person, phone, email,
             outstanding_balance, overdue_amount,
             total_purchases_ytd, order_count, last_order_date,
             assigned_agent_id,
-            employees!assigned_agent_id ( employee_name ),
+            employees!assigned_agent_id ( employee_id, employee_name ),
             branches!branch_id ( name )
           `)
           .order('name');
@@ -126,6 +176,7 @@ export function CustomersPage() {
         setAllCustomers(
           filtered.map((c: any) => ({
             id: c.id,
+            customer_code: c.customer_code ? String(c.customer_code) : null,
             name: c.name,
             type: c.type ?? '',
             status: c.status ?? 'Active',
@@ -140,7 +191,12 @@ export function CustomersPage() {
             order_count: c.order_count ?? 0,
             last_order_date: c.last_order_date ?? null,
             assigned_agent_id: c.assigned_agent_id ?? null,
-            employees: c.employees ?? null,
+            employees: c.employees
+              ? {
+                  employee_id: String(c.employees.employee_id ?? ''),
+                  employee_name: String(c.employees.employee_name ?? ''),
+                }
+              : null,
           }))
         );
       } catch (err) {
@@ -157,6 +213,7 @@ export function CustomersPage() {
   const filteredCustomers = allCustomers.filter(customer => {
     const matchesSearch =
       customer.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (customer.customer_code ?? '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       customer.contact_person.toLowerCase().includes(searchTerm.toLowerCase()) ||
       customer.id.toLowerCase().includes(searchTerm.toLowerCase());
 
@@ -353,20 +410,52 @@ export function CustomersPage() {
                 className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
               />
             </div>
-            <Button
-              variant={activeFilterCount > 0 ? 'primary' : 'outline'}
-              size="sm"
-              className="gap-2 w-full md:w-auto flex-shrink-0"
-              onClick={() => setShowFilters(v => !v)}
-            >
-              <Filter className="w-4 h-4" />
-              Filters
-              {activeFilterCount > 0 && (
-                <span className="bg-white text-red-600 rounded-full text-xs px-1.5 font-bold leading-none py-0.5">
-                  {activeFilterCount}
-                </span>
-              )}
-            </Button>
+            <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto flex-shrink-0">
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-2 w-full sm:w-auto"
+                disabled={exportingCustomers || loading || sortedCustomers.length === 0}
+                onClick={async () => {
+                  if (exportingCustomers || loading || sortedCustomers.length === 0) return;
+                  setExportingCustomers(true);
+                  try {
+                    const rows = await fetchCustomersExportByIds(sortedCustomers.map((c) => c.id));
+                    await downloadCustomersWorkbook(branch ?? 'All branches', rows);
+                    addAuditLog(
+                      'Exported customers workbook',
+                      'Customer',
+                      `${rows.length} customer${rows.length !== 1 ? 's' : ''} (${branch ?? 'All branches'})`,
+                    );
+                  } catch (err) {
+                    window.alert(err instanceof Error ? err.message : 'Export failed.');
+                  } finally {
+                    setExportingCustomers(false);
+                  }
+                }}
+              >
+                {exportingCustomers ? (
+                  <Loader2 className="w-4 h-4 animate-spin" aria-hidden />
+                ) : (
+                  <Download className="w-4 h-4" />
+                )}
+                {exportingCustomers ? 'Exporting…' : 'Export'}
+              </Button>
+              <Button
+                variant={activeFilterCount > 0 ? 'primary' : 'outline'}
+                size="sm"
+                className="gap-2 w-full sm:w-auto"
+                onClick={() => setShowFilters(v => !v)}
+              >
+                <Filter className="w-4 h-4" />
+                Filters
+                {activeFilterCount > 0 && (
+                  <span className="bg-white text-red-600 rounded-full text-xs px-1.5 font-bold leading-none py-0.5">
+                    {activeFilterCount}
+                  </span>
+                )}
+              </Button>
+            </div>
           </div>
 
           {/* Expanded filter row */}
@@ -491,84 +580,89 @@ export function CustomersPage() {
                 {pagedCustomers.map((customer) => (
                   <tr
                     key={customer.id}
-                    className="hover:bg-gray-50"
+                    className="hover:bg-gray-50 relative"
                   >
-                    <td className="px-6 py-4 max-[474px]:border-r max-[474px]:border-gray-200">
-                      <Link to={`/customers/${customer.id}`} className="block">
+                    <td className="relative px-6 py-4 max-[474px]:border-r max-[474px]:border-gray-200">
+                      <CustomerRowLink customerId={customer.id} customerName={customer.name} primary />
+                      <div className={customerRowCellContentClass}>
                         <div className="font-medium text-gray-900">{customer.name}</div>
-                        {customer.employees && (
-                          <div className="text-xs text-gray-400 mt-0.5">{customer.employees.employee_name}</div>
-                        )}
-                        {/* Show type below name on screens ≤1555px */}
+                        {customer.customer_code ? (
+                          <div className="text-xs text-gray-500 font-mono mt-0.5">{customer.customer_code}</div>
+                        ) : null}
                         <div className="mt-1 min-[1556px]:hidden">
                           <span className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold text-center leading-tight ${getTypeStyle(customer.type)}`}>
                             {customer.type}
                           </span>
                         </div>
-                        {/* Show contact below customer on screens ≤474px */}
                         <div className="max-[474px]:block hidden">
                           <hr className="my-2 border-gray-200" />
                           <div className="text-sm">
                             <div className="font-medium text-gray-900">{customer.contact_person}</div>
                             <div className="text-xs text-gray-500">{customer.phone}</div>
-                            {/* Show last order below contact on screens <1100px */}
                             <div className="mt-2 min-[1100px]:hidden">
                               <div className="text-xs font-bold text-gray-700">Last Order</div>
                               <div className="text-xs text-gray-600">{customer.last_order_date || 'Never'}</div>
                             </div>
                           </div>
                         </div>
-                      </Link>
+                      </div>
+                      <AssignedAgentLine customer={customer} />
                     </td>
-                    <td className="px-6 py-4 hidden min-[1556px]:table-cell">
-                      <Link to={`/customers/${customer.id}`} className="block">
+                    <td className="relative px-6 py-4 hidden min-[1556px]:table-cell">
+                      <CustomerRowLink customerId={customer.id} customerName={customer.name} />
+                      <div className={customerRowCellContentClass}>
                         <span className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold text-center leading-tight max-w-[120px] break-words ${getTypeStyle(customer.type)}`}>
                           {customer.type}
                         </span>
-                      </Link>
+                      </div>
                     </td>
-                    <td className="px-6 py-4 hidden min-[475px]:table-cell">
-                      <Link to={`/customers/${customer.id}`} className="block text-sm">
+                    <td className="relative px-6 py-4 hidden min-[475px]:table-cell">
+                      <CustomerRowLink customerId={customer.id} customerName={customer.name} />
+                      <div className={`${customerRowCellContentClass} text-sm`}>
                         <div className="font-medium text-gray-900">{customer.contact_person}</div>
                         <div className="text-xs text-gray-500">{customer.phone}</div>
-                        {/* Show last order below contact on screens <1100px */}
                         <div className="mt-2 min-[1100px]:hidden">
                           <div className="text-xs font-bold text-gray-700">Last Order</div>
                           <div className="text-xs text-gray-600">{customer.last_order_date || 'Never'}</div>
                         </div>
-                      </Link>
+                      </div>
                     </td>
-                    <td className="px-6 py-4 text-right hidden min-[1330px]:table-cell">
-                      <Link to={`/customers/${customer.id}`} className="block">
+                    <td className="relative px-6 py-4 text-right hidden min-[1330px]:table-cell">
+                      <CustomerRowLink customerId={customer.id} customerName={customer.name} />
+                      <div className={customerRowCellContentClass}>
                         <div className="font-medium text-gray-900">₱{(customer.total_purchases_ytd / 1000000).toFixed(1)}M</div>
                         <div className="text-xs text-gray-500">{customer.order_count} orders</div>
-                      </Link>
+                      </div>
                     </td>
-                    <td className="px-6 py-4 text-right max-[474px]:border-r max-[474px]:border-gray-200">
-                      <Link to={`/customers/${customer.id}`} className="block">
+                    <td className="relative px-6 py-4 text-right max-[474px]:border-r max-[474px]:border-gray-200">
+                      <CustomerRowLink customerId={customer.id} customerName={customer.name} />
+                      <div className={customerRowCellContentClass}>
                         <div className={`font-medium ${customer.overdue_amount > 0 ? 'text-red-600' : 'text-gray-900'}`}>
                           ₱{(customer.outstanding_balance / 1000).toFixed(0)}K
                         </div>
                         {customer.overdue_amount > 0 && (
                           <div className="text-xs text-red-600">₱{(customer.overdue_amount / 1000).toFixed(0)}K overdue</div>
                         )}
-                        {/* Show risk below outstanding on screens ≤1210px */}
                         <div className="mt-1 min-[1211px]:hidden flex justify-end">
                           <Badge variant={getRiskBadgeVariant(customer.risk_level)}>
                             {customer.risk_level}
                           </Badge>
                         </div>
-                      </Link>
+                      </div>
                     </td>
-                    <td className="px-6 py-4 text-center hidden min-[1211px]:table-cell">
-                      <Link to={`/customers/${customer.id}`} className="block">
+                    <td className="relative px-6 py-4 text-center hidden min-[1211px]:table-cell">
+                      <CustomerRowLink customerId={customer.id} customerName={customer.name} />
+                      <div className={customerRowCellContentClass}>
                         <Badge variant={getRiskBadgeVariant(customer.risk_level)}>
                           {customer.risk_level}
                         </Badge>
-                      </Link>
+                      </div>
                     </td>
-                    <td className="px-6 py-4 text-gray-600 hidden min-[1100px]:table-cell">
-                      <Link to={`/customers/${customer.id}`} className="block">{customer.last_order_date || 'Never'}</Link>
+                    <td className="relative px-6 py-4 text-gray-600 hidden min-[1100px]:table-cell">
+                      <CustomerRowLink customerId={customer.id} customerName={customer.name} />
+                      <div className={customerRowCellContentClass}>
+                        {customer.last_order_date || 'Never'}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -588,48 +682,49 @@ export function CustomersPage() {
           {/* Mobile Card View */}
           <div className="md:hidden divide-y divide-gray-200">
             {pagedCustomers.map((customer) => (
-              <Link key={customer.id} to={`/customers/${customer.id}`} className="block p-4 space-y-3 hover:bg-gray-50">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    <p className="font-medium text-gray-900 break-words">{customer.name}</p>
-                    {customer.employees && (
-                      <p className="text-xs text-gray-400 mt-0.5">{customer.employees.employee_name}</p>
+              <div key={customer.id} className="relative p-4 space-y-3 hover:bg-gray-50">
+                <CustomerRowLink customerId={customer.id} customerName={customer.name} primary />
+                <div className={`${customerRowCellContentClass} space-y-3`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-medium text-gray-900 break-words">{customer.name}</p>
+                      <AssignedAgentLine customer={customer} />
+                    </div>
+                    <Badge variant={getRiskBadgeVariant(customer.risk_level)} className="flex-shrink-0">
+                      {customer.risk_level}
+                    </Badge>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <Badge variant="default">{customer.type}</Badge>
+                    {customer.overdue_amount > 0 && (
+                      <Badge variant="danger">Overdue</Badge>
                     )}
                   </div>
-                  <Badge variant={getRiskBadgeVariant(customer.risk_level)} className="flex-shrink-0">
-                    {customer.risk_level}
-                  </Badge>
-                </div>
 
-                <div className="flex items-center gap-2">
-                  <Badge variant="default">{customer.type}</Badge>
-                  {customer.overdue_amount > 0 && (
-                    <Badge variant="danger">Overdue</Badge>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-2 gap-3 text-sm">
-                  <div>
-                    <p className="text-xs text-gray-500">Contact Person</p>
-                    <p className="text-gray-900 font-medium">{customer.contact_person}</p>
-                    <p className="text-xs text-gray-600">{customer.phone}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500">Outstanding</p>
-                    <p className={`font-semibold ${customer.overdue_amount > 0 ? 'text-red-600' : 'text-gray-900'}`}>
-                      ₱{(customer.outstanding_balance / 1000).toFixed(0)}K
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500">YTD Sales</p>
-                    <p className="text-gray-900 font-medium">₱{(customer.total_purchases_ytd / 1000000).toFixed(1)}M</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500">Last Order</p>
-                    <p className="text-gray-900">{customer.last_order_date || 'Never'}</p>
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <p className="text-xs text-gray-500">Contact Person</p>
+                      <p className="text-gray-900 font-medium">{customer.contact_person}</p>
+                      <p className="text-xs text-gray-600">{customer.phone}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500">Outstanding</p>
+                      <p className={`font-semibold ${customer.overdue_amount > 0 ? 'text-red-600' : 'text-gray-900'}`}>
+                        ₱{(customer.outstanding_balance / 1000).toFixed(0)}K
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500">YTD Sales</p>
+                      <p className="text-gray-900 font-medium">₱{(customer.total_purchases_ytd / 1000000).toFixed(1)}M</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500">Last Order</p>
+                      <p className="text-gray-900">{customer.last_order_date || 'Never'}</p>
+                    </div>
                   </div>
                 </div>
-              </Link>
+              </div>
             ))}
             {filteredCustomers.length === 0 && (
               <div className="px-4 py-12 text-center text-gray-500">

@@ -32,6 +32,8 @@ interface Agent {
 }
 
 interface CustomerFormData {
+  /** Business ID: CUS-{BRANCH}-{NNNNNN} */
+  customerCode: string;
   name: string;
   type: 'Hardware Store' | 'Construction Company' | 'Contractor' | 'Distributor';
   /** Drives agent commission: Office 0.5%, Personal 1% */
@@ -90,6 +92,7 @@ export function CustomerFormPage() {
   const { branch: contextBranch } = useAppContext();
 
   const [formData, setFormData] = useState<CustomerFormData>({
+    customerCode: '',
     name: '',
     type: 'Hardware Store',
     clientType: 'Office',
@@ -155,6 +158,7 @@ export function CustomerFormPage() {
 
         setExistingBranchId(data.branch_id ? String(data.branch_id) : null);
         setFormData({
+          customerCode: data.customer_code ? String(data.customer_code) : '',
           name: data.name ?? '',
           type: data.type ?? 'Hardware Store',
           clientType: data.client_type === 'Personal' ? 'Personal' : 'Office',
@@ -292,6 +296,9 @@ export function CustomerFormPage() {
   const validateForm = (): boolean => {
     const newErrors: Partial<Record<keyof CustomerFormData, string>> = {};
 
+    if (isEditMode && !formData.customerCode.trim()) {
+      newErrors.customerCode = 'Customer ID is required';
+    }
     if (!formData.name.trim()) newErrors.name = 'Customer name is required';
     if (!formData.contactPerson.trim()) newErrors.contactPerson = 'Contact person is required';
     if (!formData.phone.trim()) newErrors.phone = 'Phone number is required';
@@ -358,6 +365,7 @@ export function CustomerFormPage() {
       }
       const availableCredit = Math.max(0, creditLimit - outstandingBalance);
 
+      const trimmedCustomerCode = formData.customerCode.trim();
       const payload = {
         name: formData.name.trim(),
         type: formData.type,
@@ -381,6 +389,7 @@ export function CustomerFormPage() {
         status: formData.status,
         map_lat: customerMapPin?.lat ?? null,
         map_lng: customerMapPin?.lng ?? null,
+        ...(trimmedCustomerCode ? { customer_code: trimmedCustomerCode } : {}),
       };
 
       if (isEditMode && id) {
@@ -397,7 +406,11 @@ export function CustomerFormPage() {
       }
     } catch (err: any) {
       console.error('Failed to save customer:', err);
-      alert(`Failed to save customer: ${err.message ?? 'Unknown error'}`);
+      const msg =
+        err?.code === '23505' && String(err?.message ?? '').includes('customer_code')
+          ? 'That Customer ID is already in use. Choose a different code.'
+          : err.message ?? 'Unknown error';
+      alert(`Failed to save customer: ${msg}`);
     } finally {
       setSaving(false);
     }
@@ -466,6 +479,30 @@ export function CustomerFormPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {isEditMode ? (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Customer ID <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    name="customerCode"
+                    value={formData.customerCode}
+                    onChange={handleInputChange}
+                    className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent font-mono text-sm ${
+                      errors.customerCode ? 'border-red-500' : 'border-gray-300'
+                    }`}
+                    placeholder="CUS-BTG-000010"
+                  />
+                  {errors.customerCode && (
+                    <p className="text-red-500 text-xs mt-1 flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" />
+                      {errors.customerCode}
+                    </p>
+                  )}
+                </div>
+              ) : null}
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   Customer Name <span className="text-red-500">*</span>

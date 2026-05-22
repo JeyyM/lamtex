@@ -5,6 +5,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Ca
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { supabase } from '@/src/lib/supabase';
+import {
+  downloadSuppliersWorkbook,
+  fetchSuppliersExportBundle,
+} from '@/src/lib/suppliersExport';
 import { SUPPLIER_DETAIL_SELECT, type SupplierRow } from '@/src/pages/supplierModel';
 import {
   Factory,
@@ -36,7 +40,7 @@ import {
 type ViewMode = 'overview' | 'spending';
 
 export function SuppliersPage() {
-  const { branch } = useAppContext();
+  const { branch, addAuditLog } = useAppContext();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const legacyOpenSupplierId = searchParams.get('supplier');
@@ -55,6 +59,8 @@ export function SuppliersPage() {
   const [poSpendBySupplier, setPoSpendBySupplier] = useState<
     Record<string, { ytd: number; ytdN: number; lifetime: number; n: number }>
   >({});
+
+  const [exportingSuppliers, setExportingSuppliers] = useState(false);
 
   // ── Fetch ──────────────────────────────────────────────
   const fetchSuppliers = useCallback(async () => {
@@ -175,6 +181,28 @@ export function SuppliersPage() {
     const matchesStatus = filterStatus === 'All' || s.status     === filterStatus;
     return matchesSearch && matchesType && matchesRisk && matchesStatus;
   });
+
+  const handleExportSuppliers = async () => {
+    if (exportingSuppliers || filteredSuppliers.length === 0) return;
+    setExportingSuppliers(true);
+    try {
+      const bundle = await fetchSuppliersExportBundle(filteredSuppliers.map((s) => s.id));
+      await downloadSuppliersWorkbook({
+        branchLabel: branch ?? 'All branches',
+        suppliers: bundle.suppliers,
+        materials: bundle.materials,
+      });
+      addAuditLog(
+        'Exported suppliers workbook',
+        'Supplier',
+        `${bundle.suppliers.length} supplier${bundle.suppliers.length !== 1 ? 's' : ''}`,
+      );
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Export failed.');
+    } finally {
+      setExportingSuppliers(false);
+    }
+  };
 
   /** YTD = calendar year; uses purchase_orders when available, else `suppliers.total_purchases_ytd`. */
   const totalYTD = useMemo(() => {
@@ -445,7 +473,7 @@ export function SuppliersPage() {
                     <option value="Services">Services</option>
                   </select>
                 </div>
-                <div className="flex flex-col sm:flex-row gap-3">
+                <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
                   <select
                     value={filterRisk}
                     onChange={e => setFilterRisk(e.target.value)}
@@ -467,9 +495,19 @@ export function SuppliersPage() {
                     <option value="Suspended">Suspended</option>
                     <option value="Under Review">Under Review</option>
                   </select>
-                  <Button variant="outline" className="gap-2">
-                    <Download className="w-4 h-4" />
-                    <span className="hidden sm:inline">Export</span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="gap-2 shrink-0 sm:ml-auto"
+                    disabled={exportingSuppliers || filteredSuppliers.length === 0}
+                    onClick={() => void handleExportSuppliers()}
+                  >
+                    {exportingSuppliers ? (
+                      <Loader2 className="w-4 h-4 animate-spin" aria-hidden />
+                    ) : (
+                      <Download className="w-4 h-4" />
+                    )}
+                    {exportingSuppliers ? 'Exporting…' : 'Export'}
                   </Button>
                 </div>
               </div>

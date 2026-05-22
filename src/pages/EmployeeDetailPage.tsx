@@ -4,10 +4,15 @@ import {
   Activity as ActivityLineIcon,
   AlertCircle,
   AlertTriangle,
+  ArrowDown,
   ArrowLeft,
+  ArrowUp,
+  ArrowUpDown,
   Briefcase,
   Building2,
   Calendar,
+  CalendarRange,
+  ClipboardList,
   DollarSign,
   Eye,
   EyeOff,
@@ -33,17 +38,34 @@ import {
   Upload,
   Edit2,
   X,
+  Search,
+  ShoppingCart,
 } from 'lucide-react';
 import { Button } from '@/src/components/ui/Button';
 import { Badge } from '@/src/components/ui/Badge';
+import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagination';
 import type { EmployeeRole } from '@/src/types/employee';
 import { useAppContext } from '@/src/store/AppContext';
 import { supabase } from '@/src/lib/supabase';
+import {
+  DATE_PERIOD_OPTIONS,
+  inDatePeriodRange,
+  pad2Local,
+  periodTriggerLabel,
+  resolveDatePeriodQuery,
+  todayIsoLocal,
+  type DatePeriodKind,
+} from '@/src/lib/datePeriodQuery';
 import ImageGalleryModal from '@/src/components/ImageGalleryModal';
 import {
   fetchEmployeeFullProfile,
   fetchEmployeeWithPerformanceByIdentifier,
+  fetchAgentOrders,
+  fetchWarehouseManagerRequests,
   type EmployeeActivityFeedItem,
+  type EmployeeAgentOrderRow,
+  type EmployeeProductionRequestRow,
+  type EmployeePurchaseOrderRow,
   type EmployeeFullProfile,
   type EmployeePerfRow,
   type LogisticsManagerPerf,
@@ -51,6 +73,13 @@ import {
   type TruckDriverPerf,
   type WarehouseManagerPerf,
 } from '@/src/lib/employeesData';
+import {
+  fetchWarehouseAssignmentCatalog,
+  fetchWarehouseAssignmentIds,
+  saveWarehouseAssignments,
+  type WarehouseCatalogMaterial,
+  type WarehouseCatalogProduct,
+} from '@/src/lib/warehouseAssignments';
 import {
   upsertEmployeePersonalInfo,
   upsertEmployeeContactInfo,
@@ -64,6 +93,11 @@ import {
   updateEmployeeCertificationRow,
   updateEmployeeTrainingRow,
 } from '@/src/lib/employeeProfileMutations';
+import { fetchBranchTripHistory, fetchDriverTripHistory, type BranchTripHistoryRecord } from '@/src/lib/fleetTrucks';
+import { fetchTripById } from '@/src/lib/logisticsScheduling';
+import { dispatchTableStatusBadgeVariant, tripStatusDisplay } from '@/src/lib/dispatchQueueUi';
+import { TripDetailsModal } from '@/src/components/logistics/TripDetailsModal';
+import type { Trip } from '@/src/types/logistics';
 
 function isSalesAgent(emp: EmployeePerfRow): emp is SalesAgentPerf {
   return emp.role === 'Sales Agent';
@@ -76,6 +110,10 @@ function isWarehouseManager(emp: EmployeePerfRow): emp is WarehouseManagerPerf {
 }
 function isTruckDriver(emp: EmployeePerfRow): emp is TruckDriverPerf {
   return emp.role === 'Truck Driver';
+}
+
+function showTripHistoryTab(emp: EmployeePerfRow): boolean {
+  return isLogisticsManager(emp) || isTruckDriver(emp);
 }
 
 function formatPeso(value: number | null | undefined): string {
@@ -197,12 +235,51 @@ function formatProfileDate(d: string | null | undefined): string | null {
   }
 }
 
-/** Activity log: `YYYY-MM-DD HH:mm:ss` (local). */
 function formatActivityLogTimestamp(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function formatOrderDate(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+function orderPaymentStatusVariant(status: string): 'success' | 'warning' | 'info' | 'danger' | 'neutral' {
+  switch (status) {
+    case 'Paid':
+      return 'success';
+    case 'Partially Paid':
+      return 'warning';
+    case 'On Credit':
+    case 'Invoiced':
+      return 'info';
+    case 'Overdue':
+      return 'danger';
+    default:
+      return 'neutral';
+  }
+}
+
+function productionRequestStatusVariant(status: string): 'success' | 'warning' | 'info' | 'danger' | 'neutral' | 'default' {
+  if (status === 'Completed') return 'success';
+  if (status === 'Cancelled' || status === 'Rejected') return 'danger';
+  if (status === 'Requested') return 'warning';
+  if (status === 'In Progress') return 'info';
+  if (status === 'Accepted') return 'default';
+  return 'neutral';
+}
+
+function purchaseOrderStatusVariant(status: string): 'success' | 'warning' | 'info' | 'danger' | 'neutral' | 'default' {
+  if (status === 'Completed') return 'success';
+  if (status === 'Partially Received') return 'warning';
+  if (status === 'Cancelled' || status === 'Rejected') return 'danger';
+  if (status === 'Requested') return 'warning';
+  return 'neutral';
 }
 
 function activityFeedVariantIconClass(variant: EmployeeActivityFeedItem['variant']): string {
@@ -331,10 +408,55 @@ type DetailTab =
   | 'employment'
   | 'compensation'
   | 'customers'
+  | 'orders'
+  | 'trips'
+  | 'requests'
+  | 'catalog'
   | 'skills'
   | 'documents'
   | 'assets'
   | 'activity';
+
+const ACTIVITY_PAGE_SIZE = TABLE_PAGE_SIZE;
+const AGENT_ORDERS_PAGE_SIZE = TABLE_PAGE_SIZE;
+const TRIP_HISTORY_PAGE_SIZE = TABLE_PAGE_SIZE;
+const WAREHOUSE_PR_PAGE_SIZE = TABLE_PAGE_SIZE;
+const WAREHOUSE_PO_PAGE_SIZE = TABLE_PAGE_SIZE;
+
+type AgentOrdersSortKey =
+  | 'orderNumber'
+  | 'customer'
+  | 'orderDate'
+  | 'requiredDate'
+  | 'total'
+  | 'paid'
+  | 'balance'
+  | 'status'
+  | 'payment';
+
+type TripHistorySortKey =
+  | 'tripNumber'
+  | 'date'
+  | 'vehicle'
+  | 'driver'
+  | 'orders'
+  | 'status';
+
+type WarehousePrSortKey =
+  | 'prNumber'
+  | 'requestDate'
+  | 'expectedDate'
+  | 'branch'
+  | 'items'
+  | 'status';
+
+type WarehousePoSortKey =
+  | 'poNumber'
+  | 'orderDate'
+  | 'expectedDate'
+  | 'supplier'
+  | 'total'
+  | 'status';
 
 const DETAIL_TABS: { id: DetailTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: 'overview', label: 'Overview', icon: Users },
@@ -342,6 +464,10 @@ const DETAIL_TABS: { id: DetailTab; label: string; icon: React.ComponentType<{ c
   { id: 'employment', label: 'Employment', icon: Briefcase },
   { id: 'compensation', label: 'Compensation', icon: DollarSign },
   { id: 'customers', label: 'Customers', icon: UserCircle },
+  { id: 'orders', label: 'Orders', icon: ShoppingCart },
+  { id: 'trips', label: 'Trip History', icon: Truck },
+  { id: 'requests', label: 'PO & PR', icon: ClipboardList },
+  { id: 'catalog', label: 'Catalog access', icon: Package },
   { id: 'skills', label: 'Skills & Training', icon: GraduationCap },
   { id: 'documents', label: 'Documents', icon: Folder },
   { id: 'assets', label: 'Assets', icon: Package },
@@ -425,7 +551,7 @@ function emptyProfileState(): EmployeeFullProfile {
 export default function EmployeeDetailPage() {
   const { employeeId: routeParam } = useParams<{ employeeId: string }>();
   const navigate = useNavigate();
-  const { employeeName, session, addAuditLog } = useAppContext();
+  const { employeeName, session, addAuditLog, employeeId: sessionEmployeeId, refreshWarehouseScope } = useAppContext();
   const [employee, setEmployee] = useState<EmployeePerfRow | null | undefined>(undefined);
   const [profile, setProfile] = useState<EmployeeFullProfile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -537,6 +663,73 @@ export default function EmployeeDetailPage() {
   const [trDur, setTrDur] = useState('');
   const [trDone, setTrDone] = useState('');
   const [trInst, setTrInst] = useState('');
+
+  const [activityPage, setActivityPage] = useState(1);
+  const [agentOrders, setAgentOrders] = useState<EmployeeAgentOrderRow[]>([]);
+  const [agentOrdersLoading, setAgentOrdersLoading] = useState(false);
+  const [agentOrdersError, setAgentOrdersError] = useState<string | null>(null);
+  const [agentOrdersPage, setAgentOrdersPage] = useState(1);
+  const [agentOrdersSearch, setAgentOrdersSearch] = useState('');
+  const [agentOrdersSortKey, setAgentOrdersSortKey] = useState<AgentOrdersSortKey>('orderDate');
+  const [agentOrdersSortDir, setAgentOrdersSortDir] = useState<'asc' | 'desc'>('desc');
+  const [agentOrdersStatusFilter, setAgentOrdersStatusFilter] = useState('');
+  const [agentOrdersPaymentFilter, setAgentOrdersPaymentFilter] = useState('');
+  const [agentOrdersPeriodKind, setAgentOrdersPeriodKind] = useState<DatePeriodKind>('month');
+  const [agentOrdersCustomStart, setAgentOrdersCustomStart] = useState('');
+  const [agentOrdersCustomEnd, setAgentOrdersCustomEnd] = useState('');
+  const [agentOrdersPeriodModalOpen, setAgentOrdersPeriodModalOpen] = useState(false);
+  const [draftAgentOrdersPeriodKind, setDraftAgentOrdersPeriodKind] = useState<DatePeriodKind>('month');
+  const [draftAgentOrdersCustomStart, setDraftAgentOrdersCustomStart] = useState('');
+  const [draftAgentOrdersCustomEnd, setDraftAgentOrdersCustomEnd] = useState('');
+  const [tripHistory, setTripHistory] = useState<BranchTripHistoryRecord[]>([]);
+  const [tripHistoryLoading, setTripHistoryLoading] = useState(false);
+  const [tripHistoryError, setTripHistoryError] = useState<string | null>(null);
+  const [tripHistoryPage, setTripHistoryPage] = useState(1);
+  const [tripHistorySearch, setTripHistorySearch] = useState('');
+  const [tripHistorySortKey, setTripHistorySortKey] = useState<TripHistorySortKey>('date');
+  const [tripHistorySortDir, setTripHistorySortDir] = useState<'asc' | 'desc'>('desc');
+  const [tripHistoryStatusFilter, setTripHistoryStatusFilter] = useState('');
+  const [tripHistoryPeriodKind, setTripHistoryPeriodKind] = useState<DatePeriodKind>('month');
+  const [tripHistoryCustomStart, setTripHistoryCustomStart] = useState('');
+  const [tripHistoryCustomEnd, setTripHistoryCustomEnd] = useState('');
+  const [tripHistoryPeriodModalOpen, setTripHistoryPeriodModalOpen] = useState(false);
+  const [draftTripHistoryPeriodKind, setDraftTripHistoryPeriodKind] = useState<DatePeriodKind>('month');
+  const [draftTripHistoryCustomStart, setDraftTripHistoryCustomStart] = useState('');
+  const [draftTripHistoryCustomEnd, setDraftTripHistoryCustomEnd] = useState('');
+  const [tripDetailOpen, setTripDetailOpen] = useState(false);
+  const [tripDetailTrip, setTripDetailTrip] = useState<Trip | null>(null);
+  const [tripDetailLoading, setTripDetailLoading] = useState(false);
+  const [warehouseProductionRequests, setWarehouseProductionRequests] = useState<EmployeeProductionRequestRow[]>([]);
+  const [warehousePurchaseOrders, setWarehousePurchaseOrders] = useState<EmployeePurchaseOrderRow[]>([]);
+  const [warehouseRequestsLoading, setWarehouseRequestsLoading] = useState(false);
+  const [warehouseRequestsError, setWarehouseRequestsError] = useState<string | null>(null);
+  const [warehouseRequestsSearch, setWarehouseRequestsSearch] = useState('');
+  const [warehouseRequestsPeriodKind, setWarehouseRequestsPeriodKind] = useState<DatePeriodKind>('all');
+  const [warehouseRequestsCustomStart, setWarehouseRequestsCustomStart] = useState('');
+  const [warehouseRequestsCustomEnd, setWarehouseRequestsCustomEnd] = useState('');
+  const [warehouseRequestsPeriodModalOpen, setWarehouseRequestsPeriodModalOpen] = useState(false);
+  const [draftWarehouseRequestsPeriodKind, setDraftWarehouseRequestsPeriodKind] = useState<DatePeriodKind>('month');
+  const [draftWarehouseRequestsCustomStart, setDraftWarehouseRequestsCustomStart] = useState('');
+  const [draftWarehouseRequestsCustomEnd, setDraftWarehouseRequestsCustomEnd] = useState('');
+  const [warehousePrPage, setWarehousePrPage] = useState(1);
+  const [warehousePoPage, setWarehousePoPage] = useState(1);
+  const [warehousePrSortKey, setWarehousePrSortKey] = useState<WarehousePrSortKey>('requestDate');
+  const [warehousePrSortDir, setWarehousePrSortDir] = useState<'asc' | 'desc'>('desc');
+  const [warehousePoSortKey, setWarehousePoSortKey] = useState<WarehousePoSortKey>('orderDate');
+  const [warehousePoSortDir, setWarehousePoSortDir] = useState<'asc' | 'desc'>('desc');
+  const [warehousePrStatusFilter, setWarehousePrStatusFilter] = useState('');
+  const [warehousePoStatusFilter, setWarehousePoStatusFilter] = useState('');
+  const [catalogProducts, setCatalogProducts] = useState<WarehouseCatalogProduct[]>([]);
+  const [catalogMaterials, setCatalogMaterials] = useState<WarehouseCatalogMaterial[]>([]);
+  const [selectedProductIds, setSelectedProductIds] = useState<Set<string>>(new Set());
+  const [selectedMaterialIds, setSelectedMaterialIds] = useState<Set<string>>(new Set());
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogSaving, setCatalogSaving] = useState(false);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [catalogSearch, setCatalogSearch] = useState('');
+  const [catalogSection, setCatalogSection] = useState<'products' | 'materials'>('products');
+  const [catalogProductCategoryId, setCatalogProductCategoryId] = useState('');
+  const [catalogMaterialCategoryId, setCatalogMaterialCategoryId] = useState('');
 
   useEffect(() => {
     if (!routeParam) {
@@ -797,6 +990,1011 @@ export default function EmployeeDetailPage() {
   ]);
 
   const RoleIcon = useMemo(() => getRoleIcon(employee?.role ?? null), [employee?.role]);
+
+  const activityFeed = profile?.activityFeed ?? [];
+  const activityTotalPages = Math.max(1, Math.ceil(activityFeed.length / ACTIVITY_PAGE_SIZE));
+  const safeActivityPage = Math.min(Math.max(1, activityPage), activityTotalPages);
+  const paginatedActivity = useMemo(
+    () => activityFeed.slice((safeActivityPage - 1) * ACTIVITY_PAGE_SIZE, safeActivityPage * ACTIVITY_PAGE_SIZE),
+    [activityFeed, safeActivityPage],
+  );
+
+  const distinctAgentOrderStatuses = useMemo(
+    () => [...new Set(agentOrders.map(r => r.status).filter(Boolean))].sort(),
+    [agentOrders],
+  );
+  const distinctAgentPaymentStatuses = useMemo(
+    () => [...new Set(agentOrders.map(r => r.paymentStatus).filter(Boolean))].sort(),
+    [agentOrders],
+  );
+
+  const agentOrdersPeriodQuery = useMemo(
+    () => resolveDatePeriodQuery(agentOrdersPeriodKind, agentOrdersCustomStart, agentOrdersCustomEnd),
+    [agentOrdersPeriodKind, agentOrdersCustomStart, agentOrdersCustomEnd],
+  );
+
+  const maxAgentOrdersCustomDate = useMemo(() => todayIsoLocal(), []);
+
+  const draftAgentOrdersCustomInvalid = Boolean(
+    draftAgentOrdersCustomStart && draftAgentOrdersCustomEnd && draftAgentOrdersCustomStart > draftAgentOrdersCustomEnd,
+  );
+
+  const filteredAgentOrders = useMemo(() => {
+    const q = agentOrdersSearch.trim().toLowerCase();
+    return agentOrders.filter(row => {
+      if (!agentOrdersPeriodQuery.invalid) {
+        if (!inDatePeriodRange(row.orderDate, agentOrdersPeriodQuery.from, agentOrdersPeriodQuery.to)) {
+          return false;
+        }
+      }
+      if (agentOrdersStatusFilter && row.status !== agentOrdersStatusFilter) return false;
+      if (agentOrdersPaymentFilter && row.paymentStatus !== agentOrdersPaymentFilter) return false;
+      if (!q) return true;
+      return [row.orderNumber, row.customerName].some(v => v?.toLowerCase().includes(q));
+    });
+  }, [
+    agentOrders,
+    agentOrdersSearch,
+    agentOrdersStatusFilter,
+    agentOrdersPaymentFilter,
+    agentOrdersPeriodQuery,
+  ]);
+
+  const sortedAgentOrders = useMemo(() => {
+    return [...filteredAgentOrders].sort((a, b) => {
+      let av: string | number;
+      let bv: string | number;
+      switch (agentOrdersSortKey) {
+        case 'orderNumber':
+          av = a.orderNumber;
+          bv = b.orderNumber;
+          break;
+        case 'customer':
+          av = (a.customerName ?? '').toLowerCase();
+          bv = (b.customerName ?? '').toLowerCase();
+          break;
+        case 'orderDate':
+          av = a.orderDate ?? '';
+          bv = b.orderDate ?? '';
+          break;
+        case 'requiredDate':
+          av = a.requiredDate ?? '';
+          bv = b.requiredDate ?? '';
+          break;
+        case 'total':
+          av = a.totalAmount;
+          bv = b.totalAmount;
+          break;
+        case 'paid':
+          av = a.amountPaid;
+          bv = b.amountPaid;
+          break;
+        case 'balance':
+          av = a.balanceDue;
+          bv = b.balanceDue;
+          break;
+        case 'status':
+          av = a.status;
+          bv = b.status;
+          break;
+        case 'payment':
+          av = a.paymentStatus;
+          bv = b.paymentStatus;
+          break;
+        default:
+          av = a.orderDate ?? '';
+          bv = b.orderDate ?? '';
+      }
+      if (typeof av === 'number' && typeof bv === 'number') {
+        return agentOrdersSortDir === 'asc' ? av - bv : bv - av;
+      }
+      const as = String(av);
+      const bs = String(bv);
+      if (as < bs) return agentOrdersSortDir === 'asc' ? -1 : 1;
+      if (as > bs) return agentOrdersSortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [filteredAgentOrders, agentOrdersSortKey, agentOrdersSortDir]);
+
+  const agentOrdersTotalPages = Math.max(1, Math.ceil(sortedAgentOrders.length / AGENT_ORDERS_PAGE_SIZE));
+  const safeAgentOrdersPage = Math.min(Math.max(1, agentOrdersPage), agentOrdersTotalPages);
+  const paginatedAgentOrders = useMemo(
+    () =>
+      sortedAgentOrders.slice(
+        (safeAgentOrdersPage - 1) * AGENT_ORDERS_PAGE_SIZE,
+        safeAgentOrdersPage * AGENT_ORDERS_PAGE_SIZE,
+      ),
+    [sortedAgentOrders, safeAgentOrdersPage],
+  );
+
+  const handleAgentOrdersSort = (key: AgentOrdersSortKey) => {
+    if (agentOrdersSortKey === key) {
+      setAgentOrdersSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setAgentOrdersSortKey(key);
+      setAgentOrdersSortDir('asc');
+    }
+  };
+
+  const agentOrdersSortIcon = (col: AgentOrdersSortKey) => {
+    if (agentOrdersSortKey !== col) return <ArrowUpDown className="w-3 h-3 ml-1 opacity-40" />;
+    return agentOrdersSortDir === 'asc'
+      ? <ArrowUp className="w-3 h-3 ml-1 text-blue-600" />
+      : <ArrowDown className="w-3 h-3 ml-1 text-blue-600" />;
+  };
+
+  const openAgentOrdersPeriodModal = () => {
+    setDraftAgentOrdersPeriodKind(agentOrdersPeriodKind);
+    setDraftAgentOrdersCustomStart(agentOrdersCustomStart);
+    setDraftAgentOrdersCustomEnd(agentOrdersCustomEnd);
+    setAgentOrdersPeriodModalOpen(true);
+  };
+
+  const handleAgentOrdersPeriodChange = (kind: DatePeriodKind) => {
+    setAgentOrdersPeriodKind(kind);
+    if (kind === 'custom') {
+      const t = new Date();
+      const iso = todayIsoLocal();
+      const start = `${t.getFullYear()}-${pad2Local(t.getMonth() + 1)}-01`;
+      setAgentOrdersCustomStart(start);
+      setAgentOrdersCustomEnd(iso);
+    }
+  };
+
+  const handleAgentOrdersModalPresetPick = (kind: DatePeriodKind) => {
+    if (kind !== 'custom') {
+      handleAgentOrdersPeriodChange(kind);
+      setAgentOrdersPeriodModalOpen(false);
+      return;
+    }
+    setDraftAgentOrdersPeriodKind('custom');
+    const t = new Date();
+    const iso = todayIsoLocal();
+    const start = `${t.getFullYear()}-${pad2Local(t.getMonth() + 1)}-01`;
+    setDraftAgentOrdersCustomStart(prev => prev || agentOrdersCustomStart || start);
+    setDraftAgentOrdersCustomEnd(prev => prev || agentOrdersCustomEnd || iso);
+  };
+
+  const applyAgentOrdersModalCustomRange = () => {
+    setAgentOrdersPeriodKind('custom');
+    setAgentOrdersCustomStart(draftAgentOrdersCustomStart);
+    setAgentOrdersCustomEnd(draftAgentOrdersCustomEnd);
+    setAgentOrdersPeriodModalOpen(false);
+  };
+
+  const tripHistoryPeriodQuery = useMemo(
+    () => resolveDatePeriodQuery(tripHistoryPeriodKind, tripHistoryCustomStart, tripHistoryCustomEnd),
+    [tripHistoryPeriodKind, tripHistoryCustomStart, tripHistoryCustomEnd],
+  );
+
+  const maxTripHistoryCustomDate = useMemo(() => todayIsoLocal(), []);
+
+  const draftTripHistoryCustomInvalid = Boolean(
+    draftTripHistoryCustomStart && draftTripHistoryCustomEnd && draftTripHistoryCustomStart > draftTripHistoryCustomEnd,
+  );
+
+  const distinctTripHistoryStatuses = useMemo(
+    () => [...new Set(tripHistory.map(r => r.status).filter(Boolean))].sort(),
+    [tripHistory],
+  );
+
+  const filteredTripHistory = useMemo(() => {
+    const q = tripHistorySearch.trim().toLowerCase();
+    return tripHistory.filter(row => {
+      if (!tripHistoryPeriodQuery.invalid) {
+        if (!inDatePeriodRange(row.date, tripHistoryPeriodQuery.from, tripHistoryPeriodQuery.to)) {
+          return false;
+        }
+      }
+      if (tripHistoryStatusFilter && row.status !== tripHistoryStatusFilter) return false;
+      if (!q) return true;
+      const routeLabel = row.route.join(', ');
+      return [
+        row.tripNumber,
+        row.driverName,
+        row.vehicleName,
+        row.customerLabel,
+        routeLabel,
+        ...(row.orderNumbers ?? []),
+      ].some(v => v?.toLowerCase().includes(q));
+    });
+  }, [tripHistory, tripHistorySearch, tripHistoryStatusFilter, tripHistoryPeriodQuery]);
+
+  const sortedTripHistory = useMemo(() => {
+    return [...filteredTripHistory].sort((a, b) => {
+      let av: string | number;
+      let bv: string | number;
+      switch (tripHistorySortKey) {
+        case 'tripNumber':
+          av = a.tripNumber;
+          bv = b.tripNumber;
+          break;
+        case 'date':
+          av = a.date;
+          bv = b.date;
+          break;
+        case 'vehicle':
+          av = (a.vehicleName ?? '').toLowerCase();
+          bv = (b.vehicleName ?? '').toLowerCase();
+          break;
+        case 'driver':
+          av = (a.driverName ?? '').toLowerCase();
+          bv = (b.driverName ?? '').toLowerCase();
+          break;
+        case 'orders':
+          av = a.ordersCount;
+          bv = b.ordersCount;
+          break;
+        case 'status':
+          av = a.status;
+          bv = b.status;
+          break;
+        default:
+          av = a.date;
+          bv = b.date;
+      }
+      if (typeof av === 'number' && typeof bv === 'number') {
+        return tripHistorySortDir === 'asc' ? av - bv : bv - av;
+      }
+      const as = String(av);
+      const bs = String(bv);
+      if (as < bs) return tripHistorySortDir === 'asc' ? -1 : 1;
+      if (as > bs) return tripHistorySortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [filteredTripHistory, tripHistorySortKey, tripHistorySortDir]);
+
+  const tripHistoryTotalPages = Math.max(1, Math.ceil(sortedTripHistory.length / TRIP_HISTORY_PAGE_SIZE));
+  const safeTripHistoryPage = Math.min(Math.max(1, tripHistoryPage), tripHistoryTotalPages);
+  const paginatedTripHistory = useMemo(
+    () =>
+      sortedTripHistory.slice(
+        (safeTripHistoryPage - 1) * TRIP_HISTORY_PAGE_SIZE,
+        safeTripHistoryPage * TRIP_HISTORY_PAGE_SIZE,
+      ),
+    [sortedTripHistory, safeTripHistoryPage],
+  );
+
+  const handleTripHistorySort = (key: TripHistorySortKey) => {
+    if (tripHistorySortKey === key) {
+      setTripHistorySortDir(d => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setTripHistorySortKey(key);
+      setTripHistorySortDir('asc');
+    }
+  };
+
+  const tripHistorySortIcon = (col: TripHistorySortKey) => {
+    if (tripHistorySortKey !== col) return <ArrowUpDown className="w-3 h-3 ml-1 opacity-40" />;
+    return tripHistorySortDir === 'asc'
+      ? <ArrowUp className="w-3 h-3 ml-1 text-blue-600" />
+      : <ArrowDown className="w-3 h-3 ml-1 text-blue-600" />;
+  };
+
+  const openTripHistoryPeriodModal = () => {
+    setDraftTripHistoryPeriodKind(tripHistoryPeriodKind);
+    setDraftTripHistoryCustomStart(tripHistoryCustomStart);
+    setDraftTripHistoryCustomEnd(tripHistoryCustomEnd);
+    setTripHistoryPeriodModalOpen(true);
+  };
+
+  const handleTripHistoryPeriodChange = (kind: DatePeriodKind) => {
+    setTripHistoryPeriodKind(kind);
+    if (kind === 'custom') {
+      const t = new Date();
+      const iso = todayIsoLocal();
+      const start = `${t.getFullYear()}-${pad2Local(t.getMonth() + 1)}-01`;
+      setTripHistoryCustomStart(start);
+      setTripHistoryCustomEnd(iso);
+    }
+  };
+
+  const handleTripHistoryModalPresetPick = (kind: DatePeriodKind) => {
+    if (kind !== 'custom') {
+      handleTripHistoryPeriodChange(kind);
+      setTripHistoryPeriodModalOpen(false);
+      return;
+    }
+    setDraftTripHistoryPeriodKind('custom');
+    const t = new Date();
+    const iso = todayIsoLocal();
+    const start = `${t.getFullYear()}-${pad2Local(t.getMonth() + 1)}-01`;
+    setDraftTripHistoryCustomStart(prev => prev || tripHistoryCustomStart || start);
+    setDraftTripHistoryCustomEnd(prev => prev || tripHistoryCustomEnd || iso);
+  };
+
+  const applyTripHistoryModalCustomRange = () => {
+    setTripHistoryPeriodKind('custom');
+    setTripHistoryCustomStart(draftTripHistoryCustomStart);
+    setTripHistoryCustomEnd(draftTripHistoryCustomEnd);
+    setTripHistoryPeriodModalOpen(false);
+  };
+
+  const openTripDetailFromHistory = async (rec: BranchTripHistoryRecord) => {
+    if (!rec.tripId) return;
+    setTripDetailLoading(true);
+    try {
+      const { trip, error } = await fetchTripById(rec.tripId);
+      if (error || !trip) {
+        window.alert(error ?? 'Could not load trip.');
+        return;
+      }
+      setTripDetailTrip(trip);
+      setTripDetailOpen(true);
+    } finally {
+      setTripDetailLoading(false);
+    }
+  };
+
+  const warehouseRequestsPeriodQuery = useMemo(
+    () =>
+      resolveDatePeriodQuery(
+        warehouseRequestsPeriodKind,
+        warehouseRequestsCustomStart,
+        warehouseRequestsCustomEnd,
+      ),
+    [warehouseRequestsPeriodKind, warehouseRequestsCustomStart, warehouseRequestsCustomEnd],
+  );
+
+  const maxWarehouseRequestsCustomDate = useMemo(() => todayIsoLocal(), []);
+
+  const draftWarehouseRequestsCustomInvalid = Boolean(
+    draftWarehouseRequestsCustomStart &&
+      draftWarehouseRequestsCustomEnd &&
+      draftWarehouseRequestsCustomStart > draftWarehouseRequestsCustomEnd,
+  );
+
+  const distinctWarehousePrStatuses = useMemo(
+    () => [...new Set(warehouseProductionRequests.map(r => r.status).filter(Boolean))].sort(),
+    [warehouseProductionRequests],
+  );
+
+  const distinctWarehousePoStatuses = useMemo(
+    () => [...new Set(warehousePurchaseOrders.map(r => r.status).filter(Boolean))].sort(),
+    [warehousePurchaseOrders],
+  );
+
+  const filteredWarehouseProductionRequests = useMemo(() => {
+    const q = warehouseRequestsSearch.trim().toLowerCase();
+    return warehouseProductionRequests.filter(row => {
+      if (!warehouseRequestsPeriodQuery.invalid) {
+        if (!inDatePeriodRange(row.requestDate, warehouseRequestsPeriodQuery.from, warehouseRequestsPeriodQuery.to)) {
+          return false;
+        }
+      }
+      if (warehousePrStatusFilter && row.status !== warehousePrStatusFilter) return false;
+      if (!q) return true;
+      return [row.prNumber, row.branchName].some(v => v?.toLowerCase().includes(q));
+    });
+  }, [
+    warehouseProductionRequests,
+    warehouseRequestsSearch,
+    warehousePrStatusFilter,
+    warehouseRequestsPeriodQuery,
+  ]);
+
+  const filteredWarehousePurchaseOrders = useMemo(() => {
+    const q = warehouseRequestsSearch.trim().toLowerCase();
+    return warehousePurchaseOrders.filter(row => {
+      if (!warehouseRequestsPeriodQuery.invalid) {
+        if (!inDatePeriodRange(row.orderDate, warehouseRequestsPeriodQuery.from, warehouseRequestsPeriodQuery.to)) {
+          return false;
+        }
+      }
+      if (warehousePoStatusFilter && row.status !== warehousePoStatusFilter) return false;
+      if (!q) return true;
+      return [row.poNumber, row.supplierName, row.branchName].some(v => v?.toLowerCase().includes(q));
+    });
+  }, [
+    warehousePurchaseOrders,
+    warehouseRequestsSearch,
+    warehousePoStatusFilter,
+    warehouseRequestsPeriodQuery,
+  ]);
+
+  const sortedWarehouseProductionRequests = useMemo(() => {
+    return [...filteredWarehouseProductionRequests].sort((a, b) => {
+      let av: string | number;
+      let bv: string | number;
+      switch (warehousePrSortKey) {
+        case 'prNumber':
+          av = a.prNumber;
+          bv = b.prNumber;
+          break;
+        case 'requestDate':
+          av = a.requestDate ?? '';
+          bv = b.requestDate ?? '';
+          break;
+        case 'expectedDate':
+          av = a.expectedCompletionDate ?? '';
+          bv = b.expectedCompletionDate ?? '';
+          break;
+        case 'branch':
+          av = (a.branchName ?? '').toLowerCase();
+          bv = (b.branchName ?? '').toLowerCase();
+          break;
+        case 'items':
+          av = a.itemCount;
+          bv = b.itemCount;
+          break;
+        case 'status':
+          av = a.status;
+          bv = b.status;
+          break;
+        default:
+          av = a.requestDate ?? '';
+          bv = b.requestDate ?? '';
+      }
+      if (typeof av === 'number' && typeof bv === 'number') {
+        return warehousePrSortDir === 'asc' ? av - bv : bv - av;
+      }
+      const as = String(av);
+      const bs = String(bv);
+      if (as < bs) return warehousePrSortDir === 'asc' ? -1 : 1;
+      if (as > bs) return warehousePrSortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [filteredWarehouseProductionRequests, warehousePrSortKey, warehousePrSortDir]);
+
+  const sortedWarehousePurchaseOrders = useMemo(() => {
+    return [...filteredWarehousePurchaseOrders].sort((a, b) => {
+      let av: string | number;
+      let bv: string | number;
+      switch (warehousePoSortKey) {
+        case 'poNumber':
+          av = a.poNumber;
+          bv = b.poNumber;
+          break;
+        case 'orderDate':
+          av = a.orderDate ?? '';
+          bv = b.orderDate ?? '';
+          break;
+        case 'expectedDate':
+          av = a.expectedDeliveryDate ?? '';
+          bv = b.expectedDeliveryDate ?? '';
+          break;
+        case 'supplier':
+          av = (a.supplierName ?? '').toLowerCase();
+          bv = (b.supplierName ?? '').toLowerCase();
+          break;
+        case 'total':
+          av = a.totalAmount;
+          bv = b.totalAmount;
+          break;
+        case 'status':
+          av = a.status;
+          bv = b.status;
+          break;
+        default:
+          av = a.orderDate ?? '';
+          bv = b.orderDate ?? '';
+      }
+      if (typeof av === 'number' && typeof bv === 'number') {
+        return warehousePoSortDir === 'asc' ? av - bv : bv - av;
+      }
+      const as = String(av);
+      const bs = String(bv);
+      if (as < bs) return warehousePoSortDir === 'asc' ? -1 : 1;
+      if (as > bs) return warehousePoSortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [filteredWarehousePurchaseOrders, warehousePoSortKey, warehousePoSortDir]);
+
+  const warehousePrTotalPages = Math.max(
+    1,
+    Math.ceil(sortedWarehouseProductionRequests.length / WAREHOUSE_PR_PAGE_SIZE),
+  );
+  const safeWarehousePrPage = Math.min(Math.max(1, warehousePrPage), warehousePrTotalPages);
+  const paginatedWarehouseProductionRequests = useMemo(
+    () =>
+      sortedWarehouseProductionRequests.slice(
+        (safeWarehousePrPage - 1) * WAREHOUSE_PR_PAGE_SIZE,
+        safeWarehousePrPage * WAREHOUSE_PR_PAGE_SIZE,
+      ),
+    [sortedWarehouseProductionRequests, safeWarehousePrPage],
+  );
+
+  const warehousePoTotalPages = Math.max(
+    1,
+    Math.ceil(sortedWarehousePurchaseOrders.length / WAREHOUSE_PO_PAGE_SIZE),
+  );
+  const safeWarehousePoPage = Math.min(Math.max(1, warehousePoPage), warehousePoTotalPages);
+  const paginatedWarehousePurchaseOrders = useMemo(
+    () =>
+      sortedWarehousePurchaseOrders.slice(
+        (safeWarehousePoPage - 1) * WAREHOUSE_PO_PAGE_SIZE,
+        safeWarehousePoPage * WAREHOUSE_PO_PAGE_SIZE,
+      ),
+    [sortedWarehousePurchaseOrders, safeWarehousePoPage],
+  );
+
+  const handleWarehousePrSort = (key: WarehousePrSortKey) => {
+    if (warehousePrSortKey === key) {
+      setWarehousePrSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setWarehousePrSortKey(key);
+      setWarehousePrSortDir('asc');
+    }
+  };
+
+  const warehousePrSortIcon = (col: WarehousePrSortKey) => {
+    if (warehousePrSortKey !== col) return <ArrowUpDown className="w-3 h-3 ml-1 opacity-40" />;
+    return warehousePrSortDir === 'asc'
+      ? <ArrowUp className="w-3 h-3 ml-1 text-blue-600" />
+      : <ArrowDown className="w-3 h-3 ml-1 text-blue-600" />;
+  };
+
+  const handleWarehousePoSort = (key: WarehousePoSortKey) => {
+    if (warehousePoSortKey === key) {
+      setWarehousePoSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setWarehousePoSortKey(key);
+      setWarehousePoSortDir('asc');
+    }
+  };
+
+  const warehousePoSortIcon = (col: WarehousePoSortKey) => {
+    if (warehousePoSortKey !== col) return <ArrowUpDown className="w-3 h-3 ml-1 opacity-40" />;
+    return warehousePoSortDir === 'asc'
+      ? <ArrowUp className="w-3 h-3 ml-1 text-blue-600" />
+      : <ArrowDown className="w-3 h-3 ml-1 text-blue-600" />;
+  };
+
+  const openWarehouseRequestsPeriodModal = () => {
+    setDraftWarehouseRequestsPeriodKind(warehouseRequestsPeriodKind);
+    setDraftWarehouseRequestsCustomStart(warehouseRequestsCustomStart);
+    setDraftWarehouseRequestsCustomEnd(warehouseRequestsCustomEnd);
+    setWarehouseRequestsPeriodModalOpen(true);
+  };
+
+  const handleWarehouseRequestsPeriodChange = (kind: DatePeriodKind) => {
+    setWarehouseRequestsPeriodKind(kind);
+    if (kind === 'custom') {
+      const t = new Date();
+      const iso = todayIsoLocal();
+      const start = `${t.getFullYear()}-${pad2Local(t.getMonth() + 1)}-01`;
+      setWarehouseRequestsCustomStart(start);
+      setWarehouseRequestsCustomEnd(iso);
+    }
+  };
+
+  const handleWarehouseRequestsModalPresetPick = (kind: DatePeriodKind) => {
+    if (kind !== 'custom') {
+      handleWarehouseRequestsPeriodChange(kind);
+      setWarehouseRequestsPeriodModalOpen(false);
+      return;
+    }
+    setDraftWarehouseRequestsPeriodKind('custom');
+    const t = new Date();
+    const iso = todayIsoLocal();
+    const start = `${t.getFullYear()}-${pad2Local(t.getMonth() + 1)}-01`;
+    setDraftWarehouseRequestsCustomStart(prev => prev || warehouseRequestsCustomStart || start);
+    setDraftWarehouseRequestsCustomEnd(prev => prev || warehouseRequestsCustomEnd || iso);
+  };
+
+  const applyWarehouseRequestsModalCustomRange = () => {
+    setWarehouseRequestsPeriodKind('custom');
+    setWarehouseRequestsCustomStart(draftWarehouseRequestsCustomStart);
+    setWarehouseRequestsCustomEnd(draftWarehouseRequestsCustomEnd);
+    setWarehouseRequestsPeriodModalOpen(false);
+  };
+
+  const visibleTabs = useMemo(
+    () =>
+      DETAIL_TABS.filter(t => {
+        if (t.id === 'orders') return employee != null && isSalesAgent(employee);
+        if (t.id === 'trips') return employee != null && showTripHistoryTab(employee);
+        if (t.id === 'requests') return employee != null && isWarehouseManager(employee);
+        if (t.id === 'catalog') return employee != null && isWarehouseManager(employee);
+        return true;
+      }),
+    [employee],
+  );
+
+  useEffect(() => {
+    setActivityPage(1);
+  }, [activityFeed.length, employee?.id]);
+
+  useEffect(() => {
+    setAgentOrdersPage(1);
+  }, [
+    agentOrdersSearch,
+    agentOrdersSortKey,
+    agentOrdersSortDir,
+    agentOrdersStatusFilter,
+    agentOrdersPaymentFilter,
+    agentOrdersPeriodKind,
+    agentOrdersCustomStart,
+    agentOrdersCustomEnd,
+  ]);
+
+  useEffect(() => {
+    setAgentOrdersSearch('');
+    setAgentOrdersStatusFilter('');
+    setAgentOrdersPaymentFilter('');
+    setAgentOrdersSortKey('orderDate');
+    setAgentOrdersSortDir('desc');
+    setAgentOrdersPeriodKind('month');
+    setAgentOrdersPeriodModalOpen(false);
+    setTripHistorySearch('');
+    setTripHistoryStatusFilter('');
+    setTripHistorySortKey('date');
+    setTripHistorySortDir('desc');
+    setTripHistoryPeriodKind(employee?.role === 'Truck Driver' ? 'all' : 'month');
+    setTripHistoryPeriodModalOpen(false);
+    setTripDetailOpen(false);
+    setTripDetailTrip(null);
+    setWarehouseRequestsSearch('');
+    setWarehousePrStatusFilter('');
+    setWarehousePoStatusFilter('');
+    setWarehousePrSortKey('requestDate');
+    setWarehousePrSortDir('desc');
+    setWarehousePoSortKey('orderDate');
+    setWarehousePoSortDir('desc');
+    setWarehouseRequestsPeriodKind('all');
+    setWarehouseRequestsPeriodModalOpen(false);
+    const t = new Date();
+    const iso = todayIsoLocal();
+    const start = `${t.getFullYear()}-${pad2Local(t.getMonth() + 1)}-01`;
+    setAgentOrdersCustomStart(start);
+    setAgentOrdersCustomEnd(iso);
+    setTripHistoryCustomStart(start);
+    setTripHistoryCustomEnd(iso);
+    setWarehouseRequestsCustomStart(start);
+    setWarehouseRequestsCustomEnd(iso);
+    setCatalogSearch('');
+    setCatalogSection('products');
+    setCatalogProductCategoryId('');
+    setCatalogMaterialCategoryId('');
+  }, [employee?.id, employee?.role]);
+
+  useEffect(() => {
+    setWarehousePrPage(1);
+    setWarehousePoPage(1);
+  }, [
+    warehouseRequestsSearch,
+    warehousePrSortKey,
+    warehousePrSortDir,
+    warehousePoSortKey,
+    warehousePoSortDir,
+    warehousePrStatusFilter,
+    warehousePoStatusFilter,
+    warehouseRequestsPeriodKind,
+    warehouseRequestsCustomStart,
+    warehouseRequestsCustomEnd,
+  ]);
+
+  useEffect(() => {
+    if (!warehouseRequestsPeriodModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setWarehouseRequestsPeriodModalOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [warehouseRequestsPeriodModalOpen]);
+
+  useEffect(() => {
+    setTripHistoryPage(1);
+  }, [
+    tripHistorySearch,
+    tripHistorySortKey,
+    tripHistorySortDir,
+    tripHistoryStatusFilter,
+    tripHistoryPeriodKind,
+    tripHistoryCustomStart,
+    tripHistoryCustomEnd,
+  ]);
+
+  useEffect(() => {
+    if (!tripHistoryPeriodModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setTripHistoryPeriodModalOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [tripHistoryPeriodModalOpen]);
+
+  useEffect(() => {
+    if (!agentOrdersPeriodModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setAgentOrdersPeriodModalOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [agentOrdersPeriodModalOpen]);
+
+  useEffect(() => {
+    if (employee && tab === 'orders' && !isSalesAgent(employee)) {
+      setTab('overview');
+    }
+    if (employee && tab === 'trips' && !showTripHistoryTab(employee)) {
+      setTab('overview');
+    }
+    if (employee && tab === 'requests' && !isWarehouseManager(employee)) {
+      setTab('overview');
+    }
+    if (employee && tab === 'catalog' && !isWarehouseManager(employee)) {
+      setTab('overview');
+    }
+  }, [employee, tab]);
+
+  useEffect(() => {
+    if (!employee || tab !== 'orders' || !isSalesAgent(employee)) return;
+    let cancelled = false;
+    (async () => {
+      setAgentOrdersLoading(true);
+      setAgentOrdersError(null);
+      try {
+        const rows = await fetchAgentOrders(employee.id);
+        if (!cancelled) {
+          setAgentOrders(rows);
+          setAgentOrdersPage(1);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setAgentOrdersError(e instanceof Error ? e.message : 'Failed to load orders');
+          setAgentOrders([]);
+        }
+      } finally {
+        if (!cancelled) setAgentOrdersLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [employee, tab]);
+
+  useEffect(() => {
+    if (!employee || tab !== 'trips' || !showTripHistoryTab(employee)) return;
+    let cancelled = false;
+    (async () => {
+      setTripHistoryLoading(true);
+      setTripHistoryError(null);
+      try {
+        const branchName = employee.branchName?.trim();
+        if (isTruckDriver(employee)) {
+          const { records, error } = await fetchDriverTripHistory({
+            driverId: employee.id,
+            driverName: employee.employeeName,
+            branchName: branchName ?? null,
+          });
+          if (cancelled) return;
+          if (error) {
+            setTripHistoryError(error);
+            setTripHistory([]);
+          } else {
+            setTripHistory(records);
+            setTripHistoryPage(1);
+          }
+          return;
+        }
+
+        if (!branchName) {
+          if (!cancelled) {
+            setTripHistory([]);
+            setTripHistoryPage(1);
+          }
+          return;
+        }
+        const { records, error } = await fetchBranchTripHistory(branchName);
+        if (cancelled) return;
+        if (error) {
+          setTripHistoryError(error);
+          setTripHistory([]);
+        } else {
+          setTripHistory(records);
+          setTripHistoryPage(1);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setTripHistoryError(e instanceof Error ? e.message : 'Failed to load trip history');
+          setTripHistory([]);
+        }
+      } finally {
+        if (!cancelled) setTripHistoryLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [employee, tab]);
+
+  useEffect(() => {
+    if (!employee || tab !== 'requests' || !isWarehouseManager(employee)) return;
+    let cancelled = false;
+    (async () => {
+      setWarehouseRequestsLoading(true);
+      setWarehouseRequestsError(null);
+      try {
+        const bundle = await fetchWarehouseManagerRequests(employee.id);
+        if (!cancelled) {
+          setWarehouseProductionRequests(bundle.productionRequests);
+          setWarehousePurchaseOrders(bundle.purchaseOrders);
+          setWarehousePrPage(1);
+          setWarehousePoPage(1);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setWarehouseRequestsError(e instanceof Error ? e.message : 'Failed to load requests');
+          setWarehouseProductionRequests([]);
+          setWarehousePurchaseOrders([]);
+        }
+      } finally {
+        if (!cancelled) setWarehouseRequestsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [employee, tab]);
+
+  useEffect(() => {
+    if (!employee || tab !== 'catalog' || !isWarehouseManager(employee)) return;
+    let cancelled = false;
+    (async () => {
+      setCatalogLoading(true);
+      setCatalogError(null);
+      try {
+        const [catalog, ids] = await Promise.all([
+          fetchWarehouseAssignmentCatalog(employee.branchName),
+          fetchWarehouseAssignmentIds(employee.id),
+        ]);
+        if (cancelled) return;
+        setCatalogProducts(catalog.products);
+        setCatalogMaterials(catalog.materials);
+        setSelectedProductIds(new Set(ids.productIds));
+        setSelectedMaterialIds(new Set(ids.materialIds));
+      } catch (e) {
+        if (!cancelled) {
+          setCatalogError(e instanceof Error ? e.message : 'Failed to load catalog assignments');
+          setCatalogProducts([]);
+          setCatalogMaterials([]);
+          setSelectedProductIds(new Set());
+          setSelectedMaterialIds(new Set());
+        }
+      } finally {
+        if (!cancelled) setCatalogLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [employee, tab]);
+
+  const catalogProductGroups = useMemo(() => {
+    const groups = new Map<string, { categoryId: string; categoryName: string; items: WarehouseCatalogProduct[] }>();
+    for (const item of catalogProducts) {
+      const existing = groups.get(item.categoryId) ?? {
+        categoryId: item.categoryId,
+        categoryName: item.categoryName,
+        items: [],
+      };
+      existing.items.push(item);
+      groups.set(item.categoryId, existing);
+    }
+    return [...groups.values()].sort((a, b) => a.categoryName.localeCompare(b.categoryName));
+  }, [catalogProducts]);
+
+  const catalogMaterialGroups = useMemo(() => {
+    const groups = new Map<string, { categoryId: string; categoryName: string; items: WarehouseCatalogMaterial[] }>();
+    for (const item of catalogMaterials) {
+      const existing = groups.get(item.categoryId) ?? {
+        categoryId: item.categoryId,
+        categoryName: item.categoryName,
+        items: [],
+      };
+      existing.items.push(item);
+      groups.set(item.categoryId, existing);
+    }
+    return [...groups.values()].sort((a, b) => a.categoryName.localeCompare(b.categoryName));
+  }, [catalogMaterials]);
+
+  const activeCatalogProductGroup = useMemo(
+    () => catalogProductGroups.find(group => group.categoryId === catalogProductCategoryId) ?? null,
+    [catalogProductGroups, catalogProductCategoryId],
+  );
+
+  const activeCatalogMaterialGroup = useMemo(
+    () => catalogMaterialGroups.find(group => group.categoryId === catalogMaterialCategoryId) ?? null,
+    [catalogMaterialGroups, catalogMaterialCategoryId],
+  );
+
+  const visibleCatalogProducts = useMemo(() => {
+    if (!activeCatalogProductGroup) return [];
+    const q = catalogSearch.trim().toLowerCase();
+    if (!q) return activeCatalogProductGroup.items;
+    return activeCatalogProductGroup.items.filter(item => item.name.toLowerCase().includes(q));
+  }, [activeCatalogProductGroup, catalogSearch]);
+
+  const visibleCatalogMaterials = useMemo(() => {
+    if (!activeCatalogMaterialGroup) return [];
+    const q = catalogSearch.trim().toLowerCase();
+    if (!q) return activeCatalogMaterialGroup.items;
+    return activeCatalogMaterialGroup.items.filter(item =>
+      [item.name, item.sku].some(v => v.toLowerCase().includes(q)),
+    );
+  }, [activeCatalogMaterialGroup, catalogSearch]);
+
+  useEffect(() => {
+    if (catalogProductGroups.length === 0) {
+      setCatalogProductCategoryId('');
+      return;
+    }
+    if (!catalogProductCategoryId || !catalogProductGroups.some(g => g.categoryId === catalogProductCategoryId)) {
+      setCatalogProductCategoryId(catalogProductGroups[0]!.categoryId);
+    }
+  }, [catalogProductGroups, catalogProductCategoryId]);
+
+  useEffect(() => {
+    if (catalogMaterialGroups.length === 0) {
+      setCatalogMaterialCategoryId('');
+      return;
+    }
+    if (!catalogMaterialCategoryId || !catalogMaterialGroups.some(g => g.categoryId === catalogMaterialCategoryId)) {
+      setCatalogMaterialCategoryId(catalogMaterialGroups[0]!.categoryId);
+    }
+  }, [catalogMaterialGroups, catalogMaterialCategoryId]);
+
+  const toggleProductAssignment = (productId: string, checked: boolean) => {
+    setSelectedProductIds(prev => {
+      const next = new Set(prev);
+      if (checked) next.add(productId);
+      else next.delete(productId);
+      return next;
+    });
+  };
+
+  const toggleMaterialAssignment = (materialId: string, checked: boolean) => {
+    setSelectedMaterialIds(prev => {
+      const next = new Set(prev);
+      if (checked) next.add(materialId);
+      else next.delete(materialId);
+      return next;
+    });
+  };
+
+  const toggleProductCategoryAssignment = (items: WarehouseCatalogProduct[], checked: boolean) => {
+    setSelectedProductIds(prev => {
+      const next = new Set(prev);
+      for (const item of items) {
+        if (checked) next.add(item.id);
+        else next.delete(item.id);
+      }
+      return next;
+    });
+  };
+
+  const toggleMaterialCategoryAssignment = (items: WarehouseCatalogMaterial[], checked: boolean) => {
+    setSelectedMaterialIds(prev => {
+      const next = new Set(prev);
+      for (const item of items) {
+        if (checked) next.add(item.id);
+        else next.delete(item.id);
+      }
+      return next;
+    });
+  };
+
+  const handleSaveCatalogAssignments = async () => {
+    if (!employee) return;
+    setCatalogSaving(true);
+    setCatalogError(null);
+    try {
+      await saveWarehouseAssignments(employee.id, [...selectedProductIds], [...selectedMaterialIds]);
+      addAuditLog(
+        'Catalog access updated',
+        'Employee',
+        `${employee.employeeName}: ${selectedProductIds.size} product families, ${selectedMaterialIds.size} raw materials`,
+      );
+      if (sessionEmployeeId === employee.id) {
+        await refreshWarehouseScope();
+      }
+    } catch (e) {
+      setCatalogError(e instanceof Error ? e.message : 'Failed to save catalog access');
+    } finally {
+      setCatalogSaving(false);
+    }
+  };
 
   const p = profile ?? emptyProfileState();
 
@@ -2229,6 +3427,959 @@ export default function EmployeeDetailPage() {
           </div>
         );
 
+      case 'orders':
+        return (
+          <div className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+            <div className="p-4 border-b border-gray-100 space-y-3">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">Orders created</h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  {agentOrdersLoading
+                    ? 'Loading orders…'
+                    : agentOrders.length === 0
+                      ? 'Sales orders where this agent is recorded as the order agent.'
+                      : agentOrdersPeriodQuery.invalid
+                        ? 'Invalid date range selected.'
+                        : `${sortedAgentOrders.length} of ${agentOrders.length} order${agentOrders.length !== 1 ? 's' : ''} in ${agentOrdersPeriodQuery.displayLabel}`}
+                </p>
+              </div>
+              {!agentOrdersLoading && agentOrders.length > 0 && (
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                  <div className="relative flex-1 min-w-0 max-w-md">
+                    <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <input
+                      className="w-full pl-9 pr-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                      placeholder="Search by order # or customer"
+                      value={agentOrdersSearch}
+                      onChange={e => setAgentOrdersSearch(e.target.value)}
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="gap-2 h-9 border-gray-300 bg-white min-w-[9.5rem] max-w-[14rem] justify-start shrink-0"
+                    aria-haspopup="dialog"
+                    aria-expanded={agentOrdersPeriodModalOpen}
+                    aria-label="Choose order period"
+                    onClick={openAgentOrdersPeriodModal}
+                  >
+                    <CalendarRange className="w-4 h-4 shrink-0 text-gray-600" aria-hidden />
+                    <span className="truncate text-left text-sm font-normal">
+                      {periodTriggerLabel(agentOrdersPeriodKind, agentOrdersCustomStart, agentOrdersCustomEnd)}
+                    </span>
+                  </Button>
+                </div>
+              )}
+            </div>
+            {agentOrdersLoading ? (
+              <div className="py-12 flex justify-center text-gray-500">
+                <Loader2 className="w-6 h-6 animate-spin" />
+              </div>
+            ) : agentOrdersError ? (
+              <p className="p-6 text-sm text-red-600">{agentOrdersError}</p>
+            ) : agentOrders.length === 0 ? (
+              <p className="p-6 text-sm text-gray-500">No orders linked to this agent yet.</p>
+            ) : sortedAgentOrders.length === 0 ? (
+              <p className="p-6 text-sm text-gray-500">No orders match your search or filters.</p>
+            ) : (
+              <>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-gray-50 text-left text-gray-600">
+                      <tr>
+                        <th
+                          onClick={() => handleAgentOrdersSort('orderNumber')}
+                          className="px-4 py-3 font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                        >
+                          <span className="flex items-center">Order{agentOrdersSortIcon('orderNumber')}</span>
+                        </th>
+                        <th
+                          onClick={() => handleAgentOrdersSort('customer')}
+                          className="px-4 py-3 font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                        >
+                          <span className="flex items-center">Customer{agentOrdersSortIcon('customer')}</span>
+                        </th>
+                        <th
+                          onClick={() => handleAgentOrdersSort('orderDate')}
+                          className="px-4 py-3 font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                        >
+                          <span className="flex items-center">Order date{agentOrdersSortIcon('orderDate')}</span>
+                        </th>
+                        <th
+                          onClick={() => handleAgentOrdersSort('requiredDate')}
+                          className="px-4 py-3 font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                        >
+                          <span className="flex items-center">Required{agentOrdersSortIcon('requiredDate')}</span>
+                        </th>
+                        <th
+                          onClick={() => handleAgentOrdersSort('total')}
+                          className="px-4 py-3 font-medium text-right cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                        >
+                          <span className="flex items-center justify-end">Total{agentOrdersSortIcon('total')}</span>
+                        </th>
+                        <th
+                          onClick={() => handleAgentOrdersSort('paid')}
+                          className="px-4 py-3 font-medium text-right cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                        >
+                          <span className="flex items-center justify-end">Paid{agentOrdersSortIcon('paid')}</span>
+                        </th>
+                        <th
+                          onClick={() => handleAgentOrdersSort('balance')}
+                          className="px-4 py-3 font-medium text-right cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                        >
+                          <span className="flex items-center justify-end">Balance{agentOrdersSortIcon('balance')}</span>
+                        </th>
+                        <th className="px-3 py-3 font-medium align-top min-w-[10.5rem] max-w-[14rem]">
+                          <div className="normal-case">
+                            <select
+                              aria-label="Filter by status"
+                              value={agentOrdersStatusFilter}
+                              onChange={e => setAgentOrdersStatusFilter(e.target.value)}
+                              onClick={e => e.stopPropagation()}
+                              className="w-full text-sm font-medium text-gray-800 border border-gray-200 rounded-md px-2 py-1.5 bg-white hover:border-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                            >
+                              <option value="">Status</option>
+                              {distinctAgentOrderStatuses.map(s => (
+                                <option key={s} value={s}>{s}</option>
+                              ))}
+                            </select>
+                          </div>
+                        </th>
+                        <th className="px-3 py-3 font-medium align-top min-w-[9.5rem] max-w-[13rem]">
+                          <div className="normal-case">
+                            <select
+                              aria-label="Filter by payment"
+                              value={agentOrdersPaymentFilter}
+                              onChange={e => setAgentOrdersPaymentFilter(e.target.value)}
+                              onClick={e => e.stopPropagation()}
+                              className="w-full text-sm font-medium text-gray-800 border border-gray-200 rounded-md px-2 py-1.5 bg-white hover:border-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                            >
+                              <option value="">Payment</option>
+                              {distinctAgentPaymentStatuses.map(s => (
+                                <option key={s} value={s}>{s}</option>
+                              ))}
+                            </select>
+                          </div>
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {paginatedAgentOrders.map(row => (
+                        <tr key={row.id} className="hover:bg-gray-50/80">
+                          <td className="px-4 py-3">
+                            <Link
+                              to={`/orders/${row.id}`}
+                              className="font-medium text-blue-600 hover:text-blue-800 hover:underline"
+                            >
+                              {row.orderNumber}
+                            </Link>
+                          </td>
+                          <td className="px-4 py-3">
+                            {row.customerId ? (
+                              <Link
+                                to={`/customers/${row.customerId}`}
+                                className="text-blue-600 hover:text-blue-800 hover:underline"
+                              >
+                                {row.customerName ?? '—'}
+                              </Link>
+                            ) : (
+                              <span className="text-gray-800">{row.customerName ?? '—'}</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-gray-700">{formatOrderDate(row.orderDate)}</td>
+                          <td className="px-4 py-3 text-gray-700">{formatOrderDate(row.requiredDate)}</td>
+                          <td className="px-4 py-3 text-right tabular-nums">{formatPeso(row.totalAmount)}</td>
+                          <td className="px-4 py-3 text-right tabular-nums text-green-700">
+                            {formatPeso(row.amountPaid)}
+                          </td>
+                          <td className="px-4 py-3 text-right tabular-nums">{formatPeso(row.balanceDue)}</td>
+                          <td className="px-4 py-3 text-gray-700">{row.status}</td>
+                          <td className="px-4 py-3">
+                            <Badge variant={orderPaymentStatusVariant(row.paymentStatus)} className="text-xs">
+                              {row.paymentStatus}
+                            </Badge>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {sortedAgentOrders.length > AGENT_ORDERS_PAGE_SIZE && (
+                  <TablePagination
+                    page={safeAgentOrdersPage}
+                    total={sortedAgentOrders.length}
+                    pageSize={AGENT_ORDERS_PAGE_SIZE}
+                    onPageChange={setAgentOrdersPage}
+                  />
+                )}
+              </>
+            )}
+          </div>
+        );
+
+      case 'trips': {
+        const driverTripView = isTruckDriver(employee);
+        return (
+          <div className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+            <div className="p-4 border-b border-gray-100 space-y-3">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">Trip history</h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  {tripHistoryLoading
+                    ? 'Loading trips…'
+                    : driverTripView
+                      ? tripHistory.length === 0
+                        ? `Completed and closed trips assigned to ${employee.employeeName}.`
+                        : tripHistoryPeriodQuery.invalid
+                          ? 'Invalid date range selected.'
+                          : `${sortedTripHistory.length} of ${tripHistory.length} trip${tripHistory.length !== 1 ? 's' : ''} in ${tripHistoryPeriodQuery.displayLabel}`
+                      : !employee.branchName
+                        ? 'Assign a branch to this employee to view branch trip history.'
+                        : tripHistory.length === 0
+                          ? `Completed and closed trips for ${employee.branchName}.`
+                          : tripHistoryPeriodQuery.invalid
+                            ? 'Invalid date range selected.'
+                            : `${sortedTripHistory.length} of ${tripHistory.length} trip${tripHistory.length !== 1 ? 's' : ''} in ${tripHistoryPeriodQuery.displayLabel}`}
+                </p>
+              </div>
+              {!tripHistoryLoading && (driverTripView || employee.branchName) && tripHistory.length > 0 && (
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                  <div className="relative flex-1 min-w-0 max-w-md">
+                    <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <input
+                      className="w-full pl-9 pr-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                      placeholder={
+                        driverTripView
+                          ? 'Search by trip #, vehicle, route, or customer'
+                          : 'Search by trip #, vehicle, driver, or customer'
+                      }
+                      value={tripHistorySearch}
+                      onChange={e => setTripHistorySearch(e.target.value)}
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="gap-2 h-9 border-gray-300 bg-white min-w-[9.5rem] max-w-[14rem] justify-start shrink-0"
+                    aria-haspopup="dialog"
+                    aria-expanded={tripHistoryPeriodModalOpen}
+                    aria-label="Choose trip period"
+                    onClick={openTripHistoryPeriodModal}
+                  >
+                    <CalendarRange className="w-4 h-4 shrink-0 text-gray-600" aria-hidden />
+                    <span className="truncate text-left text-sm font-normal">
+                      {periodTriggerLabel(tripHistoryPeriodKind, tripHistoryCustomStart, tripHistoryCustomEnd)}
+                    </span>
+                  </Button>
+                </div>
+              )}
+            </div>
+            {tripHistoryLoading ? (
+              <div className="py-12 flex justify-center text-gray-500">
+                <Loader2 className="w-6 h-6 animate-spin" />
+              </div>
+            ) : tripHistoryError ? (
+              <p className="p-6 text-sm text-red-600">{tripHistoryError}</p>
+            ) : !driverTripView && !employee.branchName ? (
+              <p className="p-6 text-sm text-gray-500">No branch is assigned to this logistics manager.</p>
+            ) : tripHistory.length === 0 ? (
+              <p className="p-6 text-sm text-gray-500">
+                {driverTripView
+                  ? 'No completed trips recorded for this driver yet.'
+                  : 'No completed trips recorded for this branch yet.'}
+              </p>
+            ) : sortedTripHistory.length === 0 ? (
+              <p className="p-6 text-sm text-gray-500">No trips match your search or filters.</p>
+            ) : (
+              <>
+                <div className="overflow-x-auto relative">
+                  {tripDetailLoading && (
+                    <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/60">
+                      <Loader2 className="w-6 h-6 animate-spin text-blue-600" aria-hidden />
+                    </div>
+                  )}
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-gray-50 text-left text-gray-600">
+                      <tr>
+                        <th
+                          onClick={() => handleTripHistorySort('tripNumber')}
+                          className="px-4 py-3 font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                        >
+                          <span className="flex items-center">Trip{tripHistorySortIcon('tripNumber')}</span>
+                        </th>
+                        <th
+                          onClick={() => handleTripHistorySort('date')}
+                          className="px-4 py-3 font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                        >
+                          <span className="flex items-center">Date{tripHistorySortIcon('date')}</span>
+                        </th>
+                        <th
+                          onClick={() => handleTripHistorySort('vehicle')}
+                          className="px-4 py-3 font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                        >
+                          <span className="flex items-center">Vehicle{tripHistorySortIcon('vehicle')}</span>
+                        </th>
+                        {!driverTripView && (
+                          <th
+                            onClick={() => handleTripHistorySort('driver')}
+                            className="px-4 py-3 font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                          >
+                            <span className="flex items-center">Driver{tripHistorySortIcon('driver')}</span>
+                          </th>
+                        )}
+                        <th className="px-4 py-3 font-medium">Route</th>
+                        <th
+                          onClick={() => handleTripHistorySort('orders')}
+                          className="px-4 py-3 font-medium text-right cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                        >
+                          <span className="flex items-center justify-end">Orders{tripHistorySortIcon('orders')}</span>
+                        </th>
+                        <th className="px-3 py-3 font-medium align-top min-w-[9.5rem] max-w-[13rem]">
+                          <div className="normal-case">
+                            <select
+                              aria-label="Filter by status"
+                              value={tripHistoryStatusFilter}
+                              onChange={e => setTripHistoryStatusFilter(e.target.value)}
+                              onClick={e => e.stopPropagation()}
+                              className="w-full text-sm font-medium text-gray-800 border border-gray-200 rounded-md px-2 py-1.5 bg-white hover:border-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                            >
+                              <option value="">Status</option>
+                              {distinctTripHistoryStatuses.map(s => (
+                                <option key={s} value={s}>{tripStatusDisplay(s)}</option>
+                              ))}
+                            </select>
+                          </div>
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {paginatedTripHistory.map(row => {
+                        const cap =
+                          row.deliverySuccessRate != null && Number.isFinite(row.deliverySuccessRate)
+                            ? Math.round(row.deliverySuccessRate)
+                            : null;
+                        const routeLabel = row.route.filter(Boolean).join(', ') || '—';
+                        return (
+                          <tr
+                            key={row.id}
+                            className={`hover:bg-gray-50/80 ${row.tripId ? 'cursor-pointer' : ''}`}
+                            onClick={() => {
+                              if (row.tripId) void openTripDetailFromHistory(row);
+                            }}
+                          >
+                            <td className="px-4 py-3 font-medium text-blue-600">{row.tripNumber}</td>
+                            <td className="px-4 py-3 text-gray-700">{formatOrderDate(row.date)}</td>
+                            <td className="px-4 py-3">
+                              {row.vehicleId ? (
+                                <Link
+                                  to={`/logistics/${row.vehicleId}`}
+                                  className="text-blue-600 hover:text-blue-800 hover:underline"
+                                  onClick={e => e.stopPropagation()}
+                                >
+                                  {row.vehicleName || '—'}
+                                </Link>
+                              ) : (
+                                <span className="text-gray-800">{row.vehicleName || '—'}</span>
+                              )}
+                            </td>
+                            {!driverTripView && (
+                              <td className="px-4 py-3 text-gray-700">{row.driverName || '—'}</td>
+                            )}
+                            <td className="px-4 py-3 text-gray-700 max-w-[14rem] truncate" title={routeLabel}>
+                              {routeLabel}
+                            </td>
+                            <td className="px-4 py-3 text-right tabular-nums text-gray-800">
+                              {row.ordersCount}
+                              {cap != null ? (
+                                <span className="block text-xs text-gray-500">{cap}% full</span>
+                              ) : null}
+                            </td>
+                            <td className="px-4 py-3">
+                              <Badge variant={dispatchTableStatusBadgeVariant(row.status)} className="text-xs">
+                                {tripStatusDisplay(row.status)}
+                              </Badge>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {sortedTripHistory.length > TRIP_HISTORY_PAGE_SIZE && (
+                  <TablePagination
+                    page={safeTripHistoryPage}
+                    total={sortedTripHistory.length}
+                    pageSize={TRIP_HISTORY_PAGE_SIZE}
+                    onPageChange={setTripHistoryPage}
+                  />
+                )}
+              </>
+            )}
+          </div>
+        );
+      }
+
+      case 'requests': {
+        const totalWarehouseRequests = warehouseProductionRequests.length + warehousePurchaseOrders.length;
+        const filteredTotal =
+          filteredWarehouseProductionRequests.length + filteredWarehousePurchaseOrders.length;
+        const hasAnyRequests = totalWarehouseRequests > 0;
+
+        return (
+          <div className="space-y-6">
+            <div className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+              <div className="p-4 border-b border-gray-100 space-y-3">
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900">Purchase & production requests</h2>
+                  <p className="text-sm text-gray-500 mt-1">
+                    {warehouseRequestsLoading
+                      ? 'Loading requests…'
+                      : !hasAnyRequests
+                        ? 'Purchase orders and production requests created under this employee’s name.'
+                        : warehouseRequestsPeriodQuery.invalid
+                          ? 'Invalid date range selected.'
+                          : `${filteredTotal} of ${totalWarehouseRequests} request${totalWarehouseRequests !== 1 ? 's' : ''} in ${warehouseRequestsPeriodQuery.displayLabel}`}
+                  </p>
+                </div>
+                {!warehouseRequestsLoading && hasAnyRequests && (
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                    <div className="relative flex-1 min-w-0 max-w-md">
+                      <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                      <input
+                        className="w-full pl-9 pr-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                        placeholder="Search by PR/PO #, supplier, or branch"
+                        value={warehouseRequestsSearch}
+                        onChange={e => setWarehouseRequestsSearch(e.target.value)}
+                      />
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="gap-2 h-9 border-gray-300 bg-white min-w-[9.5rem] max-w-[14rem] justify-start shrink-0"
+                      aria-haspopup="dialog"
+                      aria-expanded={warehouseRequestsPeriodModalOpen}
+                      aria-label="Choose request period"
+                      onClick={openWarehouseRequestsPeriodModal}
+                    >
+                      <CalendarRange className="w-4 h-4 shrink-0 text-gray-600" aria-hidden />
+                      <span className="truncate text-left text-sm font-normal">
+                        {periodTriggerLabel(
+                          warehouseRequestsPeriodKind,
+                          warehouseRequestsCustomStart,
+                          warehouseRequestsCustomEnd,
+                        )}
+                      </span>
+                    </Button>
+                  </div>
+                )}
+              </div>
+              {warehouseRequestsLoading ? (
+                <div className="py-12 flex justify-center text-gray-500">
+                  <Loader2 className="w-6 h-6 animate-spin" />
+                </div>
+              ) : warehouseRequestsError ? (
+                <p className="p-6 text-sm text-red-600">{warehouseRequestsError}</p>
+              ) : !hasAnyRequests ? (
+                <p className="p-6 text-sm text-gray-500">No purchase or production requests recorded for this employee yet.</p>
+              ) : (
+                <div className="divide-y divide-gray-100">
+                  <div className="p-4 space-y-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="text-sm font-semibold text-gray-900">Production requests</h3>
+                      <span className="text-xs text-gray-500 tabular-nums">
+                        {filteredWarehouseProductionRequests.length} of {warehouseProductionRequests.length}
+                      </span>
+                    </div>
+                    {sortedWarehouseProductionRequests.length === 0 ? (
+                      <p className="text-sm text-gray-500">No production requests match your search or filters.</p>
+                    ) : (
+                      <>
+                        <div className="overflow-x-auto">
+                          <table className="min-w-full text-sm">
+                            <thead className="bg-gray-50 text-left text-gray-600">
+                              <tr>
+                                <th
+                                  onClick={() => handleWarehousePrSort('prNumber')}
+                                  className="px-4 py-3 font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                                >
+                                  <span className="flex items-center">PR #{warehousePrSortIcon('prNumber')}</span>
+                                </th>
+                                <th
+                                  onClick={() => handleWarehousePrSort('requestDate')}
+                                  className="px-4 py-3 font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                                >
+                                  <span className="flex items-center">Request date{warehousePrSortIcon('requestDate')}</span>
+                                </th>
+                                <th
+                                  onClick={() => handleWarehousePrSort('expectedDate')}
+                                  className="px-4 py-3 font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                                >
+                                  <span className="flex items-center">Expected{warehousePrSortIcon('expectedDate')}</span>
+                                </th>
+                                <th
+                                  onClick={() => handleWarehousePrSort('branch')}
+                                  className="px-4 py-3 font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                                >
+                                  <span className="flex items-center">Branch{warehousePrSortIcon('branch')}</span>
+                                </th>
+                                <th
+                                  onClick={() => handleWarehousePrSort('items')}
+                                  className="px-4 py-3 font-medium text-right cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                                >
+                                  <span className="flex items-center justify-end">Lines{warehousePrSortIcon('items')}</span>
+                                </th>
+                                <th className="px-3 py-3 font-medium align-top min-w-[9.5rem] max-w-[13rem]">
+                                  <div className="normal-case">
+                                    <select
+                                      aria-label="Filter production requests by status"
+                                      value={warehousePrStatusFilter}
+                                      onChange={e => setWarehousePrStatusFilter(e.target.value)}
+                                      onClick={e => e.stopPropagation()}
+                                      className="w-full text-sm font-medium text-gray-800 border border-gray-200 rounded-md px-2 py-1.5 bg-white hover:border-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                                    >
+                                      <option value="">Status</option>
+                                      {distinctWarehousePrStatuses.map(s => (
+                                        <option key={s} value={s}>{s}</option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                </th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                              {paginatedWarehouseProductionRequests.map(row => (
+                                <tr key={row.id} className="hover:bg-gray-50/80">
+                                  <td className="px-4 py-3">
+                                    <Link
+                                      to={`/production-requests/${row.id}`}
+                                      className="font-medium text-blue-600 hover:text-blue-800 hover:underline"
+                                    >
+                                      {row.prNumber}
+                                    </Link>
+                                  </td>
+                                  <td className="px-4 py-3 text-gray-700">{formatOrderDate(row.requestDate)}</td>
+                                  <td className="px-4 py-3 text-gray-700">{formatOrderDate(row.expectedCompletionDate)}</td>
+                                  <td className="px-4 py-3 text-gray-700">{row.branchName ?? '—'}</td>
+                                  <td className="px-4 py-3 text-right tabular-nums">{row.itemCount}</td>
+                                  <td className="px-4 py-3">
+                                    <Badge variant={productionRequestStatusVariant(row.status)} className="text-xs">
+                                      {row.status}
+                                    </Badge>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        {sortedWarehouseProductionRequests.length > WAREHOUSE_PR_PAGE_SIZE && (
+                          <TablePagination
+                            page={safeWarehousePrPage}
+                            total={sortedWarehouseProductionRequests.length}
+                            pageSize={WAREHOUSE_PR_PAGE_SIZE}
+                            onPageChange={setWarehousePrPage}
+                          />
+                        )}
+                      </>
+                    )}
+                  </div>
+
+                  <div className="p-4 space-y-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="text-sm font-semibold text-gray-900">Purchase orders</h3>
+                      <span className="text-xs text-gray-500 tabular-nums">
+                        {filteredWarehousePurchaseOrders.length} of {warehousePurchaseOrders.length}
+                      </span>
+                    </div>
+                    {sortedWarehousePurchaseOrders.length === 0 ? (
+                      <p className="text-sm text-gray-500">No purchase orders match your search or filters.</p>
+                    ) : (
+                      <>
+                        <div className="overflow-x-auto">
+                          <table className="min-w-full text-sm">
+                            <thead className="bg-gray-50 text-left text-gray-600">
+                              <tr>
+                                <th
+                                  onClick={() => handleWarehousePoSort('poNumber')}
+                                  className="px-4 py-3 font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                                >
+                                  <span className="flex items-center">PO #{warehousePoSortIcon('poNumber')}</span>
+                                </th>
+                                <th
+                                  onClick={() => handleWarehousePoSort('orderDate')}
+                                  className="px-4 py-3 font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                                >
+                                  <span className="flex items-center">Order date{warehousePoSortIcon('orderDate')}</span>
+                                </th>
+                                <th
+                                  onClick={() => handleWarehousePoSort('expectedDate')}
+                                  className="px-4 py-3 font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                                >
+                                  <span className="flex items-center">Expected{warehousePoSortIcon('expectedDate')}</span>
+                                </th>
+                                <th
+                                  onClick={() => handleWarehousePoSort('supplier')}
+                                  className="px-4 py-3 font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                                >
+                                  <span className="flex items-center">Supplier{warehousePoSortIcon('supplier')}</span>
+                                </th>
+                                <th
+                                  onClick={() => handleWarehousePoSort('total')}
+                                  className="px-4 py-3 font-medium text-right cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                                >
+                                  <span className="flex items-center justify-end">Total{warehousePoSortIcon('total')}</span>
+                                </th>
+                                <th className="px-3 py-3 font-medium align-top min-w-[9.5rem] max-w-[13rem]">
+                                  <div className="normal-case">
+                                    <select
+                                      aria-label="Filter purchase orders by status"
+                                      value={warehousePoStatusFilter}
+                                      onChange={e => setWarehousePoStatusFilter(e.target.value)}
+                                      onClick={e => e.stopPropagation()}
+                                      className="w-full text-sm font-medium text-gray-800 border border-gray-200 rounded-md px-2 py-1.5 bg-white hover:border-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                                    >
+                                      <option value="">Status</option>
+                                      {distinctWarehousePoStatuses.map(s => (
+                                        <option key={s} value={s}>{s}</option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                </th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                              {paginatedWarehousePurchaseOrders.map(row => (
+                                <tr key={row.id} className="hover:bg-gray-50/80">
+                                  <td className="px-4 py-3">
+                                    <Link
+                                      to={`/purchase-orders/${row.id}`}
+                                      className="font-medium text-blue-600 hover:text-blue-800 hover:underline"
+                                    >
+                                      {row.poNumber}
+                                    </Link>
+                                  </td>
+                                  <td className="px-4 py-3 text-gray-700">{formatOrderDate(row.orderDate)}</td>
+                                  <td className="px-4 py-3 text-gray-700">{formatOrderDate(row.expectedDeliveryDate)}</td>
+                                  <td className="px-4 py-3 text-gray-700">{row.supplierName ?? '—'}</td>
+                                  <td className="px-4 py-3 text-right tabular-nums">{formatPeso(row.totalAmount)}</td>
+                                  <td className="px-4 py-3">
+                                    <Badge variant={purchaseOrderStatusVariant(row.status)} className="text-xs">
+                                      {row.status}
+                                    </Badge>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        {sortedWarehousePurchaseOrders.length > WAREHOUSE_PO_PAGE_SIZE && (
+                          <TablePagination
+                            page={safeWarehousePoPage}
+                            total={sortedWarehousePurchaseOrders.length}
+                            pageSize={WAREHOUSE_PO_PAGE_SIZE}
+                            onPageChange={setWarehousePoPage}
+                          />
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      }
+
+      case 'catalog': {
+        const productGroupOptions = catalogProductGroups;
+        const materialGroupOptions = catalogMaterialGroups;
+        const visibleProductAllSelected =
+          visibleCatalogProducts.length > 0 &&
+          visibleCatalogProducts.every(item => selectedProductIds.has(item.id));
+        const visibleProductSomeSelected =
+          visibleCatalogProducts.some(item => selectedProductIds.has(item.id)) && !visibleProductAllSelected;
+        const visibleMaterialAllSelected =
+          visibleCatalogMaterials.length > 0 &&
+          visibleCatalogMaterials.every(item => selectedMaterialIds.has(item.id));
+        const visibleMaterialSomeSelected =
+          visibleCatalogMaterials.some(item => selectedMaterialIds.has(item.id)) && !visibleMaterialAllSelected;
+
+        return (
+          <div className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+            <div className="p-4 border-b border-gray-100 space-y-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900">Catalog access</h2>
+                  <p className="text-sm text-gray-500 mt-1">
+                    Pick a category, check the product families or raw materials this manager can access, then save
+                    everything together.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="sm"
+                  className="shrink-0"
+                  disabled={catalogSaving || catalogLoading || !employee.branchName}
+                  onClick={() => void handleSaveCatalogAssignments()}
+                >
+                  {catalogSaving ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                      Saving…
+                    </>
+                  ) : (
+                    'Save all assignments'
+                  )}
+                </Button>
+              </div>
+
+              {!catalogLoading && employee.branchName && (
+                <>
+                  <div className="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCatalogSection('products');
+                        setCatalogSearch('');
+                      }}
+                      className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                        catalogSection === 'products'
+                          ? 'bg-white text-gray-900 shadow-sm'
+                          : 'text-gray-600 hover:text-gray-900'
+                      }`}
+                    >
+                      Product families
+                      <span className="ml-1.5 text-xs text-gray-500 tabular-nums">({selectedProductIds.size})</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCatalogSection('materials');
+                        setCatalogSearch('');
+                      }}
+                      className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                        catalogSection === 'materials'
+                          ? 'bg-white text-gray-900 shadow-sm'
+                          : 'text-gray-600 hover:text-gray-900'
+                      }`}
+                    >
+                      Raw materials
+                      <span className="ml-1.5 text-xs text-gray-500 tabular-nums">({selectedMaterialIds.size})</span>
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,16rem)_minmax(0,1fr)] gap-3">
+                    <div>
+                      <label htmlFor="catalog-category" className="block text-xs font-medium text-gray-600 mb-1.5">
+                        Category
+                      </label>
+                      <select
+                        id="catalog-category"
+                        value={catalogSection === 'products' ? catalogProductCategoryId : catalogMaterialCategoryId}
+                        onChange={e => {
+                          if (catalogSection === 'products') setCatalogProductCategoryId(e.target.value);
+                          else setCatalogMaterialCategoryId(e.target.value);
+                        }}
+                        className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:ring-2 focus:ring-blue-500 outline-none"
+                      >
+                        {(catalogSection === 'products' ? productGroupOptions : materialGroupOptions).map(group => {
+                          const selectedInGroup = group.items.filter(item =>
+                            catalogSection === 'products'
+                              ? selectedProductIds.has(item.id)
+                              : selectedMaterialIds.has(item.id),
+                          ).length;
+                          return (
+                            <option key={group.categoryId} value={group.categoryId}>
+                              {group.categoryName} ({group.items.length}
+                              {selectedInGroup > 0 ? ` · ${selectedInGroup} selected` : ''})
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+                    <div>
+                      <label htmlFor="catalog-search" className="block text-xs font-medium text-gray-600 mb-1.5">
+                        Search in category
+                      </label>
+                      <div className="relative">
+                        <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                        <input
+                          id="catalog-search"
+                          className="w-full pl-9 pr-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                          placeholder={
+                            catalogSection === 'products'
+                              ? 'Search product families…'
+                              : 'Search raw materials…'
+                          }
+                          value={catalogSearch}
+                          onChange={e => setCatalogSearch(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {catalogLoading ? (
+              <div className="py-12 flex justify-center text-gray-500">
+                <Loader2 className="w-6 h-6 animate-spin" />
+              </div>
+            ) : catalogError ? (
+              <p className="p-6 text-sm text-red-600">{catalogError}</p>
+            ) : !employee.branchName ? (
+              <p className="p-6 text-sm text-gray-500">Assign a branch to this employee before setting catalog access.</p>
+            ) : catalogSection === 'products' ? (
+              productGroupOptions.length === 0 ? (
+                <p className="p-6 text-sm text-gray-500">No product families found for {employee.branchName}.</p>
+              ) : !activeCatalogProductGroup ? (
+                <p className="p-6 text-sm text-gray-500">Choose a category to view product families.</p>
+              ) : (
+                <div className="divide-y divide-gray-100">
+                  <div className="px-4 py-3 bg-gray-50 border-b border-gray-100 flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-medium text-gray-900">{activeCatalogProductGroup.categoryName}</p>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        {visibleCatalogProducts.length} famil{visibleCatalogProducts.length === 1 ? 'y' : 'ies'}
+                        {catalogSearch.trim() ? ' matching search' : ''}
+                      </p>
+                    </div>
+                    <p className="text-xs text-gray-500 tabular-nums">
+                      {activeCatalogProductGroup.items.filter(item => selectedProductIds.has(item.id)).length} of{' '}
+                      {activeCatalogProductGroup.items.length} selected in this category
+                    </p>
+                  </div>
+                  {visibleCatalogProducts.length === 0 ? (
+                    <p className="p-6 text-sm text-gray-500">No product families match your search.</p>
+                  ) : (
+                    <>
+                      <label className="flex items-center gap-3 px-4 py-3 border-b border-gray-100 bg-white cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={visibleProductAllSelected}
+                          ref={el => {
+                            if (el) el.indeterminate = visibleProductSomeSelected;
+                          }}
+                          onChange={e => toggleProductCategoryAssignment(visibleCatalogProducts, e.target.checked)}
+                          className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <span className="text-sm font-medium text-gray-900">
+                          {catalogSearch.trim() ? 'Select all shown' : 'Select all in this category'}
+                        </span>
+                      </label>
+                      <ul className="divide-y divide-gray-100 max-h-[28rem] overflow-y-auto">
+                        {visibleCatalogProducts.map(item => (
+                          <li key={item.id} className="px-4 py-2.5 hover:bg-gray-50">
+                            <label className="flex items-center gap-3 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={selectedProductIds.has(item.id)}
+                                onChange={e => toggleProductAssignment(item.id, e.target.checked)}
+                                className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                              />
+                              <span className="text-sm text-gray-800">{item.name}</span>
+                            </label>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+                </div>
+              )
+            ) : materialGroupOptions.length === 0 ? (
+              <p className="p-6 text-sm text-gray-500">No raw materials found for {employee.branchName}.</p>
+            ) : !activeCatalogMaterialGroup ? (
+              <p className="p-6 text-sm text-gray-500">Choose a category to view raw materials.</p>
+            ) : (
+              <div className="divide-y divide-gray-100">
+                <div className="px-4 py-3 bg-gray-50 border-b border-gray-100 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-medium text-gray-900">{activeCatalogMaterialGroup.categoryName}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {visibleCatalogMaterials.length} material{visibleCatalogMaterials.length === 1 ? '' : 's'}
+                      {catalogSearch.trim() ? ' matching search' : ''}
+                    </p>
+                  </div>
+                  <p className="text-xs text-gray-500 tabular-nums">
+                    {activeCatalogMaterialGroup.items.filter(item => selectedMaterialIds.has(item.id)).length} of{' '}
+                    {activeCatalogMaterialGroup.items.length} selected in this category
+                  </p>
+                </div>
+                {visibleCatalogMaterials.length === 0 ? (
+                  <p className="p-6 text-sm text-gray-500">No raw materials match your search.</p>
+                ) : (
+                  <>
+                    <label className="flex items-center gap-3 px-4 py-3 border-b border-gray-100 bg-white cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={visibleMaterialAllSelected}
+                        ref={el => {
+                          if (el) el.indeterminate = visibleMaterialSomeSelected;
+                        }}
+                        onChange={e => toggleMaterialCategoryAssignment(visibleCatalogMaterials, e.target.checked)}
+                        className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span className="text-sm font-medium text-gray-900">
+                        {catalogSearch.trim() ? 'Select all shown' : 'Select all in this category'}
+                      </span>
+                    </label>
+                    <ul className="divide-y divide-gray-100 max-h-[28rem] overflow-y-auto">
+                      {visibleCatalogMaterials.map(item => (
+                        <li key={item.id} className="px-4 py-2.5 hover:bg-gray-50">
+                          <label className="flex items-center gap-3 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={selectedMaterialIds.has(item.id)}
+                              onChange={e => toggleMaterialAssignment(item.id, e.target.checked)}
+                              className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                            />
+                            <span className="text-sm text-gray-800">
+                              {item.name}
+                              {item.sku ? <span className="text-gray-500"> · {item.sku}</span> : null}
+                            </span>
+                          </label>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+              </div>
+            )}
+
+            {!catalogLoading && employee.branchName && !catalogError && (
+              <div className="px-4 py-3 border-t border-gray-100 bg-gray-50 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm text-gray-600">
+                  <span className="font-medium text-gray-900 tabular-nums">{selectedProductIds.size}</span> product
+                  famil{selectedProductIds.size === 1 ? 'y' : 'ies'} and{' '}
+                  <span className="font-medium text-gray-900 tabular-nums">{selectedMaterialIds.size}</span> raw material
+                  {selectedMaterialIds.size === 1 ? '' : 's'} selected across all categories.
+                </p>
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="sm"
+                  className="shrink-0"
+                  disabled={catalogSaving || catalogLoading}
+                  onClick={() => void handleSaveCatalogAssignments()}
+                >
+                  {catalogSaving ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                      Saving…
+                    </>
+                  ) : (
+                    'Save all assignments'
+                  )}
+                </Button>
+              </div>
+            )}
+          </div>
+        );
+      }
+
       case 'skills':
         return (
           <div className="space-y-6">
@@ -3013,32 +5164,43 @@ export default function EmployeeDetailPage() {
               {p.activityFeed.length === 0 ? (
                 <p className="text-sm text-gray-500">No activity entries found.</p>
               ) : (
-                <ul className="divide-y divide-gray-100 border border-gray-100 rounded-xl overflow-hidden">
-                  {p.activityFeed.map((item) => (
-                    <li key={item.id} className="flex gap-4 p-4 bg-white hover:bg-gray-50/80 transition-colors">
-                      <div
-                        className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full ${activityFeedVariantIconClass(item.variant)}`}
-                      >
-                        <ActivityLineIcon className="w-5 h-5" aria-hidden />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="font-semibold text-gray-900 text-sm leading-snug">{item.headline}</p>
-                        <p className="text-xs text-gray-500 mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
-                          <span className="tabular-nums">{formatActivityLogTimestamp(item.timestamp)}</span>
-                          <Badge variant="outline" className="text-[10px] font-normal">
-                            {item.category}
-                          </Badge>
-                          {item.location ? (
-                            <span className="inline-flex items-center gap-1 text-gray-500">
-                              <MapPin className="w-3.5 h-3.5 flex-shrink-0" aria-hidden />
-                              {item.location}
-                            </span>
-                          ) : null}
-                        </p>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
+                <>
+                  <ul className="divide-y divide-gray-100 border border-gray-100 rounded-xl overflow-hidden">
+                    {paginatedActivity.map((item) => (
+                      <li key={item.id} className="flex gap-4 p-4 bg-white hover:bg-gray-50/80 transition-colors">
+                        <div
+                          className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full ${activityFeedVariantIconClass(item.variant)}`}
+                        >
+                          <ActivityLineIcon className="w-5 h-5" aria-hidden />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="font-semibold text-gray-900 text-sm leading-snug">{item.headline}</p>
+                          <p className="text-xs text-gray-500 mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+                            <span className="tabular-nums">{formatActivityLogTimestamp(item.timestamp)}</span>
+                            <Badge variant="outline" className="text-[10px] font-normal">
+                              {item.category}
+                            </Badge>
+                            {item.location ? (
+                              <span className="inline-flex items-center gap-1 text-gray-500">
+                                <MapPin className="w-3.5 h-3.5 flex-shrink-0" aria-hidden />
+                                {item.location}
+                              </span>
+                            ) : null}
+                          </p>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                  {p.activityFeed.length > ACTIVITY_PAGE_SIZE && (
+                    <TablePagination
+                      page={safeActivityPage}
+                      total={p.activityFeed.length}
+                      pageSize={ACTIVITY_PAGE_SIZE}
+                      onPageChange={setActivityPage}
+                      className="rounded-b-xl border-x border-b border-gray-100 -mt-px"
+                    />
+                  )}
+                </>
               )}
             </div>
 
@@ -3150,7 +5312,7 @@ export default function EmployeeDetailPage() {
       {/* Tabs — grid layout to match legacy Agent Profile */}
       <div className="rounded-2xl bg-gray-100 p-3">
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-          {DETAIL_TABS.map((t) => {
+          {visibleTabs.map((t) => {
             const Icon = t.icon;
             const active = tab === t.id;
             return (
@@ -3200,6 +5362,300 @@ export default function EmployeeDetailPage() {
           }}
         />
       ) : null}
+
+      {agentOrdersPeriodModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40"
+          role="presentation"
+          onClick={() => setAgentOrdersPeriodModalOpen(false)}
+        >
+          <div
+            className="bg-white w-full sm:max-w-lg sm:rounded-xl shadow-xl max-h-[90vh] overflow-y-auto"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="agent-orders-period-modal-title"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-4 border-b border-gray-200 sticky top-0 bg-white z-10">
+              <h2 id="agent-orders-period-modal-title" className="text-lg font-semibold text-gray-900">
+                Order period
+              </h2>
+              <button
+                type="button"
+                className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+                aria-label="Close"
+                onClick={() => setAgentOrdersPeriodModalOpen(false)}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <p className="text-sm text-gray-600">
+                Choose a preset or custom range. The order list is filtered by order date.
+              </p>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {DATE_PERIOD_OPTIONS.map(({ kind, label }) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    onClick={() => handleAgentOrdersModalPresetPick(kind)}
+                    className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
+                      draftAgentOrdersPeriodKind === kind
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-white text-gray-800 border-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {draftAgentOrdersPeriodKind === 'custom' && (
+                <div className="space-y-2 pt-1 border-t border-gray-100">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="text-xs font-medium text-gray-600 w-full sm:w-auto">From</label>
+                    <input
+                      type="date"
+                      value={draftAgentOrdersCustomStart}
+                      max={maxAgentOrdersCustomDate}
+                      onChange={e => setDraftAgentOrdersCustomStart(e.target.value)}
+                      className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                    <label className="text-xs font-medium text-gray-600">To</label>
+                    <input
+                      type="date"
+                      value={draftAgentOrdersCustomEnd}
+                      min={draftAgentOrdersCustomStart || undefined}
+                      max={maxAgentOrdersCustomDate}
+                      onChange={e => setDraftAgentOrdersCustomEnd(e.target.value)}
+                      className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
+                  {draftAgentOrdersCustomInvalid && (
+                    <p className="text-xs text-red-600">Start must be on or before end.</p>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 p-4 border-t border-gray-200">
+              <Button type="button" variant="outline" onClick={() => setAgentOrdersPeriodModalOpen(false)}>
+                Cancel
+              </Button>
+              {draftAgentOrdersPeriodKind === 'custom' && (
+                <Button
+                  type="button"
+                  variant="primary"
+                  disabled={draftAgentOrdersCustomInvalid || !draftAgentOrdersCustomStart || !draftAgentOrdersCustomEnd}
+                  onClick={applyAgentOrdersModalCustomRange}
+                >
+                  Apply range
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tripHistoryPeriodModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40"
+          role="presentation"
+          onClick={() => setTripHistoryPeriodModalOpen(false)}
+        >
+          <div
+            className="bg-white w-full sm:max-w-lg sm:rounded-xl shadow-xl max-h-[90vh] overflow-y-auto"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="trip-history-period-modal-title"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-4 border-b border-gray-200 sticky top-0 bg-white z-10">
+              <h2 id="trip-history-period-modal-title" className="text-lg font-semibold text-gray-900">
+                Trip period
+              </h2>
+              <button
+                type="button"
+                className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+                aria-label="Close"
+                onClick={() => setTripHistoryPeriodModalOpen(false)}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <p className="text-sm text-gray-600">
+                Choose a preset or custom range. The trip list is filtered by scheduled date.
+              </p>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {DATE_PERIOD_OPTIONS.map(({ kind, label }) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    onClick={() => handleTripHistoryModalPresetPick(kind)}
+                    className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
+                      draftTripHistoryPeriodKind === kind
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-white text-gray-800 border-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {draftTripHistoryPeriodKind === 'custom' && (
+                <div className="space-y-2 pt-1 border-t border-gray-100">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="text-xs font-medium text-gray-600 w-full sm:w-auto">From</label>
+                    <input
+                      type="date"
+                      value={draftTripHistoryCustomStart}
+                      max={maxTripHistoryCustomDate}
+                      onChange={e => setDraftTripHistoryCustomStart(e.target.value)}
+                      className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                    <label className="text-xs font-medium text-gray-600">To</label>
+                    <input
+                      type="date"
+                      value={draftTripHistoryCustomEnd}
+                      min={draftTripHistoryCustomStart || undefined}
+                      max={maxTripHistoryCustomDate}
+                      onChange={e => setDraftTripHistoryCustomEnd(e.target.value)}
+                      className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
+                  {draftTripHistoryCustomInvalid && (
+                    <p className="text-xs text-red-600">Start must be on or before end.</p>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 p-4 border-t border-gray-200">
+              <Button type="button" variant="outline" onClick={() => setTripHistoryPeriodModalOpen(false)}>
+                Cancel
+              </Button>
+              {draftTripHistoryPeriodKind === 'custom' && (
+                <Button
+                  type="button"
+                  variant="primary"
+                  disabled={
+                    draftTripHistoryCustomInvalid || !draftTripHistoryCustomStart || !draftTripHistoryCustomEnd
+                  }
+                  onClick={applyTripHistoryModalCustomRange}
+                >
+                  Apply range
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {warehouseRequestsPeriodModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40"
+          role="presentation"
+          onClick={() => setWarehouseRequestsPeriodModalOpen(false)}
+        >
+          <div
+            className="bg-white w-full sm:max-w-lg sm:rounded-xl shadow-xl max-h-[90vh] overflow-y-auto"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="warehouse-requests-period-modal-title"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-4 border-b border-gray-200 sticky top-0 bg-white z-10">
+              <h2 id="warehouse-requests-period-modal-title" className="text-lg font-semibold text-gray-900">
+                Request period
+              </h2>
+              <button
+                type="button"
+                className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+                aria-label="Close"
+                onClick={() => setWarehouseRequestsPeriodModalOpen(false)}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <p className="text-sm text-gray-600">
+                Choose a preset or custom range. Both lists filter by request / order date.
+              </p>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {DATE_PERIOD_OPTIONS.map(({ kind, label }) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    onClick={() => handleWarehouseRequestsModalPresetPick(kind)}
+                    className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
+                      draftWarehouseRequestsPeriodKind === kind
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-white text-gray-800 border-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {draftWarehouseRequestsPeriodKind === 'custom' && (
+                <div className="space-y-2 pt-1 border-t border-gray-100">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="text-xs font-medium text-gray-600 w-full sm:w-auto">From</label>
+                    <input
+                      type="date"
+                      value={draftWarehouseRequestsCustomStart}
+                      max={maxWarehouseRequestsCustomDate}
+                      onChange={e => setDraftWarehouseRequestsCustomStart(e.target.value)}
+                      className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                    <label className="text-xs font-medium text-gray-600">To</label>
+                    <input
+                      type="date"
+                      value={draftWarehouseRequestsCustomEnd}
+                      min={draftWarehouseRequestsCustomStart || undefined}
+                      max={maxWarehouseRequestsCustomDate}
+                      onChange={e => setDraftWarehouseRequestsCustomEnd(e.target.value)}
+                      className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
+                  {draftWarehouseRequestsCustomInvalid && (
+                    <p className="text-xs text-red-600">Start must be on or before end.</p>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 p-4 border-t border-gray-200">
+              <Button type="button" variant="outline" onClick={() => setWarehouseRequestsPeriodModalOpen(false)}>
+                Cancel
+              </Button>
+              {draftWarehouseRequestsPeriodKind === 'custom' && (
+                <Button
+                  type="button"
+                  variant="primary"
+                  disabled={
+                    draftWarehouseRequestsCustomInvalid ||
+                    !draftWarehouseRequestsCustomStart ||
+                    !draftWarehouseRequestsCustomEnd
+                  }
+                  onClick={applyWarehouseRequestsModalCustomRange}
+                >
+                  Apply range
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tripDetailTrip && (
+        <TripDetailsModal
+          isOpen={tripDetailOpen}
+          onClose={() => {
+            setTripDetailOpen(false);
+            setTripDetailTrip(null);
+          }}
+          trip={tripDetailTrip}
+          onEdit={() => setTripDetailOpen(false)}
+        />
+      )}
 
     </div>
   );

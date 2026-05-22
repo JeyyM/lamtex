@@ -4,8 +4,10 @@ import {
   Users, Search, Filter, ChevronDown,
   UserCheck, Truck, Package, Briefcase,
   MapPin, Calendar, Loader2, AlertCircle,
-  Plus,
+  Plus, Download,
 } from 'lucide-react';
+import { Button } from '@/src/components/ui/Button';
+import { downloadEmployeesWorkbook } from '@/src/lib/employeesExport';
 import type { EmployeeRole } from '@/src/types/employee';
 import {
   fetchBranchOptions,
@@ -43,7 +45,7 @@ function directoryCardDisplayName(emp: EmployeePerfRow): string {
 }
 
 const EmployeesPage: React.FC = () => {
-  const { branch: navbarBranch } = useAppContext();
+  const { branch: navbarBranch, addAuditLog } = useAppContext();
 
   const [employees, setEmployees] = useState<EmployeePerfRow[]>([]);
   const [branches, setBranches] = useState<BranchOption[]>([]);
@@ -54,6 +56,7 @@ const EmployeesPage: React.FC = () => {
   const [selectedRole, setSelectedRole] = useState<EmployeeRole | 'all'>('all');
   /** `''` here means "follow navbar branch"; `'all'` means show every branch. */
   const [selectedBranchId, setSelectedBranchId] = useState<string>('');
+  const [exportingEmployees, setExportingEmployees] = useState(false);
 
   /** Active branch id used by filtering: follow navbar branch unless the user picked one. */
   const effectiveBranchId = useMemo(() => {
@@ -147,6 +150,31 @@ const EmployeesPage: React.FC = () => {
     }
     return out;
   }, [filteredEmployees]);
+
+  const exportBranchLabel = useMemo(() => {
+    if (effectiveBranchId === 'all') return 'All branches';
+    return branches.find(b => b.id === effectiveBranchId)?.name ?? navbarBranch ?? 'All branches';
+  }, [effectiveBranchId, branches, navbarBranch]);
+
+  const handleExportEmployees = async () => {
+    if (exportingEmployees || loading || filteredEmployees.length === 0) return;
+    setExportingEmployees(true);
+    try {
+      await downloadEmployeesWorkbook({
+        branchLabel: exportBranchLabel,
+        rows: filteredEmployees,
+      });
+      addAuditLog(
+        'Exported employees workbook',
+        'Employee',
+        `${filteredEmployees.length} employee${filteredEmployees.length !== 1 ? 's' : ''} (${exportBranchLabel})`,
+      );
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Export failed.');
+    } finally {
+      setExportingEmployees(false);
+    }
+  };
 
   const getRoleIcon = (role: EmployeeRole) => {
     switch (role) {
@@ -293,9 +321,9 @@ const EmployeesPage: React.FC = () => {
 
       {/* Filters */}
       <div className="bg-white rounded-xl border border-gray-200 p-4">
-        <div className="flex flex-col md:flex-row gap-4">
+        <div className="flex flex-col lg:flex-row gap-3 lg:items-center">
           {/* Search */}
-          <div className="flex-1 relative">
+          <div className="flex-1 relative min-w-0">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
             <input
               type="text"
@@ -306,13 +334,14 @@ const EmployeesPage: React.FC = () => {
             />
           </div>
 
+          <div className="flex flex-col sm:flex-row flex-wrap gap-3 lg:shrink-0">
           {/* Role Filter */}
-          <div className="relative w-full md:w-auto">
+          <div className="relative w-full sm:w-auto">
             <Filter className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
             <select
               value={selectedRole}
               onChange={(e) => setSelectedRole(e.target.value as EmployeeRole | 'all')}
-              className="w-full md:w-auto pl-10 pr-8 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 appearance-none bg-white md:min-w-[200px]"
+              className="w-full sm:w-auto pl-10 pr-8 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 appearance-none bg-white sm:min-w-[200px]"
             >
               <option value="all">All Roles</option>
               <option value="Sales Agent">Sales Agents</option>
@@ -324,12 +353,12 @@ const EmployeesPage: React.FC = () => {
           </div>
 
           {/* Branch Filter */}
-          <div className="relative w-full md:w-auto">
+          <div className="relative w-full sm:w-auto">
             <MapPin className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
             <select
               value={selectedBranchId || effectiveBranchId}
               onChange={(e) => setSelectedBranchId(e.target.value)}
-              className="w-full md:w-auto pl-10 pr-8 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 appearance-none bg-white md:min-w-[180px]"
+              className="w-full sm:w-auto pl-10 pr-8 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 appearance-none bg-white sm:min-w-[180px]"
             >
               <option value="all">All Branches</option>
               {branches.map((b) => (
@@ -339,6 +368,23 @@ const EmployeesPage: React.FC = () => {
               ))}
             </select>
             <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5 pointer-events-none" />
+          </div>
+
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="gap-2 h-[42px] w-full sm:w-auto whitespace-nowrap"
+            disabled={exportingEmployees || loading || filteredEmployees.length === 0}
+            onClick={() => void handleExportEmployees()}
+          >
+            {exportingEmployees ? (
+              <Loader2 className="w-4 h-4 animate-spin" aria-hidden />
+            ) : (
+              <Download className="w-4 h-4" aria-hidden />
+            )}
+            {exportingEmployees ? 'Exporting…' : 'Export'}
+          </Button>
           </div>
         </div>
 

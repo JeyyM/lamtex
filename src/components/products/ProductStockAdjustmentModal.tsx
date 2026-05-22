@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Plus, Minus, Package, AlertCircle, CheckCircle, User, Factory } from 'lucide-react';
 import { supabase } from '@/src/lib/supabase';
-import { computeStockStatus } from '@/src/lib/stockStatus';
+import { computePersistedStockStatus } from '@/src/lib/stockStatus';
 import { applyBomConsumptionDeductions, validateBomConsumption } from '@/src/lib/bomConsumption';
 import { refreshParentProductStatus } from '@/src/lib/productAggregateStatus';
 import { insertProductLog } from '@/src/lib/domainActivityLog';
@@ -138,7 +138,7 @@ export default function ProductStockAdjustmentModal({
           .eq('variant_id', variant.id);
         if (sumErr) throw sumErr;
         const sumTotal = (sumRows ?? []).reduce((s, r) => s + (Number(r.quantity) || 0), 0);
-        const newStatus = computeStockStatus(sumTotal, variant.reorderPoint);
+        const newStatus = computePersistedStockStatus(sumTotal, variant.reorderPoint);
 
         const varPayload: Record<string, unknown> = { total_stock: sumTotal, status: newStatus };
         if (adjustmentType === 'add') {
@@ -152,7 +152,7 @@ export default function ProductStockAdjustmentModal({
         }
       } else {
         const newTotal = Math.max(0, Math.round(newStock));
-        const st = computeStockStatus(newTotal, variant.reorderPoint);
+        const st = computePersistedStockStatus(newTotal, variant.reorderPoint);
         const varPayloadGlobal: Record<string, unknown> = { total_stock: newTotal, status: st };
         if (adjustmentType === 'add') {
           varPayloadGlobal.last_restocked = new Date().toISOString();

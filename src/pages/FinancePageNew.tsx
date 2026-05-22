@@ -12,10 +12,12 @@ import {
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
+  CalendarRange,
   CheckCircle2,
   CircleDollarSign,
   Clock,
   CreditCard,
+  Download,
   Eye,
   FileText,
   Loader2,
@@ -48,6 +50,15 @@ import {
   markAllProofCommissionsPaidForOrder,
   markProofCommissionPaid,
 } from '@/src/lib/financeMutations';
+import { downloadOutstandingOrdersWorkbook } from '@/src/lib/outstandingOrdersExport';
+import {
+  DATE_PERIOD_OPTIONS,
+  inDatePeriodRange,
+  periodTriggerLabel,
+  resolveDatePeriodQuery,
+  todayIsoLocal,
+  type DatePeriodKind,
+} from '@/src/lib/datePeriodQuery';
 
 type TabId = 'outstanding' | 'credit' | 'commissions';
 
@@ -113,9 +124,7 @@ const COMMISSION_PAGE_SIZE = 20;
 
 const PAYMENT_STATUS_FILTER_OPTIONS = [
   'Unbilled',
-  'Invoiced',
   'Partially Paid',
-  'Paid',
   'Overdue',
   'On Credit',
 ] as const;
@@ -123,7 +132,7 @@ const PAYMENT_STATUS_FILTER_OPTIONS = [
 type ToastState = { kind: 'success' | 'error'; message: string } | null;
 
 export function FinancePageNew() {
-  const { role, employeeName, addAuditLog } = useAppContext();
+  const { role, employeeName, branch, addAuditLog } = useAppContext();
   const isExecutive = role === 'Executive';
 
   const [tab, setTab] = useState<TabId>('outstanding');
@@ -140,7 +149,16 @@ export function FinancePageNew() {
   const [sortKey, setSortKey] = useState<string>('dueDate');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [headerPaymentFilter, setHeaderPaymentFilter] = useState('');
+  const [includePaidOrders, setIncludePaidOrders] = useState(false);
   const [outstandingPage, setOutstandingPage] = useState(1);
+  const [exportPeriodKind, setExportPeriodKind] = useState<DatePeriodKind>('month');
+  const [exportCustomStart, setExportCustomStart] = useState('');
+  const [exportCustomEnd, setExportCustomEnd] = useState('');
+  const [exportPeriodModalOpen, setExportPeriodModalOpen] = useState(false);
+  const [draftExportPeriodKind, setDraftExportPeriodKind] = useState<DatePeriodKind>('month');
+  const [draftExportCustomStart, setDraftExportCustomStart] = useState('');
+  const [draftExportCustomEnd, setDraftExportCustomEnd] = useState('');
+  const [exportingOutstanding, setExportingOutstanding] = useState(false);
 
   // Commission release (orders with payment proofs)
   const [commissionSortKey, setCommissionSortKey] = useState<string>('orderNumber');
@@ -253,11 +271,74 @@ export function FinancePageNew() {
       : <ArrowDown className="w-3 h-3 ml-1 text-blue-600" />;
   };
 
+  const exportQueryDates = useMemo(
+    () => resolveDatePeriodQuery(exportPeriodKind, exportCustomStart, exportCustomEnd),
+    [exportPeriodKind, exportCustomStart, exportCustomEnd],
+  );
+
+  const maxExportCustomDate = useMemo(() => todayIsoLocal(), []);
+
+  const draftExportCustomInvalid = Boolean(
+    draftExportCustomStart && draftExportCustomEnd && draftExportCustomStart > draftExportCustomEnd,
+  );
+
+  const openExportPeriodModal = () => {
+    setDraftExportPeriodKind(exportPeriodKind);
+    setDraftExportCustomStart(exportCustomStart);
+    setDraftExportCustomEnd(exportCustomEnd);
+    setExportPeriodModalOpen(true);
+  };
+
+  const handleExportPeriodChange = (kind: DatePeriodKind) => {
+    setExportPeriodKind(kind);
+    if (kind === 'custom') {
+      const t = new Date();
+      const iso = todayIsoLocal();
+      const start = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-01`;
+      setExportCustomStart(start);
+      setExportCustomEnd(iso);
+    }
+  };
+
+  const handleExportModalPresetPick = (kind: DatePeriodKind) => {
+    if (kind !== 'custom') {
+      handleExportPeriodChange(kind);
+      setExportPeriodModalOpen(false);
+      return;
+    }
+    setDraftExportPeriodKind('custom');
+    const t = new Date();
+    const iso = todayIsoLocal();
+    const start = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-01`;
+    setDraftExportCustomStart(prev => prev || exportCustomStart || start);
+    setDraftExportCustomEnd(prev => prev || exportCustomEnd || iso);
+  };
+
+  const applyExportModalCustomRange = () => {
+    setExportPeriodKind('custom');
+    setExportCustomStart(draftExportCustomStart);
+    setExportCustomEnd(draftExportCustomEnd);
+    setExportPeriodModalOpen(false);
+  };
+
+  useEffect(() => {
+    if (!exportPeriodModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setExportPeriodModalOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [exportPeriodModalOpen]);
+
   const filteredOutstanding = useMemo(() => {
     const q = search.trim().toLowerCase();
     let rows = outstanding;
     if (q) rows = rows.filter((r) => [r.orderNumber, r.customerName, r.agentName].some((v) => v?.toLowerCase().includes(q)));
     if (headerPaymentFilter) rows = rows.filter((r) => r.paymentStatus === headerPaymentFilter);
+    if (!includePaidOrders) rows = rows.filter((r) => r.paymentStatus !== 'Paid');
+    if (!exportQueryDates.invalid) {
+      rows = rows.filter(r => inDatePeriodRange(r.orderDate, exportQueryDates.from, exportQueryDates.to));
+    }
     return [...rows].sort((a, b) => {
       let av: string | number;
       let bv: string | number;
@@ -278,7 +359,32 @@ export function FinancePageNew() {
       if (as > bs) return sortDir === 'asc' ? 1 : -1;
       return 0;
     });
-  }, [outstanding, search, headerPaymentFilter, sortKey, sortDir]);
+  }, [outstanding, search, headerPaymentFilter, includePaidOrders, sortKey, sortDir, exportQueryDates]);
+
+  const handleExportOutstanding = async () => {
+    if (exportingOutstanding || exportQueryDates.invalid) return;
+    if (filteredOutstanding.length === 0) {
+      window.alert('No outstanding orders match the current filters and date range.');
+      return;
+    }
+    setExportingOutstanding(true);
+    try {
+      await downloadOutstandingOrdersWorkbook({
+        branchLabel: branch ?? 'All branches',
+        periodLabel: exportQueryDates.displayLabel,
+        rows: filteredOutstanding,
+      });
+      addAuditLog(
+        'Exported outstanding orders workbook',
+        'Finance',
+        `${filteredOutstanding.length} order${filteredOutstanding.length !== 1 ? 's' : ''} · ${exportQueryDates.displayLabel}`,
+      );
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Export failed.');
+    } finally {
+      setExportingOutstanding(false);
+    }
+  };
 
   const outstandingTotalPages = Math.max(1, Math.ceil(filteredOutstanding.length / OUTSTANDING_PAGE_SIZE));
 
@@ -290,7 +396,7 @@ export function FinancePageNew() {
 
   useEffect(() => {
     setOutstandingPage(1);
-  }, [search, headerPaymentFilter, sortKey, sortDir]);
+  }, [search, headerPaymentFilter, includePaidOrders, sortKey, sortDir, exportQueryDates.from, exportQueryDates.to, exportQueryDates.invalid]);
 
   useEffect(() => {
     if (outstandingPage > outstandingTotalPages) {
@@ -462,10 +568,17 @@ export function FinancePageNew() {
 
       {tab === 'outstanding' && (
         <Card>
-          <CardHeader>
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <CardHeader className="space-y-4">
+            <div>
               <CardTitle className="text-lg">Delivered orders — payment tracking</CardTitle>
-              <div className="relative w-full sm:w-72">
+              <p className="text-xs text-gray-500 font-normal mt-1">
+                {exportQueryDates.invalid
+                  ? 'Invalid date range selected.'
+                  : `${filteredOutstanding.length} order${filteredOutstanding.length !== 1 ? 's' : ''} in ${exportQueryDates.displayLabel}${includePaidOrders ? '' : ' · paid hidden'}`}
+              </p>
+            </div>
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+              <div className="relative flex-1 min-w-0">
                 <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
                   className="w-full pl-9 pr-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
@@ -474,16 +587,62 @@ export function FinancePageNew() {
                   onChange={(e) => setSearch(e.target.value)}
                 />
               </div>
+              <div className="flex flex-wrap items-center gap-2 lg:flex-nowrap lg:shrink-0">
+                <label className="inline-flex items-center gap-2 h-9 px-3 text-sm text-gray-700 cursor-pointer rounded-lg border border-gray-200 bg-white hover:bg-gray-50 whitespace-nowrap">
+                  <input
+                    type="checkbox"
+                    checked={includePaidOrders}
+                    onChange={e => setIncludePaidOrders(e.target.checked)}
+                    className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  Include paid
+                </label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-2 h-9 border-gray-300 bg-white min-w-[9.5rem] max-w-[14rem] justify-start"
+                  aria-haspopup="dialog"
+                  aria-expanded={exportPeriodModalOpen}
+                  aria-label="Choose order period"
+                  onClick={openExportPeriodModal}
+                >
+                  <CalendarRange className="w-4 h-4 shrink-0 text-gray-600" aria-hidden />
+                  <span className="truncate text-left text-sm font-normal">
+                    {periodTriggerLabel(exportPeriodKind, exportCustomStart, exportCustomEnd)}
+                  </span>
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-2 h-9 border-gray-300 bg-white whitespace-nowrap"
+                  disabled={exportingOutstanding || loading.outstanding || exportQueryDates.invalid || filteredOutstanding.length === 0}
+                  onClick={() => void handleExportOutstanding()}
+                >
+                  {exportingOutstanding ? (
+                    <Loader2 className="w-4 h-4 animate-spin" aria-hidden />
+                  ) : (
+                    <Download className="w-4 h-4" aria-hidden />
+                  )}
+                  {exportingOutstanding ? 'Exporting…' : 'Export'}
+                </Button>
               </div>
+            </div>
           </CardHeader>
           <CardContent>
             {loading.outstanding ? (
               <div className="py-12 flex justify-center text-gray-500">
                 <Loader2 className="w-6 h-6 animate-spin" />
             </div>
+            ) : outstanding.length === 0 ? (
+              <p className="py-10 text-center text-sm text-gray-500">
+                No delivered or partially fulfilled orders on file.
+              </p>
             ) : filteredOutstanding.length === 0 ? (
               <p className="py-10 text-center text-sm text-gray-500">
-                No delivered or partially fulfilled orders match your filters.
+                No orders match your search, status filter, or date range.
+                {!includePaidOrders ? ' Turn on Include paid to show fully paid orders.' : ''}
               </p>
             ) : (
               <div className="overflow-x-auto">
@@ -535,9 +694,6 @@ export function FinancePageNew() {
                             <Link to={`/orders/${row.id}`} className="font-medium text-blue-600 hover:underline">
                               {row.orderNumber}
                             </Link>
-                            {row.pendingProofs > 0 ? (
-                              <p className="text-[11px] text-amber-700 mt-0.5">{row.pendingProofs} proof pending</p>
-                            ) : null}
                           </td>
                           <td className="py-3 px-3">
                             {row.customerId ? (
@@ -754,6 +910,98 @@ export function FinancePageNew() {
             )}
           </CardContent>
         </Card>
+      )}
+
+      {exportPeriodModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40"
+          role="presentation"
+          onClick={() => setExportPeriodModalOpen(false)}
+        >
+          <div
+            className="bg-white w-full sm:max-w-lg sm:rounded-xl shadow-xl max-h-[90vh] overflow-y-auto"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="outstanding-export-period-modal-title"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-4 border-b border-gray-200 sticky top-0 bg-white z-10">
+              <h2 id="outstanding-export-period-modal-title" className="text-lg font-semibold text-gray-900">
+                Order period
+              </h2>
+              <button
+                type="button"
+                className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+                aria-label="Close"
+                onClick={() => setExportPeriodModalOpen(false)}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <p className="text-sm text-gray-600">
+                Choose a preset or custom range. The order list and export both use this period (by order date).
+              </p>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {DATE_PERIOD_OPTIONS.map(({ kind, label }) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    onClick={() => handleExportModalPresetPick(kind)}
+                    className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
+                      draftExportPeriodKind === kind
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-white text-gray-800 border-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {draftExportPeriodKind === 'custom' && (
+                <div className="space-y-2 pt-1 border-t border-gray-100">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="text-xs font-medium text-gray-600 w-full sm:w-auto">From</label>
+                    <input
+                      type="date"
+                      value={draftExportCustomStart}
+                      max={maxExportCustomDate}
+                      onChange={e => setDraftExportCustomStart(e.target.value)}
+                      className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    />
+                    <label className="text-xs font-medium text-gray-600">To</label>
+                    <input
+                      type="date"
+                      value={draftExportCustomEnd}
+                      min={draftExportCustomStart || undefined}
+                      max={maxExportCustomDate}
+                      onChange={e => setDraftExportCustomEnd(e.target.value)}
+                      className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    />
+                  </div>
+                  {draftExportCustomInvalid && (
+                    <p className="text-xs text-red-600">Start must be on or before end.</p>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 p-4 border-t border-gray-200">
+              <Button type="button" variant="outline" onClick={() => setExportPeriodModalOpen(false)}>
+                Cancel
+              </Button>
+              {draftExportPeriodKind === 'custom' && (
+                <Button
+                  type="button"
+                  variant="primary"
+                  disabled={draftExportCustomInvalid || !draftExportCustomStart || !draftExportCustomEnd}
+                  onClick={applyExportModalCustomRange}
+                >
+                  Apply range
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
       )}
 
       {commissionModalOrder && (

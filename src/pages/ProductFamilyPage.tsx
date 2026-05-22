@@ -12,7 +12,7 @@ import {
   Package, ArrowLeft, AlertTriangle, ShoppingCart, Truck, Factory,
   Ruler, Weight, Info, TrendingUp, Calendar, BarChart3,
   Table as TableIcon, Edit, CheckCircle2, Lightbulb,
-  Save, X, Plus, Trash2, ChevronLeft, ChevronRight, Edit3, Loader2,
+  Save, X, Plus, Trash2, ChevronLeft, ChevronRight, Edit3, Loader2, Download, CalendarRange,
 } from 'lucide-react';
 
 import hdpePipeImg    from '../assets/product-images/HDPE Pipe.webp';
@@ -23,11 +23,24 @@ import {
 } from 'recharts';
 import { supabase } from '../lib/supabase';
 import { rawMaterialDetailHref } from '../lib/productRoutes';
-import { computeStockStatus } from '../lib/stockStatus';
+import { computePersistedStockStatus } from '../lib/stockStatus';
 import { createDraftProductionRequestWithInitialLine } from '../lib/productionRequestDraft';
 import { insertProductLog, mapAppRoleToLogRole } from '../lib/domainActivityLog';
 import type { EntityActivityLogRow } from '../components/domain/EntityActivityLogCard';
 import { EntityActivityLogCard } from '../components/domain/EntityActivityLogCard';
+import { isProductFamilyCatalogHidden, CATALOG_HIDDEN_CLASS } from '../lib/productCatalogVisibility';
+import { downloadVariantsComparisonWorkbook } from '../lib/productFamilyExport';
+import {
+  DATE_PERIOD_OPTIONS,
+  avgDailyUsage as periodAvgDailyUsage,
+  avgMonthlyUsage as periodAvgMonthlyUsage,
+  lastNMonthSlots,
+  monthSlotsBetween,
+  periodTriggerLabel,
+  resolveDatePeriodQuery,
+  todayIsoLocal,
+  type DatePeriodKind,
+} from '../lib/datePeriodQuery';
 
 // â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const stringToColor = (str: string) => {
@@ -72,6 +85,8 @@ interface DisplayVariant {
   /** Sum of line revenue for this variant year-to-date (from DB). */
   revenueYtd: number;
   status: string;
+  /** Hidden from catalog / new orders when true. */
+  isHidden: boolean;
   monthlyProductionQuota: number;
   currentMonthProduced: number;
   leadTimeDays: number;
@@ -99,6 +114,7 @@ interface VariantRow {
   total_stock: number;
   reorder_point: number;
   status: string;
+  is_hidden: boolean;
   units_sold_ytd: number;
   revenue_ytd: number;
   weight_kg: number | null;
@@ -130,7 +146,7 @@ interface ProductRow {
   images: string[] | null;
   status: string;
   branch: string | null;
-  product_categories: { name: string } | null;
+  product_categories: { name: string; is_active?: boolean } | null;
 }
 
 function normalizeBranchKey(label: string): string {
@@ -226,6 +242,7 @@ function toDisplayVariant(v: VariantRow, selectedBranch: string): DisplayVariant
     unitsSold: v.units_sold_ytd,
     revenueYtd: Number(v.revenue_ytd) || 0,
     status,
+    isHidden: v.is_hidden === true,
     monthlyProductionQuota: Math.round(monthlyUsage * 1.5),
     currentMonthProduced: Math.round(monthlyUsage * 1.1),
     leadTimeDays: v.lead_time_days ?? 0,
@@ -295,6 +312,16 @@ export default function ProductFamilyPage() {
   // â”€â”€ UI state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const [selectedVariant, setSelectedVariant]     = useState<DisplayVariant | null>(null);
   const [comparisonView, setComparisonView]       = useState<'table' | 'chart'>('table');
+  const [comparisonPeriodKind, setComparisonPeriodKind] = useState<DatePeriodKind>('ytd');
+  const [comparisonCustomStart, setComparisonCustomStart] = useState('');
+  const [comparisonCustomEnd, setComparisonCustomEnd] = useState('');
+  const [comparisonPeriodModalOpen, setComparisonPeriodModalOpen] = useState(false);
+  const [draftComparisonPeriodKind, setDraftComparisonPeriodKind] = useState<DatePeriodKind>('ytd');
+  const [draftComparisonCustomStart, setDraftComparisonCustomStart] = useState('');
+  const [draftComparisonCustomEnd, setDraftComparisonCustomEnd] = useState('');
+  const [comparisonSales, setComparisonSales] = useState<Record<string, { units: number; revenue: number }>>({});
+  const [comparisonSalesLoading, setComparisonSalesLoading] = useState(false);
+  const [exportingComparison, setExportingComparison] = useState(false);
   const [isEditingVariant, setIsEditingVariant]   = useState(false);
   const [editedVariant, setEditedVariant]         = useState<DisplayVariant | null>(null);
   const [showImageGalleryModal, setShowImageGalleryModal] = useState(false);
@@ -330,7 +357,7 @@ export default function ProductFamilyPage() {
       // Product family info
       const { data: prod } = await supabase
         .from('products')
-        .select('id, name, description, image_url, images, status, branch, product_categories(name)')
+        .select('id, name, description, image_url, images, status, branch, product_categories(name, is_active)')
         .eq('id', familyId)
         .single();
       if (prod) {
@@ -344,7 +371,7 @@ export default function ProductFamilyPage() {
       const { data: vars } = await supabase
         .from('product_variants')
         .select(`
-          id, sku, size, unit_price, cost_price, total_stock, reorder_point,
+          id, sku, size, is_hidden, unit_price, cost_price, total_stock, reorder_point,
           status, units_sold_ytd, revenue_ytd, weight_kg, length_m, volume_cbm, wall_thickness_mm,
           lead_time_days, min_order_qty, specs,
           product_variant_stock(quantity, branches(code, name)),
@@ -365,20 +392,126 @@ export default function ProductFamilyPage() {
     })();
   }, [familyId]);
 
-  /** Variant comparison chart: up to 12 months of order lines, trimmed to first/last month with any sale, optional branch. */
+  const comparisonQueryDates = useMemo(
+    () => resolveDatePeriodQuery(comparisonPeriodKind, comparisonCustomStart, comparisonCustomEnd),
+    [comparisonPeriodKind, comparisonCustomStart, comparisonCustomEnd],
+  );
+
+  const comparisonPeriodLabel = comparisonQueryDates.displayLabel;
+
+  const variantPeriodMetrics = useCallback(
+    (variantId: string) => {
+      const units = comparisonSales[variantId]?.units ?? 0;
+      const revenue = comparisonSales[variantId]?.revenue ?? 0;
+      const { from, to } = comparisonQueryDates;
+      return {
+        units,
+        revenue,
+        avgMonthly: periodAvgMonthlyUsage(units, from, to),
+        avgDaily: periodAvgDailyUsage(units, from, to),
+      };
+    },
+    [comparisonSales, comparisonQueryDates],
+  );
+
+  const comparisonEmptyMessage = useMemo(() => {
+    const branchPart = selectedBranch
+      ? ` (${selectedBranch} branch only).`
+      : ' (all branches).';
+    if (comparisonPeriodKind === 'all') {
+      return `No order sales in the last 12 months for this product family${branchPart}`;
+    }
+    if (comparisonQueryDates.from && comparisonQueryDates.to) {
+      return `No order sales from ${comparisonQueryDates.from} to ${comparisonQueryDates.to} for this product family${branchPart}`;
+    }
+    return `No order sales for ${comparisonPeriodLabel} for this product family${branchPart}`;
+  }, [
+    comparisonPeriodKind,
+    comparisonPeriodLabel,
+    comparisonQueryDates.from,
+    comparisonQueryDates.to,
+    selectedBranch,
+  ]);
+
+  const maxComparisonCustomDate = useMemo(() => todayIsoLocal(), []);
+
+  const draftComparisonCustomInvalid =
+    Boolean(
+      draftComparisonCustomStart &&
+        draftComparisonCustomEnd &&
+        draftComparisonCustomStart > draftComparisonCustomEnd,
+    );
+
+  const openComparisonPeriodModal = () => {
+    setDraftComparisonPeriodKind(comparisonPeriodKind);
+    setDraftComparisonCustomStart(comparisonCustomStart);
+    setDraftComparisonCustomEnd(comparisonCustomEnd);
+    setComparisonPeriodModalOpen(true);
+  };
+
+  const handleComparisonPeriodChange = (kind: DatePeriodKind) => {
+    setComparisonPeriodKind(kind);
+    if (kind === 'custom') {
+      const t = new Date();
+      const iso = todayIsoLocal();
+      const start = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-01`;
+      setComparisonCustomStart(start);
+      setComparisonCustomEnd(iso);
+    }
+  };
+
+  const handleComparisonModalPresetPick = (kind: DatePeriodKind) => {
+    if (kind !== 'custom') {
+      handleComparisonPeriodChange(kind);
+      setComparisonPeriodModalOpen(false);
+      return;
+    }
+    setDraftComparisonPeriodKind('custom');
+    const t = new Date();
+    const iso = todayIsoLocal();
+    const start = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-01`;
+    setDraftComparisonCustomStart((prev) => prev || comparisonCustomStart || start);
+    setDraftComparisonCustomEnd((prev) => prev || comparisonCustomEnd || iso);
+  };
+
+  const applyComparisonModalCustomRange = () => {
+    setComparisonPeriodKind('custom');
+    setComparisonCustomStart(draftComparisonCustomStart);
+    setComparisonCustomEnd(draftComparisonCustomEnd);
+    setComparisonPeriodModalOpen(false);
+  };
+
+  useEffect(() => {
+    if (!comparisonPeriodModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setComparisonPeriodModalOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [comparisonPeriodModalOpen]);
+
+  /** Variant comparison: sales totals + chart from order lines for the selected period. */
   useEffect(() => {
     const vids = variants.map(v => v.id).filter(id => !id.startsWith('NEW-'));
     if (vids.length === 0) {
+      setComparisonSales({});
       setUsageChartData([]);
       return;
     }
+    if (comparisonQueryDates.invalid) {
+      setComparisonSales({});
+      setUsageChartData([]);
+      return;
+    }
+
     let cancelled = false;
     (async () => {
+      setComparisonSalesLoading(true);
       setUsageChartLoading(true);
       const [{ data, error }, brRes] = await Promise.all([
         supabase
           .from('order_line_items')
-          .select('variant_id, quantity, orders!inner(order_date, status, branch_id)')
+          .select('variant_id, quantity, line_total, orders!inner(order_date, status, branch_id)')
           .in('variant_id', vids),
         supabase.from('branches').select('id, name'),
       ]);
@@ -386,8 +519,10 @@ export default function ProductFamilyPage() {
       if (cancelled) return;
 
       if (error) {
-        if (import.meta.env.DEV) console.warn('[usage chart]', error.message);
+        if (import.meta.env.DEV) console.warn('[variant comparison]', error.message);
+        setComparisonSales({});
         setUsageChartData([]);
+        setComparisonSalesLoading(false);
         setUsageChartLoading(false);
         return;
       }
@@ -397,22 +532,23 @@ export default function ProductFamilyPage() {
         if (b.id && b.name) branchNameById.set(b.id, b.name);
       }
 
-      const end = new Date();
-      const monthSlots: { ymk: string; label: string }[] = [];
-      for (let k = 11; k >= 0; k--) {
-        const d = new Date(end.getFullYear(), end.getMonth() - k, 1);
-        const ymk = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-        const label = d.toLocaleDateString('en-PH', { month: 'short', year: '2-digit' });
-        monthSlots.push({ ymk, label });
-      }
+      const { from, to } = comparisonQueryDates;
+      const monthSlots =
+        comparisonPeriodKind === 'all'
+          ? lastNMonthSlots(12)
+          : monthSlotsBetween(from, to);
       const monthSet = new Set(monthSlots.map(s => s.ymk));
+      const sales: Record<string, { units: number; revenue: number }> = {};
+      for (const id of vids) sales[id] = { units: 0, revenue: 0 };
       const agg = new Map<string, Map<string, number>>();
 
       type LineRow = {
         variant_id: string | null;
         quantity: number | null;
+        line_total: number | null;
         orders: { order_date: string; status: string; branch_id: string | null } | { order_date: string; status: string; branch_id: string | null }[] | null;
       };
+
       for (const r of (data as LineRow[] | null) || []) {
         const rawO = r.orders;
         const ord = rawO == null ? null : Array.isArray(rawO) ? rawO[0] : rawO;
@@ -423,12 +559,20 @@ export default function ProductFamilyPage() {
           const bn = bid ? branchNameById.get(bid) : null;
           if (bn !== selectedBranch) continue;
         }
+        const orderDate = ord.order_date.slice(0, 10);
+        if (from && orderDate < from) continue;
+        if (to && orderDate > to) continue;
+
+        const vid = r.variant_id;
+        if (!vid || !sales[vid]) continue;
+        const q = Number(r.quantity) || 0;
+        const rev = Number(r.line_total) || 0;
+        sales[vid].units += q;
+        sales[vid].revenue += rev;
+
         const od = new Date(ord.order_date);
         const ymk = `${od.getFullYear()}-${String(od.getMonth() + 1).padStart(2, '0')}`;
         if (!monthSet.has(ymk)) continue;
-        const vid = r.variant_id;
-        if (!vid) continue;
-        const q = Number(r.quantity) || 0;
         if (!agg.has(ymk)) agg.set(ymk, new Map());
         const m = agg.get(ymk)!;
         m.set(vid, (m.get(vid) || 0) + q);
@@ -450,20 +594,21 @@ export default function ProductFamilyPage() {
       let first = 0;
       while (first <= last && !rowHasSales(rows[first])) first += 1;
 
-      const trimmed =
-        last < 0 ? [] : rows.slice(first, last + 1);
+      const trimmed = last < 0 ? [] : rows.slice(first, last + 1);
 
       if (!cancelled) {
+        setComparisonSales(sales);
         setUsageChartData(trimmed);
+        setComparisonSalesLoading(false);
         setUsageChartLoading(false);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [variants, selectedBranch]);
+  }, [variants, selectedBranch, comparisonPeriodKind, comparisonQueryDates]);
 
-  // â”€â”€ Image carousel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Image carousel ──
   const productImages = product?.images?.length
     ? product.images
     : product?.image_url
@@ -540,7 +685,8 @@ export default function ProductFamilyPage() {
       cost_price: editedVariant.cost,
       total_stock: editedVariant.stock,
       reorder_point: editedVariant.reorderPoint,
-      status: computeStockStatus(editedVariant.stock, editedVariant.reorderPoint),
+      is_hidden: editedVariant.isHidden,
+      status: computePersistedStockStatus(editedVariant.stock, editedVariant.reorderPoint),
       units_sold_ytd: editedVariant.unitsSold,
       weight_kg: parseFloat(editedVariant.weight) || null,
       length_m: parseFloat(editedVariant.length) || null,
@@ -583,7 +729,7 @@ export default function ProductFamilyPage() {
 
       const { data: vars, error: varFetchErr } = await supabase
         .from('product_variants')
-        .select(`id, sku, size, unit_price, cost_price, total_stock, reorder_point,
+        .select(`id, sku, size, is_hidden, unit_price, cost_price, total_stock, reorder_point,
         status, units_sold_ytd, revenue_ytd, weight_kg, length_m, volume_cbm, wall_thickness_mm,
         lead_time_days, min_order_qty, specs,
         product_variant_stock(quantity, branches(code, name)),
@@ -745,7 +891,7 @@ export default function ProductFamilyPage() {
       const { data, error } = await supabase
         .from('product_variants')
         .select(`
-          id, sku, size, unit_price, cost_price, total_stock, reorder_point,
+          id, sku, size, is_hidden, unit_price, cost_price, total_stock, reorder_point,
           status, units_sold_ytd, revenue_ytd, weight_kg, length_m, volume_cbm, wall_thickness_mm,
           lead_time_days, min_order_qty, specs,
           product_variant_stock(quantity, branches(code, name)),
@@ -818,21 +964,29 @@ export default function ProductFamilyPage() {
         variantCount: 0,
       };
     }
-    const totalUnits = variants.reduce((s, v) => s + (Number(v.unitsSold) || 0), 0);
-    const totalRevenue = variants.reduce((s, v) => s + (Number(v.revenueYtd) || 0), 0);
-    const totalStock = variants.reduce((s, v) => s + (Number(v.stock) || 0), 0);
-    const top = variants.reduce(
-      (best, v) => ((v.unitsSold || 0) > (best.unitsSold || 0) ? v : best),
-      variants[0],
+    const totalUnits = variants.reduce(
+      (s, v) => s + (comparisonSales[v.id]?.units ?? 0),
+      0,
     );
+    const totalRevenue = variants.reduce(
+      (s, v) => s + (comparisonSales[v.id]?.revenue ?? 0),
+      0,
+    );
+    const totalStock = variants.reduce((s, v) => s + (Number(v.stock) || 0), 0);
+    const top = variants.reduce((best, v) => {
+      const u = comparisonSales[v.id]?.units ?? 0;
+      const bestU = comparisonSales[best.id]?.units ?? 0;
+      return u > bestU ? v : best;
+    }, variants[0]);
+    const topUnits = comparisonSales[top.id]?.units ?? 0;
     return {
       totalUnits,
       totalRevenue,
       totalStock,
-      topByUnits: { size: top.size, units: top.unitsSold },
+      topByUnits: topUnits > 0 ? { size: top.size, units: topUnits } : null,
       variantCount: variants.length,
     };
-  }, [variants]);
+  }, [variants, comparisonSales]);
 
   if (loading) {
     return (
@@ -883,6 +1037,7 @@ export default function ProductFamilyPage() {
                 currentMonthProduced: 0,
                 leadTimeDays: 0,
                 minOrderQty: 0,
+                isHidden: false,
                 specs: [],
                 rawMaterials: [],
                 bulkDiscounts: [{ minQty: 1, discount: 0, pricePerUnit: 0 }],
@@ -913,7 +1068,8 @@ export default function ProductFamilyPage() {
     : 'Products';
 
   const stockPercentage = (displayVariant.stock / Math.max(displayVariant.reorderPoint, 1)) * 100;
-  const avgDailyUsage   = Math.max(displayVariant.monthlyUsage / 30, 0.1);
+  const selectedPeriodMetrics = variantPeriodMetrics(displayVariant.id);
+  const avgDailyUsage = Math.max(selectedPeriodMetrics.avgDaily, 0.1);
   const daysOfCover     = Math.floor(displayVariant.stock / avgDailyUsage);
   const margin          = ((displayVariant.price - displayVariant.cost) / Math.max(displayVariant.price, 1)) * 100;
 
@@ -927,6 +1083,12 @@ export default function ProductFamilyPage() {
     if (daysOfCover < 14) return 'text-orange-600';
     return 'text-green-600';
   };
+
+  const categoryActive = product?.product_categories?.is_active !== false;
+  const familyCatalogHidden = isProductFamilyCatalogHidden(
+    variants.map((v) => ({ is_hidden: v.isHidden })),
+    categoryActive,
+  );
 
   return (
     <div className="space-y-6">
@@ -942,6 +1104,7 @@ export default function ProductFamilyPage() {
             </div>
             <p className="text-xs md:text-sm text-gray-500 mt-1 truncate">
               {variants.length} size variant{variants.length !== 1 ? 's' : ''} available
+              {familyCatalogHidden ? ' · Hidden from catalog' : ''}
             </p>
           </div>
         </div>
@@ -1054,7 +1217,13 @@ export default function ProductFamilyPage() {
                   </div>
                   <div>
                     <p className="text-xs text-gray-500 mb-1">Status</p>
-                    <Badge variant={product?.status === 'Active' ? 'success' : 'secondary'} size="sm">{product?.status ?? 'Active'}</Badge>
+                    {familyCatalogHidden ? (
+                      <Badge variant="secondary" size="sm">Hidden</Badge>
+                    ) : (
+                      <Badge variant={product?.status === 'Active' ? 'success' : 'secondary'} size="sm">
+                        {product?.status === 'Active' ? 'In Stock' : product?.status ?? 'Active'}
+                      </Badge>
+                    )}
                   </div>
                   <div>
                     <p className="text-xs text-gray-500 mb-1">Branch</p>
@@ -1085,7 +1254,7 @@ export default function ProductFamilyPage() {
                   thickness: '', pressure: '', stock: 0, reorderPoint: 0,
                   price: 0, cost: 0, monthlyUsage: 0, unitsSold: 0, revenueYtd: 0,
                   status: 'In Stock', monthlyProductionQuota: 0, currentMonthProduced: 0,
-                  leadTimeDays: 0, minOrderQty: 0,
+                  leadTimeDays: 0, minOrderQty: 0, isHidden: false,
                   specs: [], rawMaterials: [], bulkDiscounts: [],
                 };
                 setIsEditingVariant(true);
@@ -1101,6 +1270,7 @@ export default function ProductFamilyPage() {
           <div className="flex flex-wrap gap-3">
             {variants.map(variant => {
               const isSelected = selectedVariant?.id === variant.id;
+              const variantHidden = categoryActive && variant.isHidden;
               const borderColor = variant.status === 'Critical' ? 'border-red-500 text-red-600' :
                 variant.status === 'Low Stock' ? 'border-orange-500 text-orange-600' : 'border-gray-300 text-gray-700';
               return (
@@ -1109,7 +1279,7 @@ export default function ProductFamilyPage() {
                   onClick={() => { setSelectedVariant(variant); setIsEditingVariant(false); setEditedVariant(null); }}
                   className={`relative px-6 py-3 rounded-lg border-2 transition-all ${
                     isSelected ? 'bg-red-600 border-red-600 text-white shadow-lg scale-105' : `bg-white ${borderColor} hover:border-red-400 hover:shadow-md`
-                  }`}
+                  } ${variantHidden && !isSelected ? CATALOG_HIDDEN_CLASS : ''}`}
                 >
                   <div className="font-semibold">{variant.size || 'New'}</div>
                   <div className={`text-xs mt-1 ${isSelected ? 'text-red-100' : 'text-gray-500'}`}>{variant.stock} units</div>
@@ -1148,7 +1318,7 @@ export default function ProductFamilyPage() {
               )}
             </div>
             <div>
-              <p className="text-xs text-gray-500 uppercase mb-1">Status</p>
+              <p className="text-xs text-gray-500 uppercase mb-1">Stock Status</p>
               {isEditingVariant ? (
                 <select value={editedVariant!.status} onChange={e => handleInputChange('status', e.target.value)} className="w-full border rounded px-3 py-1.5 text-sm">
                   <option value="In Stock">In Stock</option>
@@ -1159,6 +1329,24 @@ export default function ProductFamilyPage() {
                 <Badge variant={displayVariant.status === 'Critical' ? 'destructive' : displayVariant.status === 'Low Stock' ? 'warning' : 'success'}>
                   {displayVariant.status}
                 </Badge>
+              )}
+            </div>
+            <div>
+              <p className="text-xs text-gray-500 uppercase mb-1">Catalog</p>
+              {isEditingVariant ? (
+                <div className="flex justify-end">
+                  <input
+                    type="checkbox"
+                    checked={!editedVariant!.isHidden}
+                    onChange={(e) => handleInputChange('isHidden', !e.target.checked)}
+                    className="h-4 w-4 shrink-0 rounded border-gray-300 text-red-600 focus:ring-red-500 m-0"
+                    aria-label="Visible in catalog"
+                  />
+                </div>
+              ) : displayVariant.isHidden ? (
+                <Badge variant="secondary" size="sm">Hidden</Badge>
+              ) : (
+                <Badge variant="success" size="sm">Visible</Badge>
               )}
             </div>
           </CardContent>
@@ -1463,30 +1651,43 @@ export default function ProductFamilyPage() {
             <CardTitle className="text-base flex items-center gap-2">
               <TrendingUp className="w-4 h-4 text-green-600" />Usage & Performance
             </CardTitle>
+            {!isEditingVariant && (
+              <p className="text-xs text-gray-500 mt-1">Period: {comparisonPeriodLabel}</p>
+            )}
           </CardHeader>
           <CardContent className="space-y-3">
             <div>
-              <p className="text-xs text-gray-500 uppercase mb-1">Monthly Usage</p>
+              <p className="text-xs text-gray-500 uppercase mb-1">
+                {isEditingVariant ? 'Monthly Usage (manual)' : 'Avg monthly usage'}
+              </p>
               {isEditingVariant ? (
                 <input type="number" value={editedVariant!.monthlyUsage} onChange={e => handleInputChange('monthlyUsage', parseInt(e.target.value))} onWheel={e => (e.target as HTMLInputElement).blur()} className="w-full border rounded px-3 py-1.5 text-lg font-semibold" />
               ) : (
-                <p className="text-lg font-semibold text-gray-900">{displayVariant.monthlyUsage.toLocaleString()} units</p>
+                <p className="text-lg font-semibold text-gray-900">
+                  {comparisonSalesLoading ? '…' : selectedPeriodMetrics.avgMonthly.toLocaleString()} units
+                </p>
               )}
             </div>
             <div>
-              <p className="text-xs text-gray-500 uppercase mb-1">Avg. Daily Usage</p>
-              <p className="text-sm font-medium text-gray-600">{avgDailyUsage.toFixed(1)} units/day</p>
+              <p className="text-xs text-gray-500 uppercase mb-1">Avg. daily usage</p>
+              <p className="text-sm font-medium text-gray-600">
+                {comparisonSalesLoading ? '…' : `${selectedPeriodMetrics.avgDaily.toFixed(1)} units/day`}
+              </p>
             </div>
             <div>
-              <p className="text-xs text-gray-500 uppercase mb-1">Units Sold YTD</p>
+              <p className="text-xs text-gray-500 uppercase mb-1">Units sold</p>
               <div className="flex items-center gap-2">
-                <p className="text-lg font-bold text-green-600">{displayVariant.unitsSold.toLocaleString()}</p>
+                <p className="text-lg font-bold text-green-600">
+                  {comparisonSalesLoading ? '…' : selectedPeriodMetrics.units.toLocaleString()}
+                </p>
               </div>
             </div>
             <div>
-              <p className="text-xs text-gray-500 uppercase mb-1">Revenue YTD</p>
+              <p className="text-xs text-gray-500 uppercase mb-1">Revenue</p>
               <p className="text-lg font-bold text-green-600">
-                ₱{((displayVariant.unitsSold * displayVariant.price) / 1000).toFixed(0)}K
+                {comparisonSalesLoading
+                  ? '…'
+                  : `₱${selectedPeriodMetrics.revenue.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
               </p>
             </div>
           </CardContent>
@@ -1622,12 +1823,77 @@ export default function ProductFamilyPage() {
       {/* All Variants Comparison */}
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <CardTitle>All Variants Comparison</CardTitle>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                className="gap-2 border-gray-300 bg-white max-w-[18rem]"
+                aria-haspopup="dialog"
+                aria-expanded={comparisonPeriodModalOpen}
+                aria-label="Choose comparison period"
+                onClick={openComparisonPeriodModal}
+              >
+                <CalendarRange className="w-4 h-4 shrink-0 text-gray-600" aria-hidden />
+                <span className="truncate text-left text-sm font-normal">
+                  {periodTriggerLabel(comparisonPeriodKind, comparisonCustomStart, comparisonCustomEnd)}
+                </span>
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="gap-2 border-gray-300 bg-white"
+                disabled={exportingComparison || comparisonSalesLoading || variants.length === 0 || comparisonQueryDates.invalid}
+                onClick={async () => {
+                  if (exportingComparison || comparisonSalesLoading || variants.length === 0 || comparisonQueryDates.invalid) return;
+                  setExportingComparison(true);
+                  try {
+                    await downloadVariantsComparisonWorkbook({
+                      productName: product?.name ?? 'Product',
+                      categoryName: product?.product_categories?.name ?? null,
+                      branch: selectedBranch || null,
+                      periodLabel: comparisonPeriodLabel,
+                      dateFrom: comparisonQueryDates.from,
+                      dateTo: comparisonQueryDates.to,
+                      summary: variantsPurchaseSummary,
+                      rows: variants.map((v) => {
+                        const m = variantPeriodMetrics(v.id);
+                        return {
+                          size: v.size,
+                          sku: v.sku,
+                          stock: v.stock,
+                          price: v.price,
+                          monthlyUsage: m.avgMonthly,
+                          unitsSold: m.units,
+                          revenue: m.revenue,
+                          status: v.status,
+                        };
+                      }),
+                    });
+                    addAuditLog(
+                      'Exported variants comparison',
+                      'Product',
+                      `${variants.length} variants · ${comparisonPeriodLabel} (${product?.name ?? familyId})`,
+                    );
+                  } catch (e) {
+                    window.alert(e instanceof Error ? e.message : 'Export failed.');
+                  } finally {
+                    setExportingComparison(false);
+                  }
+                }}
+              >
+                {exportingComparison ? (
+                  <Loader2 className="w-4 h-4 animate-spin" aria-hidden />
+                ) : (
+                  <Download className="w-4 h-4" aria-hidden />
+                )}
+                {exportingComparison ? 'Exporting…' : 'Export'}
+              </Button>
               {(['table', 'chart'] as const).map(v => (
                 <button
                   key={v}
+                  type="button"
                   onClick={() => setComparisonView(v)}
                   className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${comparisonView === v ? 'bg-red-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
                 >
@@ -1639,6 +1905,15 @@ export default function ProductFamilyPage() {
           </div>
         </CardHeader>
         <CardContent>
+          {comparisonQueryDates.invalid && (
+            <p className="mb-4 text-sm text-red-600">Invalid custom date range. Adjust the period to load comparison data.</p>
+          )}
+          {comparisonSalesLoading && variants.length > 0 && (
+            <div className="mb-4 flex items-center gap-2 text-sm text-gray-500">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Loading sales for {comparisonPeriodLabel}…
+            </div>
+          )}
           {variants.length > 0 && (
             <div className="mb-5 rounded-lg border border-gray-100 bg-gradient-to-b from-gray-50/80 to-white p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1652,23 +1927,24 @@ export default function ProductFamilyPage() {
                       <span className="text-gray-500"> · {product.product_categories.name}</span>
                     )}
                   </p>
+                  <p className="mt-1 text-xs text-gray-500">Period: {comparisonPeriodLabel}</p>
                 </div>
-                {variantsPurchaseSummary.topByUnits && variantsPurchaseSummary.topByUnits.units > 0 && (
+                {variantsPurchaseSummary.topByUnits && (
                   <p className="text-xs text-gray-600">
-                    <span className="font-medium text-gray-800">Top by units (YTD):</span>{' '}
+                    <span className="font-medium text-gray-800">Top by units:</span>{' '}
                     {variantsPurchaseSummary.topByUnits.size} ({variantsPurchaseSummary.topByUnits.units.toLocaleString()} sold)
                   </p>
                 )}
               </div>
               <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <div className="rounded-md border border-gray-100 bg-white/90 px-3 py-2.5">
-                  <p className="text-xs text-gray-500">Total units (YTD)</p>
+                  <p className="text-xs text-gray-500">Total units</p>
                   <p className="text-lg font-bold tabular-nums text-gray-900">
                     {variantsPurchaseSummary.totalUnits.toLocaleString()}
                   </p>
                 </div>
                 <div className="rounded-md border border-gray-100 bg-white/90 px-3 py-2.5">
-                  <p className="text-xs text-gray-500">Total revenue (YTD)</p>
+                  <p className="text-xs text-gray-500">Total revenue</p>
                   <p className="text-lg font-bold tabular-nums text-gray-900">
                     ₱{variantsPurchaseSummary.totalRevenue.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                   </p>
@@ -1680,7 +1956,7 @@ export default function ProductFamilyPage() {
                   </p>
                 </div>
                 <div className="rounded-md border border-gray-100 bg-white/90 px-3 py-2.5">
-                  <p className="text-xs text-gray-500">Avg / variant (units YTD)</p>
+                  <p className="text-xs text-gray-500">Avg / variant (units)</p>
                   <p className="text-lg font-bold tabular-nums text-gray-900">
                     {Math.round(
                       variantsPurchaseSummary.totalUnits / Math.max(variantsPurchaseSummary.variantCount, 1),
@@ -1692,10 +1968,26 @@ export default function ProductFamilyPage() {
           )}
           {comparisonView === 'table' ? (
             <div className="overflow-x-auto">
+              <p className="mb-2 text-xs text-gray-500">
+                Sales columns reflect <span className="font-medium text-gray-700">{comparisonPeriodLabel}</span>
+                {comparisonQueryDates.from && comparisonQueryDates.to
+                  ? ` (${comparisonQueryDates.from} → ${comparisonQueryDates.to})`
+                  : ''}
+                .
+              </p>
               <table className="w-full">
                 <thead>
                   <tr className="border-b border-gray-200">
-                    {['Size', 'SKU', 'Stock', 'Price', 'Monthly Usage', 'Units Sold YTD', 'Revenue YTD', 'Status'].map(h => (
+                    {[
+                      'Size',
+                      'SKU',
+                      'Stock',
+                      'Price',
+                      'Avg monthly usage',
+                      'Units sold',
+                      'Revenue',
+                      'Status',
+                    ].map(h => (
                       <th
                         key={h}
                         className={`py-3 px-4 text-xs font-semibold text-gray-600 uppercase ${
@@ -1710,6 +2002,7 @@ export default function ProductFamilyPage() {
                 <tbody>
                   {variants.map(variant => {
                     const isSel = selectedVariant?.id === variant.id;
+                    const m = variantPeriodMetrics(variant.id);
                     return (
                       <tr
                         key={variant.id}
@@ -1724,10 +2017,16 @@ export default function ProductFamilyPage() {
                           <span className={`font-medium ${variant.status === 'Critical' ? 'text-red-600' : variant.status === 'Low Stock' ? 'text-orange-600' : 'text-gray-900'}`}>{variant.stock.toLocaleString()}</span>
                         </td>
                         <td className="py-3 px-4 text-right font-semibold text-gray-900">₱{variant.price.toLocaleString()}</td>
-                        <td className="py-3 px-4 text-right text-gray-600">{variant.monthlyUsage}</td>
-                        <td className="py-3 px-4 text-right font-medium text-gray-900">{variant.unitsSold.toLocaleString()}</td>
+                        <td className="py-3 px-4 text-right text-gray-600">
+                          {comparisonSalesLoading ? '…' : m.avgMonthly.toLocaleString()}
+                        </td>
+                        <td className="py-3 px-4 text-right font-medium text-gray-900">
+                          {comparisonSalesLoading ? '…' : m.units.toLocaleString()}
+                        </td>
                         <td className="py-3 px-4 text-right text-gray-800 tabular-nums">
-                          ₱{variant.revenueYtd.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                          {comparisonSalesLoading
+                            ? '…'
+                            : `₱${m.revenue.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
                         </td>
                         <td className="py-3 px-4 text-center">
                           <Badge variant={variant.status === 'Critical' ? 'destructive' : variant.status === 'Low Stock' ? 'warning' : 'success'} size="sm">{variant.status}</Badge>
@@ -1741,7 +2040,11 @@ export default function ProductFamilyPage() {
           ) : (
             <div className="space-y-2">
               <p className="text-xs text-gray-500">
-                Units sold from customer <strong>order line items</strong> (by order month). Only months with at least one sale are shown (up to 12 months back).
+                Units sold from customer <strong>order line items</strong> (by order month) for{' '}
+                <span className="font-medium text-gray-700">{comparisonPeriodLabel}</span>.
+                {comparisonPeriodKind === 'all' ? (
+                  <span> Chart shows the last 12 months.</span>
+                ) : null}
                 {selectedBranch ? (
                   <span> Branch: <span className="font-medium text-gray-700">{selectedBranch}</span> only.</span>
                 ) : (
@@ -1756,7 +2059,7 @@ export default function ProductFamilyPage() {
                   </div>
                 ) : usageChartData.length === 0 ? (
                   <div className="flex h-full min-h-[280px] items-center justify-center rounded-lg border border-dashed border-gray-200 bg-gray-50/50 px-4 text-center text-sm text-gray-500">
-                    No order sales in the last 12 months for this product (with the current branch filter).
+                    {comparisonEmptyMessage}
                   </div>
                 ) : (
                   <ResponsiveContainer width="100%" height="100%">
@@ -1862,6 +2165,93 @@ export default function ProductFamilyPage() {
           performedBy={employeeName || session?.user?.email || 'User'}
           performedByRole={mapAppRoleToLogRole(role)}
         />
+      )}
+
+      {comparisonPeriodModalOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+          role="presentation"
+          onClick={() => setComparisonPeriodModalOpen(false)}
+        >
+          <div
+            className="bg-white rounded-lg shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="comparison-period-modal-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-4 border-b border-gray-200 sticky top-0 bg-white z-10">
+              <h2 id="comparison-period-modal-title" className="text-lg font-semibold text-gray-900">
+                Comparison period
+              </h2>
+              <button
+                type="button"
+                className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+                aria-label="Close"
+                onClick={() => setComparisonPeriodModalOpen(false)}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <p className="text-sm text-gray-600">Choose a preset or set a custom date range.</p>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {DATE_PERIOD_OPTIONS.map(({ kind, label }) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    onClick={() => handleComparisonModalPresetPick(kind)}
+                    className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
+                      draftComparisonPeriodKind === kind
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-white text-gray-800 border-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {draftComparisonPeriodKind === 'custom' && (
+                <div className="space-y-2 pt-1 border-t border-gray-100">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="text-xs font-medium text-gray-600 w-full sm:w-auto">From</label>
+                    <input
+                      type="date"
+                      value={draftComparisonCustomStart}
+                      max={maxComparisonCustomDate}
+                      onChange={(e) => setDraftComparisonCustomStart(e.target.value)}
+                      className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    />
+                    <label className="text-xs font-medium text-gray-600">To</label>
+                    <input
+                      type="date"
+                      value={draftComparisonCustomEnd}
+                      min={draftComparisonCustomStart || undefined}
+                      max={maxComparisonCustomDate}
+                      onChange={(e) => setDraftComparisonCustomEnd(e.target.value)}
+                      className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    />
+                  </div>
+                  {draftComparisonCustomInvalid && (
+                    <p className="text-xs text-red-600">
+                      Start must be on or before end.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 p-4 border-t border-gray-200 bg-gray-50">
+              <Button type="button" variant="outline" className="border-gray-300 bg-white" onClick={() => setComparisonPeriodModalOpen(false)}>
+                Cancel
+              </Button>
+              {draftComparisonPeriodKind === 'custom' && (
+                <Button type="button" variant="primary" onClick={applyComparisonModalCustomRange}>
+                  Apply range
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

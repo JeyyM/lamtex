@@ -4,6 +4,15 @@ import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
+import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagination';
+import {
+  DATE_PERIOD_OPTIONS,
+  inDatePeriodRange,
+  periodTriggerLabel,
+  resolveDatePeriodQuery,
+  todayIsoLocal,
+  type DatePeriodKind,
+} from '@/src/lib/datePeriodQuery';
 import {
   Truck,
   MapPin,
@@ -41,9 +50,11 @@ import {
   ChevronLeft,
   ChevronRight,
   RefreshCw,
+  Loader2,
   ArrowUp,
   ArrowDown,
   ArrowUpDown,
+  CalendarRange,
 } from 'lucide-react';
 import {
   getTripsByBranch,
@@ -65,6 +76,7 @@ import { TripDetailsModal } from '@/src/components/logistics/TripDetailsModal';
 import { EditTripModal } from '@/src/components/logistics/EditTripModal';
 import { Vehicle, Trip, OrderReadyForDispatch } from '@/src/types/logistics';
 import { fetchFleetTrucksForBranch, syncVehicleOnTripStart, syncVehicleOnTripComplete } from '@/src/lib/fleetTrucks';
+import { downloadFleetReportWorkbook, fetchFleetExportBundle } from '@/src/lib/fleetExport';
 import { TruckFormModal } from '@/src/components/logistics/TruckFormModal';
 import { supabase } from '@/src/lib/supabase';
 import {
@@ -78,6 +90,19 @@ import {
 
 type ViewMode = 'dispatch' | 'fleet' | 'routes' | 'shipments';
 type TransportType = 'truck' | 'interisland';
+
+function tripMatchesDispatchSearch(trip: Trip, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  if (trip.tripNumber.toLowerCase().includes(q)) return true;
+  if (trip.driverName.toLowerCase().includes(q)) return true;
+  if (trip.plateNumber?.toLowerCase().includes(q)) return true;
+  if (trip.destinations.some((d) => d.toLowerCase().includes(q))) return true;
+  if (trip.customerLabel && trip.customerLabel.toLowerCase().includes(q)) return true;
+  if (trip.customerNames?.some((n) => n.toLowerCase().includes(q))) return true;
+  if (trip.orderNumbers?.some((n) => n.toLowerCase().includes(q))) return true;
+  return false;
+}
 
 export function LogisticsPage() {
   const { branch } = useAppContext();
@@ -96,6 +121,14 @@ export function LogisticsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('All');
   const [showCompleted, setShowCompleted] = useState(false);
+  const [dispatchQueuePage, setDispatchQueuePage] = useState(1);
+  const [dispatchPeriodKind, setDispatchPeriodKind] = useState<DatePeriodKind>('year');
+  const [dispatchCustomStart, setDispatchCustomStart] = useState('');
+  const [dispatchCustomEnd, setDispatchCustomEnd] = useState('');
+  const [dispatchPeriodModalOpen, setDispatchPeriodModalOpen] = useState(false);
+  const [draftDispatchPeriodKind, setDraftDispatchPeriodKind] = useState<DatePeriodKind>('year');
+  const [draftDispatchCustomStart, setDraftDispatchCustomStart] = useState('');
+  const [draftDispatchCustomEnd, setDraftDispatchCustomEnd] = useState('');
   const [tripSortKey, setTripSortKey] = useState<string>('scheduledDate');
   const [tripSortDir, setTripSortDir] = useState<'asc' | 'desc'>('asc');
   const [selectedCalendarTrip, setSelectedCalendarTrip] = useState<Trip | null>(null);
@@ -111,11 +144,13 @@ export function LogisticsPage() {
   const [stripDetailDateKey, setStripDetailDateKey] = useState<string | null>(null);
   const [fleetLoading, setFleetLoading] = useState(false);
   const [fleetError, setFleetError] = useState<string | null>(null);
+  const [exportingFleet, setExportingFleet] = useState(false);
   const [truckFormOpen, setTruckFormOpen] = useState(false);
   const [truckFormMode, setTruckFormMode] = useState<'create' | 'edit'>('create');
   const [truckFormEditId, setTruckFormEditId] = useState<string | null>(null);
   const [scheduleTrips, setScheduleTrips] = useState<Trip[]>([]);
   const [planningOrders, setPlanningOrders] = useState<OrderReadyForDispatch[]>([]);
+  const [logisticsLoading, setLogisticsLoading] = useState(false);
   const [logisticsFromDb, setLogisticsFromDb] = useState(false);
   const [branchHq, setBranchHq] = useState<{ lat: number; lng: number } | null>(null);
 
@@ -145,18 +180,32 @@ export function LogisticsPage() {
       setScheduleTrips([]);
       setPlanningOrders([]);
       setLogisticsFromDb(false);
+      setLogisticsLoading(false);
       return;
     }
-    const [oq, tq] = await Promise.all([fetchLogisticsOrderQueue(branch), fetchTripsForBranch(branch)]);
-    if (oq.error || tq.error) {
-      setPlanningOrders(getOrdersReadyByBranch(branch));
-      setScheduleTrips(getTripsByBranch(branch));
-      setLogisticsFromDb(false);
-    } else {
-      setPlanningOrders(oq.orders);
+    setLogisticsLoading(true);
+    try {
+      const [oq, tq] = await Promise.all([fetchLogisticsOrderQueue(branch), fetchTripsForBranch(branch)]);
+
+      if (oq.error) {
+        if (import.meta.env.DEV) console.warn('[logistics] order queue fetch failed:', oq.error);
+        setPlanningOrders(getOrdersReadyByBranch(branch));
+      } else {
+        setPlanningOrders(oq.orders);
+      }
+
+      if (tq.error) {
+        if (import.meta.env.DEV) console.warn('[logistics] trips fetch failed:', tq.error);
+        setScheduleTrips(getTripsByBranch(branch));
+        setLogisticsFromDb(false);
+        setTripLowestOrderStatus({});
+        setTripOrderStatusMap({});
+        return;
+      }
+
       setScheduleTrips(tq.trips);
       setLogisticsFromDb(true);
-      // Fetch order statuses for all trips to show lowest-stage badge in dispatch table
+
       const allOrderIds = [...new Set(tq.trips.flatMap((t) => t.orders))];
       if (allOrderIds.length) {
         const { data: orderRows } = await supabase
@@ -170,19 +219,28 @@ export function LogisticsPage() {
         const perTripMap: Record<string, Record<string, string>> = {};
         for (const trip of tq.trips) {
           if (!trip.orders.length) continue;
-          let lowestRank = Infinity; let lowestSt: string = trip.status;
+          let lowestRank = Infinity;
+          let lowestSt: string = trip.status;
           perTripMap[trip.id] = {};
           for (const oid of trip.orders) {
             const st = statusMap[oid] ?? 'Scheduled';
             perTripMap[trip.id][oid] = st;
             const rank = RANK[st] ?? 99;
-            if (rank < lowestRank) { lowestRank = rank; lowestSt = st; }
+            if (rank < lowestRank) {
+              lowestRank = rank;
+              lowestSt = st;
+            }
           }
           lowest[trip.id] = lowestSt;
         }
         setTripLowestOrderStatus(lowest);
         setTripOrderStatusMap(perTripMap);
+      } else {
+        setTripLowestOrderStatus({});
+        setTripOrderStatusMap({});
       }
+    } finally {
+      setLogisticsLoading(false);
     }
   }, [branch]);
 
@@ -213,6 +271,23 @@ export function LogisticsPage() {
     setTruckFormEditId(null);
     setTruckFormOpen(true);
   }, [branch]);
+
+  const handleExportFleetReport = useCallback(async () => {
+    if (!branch?.trim()) {
+      window.alert('Select a branch in the header first.');
+      return;
+    }
+    if (exportingFleet || fleetLoading) return;
+    setExportingFleet(true);
+    try {
+      const bundle = await fetchFleetExportBundle(branch);
+      await downloadFleetReportWorkbook(bundle);
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Could not export fleet report.');
+    } finally {
+      setExportingFleet(false);
+    }
+  }, [branch, exportingFleet, fleetLoading]);
 
   const loadDrivers = useCallback(async () => {
     if (!branch?.trim()) { setPlanningDrivers([]); return; }
@@ -293,11 +368,76 @@ export function LogisticsPage() {
   };
 
   // Filter trips
+  const dispatchPeriodQuery = useMemo(
+    () => resolveDatePeriodQuery(dispatchPeriodKind, dispatchCustomStart, dispatchCustomEnd),
+    [dispatchPeriodKind, dispatchCustomStart, dispatchCustomEnd],
+  );
+
+  const maxDispatchCustomDate = useMemo(() => todayIsoLocal(), []);
+
+  const draftDispatchCustomInvalid = Boolean(
+    draftDispatchCustomStart && draftDispatchCustomEnd && draftDispatchCustomStart > draftDispatchCustomEnd,
+  );
+
+  const openDispatchPeriodModal = () => {
+    setDraftDispatchPeriodKind(dispatchPeriodKind);
+    setDraftDispatchCustomStart(dispatchCustomStart);
+    setDraftDispatchCustomEnd(dispatchCustomEnd);
+    setDispatchPeriodModalOpen(true);
+  };
+
+  const handleDispatchPeriodChange = (kind: DatePeriodKind) => {
+    setDispatchPeriodKind(kind);
+    if (kind === 'custom') {
+      const t = new Date();
+      const iso = todayIsoLocal();
+      const start = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-01`;
+      setDispatchCustomStart(start);
+      setDispatchCustomEnd(iso);
+    }
+  };
+
+  const handleDispatchModalPresetPick = (kind: DatePeriodKind) => {
+    if (kind !== 'custom') {
+      handleDispatchPeriodChange(kind);
+      setDispatchPeriodModalOpen(false);
+      return;
+    }
+    setDraftDispatchPeriodKind('custom');
+    const t = new Date();
+    const iso = todayIsoLocal();
+    const start = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-01`;
+    setDraftDispatchCustomStart((prev) => prev || dispatchCustomStart || start);
+    setDraftDispatchCustomEnd((prev) => prev || dispatchCustomEnd || iso);
+  };
+
+  const applyDispatchModalCustomRange = () => {
+    setDispatchPeriodKind('custom');
+    setDispatchCustomStart(draftDispatchCustomStart);
+    setDispatchCustomEnd(draftDispatchCustomEnd);
+    setDispatchPeriodModalOpen(false);
+  };
+
+  useEffect(() => {
+    if (!dispatchPeriodModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setDispatchPeriodModalOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [dispatchPeriodModalOpen]);
+
+  const dateFilteredTrips = useMemo(() => {
+    if (transportType !== 'truck' || dispatchPeriodQuery.invalid) return trips;
+    return trips.filter((trip) =>
+      inDatePeriodRange(trip.scheduledDate, dispatchPeriodQuery.from, dispatchPeriodQuery.to),
+    );
+  }, [trips, dispatchPeriodQuery, transportType]);
+
   const filteredTrips = useMemo(() => {
-    const filtered = trips.filter(trip => {
-      const matchesSearch = trip.tripNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                           trip.driverName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                           trip.destinations.some(d => d.toLowerCase().includes(searchQuery.toLowerCase()));
+    const source = transportType === 'truck' ? dateFilteredTrips : trips;
+    const filtered = source.filter((trip) => {
+      const matchesSearch = tripMatchesDispatchSearch(trip, searchQuery);
       const matchesStatus = filterStatus === 'All'
         ? (showCompleted || (trip.status !== 'Complete' && trip.status !== 'Delivered' && trip.status !== 'Cancelled'))
         : trip.status === filterStatus;
@@ -324,6 +464,10 @@ export function LogisticsPage() {
           av = a.orders.length;
           bv = b.orders.length;
           break;
+        case 'customer':
+          av = (a.customerLabel ?? a.destinations[0] ?? '').toLowerCase();
+          bv = (b.customerLabel ?? b.destinations[0] ?? '').toLowerCase();
+          break;
         case 'status':
           av = lowestOrderStatus(a.id, a.status);
           bv = lowestOrderStatus(b.id, b.status);
@@ -340,7 +484,22 @@ export function LogisticsPage() {
       if (as > bs) return tripSortDir === 'asc' ? 1 : -1;
       return 0;
     });
-  }, [trips, searchQuery, filterStatus, showCompleted, tripSortKey, tripSortDir, tripLowestOrderStatus]);
+  }, [trips, dateFilteredTrips, transportType, searchQuery, filterStatus, showCompleted, tripSortKey, tripSortDir, tripLowestOrderStatus, dispatchPeriodQuery]);
+
+  const dispatchQueueTotalPages = Math.max(1, Math.ceil(filteredTrips.length / TABLE_PAGE_SIZE) || 1);
+  const pagedDispatchTrips = useMemo(() => {
+    const p = Math.min(dispatchQueuePage, dispatchQueueTotalPages);
+    const start = (p - 1) * TABLE_PAGE_SIZE;
+    return filteredTrips.slice(start, start + TABLE_PAGE_SIZE);
+  }, [filteredTrips, dispatchQueuePage, dispatchQueueTotalPages]);
+
+  useEffect(() => {
+    if (dispatchQueuePage > dispatchQueueTotalPages) setDispatchQueuePage(dispatchQueueTotalPages);
+  }, [dispatchQueuePage, dispatchQueueTotalPages]);
+
+  useEffect(() => {
+    setDispatchQueuePage(1);
+  }, [searchQuery, filterStatus, showCompleted, branch, transportType, dispatchPeriodKind, dispatchCustomStart, dispatchCustomEnd]);
 
   const getStatusColor = (status: string) => {
     if (status === 'Complete' || status === 'Completed' || status === 'Delivered' || status === 'Available') return 'success';
@@ -444,7 +603,7 @@ export function LogisticsPage() {
       {/* DISPATCH BOARD VIEW */}
       {viewMode === 'dispatch' && (
         <div className="space-y-6 w-full max-w-full">
-          {/* Search and Filters */}
+          {transportType !== 'truck' && (
           <Card>
             <CardContent className="p-4">
               <div className="flex flex-col lg:flex-row lg:items-center gap-3 md:gap-4 w-full max-w-full">
@@ -452,15 +611,12 @@ export function LogisticsPage() {
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                   <input
                     type="text"
-                    placeholder={transportType === 'truck' 
-                      ? "Search by trip ID or driver..." 
-                      : "Search by Shipment ID, Captain, or Port..."}
+                    placeholder="Search by Shipment ID, Captain, or Port…"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
                   />
                 </div>
-                {transportType !== 'truck' && (
                 <select
                   value={filterStatus}
                   onChange={(e) => setFilterStatus(e.target.value)}
@@ -477,11 +633,6 @@ export function LogisticsPage() {
                   <option value="Complete">Completed</option>
                   <option value="Cancelled">Cancelled</option>
                 </select>
-                )}
-                <Button variant="outline" className="w-full lg:w-auto justify-center">
-                  <Filter className="w-4 h-4 mr-2" />
-                  More Filters
-                </Button>
                 <Button variant="outline" className="w-full lg:w-auto justify-center">
                   <Download className="w-4 h-4 mr-2" />
                   Export
@@ -489,6 +640,7 @@ export function LogisticsPage() {
               </div>
             </CardContent>
           </Card>
+          )}
 
           {/* Quick Stats */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 w-full">
@@ -663,7 +815,12 @@ export function LogisticsPage() {
           {/* Dispatch Table */}
           <Card>
             <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3">
-              <CardTitle>{transportType === 'truck' ? 'Dispatch Queue' : 'Shipment Queue'}</CardTitle>
+              <CardTitle>
+                {transportType === 'truck' ? 'Dispatch Queue' : 'Shipment Queue'}
+                {transportType === 'truck' && !logisticsLoading && filteredTrips.length > 0
+                  ? ` — ${filteredTrips.length} result${filteredTrips.length !== 1 ? 's' : ''}`
+                  : ''}
+              </CardTitle>
               <div className="flex flex-wrap items-center gap-3">
                 {transportType === 'truck' && (
                   <select
@@ -693,8 +850,45 @@ export function LogisticsPage() {
                 </label>
               </div>
             </CardHeader>
+            {transportType === 'truck' && (
+              <div className="px-4 pb-4 border-b border-gray-100">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                  <div className="w-full sm:flex-1 relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                    <input
+                      type="text"
+                      placeholder="Search trip, driver, customer, order #, destination…"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      disabled={logisticsLoading}
+                      className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 disabled:bg-gray-50 disabled:text-gray-500"
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full sm:w-auto gap-2 border-gray-300 bg-white max-w-[18rem] justify-start"
+                    aria-haspopup="dialog"
+                    aria-expanded={dispatchPeriodModalOpen}
+                    aria-label="Choose schedule period"
+                    disabled={logisticsLoading}
+                    onClick={openDispatchPeriodModal}
+                  >
+                    <CalendarRange className="w-4 h-4 shrink-0 text-gray-600" aria-hidden />
+                    <span className="truncate text-left text-sm font-normal">
+                      {periodTriggerLabel(dispatchPeriodKind, dispatchCustomStart, dispatchCustomEnd)}
+                    </span>
+                  </Button>
+                </div>
+              </div>
+            )}
             <CardContent className="p-0">
-              {transportType === 'truck' ? (
+              {transportType === 'truck' && logisticsLoading ? (
+                <div className="flex flex-col items-center justify-center py-16 px-4">
+                  <Loader2 className="w-10 h-10 animate-spin text-red-500" aria-hidden />
+                  <p className="mt-4 text-sm text-gray-500">Loading trips…</p>
+                </div>
+              ) : transportType === 'truck' ? (
                 /* TRUCK DISPATCH TABLE */
                 <>
                 <div className="hidden md:block">
@@ -706,6 +900,12 @@ export function LogisticsPage() {
                         className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
                       >
                         <span className="inline-flex items-center">Vehicle & Driver{tripSortIcon('vehicleName')}</span>
+                      </th>
+                      <th
+                        onClick={() => handleTripSort('customer')}
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                      >
+                        <span className="inline-flex items-center">Customer{tripSortIcon('customer')}</span>
                       </th>
                       <th
                         onClick={() => handleTripSort('scheduledDate')}
@@ -742,12 +942,16 @@ export function LogisticsPage() {
                   <tbody className="bg-white divide-y divide-gray-200">
                     {filteredTrips.length === 0 && (
                       <tr>
-                        <td colSpan={4} className="px-6 py-12 text-center text-sm text-gray-500">
-                          No active trips found.
+                        <td colSpan={5} className="px-6 py-12 text-center text-sm text-gray-500">
+                          {logisticsFromDb
+                            ? showCompleted
+                              ? 'No trips found for this branch.'
+                              : 'No active trips found. Turn on Show Completed to include finished trips.'
+                            : 'Could not load trips from the database for this branch.'}
                         </td>
                       </tr>
                     )}
-                    {filteredTrips.map((trip) => (
+                    {pagedDispatchTrips.map((trip) => (
                       <tr
                         key={trip.id}
                         className="hover:bg-gray-50 cursor-pointer"
@@ -761,6 +965,18 @@ export function LogisticsPage() {
                               <div className="text-xs text-gray-500">{trip.driverName || '—'}</div>
                             </div>
                           </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="text-sm font-medium text-gray-900 max-w-[14rem] truncate" title={trip.customerLabel ?? trip.destinations[0] ?? '—'}>
+                            {trip.customerLabel ?? trip.destinations[0] ?? '—'}
+                          </div>
+                          {trip.orderNumbers && trip.orderNumbers.length > 0 && (
+                            <div className="text-xs text-gray-500 truncate max-w-[14rem]" title={trip.orderNumbers.join(', ')}>
+                              {trip.orderNumbers.length === 1
+                                ? trip.orderNumbers[0]
+                                : `${trip.orderNumbers[0]} +${trip.orderNumbers.length - 1}`}
+                            </div>
+                          )}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="text-sm text-gray-900">{trip.departureTime || trip.scheduledDate}</div>
@@ -785,9 +1001,15 @@ export function LogisticsPage() {
 
               <div className="md:hidden divide-y divide-gray-200">
                 {filteredTrips.length === 0 && (
-                  <div className="p-8 text-center text-sm text-gray-500">No active trips found.</div>
+                  <div className="p-8 text-center text-sm text-gray-500">
+                    {logisticsFromDb
+                      ? showCompleted
+                        ? 'No trips found for this branch.'
+                        : 'No active trips found. Turn on Show Completed to include finished trips.'
+                      : 'Could not load trips from the database for this branch.'}
+                  </div>
                 )}
-                {filteredTrips.map((trip) => (
+                {pagedDispatchTrips.map((trip) => (
                   <div
                     key={trip.id}
                     className="p-4 space-y-3 w-full cursor-pointer hover:bg-gray-50 active:bg-gray-100 transition-colors"
@@ -797,7 +1019,7 @@ export function LogisticsPage() {
                       <div className="min-w-0 flex-1">
                         <p className="text-sm font-medium text-gray-900 break-words">{trip.vehicleName}</p>
                         <p className="text-xs text-gray-500 mt-1 break-words">
-                          {trip.orders.length} order{trip.orders.length !== 1 ? 's' : ''} • {trip.driverName || '—'}
+                          {trip.customerLabel ?? trip.destinations[0] ?? '—'} • {trip.orders.length} order{trip.orders.length !== 1 ? 's' : ''}
                         </p>
                       </div>
                       <Badge variant={getStatusColor(lowestOrderStatus(trip.id, trip.status))} className="flex-shrink-0">
@@ -806,6 +1028,10 @@ export function LogisticsPage() {
                     </div>
 
                     <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div>
+                        <p className="text-xs text-gray-500">Customer</p>
+                        <p className="text-gray-900 break-words">{trip.customerLabel ?? trip.destinations[0] ?? '—'}</p>
+                      </div>
                       <div>
                         <p className="text-xs text-gray-500">Driver</p>
                         <p className="text-gray-900 break-words">{trip.driverName || '—'}</p>
@@ -822,6 +1048,13 @@ export function LogisticsPage() {
                   </div>
                 ))}
               </div>
+              {filteredTrips.length > 0 && (
+                <TablePagination
+                  page={dispatchQueuePage}
+                  total={filteredTrips.length}
+                  onPageChange={setDispatchQueuePage}
+                />
+              )}
                 </>
               ) : (
                 /* INTER-ISLAND SHIPMENTS TABLE */
@@ -1005,6 +1238,103 @@ export function LogisticsPage() {
         </div>
       )}
 
+      {dispatchPeriodModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40"
+          role="presentation"
+          onClick={() => setDispatchPeriodModalOpen(false)}
+        >
+          <div
+            className="bg-white w-full sm:max-w-lg sm:rounded-xl shadow-xl max-h-[90vh] overflow-y-auto"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="dispatch-period-modal-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-4 border-b border-gray-200 sticky top-0 bg-white z-10">
+              <h2 id="dispatch-period-modal-title" className="text-lg font-semibold text-gray-900">
+                Schedule period
+              </h2>
+              <button
+                type="button"
+                className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+                aria-label="Close"
+                onClick={() => setDispatchPeriodModalOpen(false)}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <p className="text-sm text-gray-600">
+                Filter dispatch queue and calendar by trip scheduled date. Search and status filters apply on top. Period persists when you switch branches.
+              </p>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {DATE_PERIOD_OPTIONS.map(({ kind, label }) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    onClick={() => handleDispatchModalPresetPick(kind)}
+                    className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
+                      draftDispatchPeriodKind === kind
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-white text-gray-800 border-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {draftDispatchPeriodKind === 'custom' && (
+                <div className="space-y-2 pt-1 border-t border-gray-100">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="text-xs font-medium text-gray-600 w-full sm:w-auto">From</label>
+                    <input
+                      type="date"
+                      value={draftDispatchCustomStart}
+                      max={maxDispatchCustomDate}
+                      onChange={(e) => setDraftDispatchCustomStart(e.target.value)}
+                      className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    />
+                    <label className="text-xs font-medium text-gray-600">To</label>
+                    <input
+                      type="date"
+                      value={draftDispatchCustomEnd}
+                      min={draftDispatchCustomStart || undefined}
+                      max={maxDispatchCustomDate}
+                      onChange={(e) => setDraftDispatchCustomEnd(e.target.value)}
+                      className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    />
+                  </div>
+                  {draftDispatchCustomInvalid && (
+                    <p className="text-xs text-red-600">Start must be on or before end.</p>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 p-4 border-t border-gray-200 bg-gray-50">
+              <Button
+                type="button"
+                variant="outline"
+                className="border-gray-300 bg-white"
+                onClick={() => setDispatchPeriodModalOpen(false)}
+              >
+                Cancel
+              </Button>
+              {draftDispatchPeriodKind === 'custom' && (
+                <Button
+                  type="button"
+                  variant="primary"
+                  disabled={draftDispatchCustomInvalid}
+                  onClick={applyDispatchModalCustomRange}
+                >
+                  Apply range
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* FLEET MANAGEMENT VIEW */}
       {viewMode === 'fleet' && transportType === 'truck' && (
         <div className="space-y-6">
@@ -1050,10 +1380,8 @@ export function LogisticsPage() {
                       <Link
                         key={vehicle.id}
                         to={`/logistics/${vehicle.id}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
                         className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow w-full max-w-full block no-underline text-inherit focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2"
-                        title="Open truck details in new tab"
+                        title="View truck details"
                       >
                         <div className="flex items-start justify-between mb-3">
                           <div className="flex items-center gap-2 min-w-0 flex-1">
@@ -1222,13 +1550,18 @@ export function LogisticsPage() {
                     <Plus className="w-4 h-4 mr-2" />
                     Add New Vehicle
                   </Button>
-                  <Button variant="outline" className="w-full justify-start">
-                    <Settings className="w-4 h-4 mr-2" />
-                    Schedule Maintenance
-                  </Button>
-                  <Button variant="outline" className="w-full justify-start">
-                    <Download className="w-4 h-4 mr-2" />
-                    Export Fleet Report
+                  <Button
+                    variant="outline"
+                    className="w-full justify-start"
+                    disabled={exportingFleet || fleetLoading || !branch?.trim()}
+                    onClick={() => void handleExportFleetReport()}
+                  >
+                    {exportingFleet ? (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <Download className="w-4 h-4 mr-2" />
+                    )}
+                    {exportingFleet ? 'Exporting…' : 'Export Fleet Report'}
                   </Button>
                 </CardContent>
               </Card>

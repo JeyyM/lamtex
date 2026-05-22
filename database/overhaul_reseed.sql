@@ -8,6 +8,8 @@
 --   • ~12 customers per active Sales Agent (range 10–15)
 --     → also populates customer_assignments (one row per customer)
 --     → customers.created_at aligned to account_since (Agent Analytics new-customer KPI)
+--   • Customer codes: CUS-{BRANCH}-{NNNNNN} via `customers_assign_customer_code` trigger
+--     (run `database/customer_code.sql` once before reseed if not already applied)
 --   • ~450 orders per branch (range 400–500), spread across the last 24 months
 --     → ~5 orders/customer on average; realistic active-vs-dormant mix
 --   • Order number format: YYYY-MM-DD-NNNNNN
@@ -25,10 +27,31 @@
 --   • employee_compensation backfill for any Sales Agent without one
 --
 -- Run in: Supabase Dashboard → SQL Editor AFTER `overhaul_wipe.sql`.
+--
+-- If you only need trips for existing orders (fleet + drivers already seeded),
+-- run `database/seed_order_trips.sql` instead — no wipe required.
 -- ============================================================================
 
 -- Determinism: seed Postgres random() so reruns line up.
 SELECT setseed(0.2026);
+
+-- Preflight: this script is NOT re-runnable on top of existing customers/orders.
+DO $preflight$
+DECLARE
+  v_orders   BIGINT;
+  v_customers BIGINT;
+BEGIN
+  SELECT count(*) INTO v_orders FROM orders;
+  SELECT count(*) INTO v_customers FROM customers;
+  IF v_orders > 0 OR v_customers > 0 THEN
+    RAISE EXCEPTION
+      'overhaul_reseed: % order(s) and % customer(s) already exist. '
+      'Run database/overhaul_wipe.sql first (single transaction), then re-run this script. '
+      'To backfill trips only without wiping, use database/seed_order_trips.sql instead.',
+      v_orders, v_customers;
+  END IF;
+END;
+$preflight$;
 
 
 -- ============================================================================

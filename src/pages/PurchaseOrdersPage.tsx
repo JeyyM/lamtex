@@ -7,6 +7,19 @@ import { Button } from '@/src/components/ui/Button';
 import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagination';
 import { supabase } from '@/src/lib/supabase';
 import {
+  DATE_PERIOD_OPTIONS,
+  inDatePeriodRange,
+  periodTriggerLabel,
+  resolveDatePeriodQuery,
+  todayIsoLocal,
+  type DatePeriodKind,
+} from '@/src/lib/datePeriodQuery';
+import {
+  downloadPurchaseOrdersWorkbook,
+  fetchPurchaseOrderLinesForExport,
+  type PurchaseOrderHeaderExportRow,
+} from '@/src/lib/purchaseOrdersExport';
+import {
   ShoppingCart,
   Search,
   Plus,
@@ -27,6 +40,8 @@ import {
   ArrowUp,
   ArrowDown,
   ArrowUpDown,
+  CalendarRange,
+  X,
 } from 'lucide-react';
 // ── Types ──────────────────────────────────────────────────
 type POStatus = 'Draft' | 'Requested' | 'Rejected' | 'Accepted' | 'Sent' | 'Confirmed' | 'Partially Received' | 'Completed' | 'Cancelled';
@@ -42,6 +57,7 @@ interface PORow {
   actual_delivery_date: string | null;
   total_amount: number;
   currency: string;
+  payment_status: string;
   notes: string | null;
   created_by: string | null;
   created_at: string;
@@ -96,7 +112,7 @@ const poLogRoleMap: Record<string, string> = {
 };
 
 export function PurchaseOrdersPage() {
-  const { branch, employeeName, role, session } = useAppContext();
+  const { branch, employeeName, role, session, addAuditLog } = useAppContext();
   const navigate = useNavigate();
 
   const [orders, setOrders]                     = useState<PORow[]>([]);
@@ -110,6 +126,15 @@ export function PurchaseOrdersPage() {
   const [poSortKey, setPoSortKey]              = useState<string>('order_date');
   const [poSortDir, setPoSortDir]              = useState<'asc' | 'desc'>('desc');
   const [poTablePage, setPoTablePage]         = useState(1);
+
+  const [exportPeriodKind, setExportPeriodKind] = useState<DatePeriodKind>('month');
+  const [exportCustomStart, setExportCustomStart] = useState('');
+  const [exportCustomEnd, setExportCustomEnd] = useState('');
+  const [exportPeriodModalOpen, setExportPeriodModalOpen] = useState(false);
+  const [draftExportPeriodKind, setDraftExportPeriodKind] = useState<DatePeriodKind>('month');
+  const [draftExportCustomStart, setDraftExportCustomStart] = useState('');
+  const [draftExportCustomEnd, setDraftExportCustomEnd] = useState('');
+  const [exportingOrders, setExportingOrders] = useState(false);
 
   // ── Fetch ──────────────────────────────────────────────
   const fetchOrders = useCallback(async () => {
@@ -138,6 +163,65 @@ export function PurchaseOrdersPage() {
 
   useEffect(() => { fetchOrders(); }, [fetchOrders]);
 
+  const exportQueryDates = useMemo(
+    () => resolveDatePeriodQuery(exportPeriodKind, exportCustomStart, exportCustomEnd),
+    [exportPeriodKind, exportCustomStart, exportCustomEnd],
+  );
+
+  const maxExportCustomDate = useMemo(() => todayIsoLocal(), []);
+
+  const draftExportCustomInvalid = Boolean(
+    draftExportCustomStart && draftExportCustomEnd && draftExportCustomStart > draftExportCustomEnd,
+  );
+
+  const openExportPeriodModal = () => {
+    setDraftExportPeriodKind(exportPeriodKind);
+    setDraftExportCustomStart(exportCustomStart);
+    setDraftExportCustomEnd(exportCustomEnd);
+    setExportPeriodModalOpen(true);
+  };
+
+  const handleExportPeriodChange = (kind: DatePeriodKind) => {
+    setExportPeriodKind(kind);
+    if (kind === 'custom') {
+      const t = new Date();
+      const iso = todayIsoLocal();
+      const start = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-01`;
+      setExportCustomStart(start);
+      setExportCustomEnd(iso);
+    }
+  };
+
+  const handleExportModalPresetPick = (kind: DatePeriodKind) => {
+    if (kind !== 'custom') {
+      handleExportPeriodChange(kind);
+      setExportPeriodModalOpen(false);
+      return;
+    }
+    setDraftExportPeriodKind('custom');
+    const t = new Date();
+    const iso = todayIsoLocal();
+    const start = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-01`;
+    setDraftExportCustomStart((prev) => prev || exportCustomStart || start);
+    setDraftExportCustomEnd((prev) => prev || exportCustomEnd || iso);
+  };
+
+  const applyExportModalCustomRange = () => {
+    setExportPeriodKind('custom');
+    setExportCustomStart(draftExportCustomStart);
+    setExportCustomEnd(draftExportCustomEnd);
+    setExportPeriodModalOpen(false);
+  };
+
+  useEffect(() => {
+    if (!exportPeriodModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setExportPeriodModalOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [exportPeriodModalOpen]);
+
   useEffect(() => {
     setStatusFilter('');
   }, [branch]);
@@ -152,12 +236,19 @@ export function PurchaseOrdersPage() {
     [branchFiltered],
   );
 
-  const distinctPoStatuses = useMemo(() => {
-    const s = new Set<POStatus>(visiblePurchaseOrders.map((po) => po.status).filter((v): v is POStatus => Boolean(v)));
-    return Array.from(s).sort((a, b) => a.localeCompare(b));
-  }, [visiblePurchaseOrders]);
+  const dateFilteredPurchaseOrders = useMemo(() => {
+    if (exportQueryDates.invalid) return visiblePurchaseOrders;
+    return visiblePurchaseOrders.filter((po) =>
+      inDatePeriodRange(po.order_date, exportQueryDates.from, exportQueryDates.to),
+    );
+  }, [visiblePurchaseOrders, exportQueryDates]);
 
-  const filtered = visiblePurchaseOrders.filter((po) => {
+  const distinctPoStatuses = useMemo(() => {
+    const s = new Set<POStatus>(dateFilteredPurchaseOrders.map((po) => po.status).filter((v): v is POStatus => Boolean(v)));
+    return Array.from(s).sort((a, b) => a.localeCompare(b));
+  }, [dateFilteredPurchaseOrders]);
+
+  const filtered = dateFilteredPurchaseOrders.filter((po) => {
     const q = searchQuery.toLowerCase();
     const matchesSearch =
       po.po_number.toLowerCase().includes(q) ||
@@ -223,15 +314,15 @@ export function PurchaseOrdersPage() {
 
   useEffect(() => {
     setPoTablePage(1);
-  }, [searchQuery, statusFilter, resolvedBranchId]);
+  }, [searchQuery, statusFilter, resolvedBranchId, exportPeriodKind, exportCustomStart, exportCustomEnd]);
 
   // ── KPIs ───────────────────────────────────────────────
-  const totalPOs     = visiblePurchaseOrders.length;
-  const pendingPOs   = visiblePurchaseOrders.filter(po =>
+  const totalPOs     = dateFilteredPurchaseOrders.length;
+  const pendingPOs   = dateFilteredPurchaseOrders.filter(po =>
     ['Requested', 'Accepted', 'Sent', 'Confirmed', 'Partially Received'].includes(po.status)
   ).length;
-  const completedPOs = visiblePurchaseOrders.filter(po => po.status === 'Completed').length;
-  const totalValue   = visiblePurchaseOrders.reduce((s, po) => s + (po.total_amount ?? 0), 0);
+  const completedPOs = dateFilteredPurchaseOrders.filter(po => po.status === 'Completed').length;
+  const totalValue   = dateFilteredPurchaseOrders.reduce((s, po) => s + (po.total_amount ?? 0), 0);
 
   const isOverdue = (po: PORow) =>
     po.expected_delivery_date &&
@@ -317,9 +408,6 @@ export function PurchaseOrdersPage() {
           <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Purchase Orders</h1>
         </div>
         <div className="flex flex-col sm:flex-row flex-wrap gap-2 w-full sm:w-auto sm:items-center">
-          <Button variant="outline" className="w-full sm:w-auto gap-2">
-            <Download className="w-4 h-4" /> Export
-          </Button>
           <Button variant="primary" onClick={() => void handleNewPO()} disabled={creating} className="w-full sm:w-auto gap-2">
             {creating
               ? <><Loader2 className="w-4 h-4 animate-spin" /> Creating…</>
@@ -394,7 +482,79 @@ export function PurchaseOrdersPage() {
       {/* ── Table ── */}
       <Card>
         <CardHeader>
-          <CardTitle>Purchase Orders — {filtered.length} result{filtered.length !== 1 ? 's' : ''}</CardTitle>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <CardTitle>
+              Purchase Orders — {filtered.length} result{filtered.length !== 1 ? 's' : ''}
+            </CardTitle>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                className="gap-2 border-gray-300 bg-white max-w-[18rem]"
+                aria-haspopup="dialog"
+                aria-expanded={exportPeriodModalOpen}
+                aria-label="Choose export period"
+                onClick={openExportPeriodModal}
+              >
+                <CalendarRange className="w-4 h-4 shrink-0 text-gray-600" aria-hidden />
+                <span className="truncate text-left text-sm font-normal">
+                  {periodTriggerLabel(exportPeriodKind, exportCustomStart, exportCustomEnd)}
+                </span>
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="gap-2 border-gray-300 bg-white"
+                disabled={exportingOrders || loading || exportQueryDates.invalid}
+                onClick={async () => {
+                  if (exportingOrders || loading || exportQueryDates.invalid) return;
+                  if (filtered.length === 0) {
+                    window.alert('No purchase orders match the current filters and date range.');
+                    return;
+                  }
+                  setExportingOrders(true);
+                  try {
+                    const headerRows: PurchaseOrderHeaderExportRow[] = filtered.map((po) => ({
+                      po_number: po.po_number,
+                      order_date: po.order_date.slice(0, 10),
+                      supplier: po.suppliers?.name ?? '',
+                      branch: po.branches?.name ?? '',
+                      line_count: po.purchase_order_items.length,
+                      total_amount: po.total_amount,
+                      currency: po.currency,
+                      expected_delivery_date: po.expected_delivery_date
+                        ? po.expected_delivery_date.slice(0, 10)
+                        : '',
+                      actual_delivery_date: po.actual_delivery_date
+                        ? po.actual_delivery_date.slice(0, 10)
+                        : '',
+                      status: po.status,
+                      payment_status: po.payment_status ?? '',
+                      created_by: po.created_by ?? '',
+                    }));
+                    const lines = await fetchPurchaseOrderLinesForExport(filtered.map((po) => po.id));
+                    await downloadPurchaseOrdersWorkbook(branch ?? 'All branches', headerRows, lines);
+                    addAuditLog(
+                      'Exported purchase orders workbook',
+                      'Purchase',
+                      `${filtered.length} orders · ${exportQueryDates.displayLabel}`,
+                    );
+                  } catch (e) {
+                    window.alert(e instanceof Error ? e.message : 'Export failed.');
+                  } finally {
+                    setExportingOrders(false);
+                  }
+                }}
+              >
+                {exportingOrders ? (
+                  <Loader2 className="w-4 h-4 animate-spin" aria-hidden />
+                ) : (
+                  <Download className="w-4 h-4" aria-hidden />
+                )}
+                {exportingOrders ? 'Exporting…' : 'Export'}
+              </Button>
+            </div>
+          </div>
         </CardHeader>
         <CardContent className="p-0">
           {filtered.length === 0 ? (
@@ -524,6 +684,102 @@ export function PurchaseOrdersPage() {
         </CardContent>
       </Card>
 
+      {exportPeriodModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40"
+          role="presentation"
+          onClick={() => setExportPeriodModalOpen(false)}
+        >
+          <div
+            className="bg-white w-full sm:max-w-lg sm:rounded-xl shadow-xl max-h-[90vh] overflow-y-auto"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="po-export-period-modal-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-4 border-b border-gray-200 sticky top-0 bg-white z-10">
+              <h2 id="po-export-period-modal-title" className="text-lg font-semibold text-gray-900">
+                Export period
+              </h2>
+              <button
+                type="button"
+                className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+                aria-label="Close"
+                onClick={() => setExportPeriodModalOpen(false)}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <p className="text-sm text-gray-600">
+                Choose a preset or custom range. The list, summary cards, and export all use this period. It stays the same when you switch branches.
+              </p>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {DATE_PERIOD_OPTIONS.map(({ kind, label }) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    onClick={() => handleExportModalPresetPick(kind)}
+                    className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
+                      draftExportPeriodKind === kind
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-white text-gray-800 border-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {draftExportPeriodKind === 'custom' && (
+                <div className="space-y-2 pt-1 border-t border-gray-100">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="text-xs font-medium text-gray-600 w-full sm:w-auto">From</label>
+                    <input
+                      type="date"
+                      value={draftExportCustomStart}
+                      max={maxExportCustomDate}
+                      onChange={(e) => setDraftExportCustomStart(e.target.value)}
+                      className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    />
+                    <label className="text-xs font-medium text-gray-600">To</label>
+                    <input
+                      type="date"
+                      value={draftExportCustomEnd}
+                      min={draftExportCustomStart || undefined}
+                      max={maxExportCustomDate}
+                      onChange={(e) => setDraftExportCustomEnd(e.target.value)}
+                      className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    />
+                  </div>
+                  {draftExportCustomInvalid && (
+                    <p className="text-xs text-red-600">Start must be on or before end.</p>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 p-4 border-t border-gray-200 bg-gray-50">
+              <Button
+                type="button"
+                variant="outline"
+                className="border-gray-300 bg-white"
+                onClick={() => setExportPeriodModalOpen(false)}
+              >
+                Cancel
+              </Button>
+              {draftExportPeriodKind === 'custom' && (
+                <Button
+                  type="button"
+                  variant="primary"
+                  disabled={draftExportCustomInvalid}
+                  onClick={applyExportModalCustomRange}
+                >
+                  Apply range
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

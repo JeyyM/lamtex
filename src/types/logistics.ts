@@ -57,6 +57,12 @@ export interface Trip {
   /** Dispatch / route notes (`trips.logistics_notes`), not delay text. */
   logisticsNotes?: string;
   branch?: string;
+  /** Unique customer names from linked orders (populated when loaded from Supabase). */
+  customerNames?: string[];
+  /** Short label for table/search — e.g. "Acme Corp" or "Acme Corp +2". */
+  customerLabel?: string;
+  /** Order numbers for linked orders (search + display). */
+  orderNumbers?: string[];
 }
 
 export interface DeliveryTracking {

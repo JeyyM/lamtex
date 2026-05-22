@@ -34,13 +34,15 @@ const AddProductModal: React.FC<AddProductModalProps> = ({
     familyCode: '',
     description: '',
     imageUrl: '',
-    category: categoryName
+    category: categoryName,
   });
 
   // Update form data when initialData changes (for edit mode)
   useEffect(() => {
     if (initialData && isEditMode) {
-      setFormData(initialData);
+      setFormData({
+        ...initialData,
+      });
     } else {
       // Reset to empty when not in edit mode
       setFormData({
@@ -48,7 +50,7 @@ const AddProductModal: React.FC<AddProductModalProps> = ({
         familyCode: '',
         description: '',
         imageUrl: '',
-        category: categoryName
+        category: categoryName,
       });
     }
   }, [initialData, isEditMode, isOpen, categoryName]);
@@ -92,10 +94,6 @@ const AddProductModal: React.FC<AddProductModalProps> = ({
       newErrors.description = 'Description must be at least 10 characters';
     }
 
-    if (!formData.imageUrl) {
-      newErrors.imageUrl = 'Please select a product image';
-    }
-
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -120,7 +118,7 @@ const AddProductModal: React.FC<AddProductModalProps> = ({
       familyCode: '',
       description: '',
       imageUrl: '',
-      category: categoryName
+      category: categoryName,
     });
     setErrors({});
   };
@@ -248,7 +246,7 @@ const AddProductModal: React.FC<AddProductModalProps> = ({
             {/* Product Image */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Product Image <span className="text-red-600">*</span>
+                Product Image <span className="text-gray-400 text-xs font-normal">(Optional)</span>
               </label>
               <div className="space-y-3">
                 {/* Image Preview or Placeholder */}

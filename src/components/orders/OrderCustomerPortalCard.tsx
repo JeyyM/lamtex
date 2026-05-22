@@ -4,6 +4,7 @@ import { Button } from '@/src/components/ui/Button';
 import { Badge } from '@/src/components/ui/Badge';
 import {
   buildOrderCustomerPortalUrl,
+  customerPortalStaffErrorMessage,
   ensureOrderCustomerPortal,
   recordOrderPortalEmailSent,
 } from '@/src/lib/orderCustomerPortal';
@@ -35,7 +36,8 @@ export function OrderCustomerPortalCard({ orderUuid, customerEmail }: Props) {
       const { portal: row, error: err } = await ensureOrderCustomerPortal(orderUuid, customerEmail);
       if (!cancelled) {
         setPortal(row);
-        setError(err ?? null);
+        if (err) console.error('[OrderCustomerPortalCard]', err);
+        setError(row ? null : customerPortalStaffErrorMessage());
         setLoading(false);
       }
     })();
@@ -56,8 +58,7 @@ export function OrderCustomerPortalCard({ orderUuid, customerEmail }: Props) {
   if (error || !portal) {
     return (
       <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-        Could not create customer link. Run <code className="text-xs">database/order_customer_portal.sql</code> in Supabase, then refresh.
-        {error && <p className="mt-1 text-xs">{error}</p>}
+        {error ?? customerPortalStaffErrorMessage()}
       </div>
     );
   }
@@ -83,7 +84,7 @@ export function OrderCustomerPortalCard({ orderUuid, customerEmail }: Props) {
           'Automated delivery needs a Supabase Edge Function (e.g. Resend). For now, copy the link or use your mail client.',
       );
     } else {
-      alert(result.error ?? 'Could not record email send.');
+      alert('Could not send the email right now. Please try again or copy the link manually.');
     }
   };
 

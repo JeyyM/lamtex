@@ -13,7 +13,7 @@ import {
   resolveBranchCode,
   type MonthlyMovementChartRow,
 } from '@/src/lib/warehouseMovementsData';
-import { computeStockStatus } from '@/src/lib/stockStatus';
+import { computePersistedStockStatus } from '@/src/lib/stockStatus';
 import {
   Package,
   ArrowLeft,
@@ -41,6 +41,9 @@ import {
   ArrowUp,
   ArrowDown,
   ArrowUpDown,
+  Download,
+  CalendarRange,
+  X,
 } from 'lucide-react';
 import {
   BarChart,
@@ -57,6 +60,17 @@ import type { MaterialStatus } from '@/src/types/materials';
 import type { EntityActivityLogRow } from '@/src/components/domain/EntityActivityLogCard';
 import { EntityActivityLogCard } from '@/src/components/domain/EntityActivityLogCard';
 import { insertRawMaterialLog, mapAppRoleToLogRole } from '@/src/lib/domainActivityLog';
+import {
+  DATE_PERIOD_OPTIONS,
+  periodTriggerLabel,
+  resolveDatePeriodQuery,
+  todayIsoLocal,
+  type DatePeriodKind,
+} from '@/src/lib/datePeriodQuery';
+import {
+  fetchMaterialDetailForExport,
+  downloadMaterialDetailWorkbook,
+} from '@/src/lib/rawMaterialDetailExport';
 
 const poLogRoleMap: Record<string, string> = {
   Executive:  'Admin',
@@ -195,7 +209,7 @@ interface RawMaterialRow {
 export function MaterialDetailPage() {
   const { id, categoryName } = useParams<{ id: string; categoryName: string }>();
   const navigate = useNavigate();
-  const { selectedBranch, employeeName, role, session } = useAppContext();
+  const { selectedBranch, employeeName, role, session, addAuditLog } = useAppContext();
   const [activeTab, setActiveTab] = useState<'overview' | 'history' | 'analytics'>('overview');
 
   // PO creation
@@ -226,6 +240,15 @@ export function MaterialDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [materialLogRows, setMaterialLogRows] = useState<EntityActivityLogRow[]>([]);
+
+  const [exportPeriodKind, setExportPeriodKind] = useState<DatePeriodKind>('month');
+  const [exportCustomStart, setExportCustomStart] = useState('');
+  const [exportCustomEnd, setExportCustomEnd] = useState('');
+  const [exportPeriodModalOpen, setExportPeriodModalOpen] = useState(false);
+  const [draftExportPeriodKind, setDraftExportPeriodKind] = useState<DatePeriodKind>('month');
+  const [draftExportCustomStart, setDraftExportCustomStart] = useState('');
+  const [draftExportCustomEnd, setDraftExportCustomEnd] = useState('');
+  const [exportingMaterial, setExportingMaterial] = useState(false);
 
   const fetchMaterialLogs = useCallback(async () => {
     if (!id) return;
@@ -273,6 +296,65 @@ export function MaterialDetailPage() {
   useEffect(() => {
     void fetchMaterialLogs();
   }, [fetchMaterialLogs]);
+
+  const exportQueryDates = useMemo(
+    () => resolveDatePeriodQuery(exportPeriodKind, exportCustomStart, exportCustomEnd),
+    [exportPeriodKind, exportCustomStart, exportCustomEnd],
+  );
+
+  const maxExportCustomDate = useMemo(() => todayIsoLocal(), []);
+
+  const draftExportCustomInvalid = Boolean(
+    draftExportCustomStart && draftExportCustomEnd && draftExportCustomStart > draftExportCustomEnd,
+  );
+
+  const openExportPeriodModal = () => {
+    setDraftExportPeriodKind(exportPeriodKind);
+    setDraftExportCustomStart(exportCustomStart);
+    setDraftExportCustomEnd(exportCustomEnd);
+    setExportPeriodModalOpen(true);
+  };
+
+  const handleExportPeriodChange = (kind: DatePeriodKind) => {
+    setExportPeriodKind(kind);
+    if (kind === 'custom') {
+      const t = new Date();
+      const iso = todayIsoLocal();
+      const start = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-01`;
+      setExportCustomStart(start);
+      setExportCustomEnd(iso);
+    }
+  };
+
+  const handleExportModalPresetPick = (kind: DatePeriodKind) => {
+    if (kind !== 'custom') {
+      handleExportPeriodChange(kind);
+      setExportPeriodModalOpen(false);
+      return;
+    }
+    setDraftExportPeriodKind('custom');
+    const t = new Date();
+    const iso = todayIsoLocal();
+    const start = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-01`;
+    setDraftExportCustomStart((prev) => prev || exportCustomStart || start);
+    setDraftExportCustomEnd((prev) => prev || exportCustomEnd || iso);
+  };
+
+  const applyExportModalCustomRange = () => {
+    setExportPeriodKind('custom');
+    setExportCustomStart(draftExportCustomStart);
+    setExportCustomEnd(draftExportCustomEnd);
+    setExportPeriodModalOpen(false);
+  };
+
+  useEffect(() => {
+    if (!exportPeriodModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setExportPeriodModalOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [exportPeriodModalOpen]);
 
   const fetchPOHistory = useCallback(async () => {
     if (!id) return;
@@ -754,7 +836,7 @@ export function MaterialDetailPage() {
 
     try {
       // 1. Update aggregate total_stock + auto-computed status
-      const newStatus = computeStockStatus(newTotal, material.reorder_point);
+      const newStatus = computePersistedStockStatus(newTotal, material.reorder_point);
       const { error: matErr } = await supabase
         .from('raw_materials')
         .update({
@@ -797,7 +879,7 @@ export function MaterialDetailPage() {
         }
       }
 
-      await insertRawMaterialLog(supabase, {
+      void insertRawMaterialLog(supabase, {
         rawMaterialId: material.id,
         action: 'stock_adjusted',
         description: `${adjustment.type === 'add' ? 'Added' : 'Removed'} ${adjustment.quantity} ${material.unit_of_measure} — ${material.sku}${
@@ -810,11 +892,10 @@ export function MaterialDetailPage() {
         metadata: { branch_context: selectedBranch ?? null },
       });
 
-      // 3. Refresh page data
-      await fetchMaterial();
+      void fetchMaterial();
       void fetchMaterialLogs();
-    } catch (err: any) {
-      alert(`Failed to adjust stock: ${err.message ?? 'Unknown error'}`);
+    } catch (err: unknown) {
+      throw err instanceof Error ? err : new Error('Failed to adjust stock');
     }
   };
 
@@ -824,7 +905,7 @@ export function MaterialDetailPage() {
     const actorName = employeeName || session?.user?.email || 'User';
     const actorRole = mapAppRoleToLogRole(role);
     try {
-      const updatedStatus = computeStockStatus(material.total_stock, formData.reorderPoint);
+      const updatedStatus = computePersistedStockStatus(material.total_stock, formData.reorderPoint);
       const { error } = await supabase
         .from('raw_materials')
         .update({
@@ -1049,8 +1130,8 @@ export function MaterialDetailPage() {
         </Card>
       </div>
 
-      {/* Tabs */}
-      <div className="border-b border-gray-200">
+      {/* Tabs + export controls */}
+      <div className="border-b border-gray-200 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <nav className="-mb-px flex gap-6">
           <button
             onClick={() => setActiveTab('overview')}
@@ -1083,6 +1164,57 @@ export function MaterialDetailPage() {
             Analytics
           </button>
         </nav>
+        <div className="flex flex-wrap items-center gap-2 pb-2 sm:pb-0">
+          <Button
+            type="button"
+            variant="outline"
+            className="gap-2 border-gray-300 bg-white max-w-[18rem]"
+            aria-haspopup="dialog"
+            aria-expanded={exportPeriodModalOpen}
+            aria-label="Choose export period"
+            onClick={openExportPeriodModal}
+          >
+            <CalendarRange className="w-4 h-4 shrink-0 text-gray-600" aria-hidden />
+            <span className="truncate text-left text-sm font-normal">
+              {periodTriggerLabel(exportPeriodKind, exportCustomStart, exportCustomEnd)}
+            </span>
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            className="gap-2 border-gray-300 bg-white"
+            disabled={exportingMaterial || loading || !id || exportQueryDates.invalid}
+            onClick={async () => {
+              if (exportingMaterial || loading || !id || exportQueryDates.invalid) return;
+              setExportingMaterial(true);
+              try {
+                const exported = await fetchMaterialDetailForExport(
+                  id,
+                  exportQueryDates.displayLabel,
+                  exportQueryDates.from,
+                  exportQueryDates.to,
+                );
+                await downloadMaterialDetailWorkbook(exported);
+                addAuditLog(
+                  'Exported raw material workbook',
+                  'Raw Materials',
+                  `${exported.materialName} (${exported.sku}) · ${exportQueryDates.displayLabel}`,
+                );
+              } catch (e) {
+                window.alert(e instanceof Error ? e.message : 'Export failed.');
+              } finally {
+                setExportingMaterial(false);
+              }
+            }}
+          >
+            {exportingMaterial ? (
+              <Loader2 className="w-4 h-4 animate-spin" aria-hidden />
+            ) : (
+              <Download className="w-4 h-4" aria-hidden />
+            )}
+            {exportingMaterial ? 'Exporting…' : 'Export'}
+          </Button>
+        </div>
       </div>
 
       {/* Tab Content - Overview */}
@@ -1724,6 +1856,103 @@ export function MaterialDetailPage() {
           onAdjust={handleStockAdjustment}
           itemType="raw-material"
         />
+      )}
+
+      {exportPeriodModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40"
+          role="presentation"
+          onClick={() => setExportPeriodModalOpen(false)}
+        >
+          <div
+            className="bg-white w-full sm:max-w-lg sm:rounded-xl shadow-xl max-h-[90vh] overflow-y-auto"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="material-export-period-modal-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-4 border-b border-gray-200 sticky top-0 bg-white z-10">
+              <h2 id="material-export-period-modal-title" className="text-lg font-semibold text-gray-900">
+                Export period
+              </h2>
+              <button
+                type="button"
+                className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+                aria-label="Close"
+                onClick={() => setExportPeriodModalOpen(false)}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <p className="text-sm text-gray-600">
+                Choose a preset or custom range. Purchase orders, price history, and consumption are filtered by this period. Current material details are always included.
+              </p>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {DATE_PERIOD_OPTIONS.map(({ kind, label }) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    onClick={() => handleExportModalPresetPick(kind)}
+                    className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
+                      draftExportPeriodKind === kind
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-white text-gray-800 border-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {draftExportPeriodKind === 'custom' && (
+                <div className="space-y-2 pt-1 border-t border-gray-100">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="text-xs font-medium text-gray-600 w-full sm:w-auto">From</label>
+                    <input
+                      type="date"
+                      value={draftExportCustomStart}
+                      max={maxExportCustomDate}
+                      onChange={(e) => setDraftExportCustomStart(e.target.value)}
+                      className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    />
+                    <label className="text-xs font-medium text-gray-600">To</label>
+                    <input
+                      type="date"
+                      value={draftExportCustomEnd}
+                      min={draftExportCustomStart || undefined}
+                      max={maxExportCustomDate}
+                      onChange={(e) => setDraftExportCustomEnd(e.target.value)}
+                      className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    />
+                  </div>
+                  {draftExportCustomInvalid && (
+                    <p className="text-xs text-red-600">Start must be on or before end.</p>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 p-4 border-t border-gray-200 bg-gray-50">
+              <Button
+                type="button"
+                variant="outline"
+                className="border-gray-300 bg-white"
+                onClick={() => setExportPeriodModalOpen(false)}
+              >
+                Cancel
+              </Button>
+              {draftExportPeriodKind === 'custom' && (
+                <Button
+                  type="button"
+                  variant="primary"
+                  disabled={draftExportCustomInvalid}
+                  onClick={applyExportModalCustomRange}
+                >
+                  Apply range
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

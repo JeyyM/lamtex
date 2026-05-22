@@ -17,3 +17,17 @@ export function computeStockStatus(stock: number, reorderPoint: number): string 
   if (stock <= reorderPoint) return 'Low Stock';
   return 'Active';
 }
+
+/**
+ * Maps computed stock status to values storable in product_status / material_status enums.
+ * DB enums do not include 'Critical'; persist as 'Low Stock' instead.
+ */
+export function toPersistedStockStatus(computed: string): string {
+  if (computed === 'Critical') return 'Low Stock';
+  return computed;
+}
+
+/** Like computeStockStatus, but safe to write to product_status / material_status columns. */
+export function computePersistedStockStatus(stock: number, reorderPoint: number): string {
+  return toPersistedStockStatus(computeStockStatus(stock, reorderPoint));
+}

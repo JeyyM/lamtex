@@ -13,6 +13,8 @@ export function Topbar() {
   const { role, setRole, branch, setBranch, isMobileMenuOpen, setIsMobileMenuOpen, hideBranchSelector } = useAppContext();
   const agentAnalyticsRoute = useMatch({ path: '/agents', end: true });
   const hideBranchOnAgentAnalytics = Boolean(agentAnalyticsRoute);
+  const employeesRoute = useMatch({ path: '/employees', end: false });
+  const hideBranchOnEmployees = Boolean(employeesRoute);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [isMobileSettingsOpen, setIsMobileSettingsOpen] = useState(false);
   const [notifications, setNotifications] = useState(getNotificationsByBranch(branch));
@@ -77,7 +79,7 @@ export function Topbar() {
         <div className="flex-1"></div>
 
         <div className="hidden md:flex items-center gap-4 lg:gap-6">
-          {!hideBranchSelector && !hideBranchOnAgentAnalytics && (
+          {!hideBranchSelector && !hideBranchOnAgentAnalytics && !hideBranchOnEmployees && (
             <div className="hidden lg:flex items-center gap-2">
               <span className="text-xs font-medium text-gray-500 uppercase tracking-wider">Branch:</span>
               <select
@@ -149,7 +151,7 @@ export function Topbar() {
             className="absolute top-16 left-0 right-0 bg-white border-b border-gray-200 shadow-lg p-4 space-y-4"
             onClick={(e) => e.stopPropagation()}
           >
-            {!hideBranchSelector && !hideBranchOnAgentAnalytics && (
+            {!hideBranchSelector && !hideBranchOnAgentAnalytics && !hideBranchOnEmployees && (
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-1">Branch</label>
                 <select

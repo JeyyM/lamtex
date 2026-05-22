@@ -16,12 +16,18 @@ import {
   Edit3,
   Loader2,
   RefreshCw,
+  Download,
 } from 'lucide-react';
 import AddMaterialModal, { MaterialFormData } from '../components/materials/AddMaterialModal';
 import StockAdjustmentModal from '../components/warehouse/StockAdjustmentModal';
 import { supabase } from '../lib/supabase';
-import { computeStockStatus } from '../lib/stockStatus';
+import { computeStockStatus, computePersistedStockStatus } from '../lib/stockStatus';
 import { insertRawMaterialLog, mapAppRoleToLogRole } from '../lib/domainActivityLog';
+import { scopedMaterialIdList } from '../lib/warehouseScope';
+import {
+  downloadMaterialCategoryWorkbook,
+  fetchMaterialCategoryForExport,
+} from '../lib/rawMaterialsExport';
 
 // ── Supabase row shape ───────────────────────────────────────────────────────
 interface MaterialStockRow {
@@ -50,7 +56,8 @@ interface RawMaterialRow {
 export default function MaterialCategoryPage() {
   const navigate = useNavigate();
   const { categoryName } = useParams<{ categoryName: string }>();
-  const { selectedBranch, employeeName, role, session } = useAppContext();
+  const { selectedBranch, employeeName, role, session, addAuditLog, warehouseScope } = useAppContext();
+  const scopedMaterialIds = scopedMaterialIdList(warehouseScope);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'stock' | 'usage'>('name');
 
@@ -74,6 +81,7 @@ export default function MaterialCategoryPage() {
   const [materials, setMaterials] = useState<RawMaterialRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [exportingCategory, setExportingCategory] = useState(false);
 
   // ── Fetch category row (to get its UUID) then fetch its materials ───────────
   const fetchMaterials = useCallback(async () => {
@@ -97,11 +105,13 @@ export default function MaterialCategoryPage() {
       setCategoryTitle(catData.name);
 
       // 2. Fetch raw_materials for this category (with per-branch stock)
-      const { data, error: matError } = await supabase
+      let matQuery = supabase
         .from('raw_materials')
         .select('id, name, sku, brand, category_id, description, image_url, unit_of_measure, total_stock, reorder_point, cost_per_unit, monthly_consumption, status, specifications, material_stock ( quantity, branches ( code, name ) )')
         .eq('category_id', catData.id)
         .order('name', { ascending: true });
+      if (scopedMaterialIds) matQuery = matQuery.in('id', scopedMaterialIds);
+      const { data, error: matError } = await matQuery;
 
       if (matError) throw matError;
       setMaterials((data ?? []) as unknown as RawMaterialRow[]);
@@ -110,7 +120,7 @@ export default function MaterialCategoryPage() {
     } finally {
       setLoading(false);
     }
-  }, [categoryName]);
+  }, [categoryName, scopedMaterialIds?.join('|') ?? '']);
 
   useEffect(() => { fetchMaterials(); }, [fetchMaterials]);
 
@@ -298,7 +308,7 @@ export default function MaterialCategoryPage() {
     const delta = adjustment.type === 'add' ? adjustment.quantity : -adjustment.quantity;
     const prevTotal = selectedItemForAdjustment.currentStock;
     const newTotal = Math.max(0, prevTotal + delta);
-    const newStatus = computeStockStatus(newTotal, selectedItemForAdjustment.reorderPoint ?? 0);
+    const newStatus = computePersistedStockStatus(newTotal, selectedItemForAdjustment.reorderPoint ?? 0);
 
     try {
       const { error } = await supabase
@@ -306,7 +316,7 @@ export default function MaterialCategoryPage() {
         .update({ total_stock: newTotal, status: newStatus })
         .eq('id', selectedItemForAdjustment.id);
       if (error) throw error;
-      await insertRawMaterialLog(supabase, {
+      void insertRawMaterialLog(supabase, {
         rawMaterialId: selectedItemForAdjustment.id,
         action: 'stock_adjusted',
         description: `${adjustment.type === 'add' ? 'Added' : 'Removed'} ${adjustment.quantity} ${selectedItemForAdjustment.unit} — ${selectedItemForAdjustment.sku}${
@@ -318,9 +328,9 @@ export default function MaterialCategoryPage() {
         newValue: { total_stock: newTotal, status: newStatus },
         metadata: { source: 'material_category_page' },
       });
-      await fetchMaterials();
-    } catch (err: any) {
-      alert(`Failed to adjust stock: ${err.message ?? 'Unknown error'}`);
+      void fetchMaterials();
+    } catch (err: unknown) {
+      throw err instanceof Error ? err : new Error('Failed to adjust stock');
     }
   };
 
@@ -389,6 +399,40 @@ export default function MaterialCategoryPage() {
           </div>
         </div>
         <div className="flex gap-2 flex-wrap">
+          <Button
+            variant="outline"
+            className="flex-1 sm:flex-none"
+            disabled={exportingCategory || loading || !categoryId}
+            onClick={async () => {
+              if (exportingCategory || loading || !categoryId) return;
+              setExportingCategory(true);
+              try {
+                const exported = await fetchMaterialCategoryForExport(categoryId);
+                await downloadMaterialCategoryWorkbook(
+                  exported.categoryName,
+                  exported.branch,
+                  exported.categories,
+                  exported.materials,
+                );
+                addAuditLog(
+                  'Exported material category workbook',
+                  'Raw Materials',
+                  `${exported.materials.length} materials (${exported.categoryName})`,
+                );
+              } catch (e) {
+                window.alert(e instanceof Error ? e.message : 'Export failed.');
+              } finally {
+                setExportingCategory(false);
+              }
+            }}
+          >
+            {exportingCategory ? (
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" aria-hidden />
+            ) : (
+              <Download className="w-4 h-4 mr-2" />
+            )}
+            {exportingCategory ? 'Exporting…' : 'Export'}
+          </Button>
           <Button
             variant="primary"
             className="flex-1 sm:flex-none"
