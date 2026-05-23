@@ -43,17 +43,29 @@ export interface ExecutiveKPI {
 export interface PendingOrderApprovalRow {
   id: string;
   orderNumber: string;
+  customerId: string | null;
   customerName: string;
+  agentId: string | null;
   agentName: string | null;
   branchId: string | null;
   branchName: string | null;
+  /** Order header total (net after discounts). */
   totalAmount: number;
+  /** Pre-discount list subtotal from line items. */
+  originalTotalAmount: number;
+  /** Net line revenue used for margin (usually equals totalAmount). */
+  netTotalAmount: number;
   discountPercent: number;
   discountAmount: number;
   requiredDate: string | null;
   orderDate: string | null;
   lineCount: number;
-  marginImpact: 'Green' | 'Yellow' | 'Red';
+  /** Σ(qty × variant cost_price). */
+  totalCost: number;
+  /** Gross profit: Σ(line_total − qty × variant cost_price). */
+  grossProfit: number;
+  /** grossProfit / net revenue × 100 when revenue > 0; negative when sale loses money. */
+  profitMarginPct: number;
   urgencyScore: number;
 }
 
@@ -71,6 +83,7 @@ export interface PendingPORow {
   id: string;
   poNumber: string;
   branchName: string | null;
+  supplierId: string | null;
   supplierName: string | null;
   expectedDeliveryDate: string | null;
   orderDate: string | null;
@@ -104,6 +117,7 @@ export interface ExecutiveApprovals {
 export interface ExecutiveLowStockProductRow {
   variantId: string;
   productId: string;
+  categorySlug: string | null;
   productName: string;
   sku: string;
   size: string;
@@ -293,6 +307,116 @@ function logDev(scope: string, err: unknown): void {
   }
 }
 
+/** Effective discount from line items (matches Orders list logic). */
+function effectiveDiscountFromLineItems(
+  lines: Array<{ discount_amount?: unknown; line_total?: unknown }> | null | undefined,
+): { discountPercent: number; discountAmount: number } {
+  if (!Array.isArray(lines) || lines.length === 0) {
+    return { discountPercent: 0, discountAmount: 0 };
+  }
+  let sumDiscountAmount = 0;
+  let sumPreDiscountSubtotal = 0;
+  for (const row of lines) {
+    const disc = toNumber(row.discount_amount);
+    const lineTot = toNumber(row.line_total);
+    sumDiscountAmount += disc;
+    sumPreDiscountSubtotal += lineTot + disc;
+  }
+  const discountPercent =
+    sumPreDiscountSubtotal > 1e-6 ? (sumDiscountAmount / sumPreDiscountSubtotal) * 100 : 0;
+  return { discountPercent, discountAmount: sumDiscountAmount };
+}
+
+function resolveOrderDiscount(
+  headerPercent: number,
+  headerAmount: number,
+  lines: Array<{ discount_amount?: unknown; line_total?: unknown }> | null | undefined,
+): { discountPercent: number; discountAmount: number } {
+  const fromLines = effectiveDiscountFromLineItems(lines);
+  return {
+    discountPercent: fromLines.discountPercent > 1e-6 ? fromLines.discountPercent : headerPercent,
+    discountAmount: fromLines.discountAmount > 0 ? fromLines.discountAmount : headerAmount,
+  };
+}
+
+type PendingOrderLineRow = {
+  quantity?: unknown;
+  line_total?: unknown;
+  variant_id?: unknown;
+  discount_amount?: unknown;
+  unit_price?: unknown;
+};
+
+/** Pre-discount subtotal from order lines (list / negotiated gross before discounts). */
+function computeOrderOriginalTotal(
+  lines: PendingOrderLineRow[] | null | undefined,
+  fallbackNet = 0,
+  fallbackDiscount = 0,
+): number {
+  if (!Array.isArray(lines) || lines.length === 0) {
+    return fallbackNet + fallbackDiscount > 0 ? fallbackNet + fallbackDiscount : fallbackNet;
+  }
+  let gross = 0;
+  for (const line of lines) {
+    const qty = toNumber(line.quantity);
+    const lineTotal = toNumber(line.line_total);
+    const disc = toNumber(line.discount_amount);
+    const unitPrice = toNumber(line.unit_price);
+    const fromDiscountParts = lineTotal + disc;
+    const fromUnitPrice = unitPrice * qty;
+    gross += fromDiscountParts > 1e-6 ? fromDiscountParts : fromUnitPrice;
+  }
+  if (gross > 1e-6) return gross;
+  return fallbackNet + fallbackDiscount > 0 ? fallbackNet + fallbackDiscount : fallbackNet;
+}
+
+function computeOrderProfitMetrics(
+  lines: PendingOrderLineRow[] | null | undefined,
+  costByVariant: Map<string, number>,
+  orderTotalAmount = 0,
+): { grossProfit: number; revenue: number; totalCost: number; profitMarginPct: number } {
+  if (!Array.isArray(lines) || lines.length === 0) {
+    const revenue = orderTotalAmount > 0 ? orderTotalAmount : 0;
+    return { grossProfit: 0, revenue, totalCost: 0, profitMarginPct: 0 };
+  }
+  let lineRevenue = 0;
+  let cost = 0;
+  for (const line of lines) {
+    const qty = toNumber(line.quantity);
+    const lineTotal = toNumber(line.line_total);
+    lineRevenue += lineTotal;
+    const vid = toStr(line.variant_id);
+    const unitCost = vid ? (costByVariant.get(vid) ?? 0) : 0;
+    cost += unitCost * qty;
+  }
+  const revenue = lineRevenue > 0 ? lineRevenue : orderTotalAmount;
+  const grossProfit = revenue - cost;
+  let profitMarginPct = 0;
+  if (revenue > 0) {
+    profitMarginPct = (grossProfit / revenue) * 100;
+  } else if (grossProfit < 0 && cost > 0) {
+    profitMarginPct = (grossProfit / cost) * 100;
+  }
+  return { grossProfit, revenue, totalCost: cost, profitMarginPct };
+}
+
+async function fetchVariantCostMap(variantIds: string[]): Promise<Map<string, number>> {
+  const map = new Map<string, number>();
+  if (variantIds.length === 0) return map;
+  for (let i = 0; i < variantIds.length; i += 200) {
+    const slice = variantIds.slice(i, i + 200);
+    const { data, error } = await supabase.from('product_variants').select('id, cost_price').in('id', slice);
+    if (error) {
+      logDev('variant costs', error);
+      continue;
+    }
+    for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+      map.set(String(row.id), toNumber(row.cost_price));
+    }
+  }
+  return map;
+}
+
 // ---------------------------------------------------------------------------
 // Sub-fetchers (each handles its own failures so one bad query doesn't break the dashboard)
 // ---------------------------------------------------------------------------
@@ -306,10 +430,10 @@ async function fetchPendingOrderApprovals(branchId: string | null): Promise<{
     let q = supabase
       .from('orders')
       .select(
-        `id, order_number, customer_name, agent_name, branch_id, status,
+        `id, order_number, customer_id, customer_name, agent_id, agent_name, branch_id, status,
          order_date, required_date, total_amount, discount_percent, discount_amount,
          branches(name),
-         order_line_items(id)`,
+         order_line_items(quantity, line_total, variant_id, discount_amount, unit_price)`,
         { count: 'exact' },
       )
       .eq('status', PENDING_ORDER_STATUS)
@@ -319,21 +443,40 @@ async function fetchPendingOrderApprovals(branchId: string | null): Promise<{
     const { data, error, count } = await q.limit(50);
     if (error) throw error;
 
-    const rows: PendingOrderApprovalRow[] = (data ?? []).map((r) => {
-      const total = toNumber((r as Record<string, unknown>).total_amount);
-      const discountPct = toNumber((r as Record<string, unknown>).discount_percent);
-      const discountAmt = toNumber((r as Record<string, unknown>).discount_amount);
-      const lineRows = (r as Record<string, unknown>).order_line_items;
+    const rawOrders = (data ?? []) as Array<Record<string, unknown>>;
+    const variantIds = new Set<string>();
+    for (const r of rawOrders) {
+      const lines = r.order_line_items as PendingOrderLineRow[] | null | undefined;
+      if (!Array.isArray(lines)) continue;
+      for (const line of lines) {
+        const vid = toStr(line.variant_id);
+        if (vid) variantIds.add(vid);
+      }
+    }
+    const costByVariant = await fetchVariantCostMap([...variantIds]);
+
+    const rows: PendingOrderApprovalRow[] = rawOrders.map((r) => {
+      const total = toNumber(r.total_amount);
+      const lineRows = r.order_line_items as PendingOrderLineRow[] | null | undefined;
+      const { discountPercent: discountPct, discountAmount: discountAmt } = resolveOrderDiscount(
+        toNumber(r.discount_percent),
+        toNumber(r.discount_amount),
+        lineRows,
+      );
+      const { grossProfit, revenue, totalCost, profitMarginPct } = computeOrderProfitMetrics(
+        lineRows,
+        costByVariant,
+        total,
+      );
+      const netTotalAmount = revenue > 0 ? revenue : total;
+      const originalTotalAmount = computeOrderOriginalTotal(lineRows, netTotalAmount, discountAmt);
       const lineCount = Array.isArray(lineRows) ? lineRows.length : 0;
-      const requiredDate = toStr((r as Record<string, unknown>).required_date);
+      const requiredDate = toStr(r.required_date);
       const today = new Date();
       const reqDt = requiredDate ? new Date(requiredDate) : null;
       const daysUntilRequired = reqDt
         ? Math.floor((reqDt.getTime() - new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()) / 86_400_000)
         : null;
-
-      const marginImpact: 'Green' | 'Yellow' | 'Red' =
-        discountPct >= 20 ? 'Red' : discountPct >= 10 ? 'Yellow' : 'Green';
 
       let urgencyScore = 0;
       if (daysUntilRequired != null) {
@@ -341,25 +484,32 @@ async function fetchPendingOrderApprovals(branchId: string | null): Promise<{
         else if (daysUntilRequired <= 3) urgencyScore += 35;
         else if (daysUntilRequired <= 7) urgencyScore += 15;
       }
-      if (marginImpact === 'Red') urgencyScore += 30;
-      else if (marginImpact === 'Yellow') urgencyScore += 15;
+      if (profitMarginPct < 0) urgencyScore += 40;
+      else if (revenue > 0 && profitMarginPct < 10) urgencyScore += 30;
+      else if (revenue > 0 && profitMarginPct < 20) urgencyScore += 15;
       if (total >= 500_000) urgencyScore += 20;
       else if (total >= 200_000) urgencyScore += 10;
 
       return {
-        id: String((r as Record<string, unknown>).id),
-        orderNumber: toStr((r as Record<string, unknown>).order_number) ?? String((r as Record<string, unknown>).id),
-        customerName: toStr((r as Record<string, unknown>).customer_name) ?? '—',
-        agentName: toStr((r as Record<string, unknown>).agent_name),
-        branchId: toStr((r as Record<string, unknown>).branch_id),
-        branchName: nestedName((r as Record<string, unknown>).branches),
+        id: String(r.id),
+        orderNumber: toStr(r.order_number) ?? String(r.id),
+        customerId: toStr(r.customer_id),
+        customerName: toStr(r.customer_name) ?? '—',
+        agentId: toStr(r.agent_id),
+        agentName: toStr(r.agent_name),
+        branchId: toStr(r.branch_id),
+        branchName: nestedName(r.branches),
         totalAmount: total,
+        originalTotalAmount,
+        netTotalAmount,
         discountPercent: discountPct,
         discountAmount: discountAmt,
         requiredDate,
-        orderDate: toStr((r as Record<string, unknown>).order_date),
+        orderDate: toStr(r.order_date),
         lineCount,
-        marginImpact,
+        totalCost,
+        grossProfit,
+        profitMarginPct,
         urgencyScore,
       };
     });
@@ -383,7 +533,7 @@ async function fetchPendingProductionRequests(branchId: string | null): Promise<
       .from('production_requests')
       .select(
         `id, pr_number, request_date, expected_completion_date, created_by, branch_id,
-         branches(name), production_request_items(id)`,
+         branches:branches!branch_id(name), production_request_items(id)`,
         { count: 'exact' },
       )
       .eq('status', REQUESTED_PR_STATUS)
@@ -422,7 +572,7 @@ async function fetchPendingPurchaseOrders(branchId: string | null): Promise<{
       .from('purchase_orders')
       .select(
         `id, po_number, order_date, expected_delivery_date, total_amount, branch_id,
-         branches:branches!branch_id(name), suppliers(name), purchase_order_items(id)`,
+         branches:branches!branch_id(name), suppliers(id, name), purchase_order_items(id)`,
         { count: 'exact' },
       )
       .eq('status', REQUESTED_PO_STATUS)
@@ -432,18 +582,31 @@ async function fetchPendingPurchaseOrders(branchId: string | null): Promise<{
     const { data, error, count } = await q.limit(5);
     if (error) throw error;
 
-    const rows: PendingPORow[] = (data ?? []).map((r) => ({
-      id: String((r as Record<string, unknown>).id),
-      poNumber: toStr((r as Record<string, unknown>).po_number) ?? String((r as Record<string, unknown>).id),
-      branchName: nestedName((r as Record<string, unknown>).branches),
-      supplierName: nestedName((r as Record<string, unknown>).suppliers),
-      expectedDeliveryDate: toStr((r as Record<string, unknown>).expected_delivery_date),
-      orderDate: toStr((r as Record<string, unknown>).order_date),
-      totalAmount: toNumber((r as Record<string, unknown>).total_amount),
-      itemCount: Array.isArray((r as Record<string, unknown>).purchase_order_items)
-        ? ((r as Record<string, unknown>).purchase_order_items as unknown[]).length
-        : 0,
-    }));
+    const rows: PendingPORow[] = (data ?? []).map((r) => {
+      const rec = r as Record<string, unknown>;
+      const supplierEmbed = rec.suppliers;
+      let supplierId: string | null = null;
+      let supplierName: string | null = null;
+      if (supplierEmbed && typeof supplierEmbed === 'object' && !Array.isArray(supplierEmbed)) {
+        supplierId = toStr((supplierEmbed as Record<string, unknown>).id);
+        supplierName = toStr((supplierEmbed as Record<string, unknown>).name);
+      } else {
+        supplierName = nestedName(supplierEmbed);
+      }
+      return {
+        id: String(rec.id),
+        poNumber: toStr(rec.po_number) ?? String(rec.id),
+        branchName: nestedName(rec.branches),
+        supplierId,
+        supplierName,
+        expectedDeliveryDate: toStr(rec.expected_delivery_date),
+        orderDate: toStr(rec.order_date),
+        totalAmount: toNumber(rec.total_amount),
+        itemCount: Array.isArray(rec.purchase_order_items)
+          ? (rec.purchase_order_items as unknown[]).length
+          : 0,
+      };
+    });
 
     const totalValue = rows.reduce((sum, r) => sum + r.totalAmount, 0);
     return { rows, count: count ?? rows.length, totalValue };
@@ -503,7 +666,7 @@ async function fetchLowStockProducts(branchName: string | null): Promise<Executi
       .from('product_variants')
       .select(
         `id, sku, size, total_stock, reorder_point, safety_stock, branch,
-         products(id, name, is_hidden)`,
+         products(id, name, is_hidden, product_categories(slug))`,
       )
       .gt('reorder_point', 0)
       .eq('is_hidden', false)
@@ -529,9 +692,13 @@ async function fetchLowStockProducts(branchName: string | null): Promise<Executi
         if (wantBranch && branchTag && branchTag.trim().toLowerCase() !== wantBranch) {
           return null;
         }
+        const category = (productObj as { product_categories?: unknown } | undefined)?.product_categories;
+        const categoryObj = Array.isArray(category) ? category[0] : category;
+        const categorySlug = toStr((categoryObj as { slug?: unknown } | null | undefined)?.slug);
         return {
           variantId: String((r as Record<string, unknown>).id),
           productId: String(productObj?.id ?? ''),
+          categorySlug,
           productName: toStr(productObj?.name ?? null) ?? '—',
           sku: toStr((r as Record<string, unknown>).sku) ?? '—',
           size: toStr((r as Record<string, unknown>).size) ?? '—',
@@ -936,6 +1103,7 @@ async function fetchRevenueComparison(branchId: string | null): Promise<{
   currentMonthRevenue: number;
   previousMonthRevenue: number;
   currentMonthOrders: number;
+  previousMonthOrders: number;
   yearToDateRevenue: number;
 }> {
   try {
@@ -977,6 +1145,7 @@ async function fetchRevenueComparison(branchId: string | null): Promise<{
       currentMonthRevenue: sum(thisMonthRes.data),
       previousMonthRevenue: sum(prevMonthRes.data),
       currentMonthOrders: (thisMonthRes.data ?? []).length,
+      previousMonthOrders: (prevMonthRes.data ?? []).length,
       yearToDateRevenue: sum(ytdRes.data),
     };
   } catch (e) {
@@ -985,22 +1154,9 @@ async function fetchRevenueComparison(branchId: string | null): Promise<{
       currentMonthRevenue: 0,
       previousMonthRevenue: 0,
       currentMonthOrders: 0,
+      previousMonthOrders: 0,
       yearToDateRevenue: 0,
     };
-  }
-}
-
-async function fetchActiveSupplierCount(): Promise<number> {
-  try {
-    const { count, error } = await supabase
-      .from('suppliers')
-      .select('id', { count: 'exact', head: true })
-      .eq('status', 'Active');
-    if (error) throw error;
-    return count ?? 0;
-  } catch (e) {
-    logDev('suppliers', e);
-    return 0;
   }
 }
 
@@ -1015,26 +1171,31 @@ function pesos(amount: number): string {
   return `₱${Math.round(amount).toLocaleString()}`;
 }
 
+function pesosExact(amount: number): string {
+  if (!Number.isFinite(amount)) return '₱0';
+  return `₱${Math.round(amount).toLocaleString()}`;
+}
+
 function buildKpis(opts: {
   currentMonthRevenue: number;
   previousMonthRevenue: number;
   currentMonthOrders: number;
+  previousMonthOrders: number;
   yearToDateRevenue: number;
   approvals: ExecutiveApprovals;
   finance: FinanceMetrics;
   inventory: ExecutiveInventoryAlerts;
-  activeSuppliers: number;
   logistics: ExecutiveLogisticsSnapshot;
 }): ExecutiveKPI[] {
   const {
     currentMonthRevenue,
     previousMonthRevenue,
     currentMonthOrders,
+    previousMonthOrders,
     yearToDateRevenue,
     approvals,
     finance,
     inventory,
-    activeSuppliers,
     logistics,
   } = opts;
 
@@ -1047,14 +1208,21 @@ function buildKpis(opts: {
       ? `${revenueDelta >= 0 ? '+' : ''}${revenueDelta.toFixed(1)}% vs last month`
       : 'No prior period';
 
-  const totalApprovalCount =
-    approvals.pendingOrderCount +
-    approvals.pendingProductionRequestCount +
-    approvals.pendingPurchaseOrderCount +
-    approvals.pendingInterBranchRequestCount;
+  const currentAov = currentMonthOrders > 0 ? currentMonthRevenue / currentMonthOrders : 0;
+  const previousAov = previousMonthOrders > 0 ? previousMonthRevenue / previousMonthOrders : 0;
+  const aovDelta =
+    previousAov > 0 ? ((currentAov - previousAov) / previousAov) * 100 : 0;
+  const aovDeltaLabel =
+    previousAov > 0
+      ? `${aovDelta >= 0 ? '+' : ''}${aovDelta.toFixed(1)}% vs last month`
+      : 'No prior period';
 
   const lowStockCount = inventory.lowStockProductCount + inventory.lowStockMaterialCount;
   const onTimePct = logistics.onTimeRate;
+  const lowStockHref =
+    inventory.lowStockMaterialCount > inventory.lowStockProductCount
+      ? '/materials'
+      : '/products';
 
   return [
     {
@@ -1065,6 +1233,7 @@ function buildKpis(opts: {
       trend: revenueDeltaLabel,
       trendUp: revenueDelta >= 0,
       status: 'neutral',
+      href: '/reports',
     },
     {
       id: 'kpi-pending-orders',
@@ -1120,7 +1289,7 @@ function buildKpis(opts: {
       value: lowStockCount.toString(),
       subtitle: `${inventory.lowStockProductCount} products · ${inventory.lowStockMaterialCount} materials`,
       status: lowStockCount > 0 ? 'warning' : 'good',
-      href: '/warehouse',
+      href: lowStockHref,
     },
     {
       id: 'kpi-delivery',
@@ -1134,12 +1303,22 @@ function buildKpis(opts: {
       href: '/logistics',
     },
     {
-      id: 'kpi-suppliers',
-      label: 'Active Suppliers',
-      value: activeSuppliers.toString(),
-      subtitle: `${totalApprovalCount} total approvals queued`,
-      status: 'neutral',
-      href: '/suppliers',
+      id: 'kpi-aov',
+      label: 'Avg Order Value (MTD)',
+      value: currentMonthOrders > 0 ? pesosExact(currentAov) : '—',
+      subtitle:
+        currentMonthOrders > 0
+          ? `${currentMonthOrders.toLocaleString()} orders · prev ${previousAov > 0 ? pesosExact(previousAov) : '—'}`
+          : 'No orders this month',
+      trend: currentMonthOrders > 0 ? aovDeltaLabel : undefined,
+      trendUp: previousAov > 0 ? aovDelta >= 0 : undefined,
+      status:
+        currentMonthOrders === 0
+          ? 'neutral'
+          : aovDelta >= 0 || previousAov === 0
+            ? 'good'
+            : 'warning',
+      href: '/agents',
     },
   ];
 }
@@ -1174,7 +1353,6 @@ export async function fetchExecutiveDashboard(opts: {
     topAgents,
     logistics,
     comparison,
-    activeSuppliers,
   ] = await Promise.all([
     fetchPendingOrderApprovals(branchId),
     fetchPendingProductionRequests(branchId),
@@ -1193,7 +1371,7 @@ export async function fetchExecutiveDashboard(opts: {
         commissionsPaidOut: 0,
       } satisfies FinanceMetrics;
     }),
-    fetchLowStockProducts(branchName),
+    fetchLowStockProducts(null),
     fetchLowStockMaterials(),
     fetchRevenueTrend(branchId),
     fetchBranchBreakdown(),
@@ -1202,7 +1380,6 @@ export async function fetchExecutiveDashboard(opts: {
     fetchTopAgentsMTD(branchId),
     fetchLogisticsSnapshot(branchId),
     fetchRevenueComparison(branchId),
-    fetchActiveSupplierCount(),
   ]);
 
   const approvals: ExecutiveApprovals = {
@@ -1229,11 +1406,11 @@ export async function fetchExecutiveDashboard(opts: {
     currentMonthRevenue: comparison.currentMonthRevenue,
     previousMonthRevenue: comparison.previousMonthRevenue,
     currentMonthOrders: comparison.currentMonthOrders,
+    previousMonthOrders: comparison.previousMonthOrders,
     yearToDateRevenue: comparison.yearToDateRevenue,
     approvals,
     finance,
     inventory,
-    activeSuppliers,
     logistics,
   });
 
@@ -1258,4 +1435,14 @@ export async function fetchExecutiveDashboard(opts: {
 export function formatExecutivePeso(amount: number | null | undefined): string {
   if (amount == null || !Number.isFinite(amount)) return '₱0';
   return pesos(amount);
+}
+
+/** Profit margin % — negative when the sale loses money (cost exceeds net revenue). */
+export function formatExecutiveMarginPct(profitMarginPct: number, grossProfit?: number): string {
+  if (!Number.isFinite(profitMarginPct)) return '—';
+  if (grossProfit != null && grossProfit < -1e-6) {
+    const pct = profitMarginPct <= 0 ? profitMarginPct : -Math.abs(profitMarginPct);
+    return `${pct.toFixed(1)}%`;
+  }
+  return `${profitMarginPct.toFixed(1)}%`;
 }

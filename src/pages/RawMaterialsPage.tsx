@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { scopedMaterialIdList, warehouseScopeEmptyMessage } from '@/src/lib/warehouseScope';
+import { effectiveInventoryBranch } from '@/src/lib/inventoryAccess';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
@@ -74,6 +75,7 @@ export function RawMaterialsPage() {
   const [categoryFilter, setCategoryFilter] = useState<string>('All');
   const [riskFilter, setRiskFilter] = useState<string>('All');
   const { role, branch, addAuditLog, warehouseScope, warehouseScopeLoading } = useAppContext();
+  const inventoryBranch = effectiveInventoryBranch(role, branch);
   const scopedMaterialIds = scopedMaterialIdList(warehouseScope);
   
   // Modal states
@@ -164,9 +166,9 @@ export function RawMaterialsPage() {
     setSummaryLoading(true);
 
     // Collect category IDs that belong to this branch via branch_id
-    const branchCategoryIds = allCategories
-      .filter(c => c.branches?.name === currentBranch)
-      .map(c => c.id);
+    const branchCategoryIds = currentBranch
+      ? allCategories.filter(c => c.branches?.name === currentBranch).map(c => c.id)
+      : allCategories.map(c => c.id);
 
     if (branchCategoryIds.length === 0) {
       setSummaryStats({ totalMaterials: 0, totalValue: 0, lowStockCount: 0, reorderCount: 0 });
@@ -199,9 +201,9 @@ export function RawMaterialsPage() {
   const fetchAlertMaterials = async (currentBranch: string, allCategories: MaterialCategoryRow[]) => {
     setAlertsLoading(true);
 
-    const branchCategoryIds = allCategories
-      .filter(c => c.branches?.name === currentBranch)
-      .map(c => c.id);
+    const branchCategoryIds = currentBranch
+      ? allCategories.filter(c => c.branches?.name === currentBranch).map(c => c.id)
+      : allCategories.map(c => c.id);
 
     if (branchCategoryIds.length === 0) {
       setDbAlertMaterials([]);
@@ -246,11 +248,14 @@ export function RawMaterialsPage() {
   }, [scopedMaterialIds?.join('|') ?? '']);
 
   useEffect(() => {
-    if (branch) {
-      void fetchSummaryStats(branch, categories);
-      void fetchAlertMaterials(branch, categories);
+    if (inventoryBranch) {
+      void fetchSummaryStats(inventoryBranch, categories);
+      void fetchAlertMaterials(inventoryBranch, categories);
+    } else {
+      void fetchSummaryStats('', categories);
+      void fetchAlertMaterials('', categories);
     }
-  }, [branch, categories, scopedMaterialIds?.join('|') ?? '']);
+  }, [inventoryBranch, categories, scopedMaterialIds?.join('|') ?? '']);
 
   const scopedCategoryIds = useMemo(() => {
     if (!scopedMaterialIds) return null;
@@ -258,12 +263,12 @@ export function RawMaterialsPage() {
   }, [materialCounts, scopedMaterialIds]);
 
   const visibleCategories = useMemo(() => {
-    let cats = branch ? categories.filter(c => c.branches?.name === branch) : categories;
+    let cats = inventoryBranch ? categories.filter(c => c.branches?.name === inventoryBranch) : categories;
     if (scopedCategoryIds) {
       cats = cats.filter(c => scopedCategoryIds.has(c.id));
     }
     return cats;
-  }, [branch, categories, scopedCategoryIds]);
+  }, [inventoryBranch, categories, scopedCategoryIds]);
 
   // Resolve image: use image_url from DB if set, otherwise fall back to local asset map
   const getCategoryImage = (cat: MaterialCategoryRow): string => {

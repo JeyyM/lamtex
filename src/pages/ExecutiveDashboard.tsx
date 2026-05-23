@@ -1,12 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import {
   TrendingUp,
-  TrendingDown,
   DollarSign,
   Package,
   Users,
@@ -41,31 +39,26 @@ import {
 import {
   fetchExecutiveDashboard,
   formatExecutivePeso,
+  formatExecutiveMarginPct,
   type ExecutiveDashboardBundle,
-  type ExecutiveKPI,
   type PendingOrderApprovalRow,
   type PendingPRRow,
   type PendingPORow,
   type PendingIBRRow,
 } from '@/src/lib/executiveDashboard';
+import { ExecutiveKpiStrip } from '@/src/components/executive/ExecutiveKpiStrip';
+import {
+  DashLink,
+  DashQueueLink,
+  DashTableRowLink,
+  DashHeaderLink,
+  DASH_LINK_CLASS,
+} from '@/src/components/executive/executiveLinks';
+import { finishedGoodProductHref } from '@/src/lib/productRoutes';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-const STATUS_TILE_STYLES: Record<ExecutiveKPI['status'], string> = {
-  good: 'border-emerald-200 bg-emerald-50/40',
-  warning: 'border-amber-200 bg-amber-50/40',
-  danger: 'border-red-200 bg-red-50/40',
-  neutral: 'border-gray-200 bg-white',
-};
-
-const STATUS_TEXT_COLORS: Record<ExecutiveKPI['status'], string> = {
-  good: 'text-emerald-700',
-  warning: 'text-amber-700',
-  danger: 'text-red-700',
-  neutral: 'text-gray-700',
-};
 
 function formatDateShort(iso: string | null): string {
   if (!iso) return '—';
@@ -89,7 +82,6 @@ function daysUntil(iso: string | null): number | null {
 
 export function ExecutiveDashboard(): React.ReactElement {
   const { branch } = useAppContext();
-  const navigate = useNavigate();
 
   const [bundle, setBundle] = useState<ExecutiveDashboardBundle | null>(null);
   const [loading, setLoading] = useState(true);
@@ -178,22 +170,19 @@ export function ExecutiveDashboard(): React.ReactElement {
             {refreshing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
             Refresh
           </Button>
-          <Button variant="outline" onClick={() => navigate('/orders')} className="gap-2">
+          <DashHeaderLink to="/orders">
             <FileText className="w-4 h-4" /> All Orders
-          </Button>
+          </DashHeaderLink>
         </div>
       </div>
 
       {/* KPI STRIP */}
-      <KpiStrip kpis={bundle.kpis} onNavigate={(href) => navigate(href)} />
+      <ExecutiveKpiStrip kpis={bundle.kpis} />
 
       {/* APPROVAL QUEUE — PENDING ORDERS */}
       <PendingOrdersCard
         rows={bundle.approvals.pendingOrders}
         totalCount={bundle.approvals.pendingOrderCount}
-        totalValue={bundle.approvals.pendingOrderValue}
-        onOpen={(id) => navigate(`/orders/${id}`)}
-        onViewAll={() => navigate('/orders')}
       />
 
       {/* PROCUREMENT / IBR QUEUES */}
@@ -201,30 +190,20 @@ export function ExecutiveDashboard(): React.ReactElement {
         <PendingPRsCard
           rows={bundle.approvals.pendingProductionRequests}
           count={bundle.approvals.pendingProductionRequestCount}
-          onOpen={(id) => navigate(`/production-requests/${id}`)}
-          onViewAll={() => navigate('/warehouse')}
         />
         <PendingPOsCard
           rows={bundle.approvals.pendingPurchaseOrders}
           count={bundle.approvals.pendingPurchaseOrderCount}
           totalValue={bundle.approvals.pendingPurchaseOrderValue}
-          onOpen={(id) => navigate(`/purchase-orders/${id}`)}
-          onViewAll={() => navigate('/warehouse')}
         />
         <PendingIBRsCard
           rows={bundle.approvals.pendingInterBranchRequests}
           count={bundle.approvals.pendingInterBranchRequestCount}
-          onOpen={(id) => navigate(`/inter-branch-requests/${id}`)}
-          onViewAll={() => navigate('/inter-branch-requests')}
         />
       </div>
 
       {/* FINANCE SNAPSHOT */}
-      <FinanceSnapshotCard
-        metrics={bundle.finance}
-        revenueTrend={bundle.revenueTrend}
-        onOpenFinance={() => navigate('/finance')}
-      />
+      <FinanceSnapshotCard metrics={bundle.finance} revenueTrend={bundle.revenueTrend} />
 
       {/* BRANCH BREAKDOWN — only meaningful when looking org-wide or 1+ branches exist */}
       {bundle.branchBreakdown.length > 1 && <BranchBreakdownCard rows={bundle.branchBreakdown} />}
@@ -234,28 +213,21 @@ export function ExecutiveDashboard(): React.ReactElement {
         <LowStockProductsCard
           rows={bundle.inventory.lowStockProducts}
           count={bundle.inventory.lowStockProductCount}
-          onViewAll={() => navigate('/warehouse')}
-          onOpen={(productId) => navigate(`/products/${productId}`)}
         />
         <LowStockMaterialsCard
           rows={bundle.inventory.lowStockMaterials}
           count={bundle.inventory.lowStockMaterialCount}
-          onViewAll={() => navigate('/materials')}
-          onOpen={(materialId) => navigate(`/materials/${materialId}`)}
         />
       </div>
 
       {/* LOGISTICS HEALTH */}
-      <LogisticsHealthCard
-        logistics={bundle.logistics}
-        onOpen={() => navigate('/logistics')}
-      />
+      <LogisticsHealthCard logistics={bundle.logistics} />
 
       {/* STRATEGIC INSIGHTS */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <TopProductsCard rows={bundle.topProducts} onOpen={(id) => navigate(`/products/${id}`)} />
-        <TopCustomersCard rows={bundle.topCustomers} onOpen={(id) => navigate(`/customers/${id}`)} />
-        <TopAgentsCard rows={bundle.topAgents} onOpen={() => navigate('/agents')} />
+        <TopProductsCard rows={bundle.topProducts} />
+        <TopCustomersCard rows={bundle.topCustomers} />
+        <TopAgentsCard rows={bundle.topAgents} />
       </div>
 
       <p className="text-xs text-gray-400 text-right">
@@ -270,85 +242,11 @@ export function ExecutiveDashboard(): React.ReactElement {
 // Sub-components
 // ---------------------------------------------------------------------------
 
-function KpiStrip(props: { kpis: ExecutiveKPI[]; onNavigate: (href: string) => void }) {
-  return (
-    <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-4 2xl:grid-cols-8 gap-3">
-      {props.kpis.map((kpi) => (
-        <button
-          key={kpi.id}
-          type="button"
-          onClick={() => kpi.href && props.onNavigate(kpi.href)}
-          disabled={!kpi.href}
-          className={`text-left rounded-lg border ${STATUS_TILE_STYLES[kpi.status]} p-4 transition-all ${
-            kpi.href ? 'hover:shadow-md hover:-translate-y-0.5 cursor-pointer' : 'cursor-default'
-          }`}
-        >
-          <div className="flex items-start justify-between gap-2">
-            <p className="text-xs font-medium text-gray-500 uppercase tracking-wider">{kpi.label}</p>
-            <KpiIcon id={kpi.id} status={kpi.status} />
-          </div>
-          <p className={`text-2xl font-bold mt-2 ${STATUS_TEXT_COLORS[kpi.status]}`}>{kpi.value}</p>
-          {kpi.subtitle && <p className="text-xs text-gray-500 mt-1 line-clamp-2">{kpi.subtitle}</p>}
-          {kpi.trend && (
-            <div className="flex items-center gap-1 mt-2">
-              {kpi.trendUp != null ? (
-                kpi.trendUp ? (
-                  <TrendingUp className="w-3.5 h-3.5 text-emerald-600" />
-                ) : (
-                  <TrendingDown className="w-3.5 h-3.5 text-red-600" />
-                )
-              ) : null}
-              <span
-                className={`text-xs font-medium ${
-                  kpi.trendUp == null
-                    ? 'text-gray-500'
-                    : kpi.trendUp
-                      ? 'text-emerald-600'
-                      : 'text-red-600'
-                }`}
-              >
-                {kpi.trend}
-              </span>
-            </div>
-          )}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function KpiIcon(props: { id: string; status: ExecutiveKPI['status'] }) {
-  const color = STATUS_TEXT_COLORS[props.status];
-  switch (props.id) {
-    case 'kpi-revenue-mtd':
-      return <DollarSign className={`w-4 h-4 ${color}`} />;
-    case 'kpi-pending-orders':
-      return <ShoppingCart className={`w-4 h-4 ${color}`} />;
-    case 'kpi-pending-procurement':
-      return <Factory className={`w-4 h-4 ${color}`} />;
-    case 'kpi-receivables':
-      return <Wallet className={`w-4 h-4 ${color}`} />;
-    case 'kpi-commissions':
-      return <DollarSign className={`w-4 h-4 ${color}`} />;
-    case 'kpi-low-stock':
-      return <AlertTriangle className={`w-4 h-4 ${color}`} />;
-    case 'kpi-delivery':
-      return <Truck className={`w-4 h-4 ${color}`} />;
-    case 'kpi-suppliers':
-      return <Building2 className={`w-4 h-4 ${color}`} />;
-    default:
-      return <ArrowRight className={`w-4 h-4 ${color}`} />;
-  }
-}
-
 // ----- Pending orders -----
 
 function PendingOrdersCard(props: {
   rows: PendingOrderApprovalRow[];
   totalCount: number;
-  totalValue: number;
-  onOpen: (id: string) => void;
-  onViewAll: () => void;
 }) {
   return (
     <Card>
@@ -361,9 +259,9 @@ function PendingOrdersCard(props: {
               <Badge variant="warning" className="ml-1">{props.totalCount} pending</Badge>
             )}
           </CardTitle>
-          <Button variant="outline" size="sm" className="gap-1" onClick={props.onViewAll}>
+          <DashHeaderLink to="/orders">
             All orders <ArrowRight className="w-4 h-4" />
-          </Button>
+          </DashHeaderLink>
         </div>
       </CardHeader>
       <CardContent>
@@ -372,76 +270,127 @@ function PendingOrdersCard(props: {
             No orders waiting for executive approval.
           </p>
         ) : (
-          <div className="space-y-2">
-            <div className="text-xs text-gray-500">
-              Showing the {props.rows.length} highest priority of {props.totalCount} pending · total value{' '}
-              <span className="font-semibold text-gray-700">{formatExecutivePeso(props.totalValue)}</span>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-xs text-gray-500 uppercase tracking-wider border-b border-gray-200">
-                    <th className="py-2 pr-3">Order</th>
-                    <th className="py-2 pr-3">Customer</th>
-                    <th className="py-2 pr-3">Agent · Branch</th>
-                    <th className="py-2 pr-3 text-right">Total</th>
-                    <th className="py-2 pr-3 text-right">Discount</th>
-                    <th className="py-2 pr-3">Margin</th>
-                    <th className="py-2 pr-3">Required</th>
-                    <th className="py-2"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {props.rows.map((r) => {
-                    const days = daysUntil(r.requiredDate);
-                    const urgencyClass =
-                      days != null && days <= 0
-                        ? 'text-red-600 font-semibold'
-                        : days != null && days <= 3
-                          ? 'text-amber-600 font-medium'
+          <div className="overflow-x-auto -mx-1 px-1">
+            <table className="w-full min-w-[640px] table-fixed text-sm">
+              <colgroup>
+                <col className="w-[10%]" />
+                <col className="w-[20%]" />
+                <col className="w-[15%]" />
+                <col className="w-[10%]" />
+                <col className="w-[14%]" />
+                <col className="w-[10%]" />
+                <col className="w-[18%]" />
+                <col className="w-[3%]" />
+              </colgroup>
+              <thead>
+                <tr className="text-xs text-gray-500 uppercase tracking-wider border-b border-gray-200">
+                  <th className="py-2.5 px-2 text-left font-semibold">Order</th>
+                  <th className="py-2.5 px-2 text-left font-semibold">Customer</th>
+                  <th className="py-2.5 px-2 text-left font-semibold">Agent · Branch</th>
+                  <th className="py-2.5 px-2 text-center font-semibold">Original</th>
+                  <th className="py-2.5 px-2 text-center font-semibold">Net · margin</th>
+                  <th className="py-2.5 px-2 text-center font-semibold">Est. profit</th>
+                  <th className="py-2.5 px-2 text-right font-semibold">Required</th>
+                  <th className="py-2.5 px-1" aria-hidden />
+                </tr>
+              </thead>
+              <tbody>
+                {props.rows.map((r) => {
+                  const days = daysUntil(r.requiredDate);
+                  const urgencyClass =
+                    days != null && days <= 0
+                      ? 'text-red-600 font-semibold'
+                      : days != null && days <= 3
+                        ? 'text-amber-600 font-medium'
+                        : 'text-gray-600';
+                  const marginClass =
+                    r.lineCount === 0
+                      ? 'text-gray-400'
+                      : r.profitMarginPct < 0 || r.grossProfit < 0
+                        ? 'text-red-700 font-semibold'
+                        : r.profitMarginPct < 10
+                          ? 'text-red-600 font-semibold'
+                          : r.profitMarginPct < 20
+                            ? 'text-amber-600 font-medium'
+                            : 'text-emerald-700 font-medium';
+                  const hasDiscount =
+                    r.originalTotalAmount > r.netTotalAmount + 1 &&
+                    (r.discountPercent > 0.05 || r.discountAmount > 0);
+                  const profitClass =
+                    r.lineCount === 0
+                      ? 'text-gray-400'
+                      : r.grossProfit < 0
+                        ? 'text-red-700 font-semibold'
+                        : r.grossProfit > 0
+                          ? 'text-emerald-700 font-medium'
                           : 'text-gray-600';
-                    const marginBadgeVariant =
-                      r.marginImpact === 'Red' ? 'danger' : r.marginImpact === 'Yellow' ? 'warning' : 'success';
-                    return (
-                      <tr
-                        key={r.id}
-                        className="border-b border-gray-100 hover:bg-gray-50 cursor-pointer"
-                        onClick={() => props.onOpen(r.id)}
-                      >
-                        <td className="py-2 pr-3 font-mono text-xs text-gray-900">{r.orderNumber}</td>
-                        <td className="py-2 pr-3 text-gray-800">{r.customerName}</td>
-                        <td className="py-2 pr-3 text-gray-600">
-                          <div className="leading-tight">
-                            <div className="text-xs">{r.agentName ?? '—'}</div>
-                            <div className="text-xs text-gray-400">{r.branchName ?? '—'}</div>
+                  return (
+                    <DashTableRowLink
+                      key={r.id}
+                      to={`/orders/${r.id}`}
+                      title={`${r.orderNumber} — right-click or Ctrl+click to open in new tab`}
+                    >
+                      <td className="table-cell py-2.5 px-2 align-middle font-mono text-xs text-gray-900 whitespace-nowrap">
+                        {r.orderNumber}
+                      </td>
+                      <td className="table-cell py-2.5 px-2 align-middle text-gray-800">
+                        <span className="block truncate" title={r.customerName}>
+                          {r.customerName}
+                        </span>
+                      </td>
+                      <td className="table-cell py-2.5 px-2 align-middle text-gray-600">
+                        <div className="leading-tight min-w-0">
+                          <div className="text-xs truncate" title={r.agentName ?? undefined}>
+                            {r.agentName ?? '—'}
                           </div>
-                        </td>
-                        <td className="py-2 pr-3 text-right font-medium text-gray-900">
-                          {formatExecutivePeso(r.totalAmount)}
-                        </td>
-                        <td className="py-2 pr-3 text-right text-gray-600">
-                          {r.discountPercent > 0 ? `${r.discountPercent.toFixed(1)}%` : '—'}
-                        </td>
-                        <td className="py-2 pr-3">
-                          <Badge variant={marginBadgeVariant} className="text-[10px]">{r.marginImpact}</Badge>
-                        </td>
-                        <td className={`py-2 pr-3 ${urgencyClass}`}>
-                          {formatDateShort(r.requiredDate)}
-                          {days != null && (
-                            <span className="ml-1 text-xs text-gray-400">
-                              ({days <= 0 ? `${Math.abs(days)}d overdue` : `${days}d`})
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-2 text-right">
-                          <ChevronRight className="w-4 h-4 text-gray-400 inline" />
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                          <div className="text-xs text-gray-400 truncate" title={r.branchName ?? undefined}>
+                            {r.branchName ?? '—'}
+                          </div>
+                        </div>
+                      </td>
+                      <td className="table-cell py-2.5 px-2 align-middle text-center tabular-nums whitespace-nowrap">
+                        <div className="font-medium text-gray-800">
+                          {formatExecutivePeso(r.originalTotalAmount)}
+                        </div>
+                        {hasDiscount && (
+                          <div
+                            className="text-[10px] text-amber-600 font-medium mt-0.5"
+                            title={`Discount ${r.discountPercent.toFixed(1)}% (${formatExecutivePeso(r.discountAmount)})`}
+                          >
+                            −{r.discountPercent.toFixed(1)}%
+                          </div>
+                        )}
+                      </td>
+                      <td className="table-cell py-2.5 px-2 align-middle text-center tabular-nums whitespace-nowrap">
+                        <span className="font-semibold text-gray-900">
+                          {formatExecutivePeso(r.netTotalAmount)}
+                        </span>
+                        <span className="text-gray-300 mx-1">·</span>
+                        <span className={marginClass}>
+                          {r.lineCount > 0
+                            ? formatExecutiveMarginPct(r.profitMarginPct, r.grossProfit)
+                            : '—'}
+                        </span>
+                      </td>
+                      <td className={`table-cell py-2.5 px-2 align-middle text-center tabular-nums whitespace-nowrap ${profitClass}`}>
+                        {r.lineCount > 0 ? formatExecutivePeso(r.grossProfit) : '—'}
+                      </td>
+                      <td className={`table-cell py-2.5 px-2 align-middle text-right whitespace-nowrap ${urgencyClass}`}>
+                        {formatDateShort(r.requiredDate)}
+                        {days != null && (
+                          <span className="ml-1 text-xs text-gray-400">
+                            ({days <= 0 ? `${Math.abs(days)}d overdue` : `${days}d`})
+                          </span>
+                        )}
+                      </td>
+                      <td className="table-cell py-2.5 px-1 align-middle text-right">
+                        <ChevronRight className="w-4 h-4 text-gray-400 inline-block" />
+                      </td>
+                    </DashTableRowLink>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         )}
       </CardContent>
@@ -456,8 +405,8 @@ function ApprovalQueueCard(props: {
   title: string;
   count: number;
   emptyText: string;
+  viewAllHref: string;
   footer?: string;
-  onViewAll: () => void;
   children: React.ReactNode;
 }) {
   return (
@@ -469,9 +418,9 @@ function ApprovalQueueCard(props: {
             {props.title}
             {props.count > 0 && <Badge variant="warning">{props.count}</Badge>}
           </CardTitle>
-          <Button variant="outline" size="sm" onClick={props.onViewAll} className="gap-1">
+          <DashHeaderLink to={props.viewAllHref} className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm">
             <ArrowRight className="w-4 h-4" />
-          </Button>
+          </DashHeaderLink>
         </div>
       </CardHeader>
       <CardContent>
@@ -487,8 +436,6 @@ function ApprovalQueueCard(props: {
 function PendingPRsCard(props: {
   rows: PendingPRRow[];
   count: number;
-  onOpen: (id: string) => void;
-  onViewAll: () => void;
 }) {
   return (
     <ApprovalQueueCard
@@ -496,16 +443,16 @@ function PendingPRsCard(props: {
       title="Production requests"
       count={props.count}
       emptyText="No PRs awaiting approval"
-      onViewAll={props.onViewAll}
+      viewAllHref="/production-requests"
       footer={props.count > props.rows.length ? `${props.count - props.rows.length} more awaiting review` : undefined}
     >
       <div className="space-y-2">
         {props.rows.map((r) => (
-          <button
+          <DashQueueLink
             key={r.id}
-            type="button"
-            onClick={() => props.onOpen(r.id)}
-            className="w-full text-left rounded-md border border-gray-200 p-2 hover:border-violet-300 hover:bg-violet-50/30 transition-colors"
+            to={`/production-requests/${r.id}`}
+            title={`${r.prNumber} — right-click or Ctrl+click to open in new tab`}
+            className="rounded-md border border-gray-200 p-2 hover:border-violet-300 hover:bg-violet-50/30"
           >
             <div className="flex items-center justify-between gap-2">
               <span className="font-mono text-xs text-gray-900">{r.prNumber}</span>
@@ -515,7 +462,7 @@ function PendingPRsCard(props: {
               {r.branchName ?? '—'} · expect {formatDateShort(r.expectedCompletionDate)}
             </div>
             {r.createdBy && <div className="text-[11px] text-gray-400 mt-0.5">by {r.createdBy}</div>}
-          </button>
+          </DashQueueLink>
         ))}
       </div>
     </ApprovalQueueCard>
@@ -526,8 +473,6 @@ function PendingPOsCard(props: {
   rows: PendingPORow[];
   count: number;
   totalValue: number;
-  onOpen: (id: string) => void;
-  onViewAll: () => void;
 }) {
   return (
     <ApprovalQueueCard
@@ -535,7 +480,7 @@ function PendingPOsCard(props: {
       title="Purchase orders"
       count={props.count}
       emptyText="No POs awaiting approval"
-      onViewAll={props.onViewAll}
+      viewAllHref="/purchase-orders"
       footer={
         props.count > 0
           ? `Total spend if approved: ${formatExecutivePeso(props.totalValue)}`
@@ -544,11 +489,11 @@ function PendingPOsCard(props: {
     >
       <div className="space-y-2">
         {props.rows.map((r) => (
-          <button
+          <DashQueueLink
             key={r.id}
-            type="button"
-            onClick={() => props.onOpen(r.id)}
-            className="w-full text-left rounded-md border border-gray-200 p-2 hover:border-amber-300 hover:bg-amber-50/30 transition-colors"
+            to={`/purchase-orders/${r.id}`}
+            title={`${r.poNumber} — right-click or Ctrl+click to open in new tab`}
+            className="rounded-md border border-gray-200 p-2 hover:border-amber-300 hover:bg-amber-50/30"
           >
             <div className="flex items-center justify-between gap-2">
               <span className="font-mono text-xs text-gray-900">{r.poNumber}</span>
@@ -560,7 +505,7 @@ function PendingPOsCard(props: {
             <div className="text-[11px] text-gray-400 mt-0.5">
               {r.itemCount} item{r.itemCount === 1 ? '' : 's'} · expect {formatDateShort(r.expectedDeliveryDate)}
             </div>
-          </button>
+          </DashQueueLink>
         ))}
       </div>
     </ApprovalQueueCard>
@@ -570,8 +515,6 @@ function PendingPOsCard(props: {
 function PendingIBRsCard(props: {
   rows: PendingIBRRow[];
   count: number;
-  onOpen: (id: string) => void;
-  onViewAll: () => void;
 }) {
   return (
     <ApprovalQueueCard
@@ -579,16 +522,16 @@ function PendingIBRsCard(props: {
       title="Inter-branch requests"
       count={props.count}
       emptyText="No IBRs awaiting approval"
-      onViewAll={props.onViewAll}
+      viewAllHref="/inter-branch-requests"
       footer={props.count > props.rows.length ? `${props.count - props.rows.length} more awaiting review` : undefined}
     >
       <div className="space-y-2">
         {props.rows.map((r) => (
-          <button
+          <DashQueueLink
             key={r.id}
-            type="button"
-            onClick={() => props.onOpen(r.id)}
-            className="w-full text-left rounded-md border border-gray-200 p-2 hover:border-blue-300 hover:bg-blue-50/30 transition-colors"
+            to={`/inter-branch-requests/${r.id}`}
+            title={`${r.ibrNumber} — right-click or Ctrl+click to open in new tab`}
+            className="rounded-md border border-gray-200 p-2 hover:border-blue-300 hover:bg-blue-50/30"
           >
             <div className="flex items-center justify-between gap-2">
               <span className="font-mono text-xs text-gray-900">{r.ibrNumber}</span>
@@ -601,7 +544,7 @@ function PendingIBRsCard(props: {
               Depart {formatDateShort(r.scheduledDepartureDate)}
               {r.createdBy && ` · by ${r.createdBy}`}
             </div>
-          </button>
+          </DashQueueLink>
         ))}
       </div>
     </ApprovalQueueCard>
@@ -613,7 +556,6 @@ function PendingIBRsCard(props: {
 function FinanceSnapshotCard(props: {
   metrics: ExecutiveDashboardBundle['finance'];
   revenueTrend: ExecutiveDashboardBundle['revenueTrend'];
-  onOpenFinance: () => void;
 }) {
   const m = props.metrics;
   return (
@@ -624,9 +566,9 @@ function FinanceSnapshotCard(props: {
             <DollarSign className="w-5 h-5 text-blue-600" />
             Financial snapshot &amp; revenue trend
           </CardTitle>
-          <Button variant="outline" size="sm" onClick={props.onOpenFinance} className="gap-1">
+          <DashHeaderLink to="/finance">
             Open finance <ArrowRight className="w-4 h-4" />
-          </Button>
+          </DashHeaderLink>
         </div>
       </CardHeader>
       <CardContent>
@@ -801,8 +743,6 @@ function BranchBreakdownCard(props: { rows: ExecutiveDashboardBundle['branchBrea
 function LowStockProductsCard(props: {
   rows: ExecutiveDashboardBundle['inventory']['lowStockProducts'];
   count: number;
-  onViewAll: () => void;
-  onOpen: (productId: string) => void;
 }) {
   return (
     <Card>
@@ -813,9 +753,9 @@ function LowStockProductsCard(props: {
             Low-stock products
             {props.count > 0 && <Badge variant="warning">{props.count}</Badge>}
           </CardTitle>
-          <Button variant="outline" size="sm" onClick={props.onViewAll} className="gap-1">
+          <DashHeaderLink to="/warehouse">
             Warehouse <ArrowRight className="w-4 h-4" />
-          </Button>
+          </DashHeaderLink>
         </div>
       </CardHeader>
       <CardContent>
@@ -824,16 +764,15 @@ function LowStockProductsCard(props: {
         ) : (
           <div className="space-y-2">
             {props.rows.map((r) => (
-              <button
+              <DashQueueLink
                 key={r.variantId}
-                type="button"
-                onClick={() => r.productId && props.onOpen(r.productId)}
-                disabled={!r.productId}
-                className="w-full text-left rounded-md border border-gray-200 p-2 hover:border-orange-300 hover:bg-orange-50/30 transition-colors disabled:cursor-default"
+                to={r.productId ? finishedGoodProductHref(r.productId, r.categorySlug) : '/products'}
+                title={`${r.productName} — right-click or Ctrl+click to open in new tab`}
+                className="rounded-md border border-gray-200 p-2 hover:border-orange-300 hover:bg-orange-50/30"
               >
                 <div className="flex items-center justify-between gap-2">
-                  <div className="font-medium text-sm text-gray-900">{r.productName}</div>
-                  <Badge variant={r.totalStock === 0 ? 'danger' : 'warning'} className="text-[10px]">
+                  <div className="font-medium text-sm text-gray-900 truncate">{r.productName}</div>
+                  <Badge variant={r.totalStock === 0 ? 'danger' : 'warning'} className="text-[10px] shrink-0">
                     {r.totalStock === 0 ? 'Stockout' : 'Low'}
                   </Badge>
                 </div>
@@ -843,7 +782,7 @@ function LowStockProductsCard(props: {
                 <div className="text-xs text-gray-500 mt-1">
                   Stock <span className="font-medium text-gray-900">{r.totalStock}</span> / reorder at {r.reorderPoint}
                 </div>
-              </button>
+              </DashQueueLink>
             ))}
             {props.count > props.rows.length && (
               <p className="text-xs text-gray-500 pt-2 border-t border-gray-100">
@@ -860,8 +799,6 @@ function LowStockProductsCard(props: {
 function LowStockMaterialsCard(props: {
   rows: ExecutiveDashboardBundle['inventory']['lowStockMaterials'];
   count: number;
-  onViewAll: () => void;
-  onOpen: (materialId: string) => void;
 }) {
   return (
     <Card>
@@ -872,9 +809,9 @@ function LowStockMaterialsCard(props: {
             Low-stock raw materials
             {props.count > 0 && <Badge variant="warning">{props.count}</Badge>}
           </CardTitle>
-          <Button variant="outline" size="sm" onClick={props.onViewAll} className="gap-1">
+          <DashHeaderLink to="/materials">
             Materials <ArrowRight className="w-4 h-4" />
-          </Button>
+          </DashHeaderLink>
         </div>
       </CardHeader>
       <CardContent>
@@ -883,15 +820,15 @@ function LowStockMaterialsCard(props: {
         ) : (
           <div className="space-y-2">
             {props.rows.map((r) => (
-              <button
+              <DashQueueLink
                 key={r.materialId}
-                type="button"
-                onClick={() => props.onOpen(r.materialId)}
-                className="w-full text-left rounded-md border border-gray-200 p-2 hover:border-orange-300 hover:bg-orange-50/30 transition-colors"
+                to={`/materials/${r.materialId}`}
+                title={`${r.name} — right-click or Ctrl+click to open in new tab`}
+                className="rounded-md border border-gray-200 p-2 hover:border-orange-300 hover:bg-orange-50/30"
               >
                 <div className="flex items-center justify-between gap-2">
-                  <div className="font-medium text-sm text-gray-900">{r.name}</div>
-                  <Badge variant={r.totalStock === 0 ? 'danger' : 'warning'} className="text-[10px]">
+                  <div className="font-medium text-sm text-gray-900 truncate">{r.name}</div>
+                  <Badge variant={r.totalStock === 0 ? 'danger' : 'warning'} className="text-[10px] shrink-0">
                     {r.totalStock === 0 ? 'Stockout' : 'Low'}
                   </Badge>
                 </div>
@@ -906,7 +843,7 @@ function LowStockMaterialsCard(props: {
                     <span className="ml-1 text-gray-400">· {r.daysOfCover}d cover</span>
                   )}
                 </div>
-              </button>
+              </DashQueueLink>
             ))}
             {props.count > props.rows.length && (
               <p className="text-xs text-gray-500 pt-2 border-t border-gray-100">
@@ -924,7 +861,6 @@ function LowStockMaterialsCard(props: {
 
 function LogisticsHealthCard(props: {
   logistics: ExecutiveDashboardBundle['logistics'];
-  onOpen: () => void;
 }) {
   const l = props.logistics;
   return (
@@ -935,9 +871,9 @@ function LogisticsHealthCard(props: {
             <Truck className="w-5 h-5 text-emerald-600" />
             Logistics health (MTD)
           </CardTitle>
-          <Button variant="outline" size="sm" onClick={props.onOpen} className="gap-1">
+          <DashHeaderLink to="/logistics">
             Logistics <ArrowRight className="w-4 h-4" />
-          </Button>
+          </DashHeaderLink>
         </div>
       </CardHeader>
       <CardContent>
@@ -982,14 +918,18 @@ function LogisticsHealthCard(props: {
 
 function TopProductsCard(props: {
   rows: ExecutiveDashboardBundle['topProducts'];
-  onOpen: (productId: string) => void;
 }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base flex items-center gap-2">
-          <Package className="w-4 h-4 text-blue-600" /> Top products (MTD)
-        </CardTitle>
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Package className="w-4 h-4 text-blue-600" /> Top products (MTD)
+          </CardTitle>
+          <DashHeaderLink to="/products" className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm">
+            <ArrowRight className="w-4 h-4" />
+          </DashHeaderLink>
+        </div>
       </CardHeader>
       <CardContent>
         {props.rows.length === 0 ? (
@@ -997,21 +937,25 @@ function TopProductsCard(props: {
         ) : (
           <div className="space-y-3">
             {props.rows.map((p) => (
-              <button
+              <div
                 key={p.productId}
-                type="button"
-                onClick={() => props.onOpen(p.productId)}
-                className="w-full text-left flex items-center justify-between gap-3 hover:bg-gray-50 rounded-md p-2 -mx-2 transition-colors"
+                className="flex items-center justify-between gap-3 hover:bg-gray-50 rounded-md p-2 -mx-2 transition-colors"
               >
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-gray-900 truncate">{p.productName}</p>
+                  <DashLink
+                    to={`/products/${p.productId}`}
+                    className={`${DASH_LINK_CLASS} text-sm block truncate`}
+                    title={p.productName}
+                  >
+                    {p.productName}
+                  </DashLink>
                   <p className="text-xs text-gray-500 truncate">
                     {p.categoryName ?? 'Uncategorised'} · {p.unitsSoldMTD.toLocaleString()} units · {p.variantCount} variant
                     {p.variantCount === 1 ? '' : 's'}
                   </p>
                 </div>
-                <span className="text-sm font-semibold text-gray-900">{formatExecutivePeso(p.revenueMTD)}</span>
-              </button>
+                <span className="text-sm font-semibold text-gray-900 shrink-0">{formatExecutivePeso(p.revenueMTD)}</span>
+              </div>
             ))}
           </div>
         )}
@@ -1022,14 +966,18 @@ function TopProductsCard(props: {
 
 function TopCustomersCard(props: {
   rows: ExecutiveDashboardBundle['topCustomers'];
-  onOpen: (customerId: string) => void;
 }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base flex items-center gap-2">
-          <Users className="w-4 h-4 text-blue-600" /> Top customers (YTD)
-        </CardTitle>
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Users className="w-4 h-4 text-blue-600" /> Top customers (YTD)
+          </CardTitle>
+          <DashHeaderLink to="/customers" className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm">
+            <ArrowRight className="w-4 h-4" />
+          </DashHeaderLink>
+        </div>
       </CardHeader>
       <CardContent>
         {props.rows.length === 0 ? (
@@ -1037,26 +985,30 @@ function TopCustomersCard(props: {
         ) : (
           <div className="space-y-3">
             {props.rows.map((c) => (
-              <button
+              <div
                 key={c.customerId}
-                type="button"
-                onClick={() => props.onOpen(c.customerId)}
-                className="w-full text-left flex items-center justify-between gap-3 hover:bg-gray-50 rounded-md p-2 -mx-2 transition-colors"
+                className="flex items-center justify-between gap-3 hover:bg-gray-50 rounded-md p-2 -mx-2 transition-colors"
               >
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-gray-900 truncate">{c.customerName}</p>
+                  <DashLink
+                    to={`/customers/${c.customerId}`}
+                    className={`${DASH_LINK_CLASS} text-sm block truncate`}
+                    title={c.customerName}
+                  >
+                    {c.customerName}
+                  </DashLink>
                   <p className="text-xs text-gray-500 truncate">
                     {c.customerCode ?? '—'} · {c.orderCount.toLocaleString()} orders
                     {c.outstandingBalance > 0 && ` · ${formatExecutivePeso(c.outstandingBalance)} owed`}
                   </p>
                 </div>
-                <div className="text-right">
+                <div className="text-right shrink-0">
                   <span className="text-sm font-semibold text-gray-900 block">{formatExecutivePeso(c.totalPurchasesYTD)}</span>
                   {c.paymentBehavior && (
                     <span className="text-[11px] text-gray-500">{c.paymentBehavior}</span>
                   )}
                 </div>
-              </button>
+              </div>
             ))}
           </div>
         )}
@@ -1067,7 +1019,6 @@ function TopCustomersCard(props: {
 
 function TopAgentsCard(props: {
   rows: ExecutiveDashboardBundle['topAgents'];
-  onOpen: () => void;
 }) {
   return (
     <Card>
@@ -1076,9 +1027,9 @@ function TopAgentsCard(props: {
           <CardTitle className="text-base flex items-center gap-2">
             <Clock className="w-4 h-4 text-blue-600" /> Top agents (MTD)
           </CardTitle>
-          <Button variant="outline" size="sm" onClick={props.onOpen} className="gap-1">
+          <DashHeaderLink to="/agents">
             Analytics <ArrowRight className="w-4 h-4" />
-          </Button>
+          </DashHeaderLink>
         </div>
       </CardHeader>
       <CardContent>
@@ -1087,14 +1038,20 @@ function TopAgentsCard(props: {
         ) : (
           <div className="space-y-3">
             {props.rows.map((a) => (
-              <div key={a.agentId} className="flex items-center justify-between gap-3">
+              <div key={a.agentId} className="flex items-center justify-between gap-3 hover:bg-gray-50 rounded-md p-2 -mx-2 transition-colors">
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-gray-900 truncate">{a.agentName}</p>
+                  <DashLink
+                    to={`/employees/${a.agentId}`}
+                    className={`${DASH_LINK_CLASS} text-sm block truncate`}
+                    title={a.agentName}
+                  >
+                    {a.agentName}
+                  </DashLink>
                   <p className="text-xs text-gray-500 truncate">
                     {a.branchName ?? '—'} · {a.orderCountMTD.toLocaleString()} orders
                   </p>
                 </div>
-                <span className="text-sm font-semibold text-gray-900">{formatExecutivePeso(a.revenueMTD)}</span>
+                <span className="text-sm font-semibold text-gray-900 shrink-0">{formatExecutivePeso(a.revenueMTD)}</span>
               </div>
             ))}
           </div>

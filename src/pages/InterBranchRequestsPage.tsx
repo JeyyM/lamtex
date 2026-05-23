@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Ca
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagination';
+import { TABLE_ROW_CELL_CONTENT, TABLE_ROW_LINK_CLASS, TableRowCellOverlay } from '@/src/components/ui/tableRowLink';
 import { supabase } from '@/src/lib/supabase';
 import {
   DATE_PERIOD_OPTIONS,
@@ -619,32 +620,48 @@ export function InterBranchRequestsPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
-                    {pagedRows.map((r) => (
-                      <tr key={r.id} className="hover:bg-gray-50">
-                        <td className="px-6 py-4">
-                          <Link to={`/inter-branch-requests/${r.id}`} className="block font-medium text-blue-600 hover:underline">{r.ibr_number}</Link>
+                    {pagedRows.map((r) => {
+                      const href = `/inter-branch-requests/${r.id}`;
+                      const rowOverlay = (opts: { primary?: boolean }) => (
+                        <TableRowCellOverlay
+                          to={href}
+                          ariaLabel={`Open inter-branch request ${r.ibr_number}`}
+                          primary={opts.primary}
+                        />
+                      );
+                      return (
+                      <tr key={r.id} className={TABLE_ROW_LINK_CLASS}>
+                        <td className="relative px-6 py-4 align-top">
+                          <span className={`${TABLE_ROW_CELL_CONTENT} font-medium text-blue-600`}>{r.ibr_number}</span>
+                          {rowOverlay({ primary: true })}
                         </td>
-                        <td className="px-6 py-4 font-medium text-gray-900">
-                          <Link to={`/inter-branch-requests/${r.id}`} className="block">{r.req_br?.name ?? '—'}</Link>
+                        <td className="relative px-6 py-4 align-top font-medium text-gray-900">
+                          <span className={TABLE_ROW_CELL_CONTENT}>{r.req_br?.name ?? '—'}</span>
+                          {rowOverlay({})}
                         </td>
-                        <td className="px-6 py-4 font-medium text-gray-900">
-                          <Link to={`/inter-branch-requests/${r.id}`} className="block">{r.ful_br?.name ?? '—'}</Link>
+                        <td className="relative px-6 py-4 align-top font-medium text-gray-900">
+                          <span className={TABLE_ROW_CELL_CONTENT}>{r.ful_br?.name ?? '—'}</span>
+                          {rowOverlay({})}
                         </td>
-                        <td className="px-6 py-4 text-gray-600 tabular-nums">
-                          <Link to={`/inter-branch-requests/${r.id}`} className="block">{r.inter_branch_request_items.length}</Link>
+                        <td className="relative px-6 py-4 align-top text-gray-600 tabular-nums">
+                          <span className={TABLE_ROW_CELL_CONTENT}>{r.inter_branch_request_items.length}</span>
+                          {rowOverlay({})}
                         </td>
-                        <td className="px-6 py-4 text-gray-600 whitespace-nowrap">
-                          <Link to={`/inter-branch-requests/${r.id}`} className="block">{fmt(r.created_at)}</Link>
+                        <td className="relative px-6 py-4 align-top text-gray-600 whitespace-nowrap">
+                          <span className={TABLE_ROW_CELL_CONTENT}>{fmt(r.created_at)}</span>
+                          {rowOverlay({})}
                         </td>
-                        <td className="px-6 py-4 text-center">
-                          <Link to={`/inter-branch-requests/${r.id}`} className="block">
+                        <td className="relative px-6 py-4 align-top text-center">
+                          <span className={`${TABLE_ROW_CELL_CONTENT} inline-flex [&_*]:pointer-events-none`}>
                             <Badge variant={getStatusVariant(r.status)} className="inline-flex items-center gap-1 whitespace-nowrap">
                               {getIBRStatusIcon(r.status)} {r.status}
                             </Badge>
-                          </Link>
+                          </span>
+                          {rowOverlay({})}
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

@@ -10,6 +10,7 @@ import { FulfillOrderModal, type FulfillmentData } from '@/src/components/orders
 import { CancelOrderModal, type CancellationData } from '@/src/components/orders/CancelOrderModal';
 import { useAppContext } from '@/src/store/AppContext';
 import type { OrderLineItem as OrdersLineItem } from '@/src/types/orders';
+import { remainingToShipForLine } from '@/src/lib/orderShipmentQuantities';
 
 interface OrderLineItem {
   id: string;
@@ -210,7 +211,13 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
             created_by: session?.user?.id ?? null,
           });
 
-          const newShipped = (item.quantityShipped ?? 0) + row.shippedQuantity;
+          const { data: lineRow } = await supabase
+            .from('order_line_items')
+            .select('quantity_shipped')
+            .eq('id', row.itemId)
+            .maybeSingle();
+          const prevShipped = Number(lineRow?.quantity_shipped ?? item.quantityShipped ?? 0);
+          const newShipped = prevShipped + row.shippedQuantity;
           await supabase.from('order_line_items').update({ quantity_shipped: newShipped }).eq('id', row.itemId);
         }
 
@@ -793,7 +800,10 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
                               onClick={() => {
                                 const rows = order.items.map((i) => ({
                                   itemId: i.id,
-                                  shippedQuantity: Math.max(0, Number(i.quantity) - Number(i.quantityShipped ?? 0)),
+                                  shippedQuantity: remainingToShipForLine(
+                                    i,
+                                    orderStatuses[order.id] ?? order.status,
+                                  ),
                                 }));
                                 void applyTripShipment({ order, customer }, rows, 'In Transit');
                               }}
@@ -1076,6 +1086,7 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
             }
           }}
           orderNumber={inTransitOrder.order.orderNumber}
+          orderStatus={orderStatuses[inTransitOrder.order.id] ?? inTransitOrder.order.status}
           items={inTransitOrder.order.items.map((i) => ({
             id: i.id,
             sku: i.sku,

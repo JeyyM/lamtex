@@ -13,6 +13,7 @@ import { supabase } from '../lib/supabase';
 import { insertProductLog, mapAppRoleToLogRole } from '../lib/domainActivityLog';
 import { isCategoryCatalogHidden, isProductFamilyCatalogHidden, CATALOG_HIDDEN_CLASS } from '../lib/productCatalogVisibility';
 import { scopedProductIdList } from '../lib/warehouseScope';
+import { effectiveInventoryBranch } from '../lib/inventoryAccess';
 
 // Local image fallbacks
 import hdpePipeImg    from '../assets/product-images/HDPE Pipe.webp';
@@ -229,6 +230,7 @@ export default function ProductCategoryPage() {
   const navigate = useNavigate();
   const { categoryName } = useParams<{ categoryName: string }>();
   const { branch, setHideBranchSelector, employeeName, role, session, addAuditLog, warehouseScope } = useAppContext();
+  const inventoryBranch = effectiveInventoryBranch(role, branch);
   const scopedProductIds = scopedProductIdList(warehouseScope);
 
   // Hide branch selector while on this page
@@ -274,7 +276,7 @@ export default function ProductCategoryPage() {
         .from('products')
         .select('id, name, category_id, description, image_url, status, total_variants, total_stock, avg_price, total_revenue, total_units_sold, branch, product_variants(is_hidden)')
         .eq('category_id', catData.id);
-      if (branch) q = q.eq('branch', branch);
+      if (inventoryBranch) q = q.eq('branch', inventoryBranch);
       if (scopedProductIds) q = q.in('id', scopedProductIds);
       const { data: prodData } = await q;
       setProducts((prodData ?? []) as ProductRow[]);
@@ -282,7 +284,7 @@ export default function ProductCategoryPage() {
     setLoading(false);
   };
 
-  useEffect(() => { fetchData(); }, [categoryName, branch, scopedProductIds?.join('|') ?? '']);
+  useEffect(() => { fetchData(); }, [categoryName, inventoryBranch, scopedProductIds?.join('|') ?? '']);
 
   // â”€â”€ Product CRUD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const handleEditProduct = (p: ProductRow, e: React.MouseEvent) => {
@@ -467,7 +469,7 @@ export default function ProductCategoryPage() {
               if (exportingCategory || loading || !categoryId) return;
               setExportingCategory(true);
               try {
-                const exported = await fetchCategoryCatalogForExport(categoryId, branch ?? '');
+                const exported = await fetchCategoryCatalogForExport(categoryId, inventoryBranch ?? '');
                 await downloadCategoryWorkbook(
                   exported.category_code,
                   exported.category_name,

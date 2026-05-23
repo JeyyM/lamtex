@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
@@ -44,8 +44,6 @@ import {
   StopCircle,
   Camera,
   Ship,
-  Plane,
-  Globe,
   X,
   ChevronLeft,
   ChevronRight,
@@ -61,21 +59,26 @@ import {
   getVehiclesByBranch,
   getDeliveriesByBranch,
   getOrdersReadyByBranch,
-  getShipmentsByBranch,
 } from '@/src/mock/logisticsDashboard';
 import {
-  fetchLogisticsOrderQueue,
-  fetchTripsForBranch,
+  fetchLogisticsPageData,
   createTripFromPlanning,
+  createContainerShipmentFromPlanning,
   fetchDriversForBranch,
   fetchBranchHqCoords,
   updateTrip,
 } from '@/src/lib/logisticsScheduling';
 import { RoutePlanningView } from '@/src/components/logistics/RoutePlanningView';
+import { ContainerScheduleView } from '@/src/components/logistics/ContainerScheduleView';
 import { TripDetailsModal } from '@/src/components/logistics/TripDetailsModal';
 import { EditTripModal } from '@/src/components/logistics/EditTripModal';
 import { Vehicle, Trip, OrderReadyForDispatch } from '@/src/types/logistics';
 import { fetchFleetTrucksForBranch, syncVehicleOnTripStart, syncVehicleOnTripComplete } from '@/src/lib/fleetTrucks';
+import { fetchFleetContainersForBranch } from '@/src/lib/fleetContainers';
+import {
+  resolveLogisticsModeAvailability,
+  type LogisticsModeAvailability,
+} from '@/src/lib/logisticsBranchModes';
 import { downloadFleetReportWorkbook, fetchFleetExportBundle } from '@/src/lib/fleetExport';
 import { TruckFormModal } from '@/src/components/logistics/TruckFormModal';
 import { supabase } from '@/src/lib/supabase';
@@ -95,7 +98,8 @@ function tripMatchesDispatchSearch(trip: Trip, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
   if (trip.tripNumber.toLowerCase().includes(q)) return true;
-  if (trip.driverName.toLowerCase().includes(q)) return true;
+  if (trip.driverName?.toLowerCase().includes(q)) return true;
+  if (trip.vehicleName?.toLowerCase().includes(q)) return true;
   if (trip.plateNumber?.toLowerCase().includes(q)) return true;
   if (trip.destinations.some((d) => d.toLowerCase().includes(q))) return true;
   if (trip.customerLabel && trip.customerLabel.toLowerCase().includes(q)) return true;
@@ -104,17 +108,59 @@ function tripMatchesDispatchSearch(trip: Trip, query: string): boolean {
   return false;
 }
 
+function tripSubline(trip: Trip, interIsland: boolean): string {
+  const suffix = interIsland
+    ? (trip.destinations[0] ? ` · ${trip.destinations[0]}` : '')
+    : (trip.driverName && trip.driverName !== '—' ? ` · ${trip.driverName}` : '');
+  return `${trip.vehicleName}${suffix}`;
+}
+
+function parseLogisticsSearch(search: string) {
+  const q = new URLSearchParams(search);
+  const mode = q.get('mode');
+  return {
+    tab: q.get('tab'),
+    mode: mode === 'interisland' ? ('interisland' as const) : mode === 'truck' ? ('truck' as const) : null,
+    orderId: q.get('order')?.trim() || undefined,
+    date: q.get('date')?.trim().slice(0, 10) || undefined,
+  };
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new Error(`${label} timed out`)), ms);
+    }),
+  ]);
+}
+
 export function LogisticsPage() {
   const { branch } = useAppContext();
   const { search } = useLocation();
-  const [viewMode, setViewMode] = useState<ViewMode>(() =>
-    new URLSearchParams(search).get('tab') === 'routes' ? 'routes' : 'dispatch',
+  const initialParams = useMemo(() => parseLogisticsSearch(search), []);
+  const [transportType, setTransportType] = useState<TransportType>(() =>
+    initialParams.mode === 'interisland' ? 'interisland' : 'truck',
   );
+  const [viewMode, setViewMode] = useState<ViewMode>(() => {
+    if (initialParams.mode === 'interisland' || initialParams.tab === 'dispatch') return 'dispatch';
+    if (initialParams.tab === 'routes') return 'routes';
+    if (initialParams.tab === 'fleet') return 'fleet';
+    return 'dispatch';
+  });
 
   useEffect(() => {
-    if (new URLSearchParams(search).get('tab') === 'routes') setViewMode('routes');
+    const params = parseLogisticsSearch(search);
+    if (params.mode === 'interisland') {
+      setTransportType('interisland');
+      setViewMode('dispatch');
+      return;
+    }
+    if (params.mode === 'truck') setTransportType('truck');
+    if (params.tab === 'routes') setViewMode('routes');
+    else if (params.tab === 'fleet') setViewMode('fleet');
+    else if (params.tab === 'dispatch' || params.orderId) setViewMode('dispatch');
   }, [search]);
-  const [transportType, setTransportType] = useState<TransportType>('truck');
   const [selectedTrip, setSelectedTrip] = useState<Trip | null>(null);
   const [showTripDetails, setShowTripDetails] = useState(false);
   const [showEditTrip, setShowEditTrip] = useState(false);
@@ -152,9 +198,15 @@ export function LogisticsPage() {
   const [planningOrders, setPlanningOrders] = useState<OrderReadyForDispatch[]>([]);
   const [logisticsLoading, setLogisticsLoading] = useState(false);
   const [logisticsFromDb, setLogisticsFromDb] = useState(false);
+  const [logisticsLoadError, setLogisticsLoadError] = useState<string | null>(null);
   const [branchHq, setBranchHq] = useState<{ lat: number; lng: number } | null>(null);
 
   const [planningDrivers, setPlanningDrivers] = useState<import('@/src/types/logistics').DriverOption[]>([]);
+  const [modeAvailability, setModeAvailability] = useState<LogisticsModeAvailability | null>(null);
+  const logisticsRefreshGenRef = useRef(0);
+  const isInterIsland = transportType === 'interisland';
+  /** Branch selected → use live dispatch UI (calendar, queue, filters). Data source still gated by `logisticsFromDb`. */
+  const liveDispatch = Boolean(branch?.trim());
   // Lowest order dispatch-stage per trip (for the dispatch table badge)
   const [tripLowestOrderStatus, setTripLowestOrderStatus] = useState<Record<string, string>>({});
   // Full per-trip order status map — used for real-time badge updates
@@ -166,11 +218,10 @@ export function LogisticsPage() {
   };
 
   const routePlanningPrefill = useMemo(() => {
-    const q = new URLSearchParams(search);
-    const oid = q.get('order')?.trim();
-    const ds = q.get('date')?.trim().slice(0, 10) ?? '';
+    const params = parseLogisticsSearch(search);
+    const ds = params.date ?? '';
     return {
-      orderIds: oid ? [oid] : undefined as string[] | undefined,
+      orderIds: params.orderId ? [params.orderId] : undefined as string[] | undefined,
       tripDate: /^\d{4}-\d{2}-\d{2}$/.test(ds) ? ds : undefined as string | undefined,
     };
   }, [search]);
@@ -180,44 +231,61 @@ export function LogisticsPage() {
       setScheduleTrips([]);
       setPlanningOrders([]);
       setLogisticsFromDb(false);
+      setLogisticsLoadError(null);
       setLogisticsLoading(false);
       return;
     }
+
+    const gen = ++logisticsRefreshGenRef.current;
     setLogisticsLoading(true);
+    setLogisticsLoadError(null);
     try {
-      const [oq, tq] = await Promise.all([fetchLogisticsOrderQueue(branch), fetchTripsForBranch(branch)]);
+      const vehicleKind = transportType === 'interisland' ? 'container' : 'truck';
+      const data = await withTimeout(
+        fetchLogisticsPageData(branch, vehicleKind),
+        30000,
+        'Logistics',
+      );
 
-      if (oq.error) {
-        if (import.meta.env.DEV) console.warn('[logistics] order queue fetch failed:', oq.error);
-        setPlanningOrders(getOrdersReadyByBranch(branch));
-      } else {
-        setPlanningOrders(oq.orders);
-      }
+      setPlanningOrders(data.orders);
+      setScheduleTrips(data.trips);
 
-      if (tq.error) {
-        if (import.meta.env.DEV) console.warn('[logistics] trips fetch failed:', tq.error);
-        setScheduleTrips(getTripsByBranch(branch));
+      if (data.ordersError && data.tripsError) {
         setLogisticsFromDb(false);
+        setLogisticsLoadError(data.ordersError);
         setTripLowestOrderStatus({});
         setTripOrderStatusMap({});
         return;
       }
 
-      setScheduleTrips(tq.trips);
-      setLogisticsFromDb(true);
+      setLogisticsFromDb(!data.ordersError);
+      setLogisticsLoadError(data.tripsError ?? data.ordersError ?? null);
 
-      const allOrderIds = [...new Set(tq.trips.flatMap((t) => t.orders))];
+      if (data.tripsError && import.meta.env.DEV) {
+        console.warn('[logistics] trips load issue (orders may still be available):', data.tripsError);
+      }
+      if (data.ordersError && import.meta.env.DEV) {
+        console.warn('[logistics] order queue load issue:', data.ordersError);
+      }
+
+      const allOrderIds = [...new Set(data.trips.flatMap((t) => t.orders))];
       if (allOrderIds.length) {
-        const { data: orderRows } = await supabase
+        const { data: orderRows, error: orderStatusErr } = await supabase
           .from('orders')
           .select('id, status')
           .in('id', allOrderIds);
+        if (orderStatusErr) {
+          if (import.meta.env.DEV) console.warn('[logistics] trip order status fetch failed:', orderStatusErr.message);
+          setTripLowestOrderStatus({});
+          setTripOrderStatusMap({});
+          return;
+        }
         const statusMap: Record<string, string> = {};
         for (const row of orderRows ?? []) statusMap[row.id as string] = (row.status as string) ?? 'Scheduled';
         const RANK: Record<string, number> = { Scheduled: 1, Loading: 2, Packed: 3, Ready: 4, 'In Transit': 5, Delivered: 6, Complete: 7, Delayed: 8, Cancelled: 9 };
         const lowest: Record<string, string> = {};
         const perTripMap: Record<string, Record<string, string>> = {};
-        for (const trip of tq.trips) {
+        for (const trip of data.trips) {
           if (!trip.orders.length) continue;
           let lowestRank = Infinity;
           let lowestSt: string = trip.status;
@@ -239,10 +307,21 @@ export function LogisticsPage() {
         setTripLowestOrderStatus({});
         setTripOrderStatusMap({});
       }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Could not load logistics data.';
+      if (import.meta.env.DEV) console.error('[logistics] refresh failed:', err);
+      setScheduleTrips(getTripsByBranch(branch));
+      setPlanningOrders([]);
+      setLogisticsFromDb(false);
+      setLogisticsLoadError(message);
+      setTripLowestOrderStatus({});
+      setTripOrderStatusMap({});
     } finally {
-      setLogisticsLoading(false);
+      if (gen === logisticsRefreshGenRef.current) {
+        setLogisticsLoading(false);
+      }
     }
-  }, [branch]);
+  }, [branch, transportType]);
 
   const loadFleet = useCallback(async () => {
     if (!branch?.trim()) {
@@ -252,7 +331,10 @@ export function LogisticsPage() {
     }
     setFleetLoading(true);
     setFleetError(null);
-    const { vehicles, error } = await fetchFleetTrucksForBranch(branch);
+    const { vehicles, error } =
+      transportType === 'interisland'
+        ? await fetchFleetContainersForBranch(branch)
+        : await fetchFleetTrucksForBranch(branch);
     setFleetLoading(false);
     if (error) {
       setFleetError(error);
@@ -260,7 +342,50 @@ export function LogisticsPage() {
       return;
     }
     setFleetTrucks(vehicles);
+  }, [branch, transportType]);
+
+  useEffect(() => {
+    if (!branch?.trim()) {
+      setModeAvailability(null);
+      setLogisticsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    void withTimeout(resolveLogisticsModeAvailability(branch), 12000, 'Mode availability')
+      .then((modes) => {
+        if (!cancelled) setModeAvailability(modes);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        if (import.meta.env.DEV) console.warn('[logistics] mode availability failed:', err);
+        setModeAvailability({
+          truck: false,
+          interIsland: true,
+          availableModes: ['interisland'],
+          defaultMode: 'interisland',
+        });
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [branch]);
+
+  useEffect(() => {
+    if (!modeAvailability) return;
+    setTransportType((current) => {
+      if (current === 'truck' && !modeAvailability.truck) return 'interisland';
+      if (modeAvailability.availableModes.length === 1 && modeAvailability.defaultMode) {
+        return modeAvailability.defaultMode;
+      }
+      return current;
+    });
+  }, [modeAvailability]);
+
+  useEffect(() => {
+    if (isInterIsland && viewMode === 'routes') {
+      setViewMode('dispatch');
+    }
+  }, [isInterIsland, viewMode]);
 
   const openCreateTruckModal = useCallback(() => {
     if (!branch?.trim()) {
@@ -299,8 +424,9 @@ export function LogisticsPage() {
   useEffect(() => { loadDrivers(); }, [loadDrivers]);
 
   useEffect(() => {
-    refreshLogistics();
-  }, [refreshLogistics]);
+    if (!branch?.trim()) return;
+    void refreshLogistics();
+  }, [branch, transportType, refreshLogistics]);
 
   useEffect(() => {
     let alive = true;
@@ -322,7 +448,6 @@ export function LogisticsPage() {
   const vehicles = getVehiclesByBranch(branch ?? '');
   const deliveries = getDeliveriesByBranch(branch ?? '');
   const ordersReady = logisticsFromDb ? planningOrders : getOrdersReadyByBranch(branch ?? '');
-  const shipments = getShipmentsByBranch(branch ?? '');
   const vehiclesForStats = fleetTrucks.length > 0 ? fleetTrucks : vehicles;
 
   const nextFourteenCalendarDays = useMemo(() => {
@@ -428,14 +553,14 @@ export function LogisticsPage() {
   }, [dispatchPeriodModalOpen]);
 
   const dateFilteredTrips = useMemo(() => {
-    if (transportType !== 'truck' || dispatchPeriodQuery.invalid) return trips;
+    if (!liveDispatch || dispatchPeriodQuery.invalid) return trips;
     return trips.filter((trip) =>
       inDatePeriodRange(trip.scheduledDate, dispatchPeriodQuery.from, dispatchPeriodQuery.to),
     );
-  }, [trips, dispatchPeriodQuery, transportType]);
+  }, [trips, dispatchPeriodQuery, liveDispatch]);
 
   const filteredTrips = useMemo(() => {
-    const source = transportType === 'truck' ? dateFilteredTrips : trips;
+    const source = liveDispatch ? dateFilteredTrips : trips;
     const filtered = source.filter((trip) => {
       const matchesSearch = tripMatchesDispatchSearch(trip, searchQuery);
       const matchesStatus = filterStatus === 'All'
@@ -522,11 +647,23 @@ export function LogisticsPage() {
 
   const getVehicleColor = getDispatchVehicleColor;
 
-  const viewModeTabs = [
-    { id: 'dispatch' as ViewMode, label: 'Schedule & Tracking', icon: <Calendar className="w-4 h-4" /> },
-    { id: 'fleet' as ViewMode, label: 'Fleet Management', icon: <Truck className="w-4 h-4" /> },
-    { id: 'routes' as ViewMode, label: 'Route Planning', icon: <Route className="w-4 h-4" /> },
-  ];
+  const viewModeTabs = useMemo(() => {
+    const tabs = [
+      { id: 'dispatch' as ViewMode, label: 'Schedule & Tracking', icon: <Calendar className="w-4 h-4" /> },
+      {
+        id: 'fleet' as ViewMode,
+        label: 'Fleet Management',
+        icon: isInterIsland ? <Ship className="w-4 h-4" /> : <Truck className="w-4 h-4" />,
+      },
+    ];
+    if (!isInterIsland) {
+      tabs.push({ id: 'routes' as ViewMode, label: 'Route Planning', icon: <Route className="w-4 h-4" /> });
+    }
+    return tabs;
+  }, [isInterIsland]);
+
+  const showTransportToggle = Boolean(branch?.trim());
+  const truckModeAvailable = modeAvailability?.truck ?? false;
 
   return (
     <div className="space-y-6 w-full max-w-full overflow-x-hidden">
@@ -535,13 +672,18 @@ export function LogisticsPage() {
         <h1 className="text-2xl font-bold text-gray-900">Logistics Management</h1>
       </div>
 
-      {/* Transport Type Toggle */}
+      {/* Transport Type Toggle — inter-island always available when a branch is selected */}
+      {showTransportToggle && (
       <div className="flex items-start">
         <div className="inline-flex rounded-lg border border-gray-300 p-1 bg-gray-50">
           <button
-            onClick={() => setTransportType('truck')}
+            type="button"
+            onClick={() => truckModeAvailable && setTransportType('truck')}
+            disabled={!truckModeAvailable}
+            title={truckModeAvailable ? undefined : 'No trucks in this branch fleet yet'}
             className={`
               flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all
+              disabled:opacity-45 disabled:cursor-not-allowed
               ${transportType === 'truck'
                 ? 'bg-white text-red-600 shadow-sm'
                 : 'text-gray-600 hover:text-gray-900'
@@ -552,6 +694,7 @@ export function LogisticsPage() {
             Truck Deliveries
           </button>
           <button
+            type="button"
             onClick={() => setTransportType('interisland')}
             className={`
               flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all
@@ -566,6 +709,7 @@ export function LogisticsPage() {
           </button>
         </div>
       </div>
+      )}
 
       {/* View Mode Tabs */}
       <div className="border-b border-gray-200 w-full max-w-full">
@@ -603,43 +747,48 @@ export function LogisticsPage() {
       {/* DISPATCH BOARD VIEW */}
       {viewMode === 'dispatch' && (
         <div className="space-y-6 w-full max-w-full">
-          {transportType !== 'truck' && (
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex flex-col lg:flex-row lg:items-center gap-3 md:gap-4 w-full max-w-full">
-                <div className="w-full lg:flex-1 relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                  <input
-                    type="text"
-                    placeholder="Search by Shipment ID, Captain, or Port…"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
-                  />
-                </div>
-                <select
-                  value={filterStatus}
-                  onChange={(e) => setFilterStatus(e.target.value)}
-                  className="w-full lg:w-auto px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
-                >
-                  <option value="All">All Statuses</option>
-                  <option value="Scheduled">Scheduled</option>
-                  <option value="Loading">Loading</option>
-                  <option value="Packed">Packed</option>
-                  <option value="Ready">Ready</option>
-                  <option value="In Transit">In Transit</option>
-                  <option value="Delayed">Delayed</option>
-                  <option value="Delivered">Delivered</option>
-                  <option value="Complete">Completed</option>
-                  <option value="Cancelled">Cancelled</option>
-                </select>
-                <Button variant="outline" className="w-full lg:w-auto justify-center">
-                  <Download className="w-4 h-4 mr-2" />
-                  Export
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+          {isInterIsland && liveDispatch && !logisticsLoading && (
+            <ContainerScheduleView
+              ordersReady={planningOrders}
+              containers={fleetTrucks}
+              existingTrips={scheduleTrips}
+              initialSelectedOrderIds={routePlanningPrefill.orderIds}
+              initialTripDate={routePlanningPrefill.tripDate}
+              onCreateShipment={async (selectedOrderIds, containerId, scheduledDates, routeLabel) => {
+                if (!branch?.trim()) {
+                  window.alert('Select a branch in the header.');
+                  return undefined;
+                }
+                const picked = planningOrders.filter((o) => selectedOrderIds.includes(o.id));
+                const totalWeight = picked.reduce((s, o) => s + o.weight, 0);
+                const totalVolume = picked.reduce((s, o) => s + o.volume, 0);
+                const sortedDates = [...new Set(scheduledDates.map((d) => d.trim().slice(0, 10)).filter(Boolean))].sort();
+                const res = await createContainerShipmentFromPlanning({
+                  branchName: branch,
+                  containerUuid: containerId,
+                  orderUuids: selectedOrderIds,
+                  scheduledDates: sortedDates,
+                  totalWeightKg: totalWeight,
+                  totalVolumeCbm: totalVolume,
+                  routeLabel,
+                });
+                if (!res.ok) {
+                  window.alert(res.error ?? 'Could not schedule shipment');
+                  return undefined;
+                }
+                await refreshLogistics();
+                loadFleet();
+                const c = fleetTrucks.find((x) => x.id === containerId);
+                return {
+                  tripNumber: res.tripNumber ?? 'New shipment',
+                  scheduledDate: sortedDates[0],
+                  scheduledEndDate: sortedDates.length > 1 ? sortedDates[sortedDates.length - 1] : undefined,
+                  dayCount: sortedDates.length,
+                  orderCount: selectedOrderIds.length,
+                  containerName: c?.vehicleName?.trim() ? c.vehicleName : 'Selected container',
+                };
+              }}
+            />
           )}
 
           {/* Quick Stats */}
@@ -649,19 +798,17 @@ export function LogisticsPage() {
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-sm text-gray-500">
-                      {transportType === 'truck' ? 'Active Trips' : 'Active Shipments'}
+                      {isInterIsland ? 'Active Shipments' : 'Active Trips'}
                     </p>
                     <p className="text-2xl font-bold text-gray-900 mt-1">
-                      {transportType === 'truck' 
-                        ? trips.filter(t => t.status === 'In Transit' || t.status === 'Loading').length
-                        : shipments.filter(s => s.status === 'In Transit' || s.status === 'Preparing').length}
+                      {trips.filter(t => t.status === 'In Transit' || t.status === 'Loading').length}
                     </p>
                   </div>
-                  <div className={`p-3 rounded-lg ${transportType === 'truck' ? 'bg-blue-100' : 'bg-cyan-100'}`}>
-                    {transportType === 'truck' ? (
-                      <Truck className="w-6 h-6 text-blue-600" />
-                    ) : (
+                  <div className={`p-3 rounded-lg ${isInterIsland ? 'bg-cyan-100' : 'bg-blue-100'}`}>
+                    {isInterIsland ? (
                       <Ship className="w-6 h-6 text-cyan-600" />
+                    ) : (
+                      <Truck className="w-6 h-6 text-blue-600" />
                     )}
                   </div>
                 </div>
@@ -684,7 +831,7 @@ export function LogisticsPage() {
               <CardContent className="p-4">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-sm text-gray-500">Available Trucks</p>
+                    <p className="text-sm text-gray-500">{isInterIsland ? 'Available Containers' : 'Available Trucks'}</p>
                     <p className="text-2xl font-bold text-gray-900 mt-1">
                       {vehiclesForStats.filter((v) => v.status === 'Available').length}
                     </p>
@@ -712,14 +859,13 @@ export function LogisticsPage() {
             </Card>
           </div>
 
-          {/* Schedule Calendar - Only for Truck Transport */}
-          {transportType === 'truck' && (
+          {liveDispatch && (
             <Card>
               <CardHeader>
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2">
                     <Calendar className="w-5 h-5 text-gray-500" />
-                    <CardTitle>Dispatch Schedule (14 Days)</CardTitle>
+                    <CardTitle>{isInterIsland ? 'Shipment Schedule (14 Days)' : 'Dispatch Schedule (14 Days)'}</CardTitle>
                   </div>
                   <button
                     type="button"
@@ -782,16 +928,20 @@ export function LogisticsPage() {
                                       backgroundColor: colors.bg,
                                       borderLeft: `3px solid ${colors.border}`
                                     }}
-                                    title={`${trip.tripNumber} - ${trip.vehicleName} (${trip.driverName})`}
+                                    title={`${trip.tripNumber} - ${trip.vehicleName}${isInterIsland ? '' : ` (${trip.driverName})`}`}
                                   >
                                     <div className="flex items-center gap-1">
-                                      <Truck className="w-3 h-3 flex-shrink-0" style={{ color: colors.text }} />
+                                      {isInterIsland ? (
+                                        <Ship className="w-3 h-3 flex-shrink-0" style={{ color: colors.text }} />
+                                      ) : (
+                                        <Truck className="w-3 h-3 flex-shrink-0" style={{ color: colors.text }} />
+                                      )}
                                       <span className="font-medium truncate flex-1" style={{ color: colors.text }}>
                                         {trip.vehicleName}
                                       </span>
                                     </div>
                                     <div className="truncate text-[10px] mt-0.5" style={{ color: colors.text, opacity: 0.8 }}>
-                                      {trip.driverName}
+                                      {isInterIsland ? (trip.destinations[0] || trip.tripNumber) : trip.driverName}
                                     </div>
                                   </div>
                                 );
@@ -816,13 +966,13 @@ export function LogisticsPage() {
           <Card>
             <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3">
               <CardTitle>
-                {transportType === 'truck' ? 'Dispatch Queue' : 'Shipment Queue'}
-                {transportType === 'truck' && !logisticsLoading && filteredTrips.length > 0
+                {isInterIsland ? 'Shipment Queue' : 'Dispatch Queue'}
+                {liveDispatch && !logisticsLoading && filteredTrips.length > 0
                   ? ` — ${filteredTrips.length} result${filteredTrips.length !== 1 ? 's' : ''}`
                   : ''}
               </CardTitle>
               <div className="flex flex-wrap items-center gap-3">
-                {transportType === 'truck' && (
+                {liveDispatch && (
                   <select
                     aria-label="Filter dispatch queue by status"
                     value={filterStatus === 'All' ? '' : filterStatus}
@@ -850,14 +1000,14 @@ export function LogisticsPage() {
                 </label>
               </div>
             </CardHeader>
-            {transportType === 'truck' && (
+            {liveDispatch && (
               <div className="px-4 pb-4 border-b border-gray-100">
                 <div className="flex flex-col sm:flex-row sm:items-center gap-3">
                   <div className="w-full sm:flex-1 relative">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                     <input
                       type="text"
-                      placeholder="Search trip, driver, customer, order #, destination…"
+                      placeholder={isInterIsland ? 'Search shipment, container, customer, order #, route…' : 'Search trip, driver, customer, order #, destination…'}
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                       disabled={logisticsLoading}
@@ -883,13 +1033,23 @@ export function LogisticsPage() {
               </div>
             )}
             <CardContent className="p-0">
-              {transportType === 'truck' && logisticsLoading ? (
+              {logisticsLoading ? (
                 <div className="flex flex-col items-center justify-center py-16 px-4">
                   <Loader2 className="w-10 h-10 animate-spin text-red-500" aria-hidden />
-                  <p className="mt-4 text-sm text-gray-500">Loading trips…</p>
+                  <p className="mt-4 text-sm text-gray-500">{isInterIsland ? 'Loading shipments…' : 'Loading trips…'}</p>
                 </div>
-              ) : transportType === 'truck' ? (
-                /* TRUCK DISPATCH TABLE */
+              ) : !liveDispatch ? (
+                <div className="py-16 px-4 text-center text-sm text-gray-500">
+                  Select a branch in the header to view logistics.
+                </div>
+              ) : logisticsLoadError && !logisticsFromDb ? (
+                <div className="py-16 px-4 text-center space-y-3">
+                  <p className="text-sm text-red-700">{logisticsLoadError}</p>
+                  <Button type="button" variant="outline" onClick={() => void refreshLogistics()}>
+                    Retry
+                  </Button>
+                </div>
+              ) : (
                 <>
                 <div className="hidden md:block">
                 <table className="w-full">
@@ -899,7 +1059,7 @@ export function LogisticsPage() {
                         onClick={() => handleTripSort('vehicleName')}
                         className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
                       >
-                        <span className="inline-flex items-center">Vehicle & Driver{tripSortIcon('vehicleName')}</span>
+                        <span className="inline-flex items-center">{isInterIsland ? 'Container & route' : 'Vehicle & Driver'}{tripSortIcon('vehicleName')}</span>
                       </th>
                       <th
                         onClick={() => handleTripSort('customer')}
@@ -959,10 +1119,16 @@ export function LogisticsPage() {
                       >
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="flex items-center gap-2">
-                            <Truck className="w-4 h-4 text-gray-400" />
+                            {isInterIsland ? (
+                              <Ship className="w-4 h-4 text-gray-400" />
+                            ) : (
+                              <Truck className="w-4 h-4 text-gray-400" />
+                            )}
                             <div>
                               <div className="text-sm font-medium text-gray-900">{trip.vehicleName}</div>
-                              <div className="text-xs text-gray-500">{trip.driverName || '—'}</div>
+                              <div className="text-xs text-gray-500">
+                                {isInterIsland ? (trip.destinations[0] || trip.tripNumber) : (trip.driverName || '—')}
+                              </div>
                             </div>
                           </div>
                         </td>
@@ -1033,8 +1199,10 @@ export function LogisticsPage() {
                         <p className="text-gray-900 break-words">{trip.customerLabel ?? trip.destinations[0] ?? '—'}</p>
                       </div>
                       <div>
-                        <p className="text-xs text-gray-500">Driver</p>
-                        <p className="text-gray-900 break-words">{trip.driverName || '—'}</p>
+                        <p className="text-xs text-gray-500">{isInterIsland ? 'Route' : 'Driver'}</p>
+                        <p className="text-gray-900 break-words">
+                          {isInterIsland ? (trip.destinations[0] || '—') : (trip.driverName || '—')}
+                        </p>
                       </div>
                       <div>
                         <p className="text-xs text-gray-500">Schedule</p>
@@ -1055,182 +1223,6 @@ export function LogisticsPage() {
                   onPageChange={setDispatchQueuePage}
                 />
               )}
-                </>
-              ) : (
-                /* INTER-ISLAND SHIPMENTS TABLE */
-                <>
-                <div className="hidden md:block">
-                  <table className="w-full">
-                    <thead className="bg-gray-50 border-b border-gray-200">
-                      <tr>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Shipment Details
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Vessel & Captain
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Route
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Schedule
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Cargo
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Status
-                        </th>
-                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Actions
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                      {shipments.length === 0 && (
-                        <tr>
-                          <td colSpan={7} className="px-6 py-12 text-center text-sm text-gray-500">
-                            No active shipments found.
-                          </td>
-                        </tr>
-                      )}
-                      {shipments.map((shipment) => (
-                        <tr key={shipment.id} className="hover:bg-gray-50">
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="flex items-center gap-2">
-                              <div className={`p-2 rounded-lg ${
-                                shipment.status === 'In Transit' ? 'bg-blue-100' :
-                                shipment.status === 'Arrived' ? 'bg-green-100' :
-                                shipment.status === 'Delayed' ? 'bg-red-100' :
-                                'bg-gray-100'
-                              }`}>
-                                {shipment.type === 'Sea Freight' ? (
-                                  <Ship className="w-4 h-4 text-blue-600" />
-                                ) : (
-                                  <Plane className="w-4 h-4 text-purple-600" />
-                                )}
-                              </div>
-                              <div>
-                                <div className="text-sm font-medium text-gray-900">{shipment.shipmentNumber}</div>
-                                <div className="text-xs text-gray-500">{shipment.type}</div>
-                              </div>
-                            </div>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="flex items-center gap-2">
-                              <Ship className="w-4 h-4 text-gray-400" />
-                              <div>
-                                <div className="text-sm font-medium text-gray-900">{shipment.carrier || 'Carrier TBD'}</div>
-                                <div className="text-xs text-gray-500">{shipment.trackingNumber || 'No tracking'}</div>
-                              </div>
-                            </div>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="flex items-center gap-2">
-                              <MapPin className="w-4 h-4 text-gray-400" />
-                              <div>
-                                <div className="text-sm text-gray-900">
-                                  {shipment.port} → {shipment.destination}
-                                </div>
-                              </div>
-                            </div>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="text-sm text-gray-900">{shipment.departureDate}</div>
-                            <div className="text-xs text-gray-500">ETA: {shipment.eta}</div>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="text-sm text-gray-900">{shipment.orders.length} orders</div>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <Badge variant={getStatusColor(shipment.status)}>
-                              {shipment.status}
-                            </Badge>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-right text-sm">
-                            <div className="flex items-center justify-end gap-2">
-                              <button
-                                className="text-blue-600 hover:text-blue-800"
-                                title="View Details"
-                              >
-                                <FileText className="w-4 h-4" />
-                              </button>
-                              <button
-                                className="text-gray-600 hover:text-gray-800"
-                                title="Track Shipment"
-                              >
-                                <Globe className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                <div className="md:hidden divide-y divide-gray-200">
-                  {shipments.length === 0 && (
-                    <div className="p-8 text-center text-sm text-gray-500">No active shipments found.</div>
-                  )}
-                  {shipments.map((shipment) => (
-                    <div key={shipment.id} className="p-4 space-y-3 w-full">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm font-medium text-gray-900 break-words">{shipment.shipmentNumber}</p>
-                          <p className="text-xs text-gray-500 mt-1 break-words">
-                            {shipment.orders.length} order{shipment.orders.length > 1 ? 's' : ''} • {shipment.type}
-                          </p>
-                        </div>
-                        <Badge variant={getStatusColor(shipment.status)} className="flex-shrink-0">
-                          {shipment.status}
-                        </Badge>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-3 text-sm">
-                        <div>
-                          <p className="text-xs text-gray-500">Carrier</p>
-                          <p className="text-gray-900 break-words">{shipment.carrier || 'TBD'}</p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-gray-500">Departure</p>
-                          <p className="text-gray-900">{shipment.departureDate}</p>
-                        </div>
-                        <div className="col-span-2">
-                          <p className="text-xs text-gray-500">Route</p>
-                          <p className="text-gray-900 break-words">{shipment.port} → {shipment.destination}</p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-gray-500">Tracking</p>
-                          <p className="text-gray-900 break-words">{shipment.trackingNumber || 'N/A'}</p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-gray-500">ETA</p>
-                          <p className="text-gray-900">{shipment.eta}</p>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-2 pt-1">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="flex-1 justify-center"
-                        >
-                          <FileText className="w-4 h-4 mr-2" />
-                          Details
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="flex-1 justify-center"
-                        >
-                          <Globe className="w-4 h-4 mr-2" />
-                          Track
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
                 </>
               )}
             </CardContent>
@@ -1336,11 +1328,11 @@ export function LogisticsPage() {
       )}
 
       {/* FLEET MANAGEMENT VIEW */}
-      {viewMode === 'fleet' && transportType === 'truck' && (
+      {viewMode === 'fleet' && (transportType === 'truck' || isInterIsland) && (
         <div className="space-y-6">
           {fleetError && (
             <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-              Unable to load trucks for this branch. Please try again in a moment.
+              Unable to load {isInterIsland ? 'containers' : 'trucks'} for this branch. Please try again in a moment.
             </div>
           )}
           {fleetLoading && (
@@ -1352,17 +1344,21 @@ export function LogisticsPage() {
             <div className="lg:col-span-2 space-y-4">
               <Card>
                 <CardHeader>
-                  <CardTitle>Truck fleet</CardTitle>
+                  <CardTitle>{isInterIsland ? 'Shipping container fleet' : 'Truck fleet'}</CardTitle>
                 </CardHeader>
                 <CardContent>
                   {fleetList.length === 0 ? (
                     <div className="py-12 px-4 text-center">
                       <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-gray-100 text-gray-500">
-                        <Truck className="h-7 w-7" aria-hidden />
+                        {isInterIsland ? <Ship className="h-7 w-7" aria-hidden /> : <Truck className="h-7 w-7" aria-hidden />}
                       </div>
-                      <h3 className="text-base font-semibold text-gray-900">No trucks yet</h3>
+                      <h3 className="text-base font-semibold text-gray-900">
+                        {isInterIsland ? 'No containers yet' : 'No trucks yet'}
+                      </h3>
                       <p className="mt-2 text-sm text-gray-600 max-w-md mx-auto">
-                        This branch does not have any trucks in the fleet. Add one to start scheduling deliveries and route planning.
+                        {isInterIsland
+                          ? 'Add shipping containers with capacity and dimensions, then group ship-delivery orders into scheduled shipments.'
+                          : 'This branch does not have any trucks in the fleet. Add one to start scheduling deliveries and route planning.'}
                       </p>
                       <Button
                         type="button"
@@ -1371,7 +1367,7 @@ export function LogisticsPage() {
                         onClick={openCreateTruckModal}
                       >
                         <Plus className="w-4 h-4 mr-2" />
-                        Add truck
+                        Add {isInterIsland ? 'container' : 'truck'}
                       </Button>
                     </div>
                   ) : (
@@ -1381,7 +1377,7 @@ export function LogisticsPage() {
                         key={vehicle.id}
                         to={`/logistics/${vehicle.id}`}
                         className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow w-full max-w-full block no-underline text-inherit focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2"
-                        title="View truck details"
+                        title={isInterIsland ? 'View container details' : 'View truck details'}
                       >
                         <div className="flex items-start justify-between mb-3">
                           <div className="flex items-center gap-2 min-w-0 flex-1">
@@ -1459,12 +1455,12 @@ export function LogisticsPage() {
             <div className="space-y-4">
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-base">Fleet Statistics</CardTitle>
+                  <CardTitle className="text-base">{isInterIsland ? 'Container statistics' : 'Fleet Statistics'}</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div>
                     <div className="flex items-center justify-between text-sm mb-2">
-                      <span className="text-gray-500">Total Vehicles</span>
+                      <span className="text-gray-500">Total {isInterIsland ? 'Containers' : 'Vehicles'}</span>
                       <span className="text-gray-900 font-bold">{fleetList.length}</span>
                     </div>
                     <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
@@ -1548,7 +1544,7 @@ export function LogisticsPage() {
                     onClick={openCreateTruckModal}
                   >
                     <Plus className="w-4 h-4 mr-2" />
-                    Add New Vehicle
+                    Add New {isInterIsland ? 'Container' : 'Vehicle'}
                   </Button>
                   <Button
                     variant="outline"
@@ -1571,167 +1567,8 @@ export function LogisticsPage() {
         </div>
       )}
 
-      {/* FLEET MANAGEMENT VIEW - INTER-ISLAND */}
-      {viewMode === 'fleet' && transportType === 'interisland' && (
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Fleet Overview */}
-            <div className="lg:col-span-2 space-y-4">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Vessel Fleet Overview</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    {shipments.length === 0 && (
-                      <div className="col-span-full py-10 text-center text-sm text-gray-500">No vessels found.</div>
-                    )}
-                    {shipments.map((shipment) => (
-                      <div key={shipment.id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow w-full max-w-full">
-                        <div className="flex items-start justify-between mb-3">
-                          <div className="flex items-center gap-2 min-w-0 flex-1">
-                            <div className={`p-2 rounded-lg ${
-                              shipment.status === 'Arrived' ? 'bg-green-100' :
-                              shipment.status === 'In Transit' ? 'bg-blue-100' :
-                              shipment.status === 'Preparing' ? 'bg-yellow-100' :
-                              'bg-red-100'
-                            }`}>
-                              {shipment.type === 'Sea Freight' ? (
-                                <Ship className="w-4 h-4 text-blue-600" />
-                              ) : (
-                                <Plane className="w-4 h-4 text-purple-600" />
-                              )}
-                            </div>
-                            <div className="min-w-0 flex-1">
-                              <div className="font-medium text-gray-900 break-words">{shipment.carrier || 'Carrier TBD'}</div>
-                              <div className="text-xs text-gray-500 break-words">{shipment.shipmentNumber}</div>
-                            </div>
-                          </div>
-                          <Badge variant={getStatusColor(shipment.status)} className="text-xs flex-shrink-0">
-                            {shipment.status}
-                          </Badge>
-                        </div>
-                        
-                        <div className="space-y-2">
-                          <div className="flex items-center justify-between text-sm">
-                            <span className="text-gray-500">Type:</span>
-                            <span className="text-gray-900 font-medium">{shipment.type}</span>
-                          </div>
-                          <div className="flex items-center justify-between text-sm">
-                            <span className="text-gray-500">Route:</span>
-                            <span className="text-gray-900 font-medium truncate">{shipment.port} → {shipment.destination}</span>
-                          </div>
-                          <div className="flex items-center justify-between text-sm">
-                            <span className="text-gray-500">Cargo:</span>
-                            <span className="text-gray-900 font-medium">{shipment.orders.length} orders</span>
-                          </div>
-                          <div className="flex items-center justify-between text-sm">
-                            <span className="text-gray-500">ETA:</span>
-                            <span className="text-gray-900 font-medium">{shipment.eta}</span>
-                          </div>
-                        </div>
-
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="w-full mt-3"
-                        >
-                          View Details
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-
-            {/* Fleet Stats */}
-            <div className="space-y-4">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Vessel Statistics</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-sm text-gray-500">Total Vessels</span>
-                      <span className="text-gray-900 font-bold">{shipments.length}</span>
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-sm text-gray-500">In Transit</span>
-                      <span className="text-gray-900 font-bold">
-                        {shipments.filter(s => s.status === 'In Transit').length}
-                      </span>
-                    </div>
-                    <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-blue-500 rounded-full transition-all"
-                        style={{ width: `${(shipments.filter(s => s.status === 'In Transit').length / shipments.length) * 100}%` }}
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-sm text-gray-500">Preparing</span>
-                      <span className="text-gray-900 font-bold">
-                        {shipments.filter(s => s.status === 'Preparing').length}
-                      </span>
-                    </div>
-                    <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-yellow-500 rounded-full transition-all"
-                        style={{ width: `${(shipments.filter(s => s.status === 'Preparing').length / shipments.length) * 100}%` }}
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-sm text-gray-500">Arrived</span>
-                      <span className="text-gray-900 font-bold">
-                        {shipments.filter(s => s.status === 'Arrived').length}
-                      </span>
-                    </div>
-                    <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-green-500 rounded-full transition-all"
-                        style={{ width: `${(shipments.filter(s => s.status === 'Arrived').length / shipments.length) * 100}%` }}
-                      />
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Quick Actions</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-2">
-                  <Button variant="outline" size="sm" className="w-full justify-start">
-                    <Plus className="w-4 h-4 mr-2" />
-                    Book New Shipment
-                  </Button>
-                  <Button variant="outline" size="sm" className="w-full justify-start">
-                    <Globe className="w-4 h-4 mr-2" />
-                    Track All Shipments
-                  </Button>
-                  <Button variant="outline" size="sm" className="w-full justify-start">
-                    <Download className="w-4 h-4 mr-2" />
-                    Export Manifest
-                  </Button>
-                </CardContent>
-              </Card>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ROUTE PLANNING VIEW */}
-      {viewMode === 'routes' && (
+      {/* ROUTE PLANNING VIEW — trucks only */}
+      {viewMode === 'routes' && transportType === 'truck' && (
         <RoutePlanningView
           ordersReady={ordersReady}
           vehicles={fleetTrucks.length > 0 ? fleetTrucks : vehicles}
@@ -1894,6 +1731,7 @@ export function LogisticsPage() {
         branchName={branch}
         vehicleUuid={truckFormEditId}
         onSaved={() => loadFleet()}
+        fleetKind={isInterIsland ? 'container' : 'truck'}
       />
 
       {/* ── 14-day Strip: Day Detail Modal ────────────────────── */}
@@ -1948,11 +1786,15 @@ export function LogisticsPage() {
                       }}
                     >
                       <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0" style={{ backgroundColor: colors.bg }}>
-                        <Truck className="w-4 h-4" style={{ color: colors.text }} />
+                        {isInterIsland ? (
+                          <Ship className="w-4 h-4" style={{ color: colors.text }} />
+                        ) : (
+                          <Truck className="w-4 h-4" style={{ color: colors.text }} />
+                        )}
                       </div>
                       <div className="min-w-0 flex-1">
                         <p className="text-sm font-semibold text-gray-900 truncate">{trip.tripNumber}</p>
-                        <p className="text-xs text-gray-500 truncate">{trip.vehicleName}{trip.driverName !== '—' ? ` · ${trip.driverName}` : ''}</p>
+                        <p className="text-xs text-gray-500 truncate">{tripSubline(trip, isInterIsland)}</p>
                       </div>
                       <span className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded border shrink-0 ${
                         tripStatusIsCompletedUi(trip.status)  ? 'bg-green-100 text-green-800 border-green-300' :
@@ -2009,10 +1851,10 @@ export function LogisticsPage() {
               <div className="flex items-start justify-between gap-3 p-4 md:p-5 border-b border-gray-200">
                 <div>
                   <h2 id="dispatch-cal-title" className="text-lg md:text-xl font-bold text-gray-900">
-                    Dispatch Calendar
+                    {isInterIsland ? 'Shipment Calendar' : 'Dispatch Calendar'}
                   </h2>
                   <p className="text-sm text-gray-600 mt-1">
-                    All scheduled trips{branch ? ` · ${branch}` : ''}
+                    All scheduled {isInterIsland ? 'shipments' : 'trips'}{branch ? ` · ${branch}` : ''}
                   </p>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
@@ -2116,7 +1958,7 @@ export function LogisticsPage() {
                               <div
                                 key={trip.id}
                                 className={`truncate rounded px-0.5 py-0.5 text-[10px] leading-tight font-medium ${chipColor}`}
-                                title={`${trip.tripNumber} · ${trip.vehicleName} · ${trip.driverName}`}
+                                title={`${trip.tripNumber} · ${tripSubline(trip, isInterIsland)}`}
                               >
                                 {trip.vehicleName}
                               </div>
@@ -2164,7 +2006,7 @@ export function LogisticsPage() {
                                 </div>
                                 <div className="min-w-0 flex-1">
                                   <p className="font-semibold text-gray-900 text-sm">{trip.tripNumber}</p>
-                                  <p className="text-xs text-gray-500 truncate">{trip.vehicleName}{trip.driverName !== '—' ? ` · ${trip.driverName}` : ''}</p>
+                                  <p className="text-xs text-gray-500 truncate">{tripSubline(trip, isInterIsland)}</p>
                                 </div>
                                 <span className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded border shrink-0 ${
                                   tripStatusIsCompletedUi(trip.status)  ? 'bg-green-100 text-green-800 border-green-300' :

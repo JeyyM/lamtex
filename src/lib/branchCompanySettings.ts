@@ -24,12 +24,26 @@ export function emptyCompanyInfo(): CompanyInfoFields {
 }
 
 /** Resolve Supabase branch id from Topbar branch name (exact or first segment before " -"). */
+let branchRowsCache: { loadedAt: number; rows: { id: string; name: string | null }[] } | null = null;
+const BRANCH_ROWS_CACHE_MS = 60_000;
+
+async function loadActiveBranchRows(): Promise<{ id: string; name: string | null }[]> {
+  const now = Date.now();
+  if (branchRowsCache && now - branchRowsCache.loadedAt < BRANCH_ROWS_CACHE_MS) {
+    return branchRowsCache.rows;
+  }
+  const { data: rows, error } = await supabase.from('branches').select('id, name').eq('is_active', true);
+  if (error || !rows?.length) return [];
+  branchRowsCache = { loadedAt: now, rows };
+  return rows;
+}
+
 export async function resolveBranchIdByName(branchName: string): Promise<string | null> {
   const raw = branchName.trim();
   if (!raw) return null;
 
-  const { data: rows, error } = await supabase.from('branches').select('id, name').eq('is_active', true);
-  if (error || !rows?.length) return null;
+  const rows = await loadActiveBranchRows();
+  if (!rows.length) return null;
 
   const lower = raw.toLowerCase();
 

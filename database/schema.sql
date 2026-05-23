@@ -51,7 +51,8 @@ DO $$ BEGIN CREATE TYPE material_movement_type AS ENUM ('Receipt', 'Issue', 'Tra
 DO $$ BEGIN CREATE TYPE movement_reference_type AS ENUM ('PO', 'PR', 'Production', 'Transfer Request', 'Manual'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- ── Order Enums ─────────────────────────────────────────────────────────────
-DO $$ BEGIN CREATE TYPE order_status AS ENUM ('Draft', 'Pending', 'Approved', 'Scheduled', 'Loading', 'Packed', 'Ready', 'In Transit', 'Delivered', 'Completed', 'Cancelled', 'Rejected'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE order_status AS ENUM ('Draft', 'Pending', 'Approved', 'Scheduled', 'Loading', 'Packed', 'Ready', 'In Transit', 'Delivered', 'Partially Fulfilled', 'Completed', 'Cancelled', 'Rejected'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+ALTER TYPE order_status ADD VALUE IF NOT EXISTS 'Partially Fulfilled';
 DO $$ BEGIN CREATE TYPE payment_status AS ENUM ('Unbilled', 'Invoiced', 'Partially Paid', 'Paid', 'Overdue', 'On Credit'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE delivery_type AS ENUM ('Truck', 'Ship', 'Pickup'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE payment_terms AS ENUM ('COD', '15 Days', '30 Days', '45 Days', '60 Days', '90 Days', 'Custom'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
@@ -94,7 +95,7 @@ DO $$ BEGIN CREATE TYPE grn_status AS ENUM ('Draft', 'Completed', 'Partially Acc
 DO $$ BEGIN CREATE TYPE urgency_level AS ENUM ('Low', 'Medium', 'High', 'Critical'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- ── Logistics Enums ─────────────────────────────────────────────────────────
-DO $$ BEGIN CREATE TYPE vehicle_type AS ENUM ('Truck', 'Container Van', 'Motorcycle'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE vehicle_type AS ENUM ('Truck', 'Container Van', 'Motorcycle', 'Shipping Container'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE vehicle_status AS ENUM ('Available', 'On Trip', 'Loading', 'Maintenance', 'Out of Service'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE financing_status AS ENUM ('Owned', 'Financed', 'Leased'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE trip_status AS ENUM ('Pending', 'Planned', 'Loading', 'In Transit', 'Completed', 'Delayed', 'Failed'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;

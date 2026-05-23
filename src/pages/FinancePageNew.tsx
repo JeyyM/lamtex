@@ -88,19 +88,86 @@ function formatDateTime(iso: string | null | undefined): string {
   return d.toLocaleString('en-PH', { dateStyle: 'medium', timeStyle: 'short' });
 }
 
-function AgentCell(props: { agentId: string | null; agentName: string | null; className?: string }) {
-  if (props.agentId && props.agentName) {
-    return (
-      <Link
-        to={`/employees/${props.agentId}`}
-        className={`text-blue-600 hover:underline font-medium ${props.className ?? ''}`}
-      >
-        {props.agentName}
-      </Link>
-    );
-  }
-  return <span className={props.className ?? 'text-gray-700'}>{props.agentName ?? '—'}</span>;
+const FINANCE_LINK_CLASS = 'text-blue-700 hover:text-blue-900 font-medium hover:underline';
+
+const FINANCE_LINK_TITLE = 'Right-click or Ctrl+click to open in new tab';
+
+function FinanceLink(props: {
+  to: string;
+  children: React.ReactNode;
+  className?: string;
+  title?: string;
+  onClick?: (e: React.MouseEvent<HTMLAnchorElement>) => void;
+}): React.ReactElement {
+  return (
+    <Link
+      to={props.to}
+      title={props.title ?? FINANCE_LINK_TITLE}
+      className={props.className ?? `${FINANCE_LINK_CLASS} focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 rounded-sm`}
+      onClick={props.onClick}
+    >
+      {props.children}
+    </Link>
+  );
 }
+
+/** Invisible link covering a table cell — place after cell content so it sits on top. */
+function FinanceRowOrderOverlay(props: {
+  to: string;
+  orderNumber: string;
+  primary?: boolean;
+  onClick?: (e: React.MouseEvent<HTMLAnchorElement>) => void;
+}): React.ReactElement {
+  return (
+    <Link
+      to={props.to}
+      onClick={props.onClick}
+      tabIndex={props.primary ? undefined : -1}
+      aria-hidden={props.primary ? undefined : true}
+      aria-label={props.primary ? `Open order ${props.orderNumber}` : undefined}
+      title={FINANCE_LINK_TITLE}
+      className="absolute inset-0 z-10 block cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500"
+    />
+  );
+}
+
+const FINANCE_CELL_CONTENT = 'relative z-0 pointer-events-none';
+
+const FINANCE_ENTITY_LINK =
+  'relative z-20 block truncate pointer-events-auto focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset rounded-sm';
+
+/** Entity column link (commission table — row click opens modal elsewhere). */
+function FinanceTableCellLink(props: {
+  to: string;
+  children: React.ReactNode;
+  ariaLabel: string;
+  contentClassName?: string;
+  tdClassName?: string;
+  onClick?: (e: React.MouseEvent<HTMLAnchorElement>) => void;
+  primary?: boolean;
+}): React.ReactElement {
+  return (
+    <td className={`relative py-3 px-3 align-top ${props.tdClassName ?? ''}`}>
+      <Link
+        to={props.to}
+        aria-label={props.ariaLabel}
+        title={FINANCE_LINK_TITLE}
+        onClick={props.onClick}
+        tabIndex={props.primary ? undefined : -1}
+        aria-hidden={props.primary ? undefined : true}
+        className="absolute inset-0 z-0 block outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500"
+      />
+      <span
+        className={`${FINANCE_CELL_CONTENT} block truncate ${FINANCE_LINK_CLASS} ${props.contentClassName ?? ''}`.trim()}
+      >
+        {props.children}
+      </span>
+    </td>
+  );
+}
+
+const FINANCE_TABLE_ROW_CLASS =
+  'group cursor-pointer hover:bg-gray-50 transition-colors focus-within:bg-gray-50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-blue-500';
 
 function paymentStatusVariant(status: string): 'success' | 'warning' | 'info' | 'danger' | 'neutral' {
   switch (status) {
@@ -688,33 +755,75 @@ export function FinancePageNew() {
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {paginatedOutstanding.map((row) => {
+                      const orderHref = `/orders/${row.id}`;
+                      const rowOverlay = (opts: { primary?: boolean }) => (
+                        <FinanceRowOrderOverlay
+                          to={orderHref}
+                          orderNumber={row.orderNumber}
+                          primary={opts.primary}
+                        />
+                      );
                       return (
-                        <tr key={row.id} className="hover:bg-gray-50/80">
-                          <td className="py-3 px-3">
-                            <Link to={`/orders/${row.id}`} className="font-medium text-blue-600 hover:underline">
+                        <tr key={row.id} className={FINANCE_TABLE_ROW_CLASS}>
+                          <td className="relative py-3 px-3 align-top">
+                            <span className={`${FINANCE_CELL_CONTENT} font-mono text-xs tabular-nums ${FINANCE_LINK_CLASS}`}>
                               {row.orderNumber}
-                            </Link>
+                            </span>
+                            {rowOverlay({ primary: true })}
                           </td>
-                          <td className="py-3 px-3">
+                          <td className="relative py-3 px-3 align-top max-w-[12rem]">
                             {row.customerId ? (
-                              <Link to={`/customers/${row.customerId}`} className="text-blue-600 hover:underline font-medium">
+                              <Link
+                                to={`/customers/${row.customerId}`}
+                                title={FINANCE_LINK_TITLE}
+                                className={`${FINANCE_ENTITY_LINK} ${FINANCE_LINK_CLASS}`}
+                              >
                                 {row.customerName ?? '—'}
                               </Link>
                             ) : (
-                              <span className="text-gray-800">{row.customerName ?? '—'}</span>
+                              <span className={`${FINANCE_CELL_CONTENT} text-gray-800 block truncate`}>
+                                {row.customerName ?? '—'}
+                              </span>
                             )}
+                            {rowOverlay({})}
                           </td>
-                          <td className="py-3 px-3 hidden md:table-cell">
-                            <AgentCell agentId={row.agentId} agentName={row.agentName} />
+                          <td className="relative py-3 px-3 align-top hidden md:table-cell">
+                            {row.agentId && row.agentName ? (
+                              <Link
+                                to={`/employees/${row.agentId}`}
+                                title={FINANCE_LINK_TITLE}
+                                className={`${FINANCE_ENTITY_LINK} ${FINANCE_LINK_CLASS}`}
+                              >
+                                {row.agentName}
+                              </Link>
+                            ) : (
+                              <span className={`${FINANCE_CELL_CONTENT} text-gray-700 block truncate`}>
+                                {row.agentName ?? '—'}
+                              </span>
+                            )}
+                            {rowOverlay({})}
                           </td>
-                          <td className="py-3 px-3 text-gray-700 hidden lg:table-cell">{row.paymentTerms ?? '—'}</td>
-                          <td className="py-3 px-3 text-right tabular-nums">{formatPeso(row.totalAmount)}</td>
-                          <td className="py-3 px-3 text-right tabular-nums text-green-700">{formatPeso(row.amountPaid)}</td>
-                          <td className="py-3 px-3 text-center text-gray-800">
-                            {formatDate(row.dueDate)}
+                          <td className="relative py-3 px-3 text-gray-700 hidden lg:table-cell align-top">
+                            <span className={FINANCE_CELL_CONTENT}>{row.paymentTerms ?? '—'}</span>
+                            {rowOverlay({})}
                           </td>
-                          <td className="py-3 px-3 text-center">
-                            <Badge variant={paymentStatusVariant(row.paymentStatus)}>{row.paymentStatus}</Badge>
+                          <td className="relative py-3 px-3 text-right tabular-nums align-top">
+                            <span className={FINANCE_CELL_CONTENT}>{formatPeso(row.totalAmount)}</span>
+                            {rowOverlay({})}
+                          </td>
+                          <td className="relative py-3 px-3 text-right tabular-nums text-green-700 align-top">
+                            <span className={FINANCE_CELL_CONTENT}>{formatPeso(row.amountPaid)}</span>
+                            {rowOverlay({})}
+                          </td>
+                          <td className="relative py-3 px-3 text-center text-gray-800 align-top">
+                            <span className={FINANCE_CELL_CONTENT}>{formatDate(row.dueDate)}</span>
+                            {rowOverlay({})}
+                          </td>
+                          <td className="relative py-3 px-3 text-center align-top">
+                            <span className={`${FINANCE_CELL_CONTENT} inline-flex [&_*]:pointer-events-none`}>
+                              <Badge variant={paymentStatusVariant(row.paymentStatus)}>{row.paymentStatus}</Badge>
+                            </span>
+                            {rowOverlay({})}
                           </td>
                         </tr>
                       );
@@ -845,26 +954,46 @@ export function FinancePageNew() {
                       return (
                       <tr
                         key={row.orderId}
-                        className="hover:bg-gray-50/80 cursor-pointer"
+                        className={`${FINANCE_TABLE_ROW_CLASS} cursor-pointer`}
                         onClick={() => setCommissionModalOrder(row)}
                       >
-                        <td className="py-3 px-3" onClick={(e) => e.stopPropagation()}>
-                          <Link to={`/orders/${row.orderId}`} className="font-medium text-blue-600 hover:underline">
-                            {row.orderNumber}
-                          </Link>
-                        </td>
-                        <td className="py-3 px-3" onClick={(e) => e.stopPropagation()}>
-                          {row.customerId ? (
-                            <Link to={`/customers/${row.customerId}`} className="text-blue-600 hover:underline font-medium">
-                              {row.customerName ?? '—'}
-                            </Link>
-                          ) : (
+                        <FinanceTableCellLink
+                          to={`/orders/${row.orderId}`}
+                          ariaLabel={`Open order ${row.orderNumber}`}
+                          contentClassName="font-mono text-xs tabular-nums"
+                          primary
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {row.orderNumber}
+                        </FinanceTableCellLink>
+                        {row.customerId ? (
+                          <FinanceTableCellLink
+                            to={`/customers/${row.customerId}`}
+                            ariaLabel={`Open customer ${row.customerName ?? ''}`}
+                            tdClassName="max-w-[12rem]"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {row.customerName ?? '—'}
+                          </FinanceTableCellLink>
+                        ) : (
+                          <td className="py-3 px-3" onClick={(e) => e.stopPropagation()}>
                             <span className="text-gray-800">{row.customerName ?? '—'}</span>
-                          )}
-                        </td>
-                        <td className="py-3 px-3 hidden md:table-cell" onClick={(e) => e.stopPropagation()}>
-                          <AgentCell agentId={row.agentId} agentName={row.agentName} />
-                        </td>
+                          </td>
+                        )}
+                        {row.agentId && row.agentName ? (
+                          <FinanceTableCellLink
+                            to={`/employees/${row.agentId}`}
+                            ariaLabel={`Open agent ${row.agentName}`}
+                            tdClassName="hidden md:table-cell"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {row.agentName}
+                          </FinanceTableCellLink>
+                        ) : (
+                          <td className="py-3 px-3 text-gray-700 hidden md:table-cell" onClick={(e) => e.stopPropagation()}>
+                            {row.agentName ?? '—'}
+                          </td>
+                        )}
                         <td className="py-3 px-3 text-right tabular-nums">{formatPeso(row.totalAmount)}</td>
                         <td className="py-3 px-3 text-right tabular-nums text-green-700">{formatPeso(row.amountPaid)}</td>
                         <td className="py-3 px-3 text-center tabular-nums">{row.proofCount}</td>
@@ -1096,12 +1225,9 @@ function CreditRowCard(props: { row: CustomerCreditRow; canEdit: boolean; onEdit
     <div className="border border-gray-200 rounded-lg p-4">
       <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
         <div className="min-w-0">
-          <Link
-            to={`/customers/${c.customerId}`}
-            className="font-semibold text-blue-600 hover:underline truncate block"
-          >
+          <FinanceLink to={`/customers/${c.customerId}`} className={`${FINANCE_LINK_CLASS} font-semibold truncate block`}>
             {c.customerName}
-          </Link>
+          </FinanceLink>
           <p className="text-xs text-gray-500 mt-0.5">
             Terms: <span className="font-medium text-gray-700">{c.paymentTerms ?? '—'}</span>
             {c.paymentScore != null ? <span className="ml-3">Payment score: <span className="font-medium text-gray-700">{c.paymentScore}</span></span> : null}
@@ -1256,7 +1382,22 @@ function OrderCommissionProofsModal(props: {
     >
       <div className="text-sm mb-4 rounded-lg border border-gray-200 bg-gray-50 p-3 space-y-3">
         <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-          <p className="font-semibold text-gray-900 text-base">{props.order.customerName ?? '—'}</p>
+          {props.order.customerId ? (
+            <FinanceLink
+              to={`/customers/${props.order.customerId}`}
+              className={`${FINANCE_LINK_CLASS} font-semibold text-base`}
+            >
+              {props.order.customerName ?? '—'}
+            </FinanceLink>
+          ) : (
+            <p className="font-semibold text-gray-900 text-base">{props.order.customerName ?? '—'}</p>
+          )}
+          <FinanceLink
+            to={`/orders/${props.order.orderId}`}
+            className={`${FINANCE_LINK_CLASS} text-xs font-mono`}
+          >
+            {props.order.orderNumber}
+          </FinanceLink>
           <Badge
             variant="success"
             title={`${commissionPercentLabel} commission on cash payments`}
@@ -1266,7 +1407,13 @@ function OrderCommissionProofsModal(props: {
         </div>
         <p className="text-gray-600 text-xs">
           Agent:{' '}
-          <AgentCell agentId={props.order.agentId} agentName={props.order.agentName} className="text-xs" />
+          {props.order.agentId && props.order.agentName ? (
+            <FinanceLink to={`/employees/${props.order.agentId}`} className="text-xs">
+              {props.order.agentName}
+            </FinanceLink>
+          ) : (
+            props.order.agentName ?? '—'
+          )}
         </p>
         <div className="rounded-md border border-gray-200 bg-white p-3 space-y-3">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">

@@ -101,7 +101,7 @@ export interface Vehicle {
   vehicleId: string;
   vehicleName: string;
   plateNumber?: string;
-  type: 'Truck' | 'Container Van' | 'Motorcycle';
+  type: 'Truck' | 'Container Van' | 'Motorcycle' | 'Shipping Container';
   status: 'Available' | 'On Trip' | 'Loading' | 'Maintenance' | 'Out of Service';
   currentTrip?: string;
   tripsToday: number;

@@ -5,7 +5,7 @@
  * and delivery performance for their branch. Their day-to-day signals:
  *
  *   - Active trips (Loading / In Transit / Delayed) — what's moving right now
- *   - Today's schedule (trips with `scheduled_date = today`)
+ *   - This week's schedule (trips with `scheduled_date` from today through +6 days)
  *   - Orders waiting to be dispatched (Approved / Partially Fulfilled, not on
  *     an active trip)
  *   - Fleet status breakdown (vehicles per status, maintenance due)
@@ -43,8 +43,10 @@ export interface LogisticsTripRow {
   scheduledDate: string | null;
   departureTime: string | null;
   eta: string | null;
+  vehicleUuid: string | null;
   vehicleName: string | null;
   plateNumber: string | null;
+  driverUuid: string | null;
   driverName: string | null;
   destinations: string[];
   orderCount: number;
@@ -59,6 +61,7 @@ export interface LogisticsTripRow {
 export interface LogisticsOrderToDispatchRow {
   id: string;
   orderNumber: string;
+  customerId: string | null;
   customerName: string;
   destination: string;
   requiredDate: string | null;
@@ -116,6 +119,7 @@ export interface LogisticsDelayRow {
 
 export interface LogisticsMaintenanceRow {
   id: string;
+  vehicleUuid: string;
   vehicleId: string;
   vehicleName: string;
   plateNumber: string | null;
@@ -162,27 +166,17 @@ export interface LogisticsDashboardBundle {
   generatedAt: string;
   kpis: LogisticsKPI[];
 
-  activeTrips: LogisticsTripRow[];
-  activeTripCount: number;
-
-  todaySchedule: LogisticsTripRow[];
-  todayScheduleCount: number;
+  weekSchedule: LogisticsTripRow[];
+  weekScheduleCount: number;
 
   ordersAwaitingDispatch: LogisticsOrderToDispatchRow[];
   ordersAwaitingDispatchCount: number;
-
-  fleet: { vehicles: LogisticsVehicleRow[]; summary: LogisticsFleetSummary };
-  drivers: { drivers: LogisticsDriverRow[]; summary: LogisticsDriverSummary };
 
   ibrs: LogisticsIbrRow[];
   ibrCount: number;
 
   delays: LogisticsDelayRow[];
   delayCount: number;
-
-  upcomingMaintenance: LogisticsMaintenanceRow[];
-  upcomingMaintenanceCount: number;
-  overdueMaintenanceCount: number;
 
   performance: {
     points: LogisticsPerformancePoint[];
@@ -289,8 +283,10 @@ function mapTripRow(row: Record<string, unknown>): LogisticsTripRow {
     scheduledDate: toStr(row.scheduled_date),
     departureTime: toStr(row.departure_time),
     eta: toStr(row.eta),
+    vehicleUuid: toStr(row.vehicle_id),
     vehicleName: toStr(row.vehicle_name),
     plateNumber: plate,
+    driverUuid: toStr(row.driver_id),
     driverName: toStr(row.driver_name),
     destinations,
     orderCount: orderIds.length,
@@ -321,21 +317,26 @@ async function fetchActiveTrips(branchId: string | null): Promise<LogisticsTripR
   }
 }
 
-async function fetchTodaySchedule(branchId: string | null): Promise<LogisticsTripRow[]> {
+async function fetchWeekSchedule(branchId: string | null): Promise<LogisticsTripRow[]> {
   if (!branchId) return [];
   try {
-    const today = isoDate(new Date());
+    const start = isoDate(new Date());
+    const endDt = new Date();
+    endDt.setDate(endDt.getDate() + 6);
+    const end = isoDate(endDt);
     const { data, error } = await supabase
       .from('trips')
       .select(TRIP_SELECT)
       .eq('branch_id', branchId)
-      .eq('scheduled_date', today)
+      .gte('scheduled_date', start)
+      .lte('scheduled_date', end)
+      .order('scheduled_date', { ascending: true })
       .order('departure_time', { ascending: true })
-      .limit(20);
+      .limit(50);
     if (error) throw error;
     return ((data ?? []) as Array<Record<string, unknown>>).map(mapTripRow);
   } catch (e) {
-    logDev('today schedule', e);
+    logDev('week schedule', e);
     return [];
   }
 }
@@ -361,7 +362,7 @@ async function fetchOrdersAwaitingDispatch(branchId: string | null): Promise<Log
     const { data, error } = await supabase
       .from('orders')
       .select(
-        `id, order_number, customer_name, delivery_address, required_date, urgency, status,
+        `id, order_number, customer_id, customer_name, delivery_address, required_date, urgency, status,
          volume_cbm, weight_kg`,
       )
       .eq('branch_id', branchId)
@@ -382,6 +383,7 @@ async function fetchOrdersAwaitingDispatch(branchId: string | null): Promise<Log
         return {
           id: String(r.id),
           orderNumber: toStr(r.order_number) ?? String(r.id),
+          customerId: toStr(r.customer_id),
           customerName: toStr(r.customer_name) ?? '—',
           destination: dest,
           requiredDate: toStr(r.required_date),
@@ -667,6 +669,7 @@ async function fetchUpcomingMaintenance(
       const vehicleRow = vehicleMap.get(vehicleId);
       return {
         id: String(r.id),
+        vehicleUuid: vehicleId,
         vehicleId: toStr(vehicleRow?.vehicle_id) ?? '—',
         vehicleName: toStr(vehicleRow?.vehicle_name) ?? '—',
         plateNumber: toStr(vehicleRow?.plate_number),
@@ -759,36 +762,24 @@ async function fetchPerformanceTrend(branchId: string | null): Promise<{
 // ---------------------------------------------------------------------------
 
 function buildKpis(opts: {
-  activeTrips: number;
-  todayScheduled: number;
+  weekScheduled: number;
   ordersAwaitingDispatch: number;
-  fleet: LogisticsFleetSummary;
-  drivers: LogisticsDriverSummary;
-  ibrs: number;
   delays: number;
-  overdueMaintenance: number;
   performance: { completed: number; delayed: number; failed: number; onTimePct: number };
 }): LogisticsKPI[] {
   const closed = opts.performance.completed + opts.performance.delayed + opts.performance.failed;
-  const fleetUtilizationPct =
-    opts.fleet.total > 0 ? ((opts.fleet.onTrip + opts.fleet.loading) / opts.fleet.total) * 100 : 0;
 
   return [
     {
-      id: 'kpi-active-trips',
-      label: 'Active trips',
-      value: opts.activeTrips.toString(),
-      subtitle: 'Loading / In Transit / Delayed',
-      status: opts.activeTrips > 0 ? 'warning' : 'good',
-      href: '/logistics',
-    },
-    {
-      id: 'kpi-today',
-      label: "Today's schedule",
-      value: opts.todayScheduled.toString(),
-      subtitle: opts.todayScheduled > 0 ? 'Trips scheduled today' : 'Nothing scheduled today',
+      id: 'kpi-week',
+      label: "This week's schedule",
+      value: opts.weekScheduled.toString(),
+      subtitle:
+        opts.weekScheduled > 0
+          ? 'Trips in the next 7 days'
+          : 'Nothing scheduled this week',
       status: 'neutral',
-      href: '/logistics',
+      href: '/logistics?tab=dispatch',
     },
     {
       id: 'kpi-orders',
@@ -796,33 +787,7 @@ function buildKpis(opts: {
       value: opts.ordersAwaitingDispatch.toString(),
       subtitle: 'Approved orders not on a trip',
       status: opts.ordersAwaitingDispatch > 0 ? 'warning' : 'good',
-      href: '/logistics',
-    },
-    {
-      id: 'kpi-fleet',
-      label: 'Fleet ready',
-      value: `${opts.fleet.available}/${opts.fleet.total}`,
-      subtitle:
-        opts.fleet.total > 0
-          ? `${fleetUtilizationPct.toFixed(0)}% on trips · ${opts.fleet.maintenance} in maintenance`
-          : 'No vehicles registered',
-      status:
-        opts.fleet.total === 0
-          ? 'neutral'
-          : opts.fleet.available === 0
-            ? 'danger'
-            : opts.fleet.maintenance + opts.fleet.outOfService >= opts.fleet.total / 2
-              ? 'warning'
-              : 'good',
-      href: '/logistics',
-    },
-    {
-      id: 'kpi-drivers',
-      label: 'Drivers available',
-      value: `${opts.drivers.available}/${opts.drivers.total}`,
-      subtitle: `${opts.drivers.onActiveTrip} on trip · ${opts.drivers.onLeave} on leave`,
-      status: opts.drivers.total === 0 ? 'neutral' : opts.drivers.available === 0 ? 'danger' : 'good',
-      href: '/logistics',
+      href: '/logistics?tab=dispatch',
     },
     {
       id: 'kpi-on-time',
@@ -840,7 +805,7 @@ function buildKpis(opts: {
             : opts.performance.onTimePct >= 75
               ? 'warning'
               : 'danger',
-      href: '/logistics',
+      href: '/logistics?tab=dispatch',
     },
     {
       id: 'kpi-delays',
@@ -848,18 +813,7 @@ function buildKpis(opts: {
       value: opts.delays.toString(),
       subtitle: opts.delays > 0 ? 'Delay / failure investigations' : 'No open exceptions',
       status: opts.delays > 0 ? 'danger' : 'good',
-      href: '/logistics',
-    },
-    {
-      id: 'kpi-maintenance',
-      label: 'Maintenance',
-      value: opts.overdueMaintenance.toString(),
-      subtitle:
-        opts.overdueMaintenance > 0
-          ? `${opts.overdueMaintenance} overdue · ${opts.ibrs} IBR transfers`
-          : `${opts.ibrs} IBR transfers in flight`,
-      status: opts.overdueMaintenance > 0 ? 'warning' : 'good',
-      href: '/logistics',
+      href: '/logistics?tab=dispatch',
     },
   ];
 }
@@ -876,36 +830,23 @@ export async function fetchLogisticsDashboard(opts: {
   const branchId = branchName ? await resolveBranchIdByName(branchName) : null;
 
   const [
-    activeTrips,
-    todaySchedule,
+    weekSchedule,
     ordersAwaitingDispatch,
-    fleet,
     ibrs,
     delays,
-    maintenance,
     performance,
   ] = await Promise.all([
-    fetchActiveTrips(branchId),
-    fetchTodaySchedule(branchId),
+    fetchWeekSchedule(branchId),
     fetchOrdersAwaitingDispatch(branchId),
-    fetchFleetSnapshot(branchId),
     fetchInterBranchTransfers(branchId),
     fetchOpenDelayExceptions(branchId),
-    fetchUpcomingMaintenance(branchId),
     fetchPerformanceTrend(branchId),
   ]);
 
-  const drivers = await fetchDriversSnapshot(branchId, activeTrips);
-
   const kpis = buildKpis({
-    activeTrips: activeTrips.length,
-    todayScheduled: todaySchedule.length,
+    weekScheduled: weekSchedule.length,
     ordersAwaitingDispatch: ordersAwaitingDispatch.length,
-    fleet: fleet.summary,
-    drivers: drivers.summary,
-    ibrs: ibrs.length,
     delays: delays.length,
-    overdueMaintenance: maintenance.overdueCount,
     performance,
   });
 
@@ -915,27 +856,17 @@ export async function fetchLogisticsDashboard(opts: {
     generatedAt: new Date().toISOString(),
     kpis,
 
-    activeTrips,
-    activeTripCount: activeTrips.length,
-
-    todaySchedule,
-    todayScheduleCount: todaySchedule.length,
+    weekSchedule,
+    weekScheduleCount: weekSchedule.length,
 
     ordersAwaitingDispatch,
     ordersAwaitingDispatchCount: ordersAwaitingDispatch.length,
-
-    fleet,
-    drivers,
 
     ibrs,
     ibrCount: ibrs.length,
 
     delays,
     delayCount: delays.length,
-
-    upcomingMaintenance: maintenance.rows.slice(0, 5),
-    upcomingMaintenanceCount: maintenance.rows.length,
-    overdueMaintenanceCount: maintenance.overdueCount,
 
     performance,
   };

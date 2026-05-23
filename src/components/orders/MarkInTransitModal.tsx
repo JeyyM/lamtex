@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Truck, Package } from 'lucide-react';
 import { OrderLineItem } from '@/src/types/orders';
+import { remainingToShipForLine } from '@/src/lib/orderShipmentQuantities';
 
 export type MarkInTransitModalPurpose = 'markPacked' | 'inTransit';
 
@@ -13,14 +14,14 @@ export interface MarkInTransitModalProps {
   submitting?: boolean;
   /** markPacked: Loading→Packed (record loaded qty). inTransit: Packed→In Transit (default). */
   purpose?: MarkInTransitModalPurpose;
+  /** Current order status — used to ignore stale shipped qty before pack. */
+  orderStatus?: string;
   /** Per line, units on this shipment (added to cumulative quantity_shipped). */
   onConfirm: (rows: { itemId: string; shippedQuantity: number }[]) => void | Promise<void>;
 }
 
-function remainingToSend(line: OrderLineItem): number {
-  const ordered = line.quantity;
-  const cum = line.quantityShipped ?? 0;
-  return Math.max(0, ordered - cum);
+function remainingToSend(line: OrderLineItem, orderStatus?: string): number {
+  return remainingToShipForLine(line, orderStatus);
 }
 
 export function MarkInTransitModal({
@@ -30,6 +31,7 @@ export function MarkInTransitModal({
   items,
   submitting = false,
   purpose = 'inTransit',
+  orderStatus,
   onConfirm,
 }: MarkInTransitModalProps) {
   const [inputValues, setInputValues] = useState<Record<string, string>>({});
@@ -40,7 +42,7 @@ export function MarkInTransitModal({
       const next: Record<string, number> = {};
       const raw: Record<string, string> = {};
       items.forEach((item) => {
-        const rem = remainingToSend(item);
+        const rem = remainingToSend(item, orderStatus);
         const q = rem;
         next[item.id] = q;
         raw[item.id] = String(q);
@@ -48,7 +50,7 @@ export function MarkInTransitModal({
       setQuantities(next);
       setInputValues(raw);
     }
-  }, [isOpen, items]);
+  }, [isOpen, items, orderStatus]);
 
   if (!isOpen) return null;
 
@@ -66,14 +68,14 @@ export function MarkInTransitModal({
     const n = parseInt(value, 10);
     if (isNaN(n)) return;
     const line = items.find((i) => i.id === itemId);
-    const cap = line ? remainingToSend(line) : 0;
+    const cap = line ? remainingToSend(line, orderStatus) : 0;
     const clamped = Math.min(Math.max(0, n), cap);
     setQuantities((prev) => ({ ...prev, [itemId]: clamped }));
   };
 
   const onBlur = (itemId: string) => {
     const line = items.find((i) => i.id === itemId);
-    const cap = line ? remainingToSend(line) : 0;
+    const cap = line ? remainingToSend(line, orderStatus) : 0;
     const raw = inputValues[itemId] ?? '';
     const n = parseInt(raw, 10);
     const clamped = isNaN(n) ? 0 : Math.min(Math.max(0, n), cap);
@@ -128,7 +130,7 @@ export function MarkInTransitModal({
               const hasVariant = Boolean(item.variantId);
               const ordered = item.quantity;
               const delivered = item.quantityDelivered ?? 0;
-              const rem = remainingToSend(item);
+              const rem = remainingToSend(item, orderStatus);
               return (
                 <div key={item.id} className="rounded-lg border border-gray-200 bg-gray-50 p-4">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">

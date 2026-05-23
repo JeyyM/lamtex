@@ -1,5 +1,5 @@
 import React from 'react';
-import { NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { NavLink, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { 
   LayoutDashboard, 
@@ -75,12 +75,17 @@ export function Sidebar() {
       )}>
         <div className="h-16 flex items-center justify-between px-4 border-b border-gray-200">
           {/* Logo - hidden when collapsed on desktop */}
-          <div className={cn(
-            "flex items-center gap-2",
-            isSidebarCollapsed && "lg:hidden"
-          )}>
+          <Link
+            to="/"
+            title="Go to Dashboard"
+            onClick={() => setIsMobileMenuOpen(false)}
+            className={cn(
+              'flex items-center gap-2 rounded-md hover:opacity-90 transition-opacity',
+              isSidebarCollapsed && 'lg:hidden',
+            )}
+          >
             <img src={lamtexLogo} alt="Lamtex Logo" className="h-10 w-auto" />
-          </div>
+          </Link>
           
           {/* Button group - pushed to right */}
           <div className={cn(

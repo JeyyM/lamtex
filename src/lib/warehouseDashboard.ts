@@ -20,6 +20,9 @@ import { supabase } from '@/src/lib/supabase';
 import { resolveBranchIdByName } from '@/src/lib/branchCompanySettings';
 import type { WarehouseAssignmentScope } from '@/src/lib/warehouseScope';
 
+/** Toggle stock movements chart/table on the warehouse dashboard. */
+export const WAREHOUSE_DASHBOARD_SHOW_STOCK_MOVEMENTS = false;
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -36,6 +39,7 @@ export interface WarehouseKPI {
 export interface ProductStockoutRow {
   variantId: string;
   productId: string;
+  categorySlug: string | null;
   productName: string;
   size: string;
   sku: string;
@@ -120,6 +124,8 @@ export interface MyPORow {
 export interface RecentMovementRow {
   id: string;
   kind: 'product' | 'material';
+  /** Product id or raw material id for detail links. */
+  entityId: string | null;
   type: string;
   itemName: string;
   sku: string | null;
@@ -284,6 +290,7 @@ function buildCreatorMatchers(name: string | null): string[] {
 interface StockSourceRow {
   variantId: string;
   productId: string;
+  categorySlug: string | null;
   productName: string;
   sku: string;
   size: string;
@@ -299,7 +306,7 @@ async function fetchScopedVariants(scope: WarehouseAssignmentScope): Promise<Sto
       .from('product_variants')
       .select(
         `id, sku, size, total_stock, reorder_point, safety_stock, last_restocked,
-         products!inner(id, name, is_hidden)`,
+         products!inner(id, name, is_hidden, product_categories(slug))`,
       )
       .eq('is_hidden', false)
       .order('total_stock', { ascending: true })
@@ -315,12 +322,20 @@ async function fetchScopedVariants(scope: WarehouseAssignmentScope): Promise<Sto
 
     return ((data ?? []) as Array<Record<string, unknown>>)
       .map((r) => {
-        const product = nestedAs<{ id?: unknown; name?: unknown; is_hidden?: unknown }>(r.products);
+        const product = nestedAs<{
+          id?: unknown;
+          name?: unknown;
+          is_hidden?: unknown;
+          product_categories?: { slug?: unknown } | { slug?: unknown }[] | null;
+        }>(r.products);
         if (!product) return null;
         if (product.is_hidden === true) return null;
+        const category = product.product_categories;
+        const categoryObj = Array.isArray(category) ? category[0] : category;
         return {
           variantId: String(r.id),
           productId: String(product.id ?? ''),
+          categorySlug: toStr(categoryObj?.slug),
           productName: toStr(product.name) ?? '—',
           sku: toStr(r.sku) ?? '—',
           size: toStr(r.size) ?? '—',
@@ -657,6 +672,7 @@ async function fetchRecentMovements(
         return {
           id: String(r.id),
           kind: 'product' as const,
+          entityId: productId,
           type: toStr(r.movement_type) ?? '—',
           itemName: toStr(product?.name) ?? toStr(r.product_name) ?? '—',
           sku: toStr(r.variant_sku),
@@ -687,6 +703,7 @@ async function fetchRecentMovements(
         return {
           id: String(r.id),
           kind: 'material' as const,
+          entityId: materialId,
           type: toStr(r.movement_type) ?? '—',
           itemName: toStr(r.material_name) ?? '—',
           sku: toStr(r.material_sku),
@@ -861,7 +878,9 @@ export async function fetchWarehouseManagerDashboard(opts: {
   const branchTrim = opts.branchName?.trim() || '';
   const branchName = branchTrim === '' ? null : branchTrim;
   const branchId = branchName ? await resolveBranchIdByName(branchName) : null;
-  const branchCode = await fetchBranchCode(branchId);
+  const branchCode = WAREHOUSE_DASHBOARD_SHOW_STOCK_MOVEMENTS
+    ? await fetchBranchCode(branchId)
+    : null;
   const creators = buildCreatorMatchers(opts.employeeName);
 
   const [
@@ -881,7 +900,9 @@ export async function fetchWarehouseManagerDashboard(opts: {
     fetchIBRsToFulfill(branchId),
     fetchMyProductionRequests(branchId, creators),
     fetchMyPurchaseOrders(branchId, creators),
-    fetchRecentMovements(branchCode, opts.scope),
+    WAREHOUSE_DASHBOARD_SHOW_STOCK_MOVEMENTS
+      ? fetchRecentMovements(branchCode, opts.scope)
+      : Promise.resolve({ recent: [], trend: [] }),
   ]);
 
   // Inventory derivation
@@ -893,6 +914,7 @@ export async function fetchWarehouseManagerDashboard(opts: {
       stockoutRows.push({
         variantId: v.variantId,
         productId: v.productId,
+        categorySlug: v.categorySlug,
         productName: v.productName,
         size: v.size,
         sku: v.sku,
@@ -904,6 +926,7 @@ export async function fetchWarehouseManagerDashboard(opts: {
       lowStockProducts.push({
         variantId: v.variantId,
         productId: v.productId,
+        categorySlug: v.categorySlug,
         productName: v.productName,
         size: v.size,
         sku: v.sku,

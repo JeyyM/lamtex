@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { scopedProductIdList } from '@/src/lib/warehouseScope';
+import { effectiveInventoryBranch } from '@/src/lib/inventoryAccess';
 import { Button } from '@/src/components/ui/Button';
 import { supabase } from '@/src/lib/supabase';
 import { getVariantIdsWithStockAtBothBranches } from '@/src/lib/interBranchRequest';
@@ -291,7 +292,8 @@ export function OrderProductSelectionModal({
   initialEdit = null,
   confirmBusy = false,
 }: OrderProductSelectionModalProps) {
-  const { branch, warehouseScope } = useAppContext();
+  const { branch, role, warehouseScope } = useAppContext();
+  const inventoryBranch = effectiveInventoryBranch(role, branch);
   const scopedProductIds = scopedProductIdList(warehouseScope);
   const navbarBranch = (branch ?? '').trim();
 
@@ -533,8 +535,8 @@ export function OrderProductSelectionModal({
         .from('product_categories')
         .select('id, name, image_url')
         .eq('is_active', true);
-      if (navbarBranch) {
-        cq = cq.or(`branch.eq.${navbarBranch},branch.is.null`);
+      if (inventoryBranch) {
+        cq = cq.or(`branch.eq.${inventoryBranch},branch.is.null`);
       }
       const { data } = await cq.order('sort_order');
       if (!cancelled) {
@@ -556,7 +558,7 @@ export function OrderProductSelectionModal({
     return () => {
       cancelled = true;
     };
-  }, [open, navbarBranch, scopedProductIds?.join('|') ?? '']);
+  }, [open, inventoryBranch, scopedProductIds?.join('|') ?? '']);
 
   const applyDualVariantFilter = useCallback(
     (list: DBProduct[]): DBProduct[] => {
@@ -583,8 +585,8 @@ export function OrderProductSelectionModal({
         .select(`id, name, image_url, product_variants(${VARIANT_SELECT})`)
         .eq('category_id', cat.id)
         .eq('status', 'Active');
-      if (navbarBranch) {
-        pQuery = pQuery.or(`branch.eq.${navbarBranch},branch.is.null`);
+      if (inventoryBranch) {
+        pQuery = pQuery.or(`branch.eq.${inventoryBranch},branch.is.null`);
       }
       if (scopedProductIds) pQuery = pQuery.in('id', scopedProductIds);
       const { data: productsData } = await pQuery.order('name');
@@ -614,7 +616,7 @@ export function OrderProductSelectionModal({
       dualVariantIds,
       interBranchRequestingBranchId,
       interBranchFulfillingBranchId,
-      navbarBranch,
+      inventoryBranch,
       scopedProductIds?.join('|') ?? '',
     ],
   );
@@ -640,8 +642,8 @@ export function OrderProductSelectionModal({
           .from('products')
           .select(`id, name, image_url, product_variants(${VARIANT_SELECT})`)
           .eq('status', 'Active');
-        if (navbarBranch) {
-          searchQ = searchQ.or(`branch.eq.${navbarBranch},branch.is.null`);
+        if (inventoryBranch) {
+          searchQ = searchQ.or(`branch.eq.${inventoryBranch},branch.is.null`);
         }
         if (scopedProductIds) searchQ = searchQ.in('id', scopedProductIds);
         const { data: productsData } = await searchQ
@@ -677,7 +679,8 @@ export function OrderProductSelectionModal({
     dualVariantIds,
     interBranchRequestingBranchId,
     interBranchFulfillingBranchId,
-    navbarBranch,
+    inventoryBranch,
+    scopedProductIds?.join('|') ?? '',
   ]);
 
   const filteredLocal = useMemo(() => {

@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Ca
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagination';
+import { TABLE_ROW_CELL_CONTENT, TABLE_ROW_LINK_CLASS, TableRowCellOverlay } from '@/src/components/ui/tableRowLink';
 import { supabase } from '@/src/lib/supabase';
 import { createDraftProductionRequest, prLogRoleMap } from '@/src/lib/productionRequestDraft';
 import { isPrExpectedOverdue } from '@/src/lib/prOverdue';
@@ -679,11 +680,19 @@ export function ProductionRequestsPage() {
                   <tbody className="divide-y divide-gray-200">
                     {pagedRows.map((r) => {
                       const targetOverdue = isPrExpectedOverdue(r.expected_completion_date, r.status);
+                      const href = `/production-requests/${r.id}`;
+                      const rowOverlay = (opts: { primary?: boolean }) => (
+                        <TableRowCellOverlay
+                          to={href}
+                          ariaLabel={`Open production request ${r.pr_number}`}
+                          primary={opts.primary}
+                        />
+                      );
                       return (
-                      <tr key={r.id} className="hover:bg-gray-50">
-                        <td className="px-6 py-4">
-                          <Link to={`/production-requests/${r.id}`} className="block">
-                            <div className="font-medium text-blue-600 hover:underline">{r.pr_number}</div>
+                      <tr key={r.id} className={TABLE_ROW_LINK_CLASS}>
+                        <td className="relative px-6 py-4 align-top">
+                          <div className={TABLE_ROW_CELL_CONTENT}>
+                            <div className="font-medium text-blue-600">{r.pr_number}</div>
                             {(r.inter_branch_request_id || r.is_transfer_request) && (
                               <Badge
                                 variant="default"
@@ -695,38 +704,42 @@ export function ProductionRequestsPage() {
                                   : `Transfer · ${r.tr_branch?.name ?? '—'}`}
                               </Badge>
                             )}
-                          </Link>
+                          </div>
+                          {rowOverlay({ primary: true })}
                         </td>
-                        <td className="px-6 py-4 text-gray-600">
-                          <Link to={`/production-requests/${r.id}`} className="block">{fmt(r.request_date)}</Link>
+                        <td className="relative px-6 py-4 align-top text-gray-600">
+                          <span className={TABLE_ROW_CELL_CONTENT}>{fmt(r.request_date)}</span>
+                          {rowOverlay({})}
                         </td>
-                        <td className="px-6 py-4 font-medium text-gray-900">
-                          <Link to={`/production-requests/${r.id}`} className="block">{r.branches?.name ?? '—'}</Link>
+                        <td className="relative px-6 py-4 align-top font-medium text-gray-900">
+                          <span className={TABLE_ROW_CELL_CONTENT}>{r.branches?.name ?? '—'}</span>
+                          {rowOverlay({})}
                         </td>
-                        <td className="px-6 py-4 text-gray-600 tabular-nums">
-                          <Link to={`/production-requests/${r.id}`} className="block">{r.production_request_items.length}</Link>
+                        <td className="relative px-6 py-4 align-top text-gray-600 tabular-nums">
+                          <span className={TABLE_ROW_CELL_CONTENT}>{r.production_request_items.length}</span>
+                          {rowOverlay({})}
                         </td>
-                        <td className="px-6 py-4">
-                          <Link to={`/production-requests/${r.id}`} className="block">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className={targetOverdue ? 'text-red-800 font-medium' : 'text-gray-600'}>
-                                {fmt(r.expected_completion_date)}
-                              </span>
-                              {targetOverdue && (
-                                <Badge variant="danger" className="text-[10px] px-1.5 py-0 gap-0.5 shrink-0">
-                                  <AlertTriangle className="w-3 h-3" />
-                                  Overdue
-                                </Badge>
-                              )}
-                            </div>
-                          </Link>
+                        <td className="relative px-6 py-4 align-top">
+                          <div className={`${TABLE_ROW_CELL_CONTENT} flex items-center gap-2 flex-wrap`}>
+                            <span className={targetOverdue ? 'text-red-800 font-medium' : 'text-gray-600'}>
+                              {fmt(r.expected_completion_date)}
+                            </span>
+                            {targetOverdue && (
+                              <Badge variant="danger" className="text-[10px] px-1.5 py-0 gap-0.5 shrink-0">
+                                <AlertTriangle className="w-3 h-3" />
+                                Overdue
+                              </Badge>
+                            )}
+                          </div>
+                          {rowOverlay({})}
                         </td>
-                        <td className="px-6 py-4 text-center">
-                          <Link to={`/production-requests/${r.id}`} className="block">
+                        <td className="relative px-6 py-4 align-top text-center">
+                          <span className={`${TABLE_ROW_CELL_CONTENT} inline-flex [&_*]:pointer-events-none`}>
                             <Badge variant={getStatusVariant(r.status)} className="inline-flex items-center gap-1 whitespace-nowrap">
                               {getPRStatusIcon(r.status)} {r.status}
                             </Badge>
-                          </Link>
+                          </span>
+                          {rowOverlay({})}
                         </td>
                       </tr>
                       );

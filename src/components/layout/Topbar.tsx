@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useMatch } from 'react-router-dom';
+import { Link, useMatch } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { Bell, Menu, Settings } from 'lucide-react';
 import { UserRole, Branch } from '@/src/types';
@@ -72,9 +72,9 @@ export function Topbar() {
           <Menu className="w-5 h-5" />
         </button>
 
-        <div className="lg:hidden flex items-center">
+        <Link to="/" title="Go to Dashboard" className="lg:hidden flex items-center rounded-md hover:opacity-90 transition-opacity">
           <img src={lamtexLogo} alt="Lamtex Logo" className="h-8 w-auto" />
-        </div>
+        </Link>
 
         <div className="flex-1"></div>
 

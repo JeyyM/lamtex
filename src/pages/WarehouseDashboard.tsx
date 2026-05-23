@@ -1,9 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
+import { WarehouseKpiStrip } from '@/src/components/warehouse/WarehouseKpiStrip';
+import {
+  DashTableRowLink,
+  DashHeaderLink,
+} from '@/src/components/executive/executiveLinks';
 import {
   Package,
   AlertTriangle,
@@ -34,11 +38,8 @@ import {
 import {
   fetchWarehouseManagerDashboard,
   formatWarehousePeso,
-  type WarehouseKPI,
+  WAREHOUSE_DASHBOARD_SHOW_STOCK_MOVEMENTS,
   type WarehouseManagerDashboardBundle,
-  type ProductStockoutRow,
-  type ProductLowStockRow,
-  type MaterialLowStockRow,
   type IncomingPORow,
   type OrderToFulfillRow,
   type IBRToFulfillRow,
@@ -46,20 +47,8 @@ import {
   type MyPORow,
   type RecentMovementRow,
 } from '@/src/lib/warehouseDashboard';
-
-const STATUS_TILE_STYLES: Record<WarehouseKPI['status'], string> = {
-  good: 'border-emerald-200 bg-emerald-50/40',
-  warning: 'border-amber-200 bg-amber-50/40',
-  danger: 'border-red-200 bg-red-50/40',
-  neutral: 'border-gray-200 bg-white',
-};
-
-const STATUS_TEXT_COLORS: Record<WarehouseKPI['status'], string> = {
-  good: 'text-emerald-700',
-  warning: 'text-amber-700',
-  danger: 'text-red-700',
-  neutral: 'text-gray-700',
-};
+import { buildWarehouseAssignmentScope } from '@/src/lib/warehouseScope';
+import { finishedGoodProductHref } from '@/src/lib/productRoutes';
 
 function formatDateShort(iso: string | null | undefined): string {
   if (!iso) return '—';
@@ -68,10 +57,25 @@ function formatDateShort(iso: string | null | undefined): string {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: '2-digit' });
 }
 
-function statusBadgeVariant(status: string): 'success' | 'warning' | 'danger' | 'default' | 'info' {
+function productHref(productId: string | null | undefined, categorySlug?: string | null): string {
+  if (!productId) return '/warehouse';
+  return finishedGoodProductHref(productId, categorySlug);
+}
+
+function materialHref(materialId: string): string {
+  return `/materials/${materialId}`;
+}
+
+function movementHref(row: RecentMovementRow): string {
+  if (row.kind === 'product' && row.entityId) return productHref(row.entityId);
+  if (row.kind === 'material' && row.entityId) return materialHref(row.entityId);
+  return '/warehouse';
+}
+
+function statusBadgeVariant(status: string): 'success' | 'warning' | 'danger' | 'default' | 'info' | 'neutral' {
   switch (status) {
     case 'Draft':
-      return 'default';
+      return 'neutral';
     case 'Requested':
     case 'Pending':
     case 'Loading':
@@ -100,8 +104,17 @@ function statusBadgeVariant(status: string): 'success' | 'warning' | 'danger' | 
 }
 
 export function WarehouseDashboard(): React.ReactElement {
-  const { branch, employeeName, warehouseScope, warehouseScopeLoading } = useAppContext();
-  const navigate = useNavigate();
+  const {
+    branch,
+    employeeName,
+    role,
+    assignedProductIds,
+    assignedMaterialIds,
+    warehouseScopeLoading,
+  } = useAppContext();
+
+  const scopeProductKey = assignedProductIds?.join('|') ?? '';
+  const scopeMaterialKey = assignedMaterialIds?.join('|') ?? '';
 
   const [bundle, setBundle] = useState<WarehouseManagerDashboardBundle | null>(null);
   const [loading, setLoading] = useState(true);
@@ -115,10 +128,11 @@ export function WarehouseDashboard(): React.ReactElement {
       setRefreshing(silent);
       setError(null);
       try {
+        const scope = buildWarehouseAssignmentScope(role, assignedProductIds, assignedMaterialIds);
         const data = await fetchWarehouseManagerDashboard({
           branchName: branch,
           employeeName,
-          scope: warehouseScope,
+          scope,
         });
         setBundle(data);
       } catch (e) {
@@ -128,12 +142,20 @@ export function WarehouseDashboard(): React.ReactElement {
         setRefreshing(false);
       }
     },
-    [branch, employeeName, warehouseScope, warehouseScopeLoading],
+    [
+      branch,
+      employeeName,
+      role,
+      scopeProductKey,
+      scopeMaterialKey,
+      warehouseScopeLoading,
+    ],
   );
 
   useEffect(() => {
+    if (warehouseScopeLoading) return;
     void load();
-  }, [load]);
+  }, [load, warehouseScopeLoading]);
 
   const branchLabel = useMemo(() => {
     if (bundle?.branchName) return bundle.branchName;
@@ -187,13 +209,12 @@ export function WarehouseDashboard(): React.ReactElement {
             {refreshing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
             Refresh
           </Button>
-          <Button variant="outline" onClick={() => navigate('/warehouse')} className="gap-2">
+          <DashHeaderLink to="/warehouse">
             <Package className="w-4 h-4" /> Open Warehouse
-          </Button>
+          </DashHeaderLink>
         </div>
       </div>
 
-      {/* Catalog scope banner */}
       {bundle.scopeActive && (
         <Card className="border-blue-100 bg-blue-50/40">
           <CardContent className="p-3 flex items-center gap-3">
@@ -207,69 +228,47 @@ export function WarehouseDashboard(): React.ReactElement {
         </Card>
       )}
 
-      {/* KPI STRIP */}
-      <KpiStrip kpis={bundle.kpis} onNavigate={(href) => navigate(href)} />
+      <WarehouseKpiStrip kpis={bundle.kpis} />
 
-      {/* CRITICAL INVENTORY */}
       {(bundle.criticalInventory.stockoutCount > 0 ||
         bundle.criticalInventory.lowStockProductCount > 0 ||
         bundle.criticalInventory.lowStockMaterialCount > 0) && (
-        <CriticalInventoryCard
-          inventory={bundle.criticalInventory}
-          onOpenProduct={(productId) => productId && navigate(`/products/${productId}`)}
-          onOpenMaterial={(materialId) => navigate(`/materials/${materialId}`)}
-          onViewProducts={() => navigate('/warehouse')}
-          onViewMaterials={() => navigate('/materials')}
-        />
+        <CriticalInventoryCard inventory={bundle.criticalInventory} />
       )}
 
-      {/* ACTION QUEUES */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <IncomingPOsCard
           rows={bundle.incomingPurchaseOrders}
           count={bundle.incomingPurchaseOrderCount}
           totalValue={bundle.incomingPurchaseOrderValue}
-          onOpen={(id) => navigate(`/purchase-orders/${id}`)}
-          onViewAll={() => navigate('/purchase-orders')}
         />
         <OrdersToFulfillCard
           rows={bundle.ordersAwaitingFulfillment}
           count={bundle.ordersAwaitingFulfillmentCount}
-          onOpen={(id) => navigate(`/orders/${id}`)}
-          onViewAll={() => navigate('/warehouse')}
         />
-        <IBRsCard
-          rows={bundle.ibrsToFulfill}
-          count={bundle.ibrsToFulfillCount}
-          onOpen={(id) => navigate(`/inter-branch-requests/${id}`)}
-          onViewAll={() => navigate('/inter-branch-requests')}
-        />
+        <IBRsCard rows={bundle.ibrsToFulfill} count={bundle.ibrsToFulfillCount} />
       </div>
 
-      {/* MY REQUESTS */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <MyPRsCard
           recent={bundle.myProductionRequests.recent}
           statusCounts={bundle.myProductionRequests.statusCounts}
           activeCount={bundle.myProductionRequests.activeCount}
-          onOpen={(id) => navigate(`/production-requests/${id}`)}
-          onViewAll={() => navigate('/production-requests')}
         />
         <MyPOsCard
           recent={bundle.myPurchaseOrders.recent}
           statusCounts={bundle.myPurchaseOrders.statusCounts}
           activeCount={bundle.myPurchaseOrders.activeCount}
-          onOpen={(id) => navigate(`/purchase-orders/${id}`)}
-          onViewAll={() => navigate('/purchase-orders')}
         />
       </div>
 
-      {/* MOVEMENTS */}
-      <MovementsCard
-        trend={bundle.movementsTrend}
-        recent={bundle.recentMovements}
-        inventoryValue={bundle.inventoryValue}
-      />
+      {WAREHOUSE_DASHBOARD_SHOW_STOCK_MOVEMENTS && (
+        <MovementsCard
+          trend={bundle.movementsTrend}
+          recent={bundle.recentMovements}
+          inventoryValue={bundle.inventoryValue}
+        />
+      )}
 
       <p className="text-xs text-gray-400 text-right">
         Generated {new Date(bundle.generatedAt).toLocaleString()}
@@ -282,63 +281,48 @@ export function WarehouseDashboard(): React.ReactElement {
 // Sub-components
 // ---------------------------------------------------------------------------
 
-function KpiStrip(props: { kpis: WarehouseKPI[]; onNavigate: (href: string) => void }) {
+function QueueTableCard(props: {
+  icon: React.ReactNode;
+  title: string;
+  count: number;
+  emptyText: string;
+  viewAllHref: string;
+  footer?: string;
+  children: React.ReactNode;
+}) {
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-4 2xl:grid-cols-8 gap-3">
-      {props.kpis.map((kpi) => (
-        <button
-          key={kpi.id}
-          type="button"
-          onClick={() => kpi.href && props.onNavigate(kpi.href)}
-          disabled={!kpi.href}
-          className={`text-left rounded-lg border ${STATUS_TILE_STYLES[kpi.status]} p-4 transition-all ${
-            kpi.href ? 'hover:shadow-md hover:-translate-y-0.5 cursor-pointer' : 'cursor-default'
-          }`}
-        >
-          <div className="flex items-start justify-between gap-2">
-            <p className="text-xs font-medium text-gray-500 uppercase tracking-wider">{kpi.label}</p>
-            <KpiIcon id={kpi.id} status={kpi.status} />
-          </div>
-          <p className={`text-2xl font-bold mt-2 ${STATUS_TEXT_COLORS[kpi.status]}`}>{kpi.value}</p>
-          {kpi.subtitle && <p className="text-xs text-gray-500 mt-1 line-clamp-2">{kpi.subtitle}</p>}
-        </button>
-      ))}
-    </div>
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            {props.icon}
+            {props.title}
+            {props.count > 0 && <Badge variant="warning">{props.count}</Badge>}
+          </CardTitle>
+          <DashHeaderLink
+            to={props.viewAllHref}
+            className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm"
+          >
+            <ArrowRight className="w-4 h-4" />
+          </DashHeaderLink>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {props.count === 0 ? (
+          <p className="text-sm text-gray-500 py-4 text-center">{props.emptyText}</p>
+        ) : (
+          props.children
+        )}
+        {props.footer && props.count > 0 && (
+          <p className="text-xs text-gray-500 mt-3 border-t border-gray-100 pt-2">{props.footer}</p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
-function KpiIcon(props: { id: string; status: WarehouseKPI['status'] }) {
-  const color = STATUS_TEXT_COLORS[props.status];
-  switch (props.id) {
-    case 'kpi-catalog':
-      return <Box className={`w-4 h-4 ${color}`} />;
-    case 'kpi-stockouts':
-      return <AlertTriangle className={`w-4 h-4 ${color}`} />;
-    case 'kpi-low-stock':
-      return <AlertTriangle className={`w-4 h-4 ${color}`} />;
-    case 'kpi-incoming-po':
-      return <PackageCheck className={`w-4 h-4 ${color}`} />;
-    case 'kpi-orders-pipeline':
-      return <Truck className={`w-4 h-4 ${color}`} />;
-    case 'kpi-ibrs':
-      return <Repeat className={`w-4 h-4 ${color}`} />;
-    case 'kpi-my-prs':
-      return <Factory className={`w-4 h-4 ${color}`} />;
-    case 'kpi-my-pos':
-      return <ClipboardList className={`w-4 h-4 ${color}`} />;
-    default:
-      return <Package className={`w-4 h-4 ${color}`} />;
-  }
-}
-
-// ----- Critical inventory card -----
-
 function CriticalInventoryCard(props: {
   inventory: WarehouseManagerDashboardBundle['criticalInventory'];
-  onOpenProduct: (productId: string) => void;
-  onOpenMaterial: (materialId: string) => void;
-  onViewProducts: () => void;
-  onViewMaterials: () => void;
 }) {
   const { inventory } = props;
   return (
@@ -350,187 +334,186 @@ function CriticalInventoryCard(props: {
             Critical inventory alerts
           </CardTitle>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={props.onViewProducts} className="gap-1">
+            <DashHeaderLink to="/warehouse">
               <Package className="w-4 h-4" /> Products
-            </Button>
-            <Button variant="outline" size="sm" onClick={props.onViewMaterials} className="gap-1">
+            </DashHeaderLink>
+            <DashHeaderLink to="/materials">
               <Box className="w-4 h-4" /> Materials
-            </Button>
+            </DashHeaderLink>
           </div>
         </div>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="space-y-6">
         {inventory.stockouts.length > 0 && (
-          <div>
-            <h3 className="text-sm font-semibold text-red-900 mb-2 flex items-center gap-2">
-              <span>Stockouts</span>
-              <Badge variant="danger">{inventory.stockoutCount}</Badge>
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-              {inventory.stockouts.map((s) => (
-                <StockoutItem key={s.variantId} row={s} onOpen={props.onOpenProduct} />
-              ))}
-            </div>
-          </div>
+          <InventoryAlertTable
+            title="Stockouts"
+            count={inventory.stockoutCount}
+            badgeVariant="danger"
+            headers={['Product', 'SKU', 'Stock / reorder', 'Last restock', '']}
+            rows={inventory.stockouts.map((s) => ({
+              key: s.variantId,
+              href: productHref(s.productId, s.categorySlug),
+              ariaLabel: `Open product ${s.productName}`,
+              cells: [
+                s.productName,
+                `${s.size} · ${s.sku}`,
+                `${s.totalStock} / ${s.reorderPoint}`,
+                formatDateShort(s.lastRestocked),
+                <Badge key="b" variant="danger" className="text-[10px]">Stockout</Badge>,
+              ],
+            }))}
+          />
         )}
         {inventory.lowStockProducts.length > 0 && (
-          <div>
-            <h3 className="text-sm font-semibold text-gray-800 mb-2 flex items-center gap-2">
-              <Package className="w-4 h-4 text-amber-600" />
-              <span>Low-stock products</span>
-              <Badge variant="warning">{inventory.lowStockProductCount}</Badge>
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-              {inventory.lowStockProducts.map((p) => (
-                <LowProductItem key={p.variantId} row={p} onOpen={props.onOpenProduct} />
-              ))}
-            </div>
-          </div>
+          <InventoryAlertTable
+            title="Low-stock products"
+            count={inventory.lowStockProductCount}
+            badgeVariant="warning"
+            icon={<Package className="w-4 h-4 text-amber-600" />}
+            headers={['Product', 'SKU', 'Stock / reorder', 'Safety', '']}
+            rows={inventory.lowStockProducts.map((p) => ({
+              key: p.variantId,
+              href: productHref(p.productId, p.categorySlug),
+              ariaLabel: `Open product ${p.productName}`,
+              cells: [
+                p.productName,
+                `${p.size} · ${p.sku}`,
+                `${p.totalStock} / ${p.reorderPoint}`,
+                p.safetyStock > 0 ? String(p.safetyStock) : '—',
+                <Badge key="b" variant="warning" className="text-[10px]">Low</Badge>,
+              ],
+            }))}
+          />
         )}
         {inventory.lowStockMaterials.length > 0 && (
-          <div>
-            <h3 className="text-sm font-semibold text-gray-800 mb-2 flex items-center gap-2">
-              <Box className="w-4 h-4 text-amber-600" />
-              <span>Low-stock raw materials</span>
-              <Badge variant="warning">{inventory.lowStockMaterialCount}</Badge>
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-              {inventory.lowStockMaterials.map((m) => (
-                <LowMaterialItem key={m.materialId} row={m} onOpen={props.onOpenMaterial} />
-              ))}
-            </div>
-          </div>
+          <InventoryAlertTable
+            title="Low-stock raw materials"
+            count={inventory.lowStockMaterialCount}
+            badgeVariant="warning"
+            icon={<Box className="w-4 h-4 text-amber-600" />}
+            headers={['Material', 'SKU', 'Stock / reorder', 'Cover', '']}
+            rows={inventory.lowStockMaterials.map((m) => ({
+              key: m.materialId,
+              href: materialHref(m.materialId),
+              ariaLabel: `Open material ${m.name}`,
+              cells: [
+                m.name,
+                m.sku + (m.primarySupplier ? ` · ${m.primarySupplier}` : ''),
+                `${m.totalStock.toLocaleString()}${m.unit ? ` ${m.unit}` : ''} / ${m.reorderPoint.toLocaleString()}`,
+                m.daysOfCover != null ? `${m.daysOfCover}d` : '—',
+                <Badge key="b" variant={m.totalStock === 0 ? 'danger' : 'warning'} className="text-[10px]">
+                  {m.totalStock === 0 ? 'Out' : 'Low'}
+                </Badge>,
+              ],
+            }))}
+          />
         )}
       </CardContent>
     </Card>
   );
 }
 
-function StockoutItem(props: { row: ProductStockoutRow; onOpen: (productId: string) => void }) {
-  const { row } = props;
+function InventoryAlertTable(props: {
+  title: string;
+  count: number;
+  badgeVariant: 'danger' | 'warning';
+  icon?: React.ReactNode;
+  headers: string[];
+  rows: Array<{
+    key: string;
+    href: string;
+    ariaLabel: string;
+    cells: React.ReactNode[];
+  }>;
+}) {
   return (
-    <button
-      type="button"
-      onClick={() => row.productId && props.onOpen(row.productId)}
-      disabled={!row.productId}
-      className="text-left bg-white rounded-md border border-red-200 p-3 hover:border-red-400 transition-colors disabled:cursor-default"
-    >
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-gray-900 truncate">{row.productName}</p>
-          <p className="text-xs text-gray-500 truncate">{row.size} · SKU {row.sku}</p>
-        </div>
-        <Badge variant="danger" className="shrink-0">Stockout</Badge>
+    <div>
+      <h3 className="text-sm font-semibold text-gray-800 mb-2 flex items-center gap-2">
+        {props.icon}
+        <span>{props.title}</span>
+        <Badge variant={props.badgeVariant}>{props.count}</Badge>
+      </h3>
+      <div className="overflow-x-auto -mx-1 px-1">
+        <table className="w-full min-w-[520px] text-sm">
+          <thead>
+            <tr className="text-xs text-gray-500 uppercase tracking-wider border-b border-gray-200">
+              {props.headers.map((h) => (
+                <th key={h || 'status'} className={`py-2 px-2 text-left font-semibold ${h === '' ? 'w-8' : ''}`}>
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {props.rows.map((row) => (
+              <DashTableRowLink key={row.key} to={row.href} title={row.ariaLabel}>
+                {row.cells.map((cell, i) => (
+                  <td
+                    key={i}
+                    className={`table-cell py-2 px-2 align-middle text-gray-800 ${i === props.headers.length - 1 ? 'text-right' : ''}`}
+                  >
+                    {typeof cell === 'string' ? (
+                      <span className={i === 0 ? 'font-medium truncate block max-w-[220px]' : 'truncate block max-w-[180px]'} title={cell}>
+                        {cell}
+                      </span>
+                    ) : (
+                      cell
+                    )}
+                  </td>
+                ))}
+              </DashTableRowLink>
+            ))}
+          </tbody>
+        </table>
       </div>
-      <div className="mt-2 text-xs text-gray-600 flex items-center justify-between">
-        <span>Reorder at <span className="font-medium">{row.reorderPoint}</span></span>
-        <span className="text-gray-400">Last restock {formatDateShort(row.lastRestocked)}</span>
-      </div>
-    </button>
+    </div>
   );
 }
-
-function LowProductItem(props: { row: ProductLowStockRow; onOpen: (productId: string) => void }) {
-  const { row } = props;
-  return (
-    <button
-      type="button"
-      onClick={() => row.productId && props.onOpen(row.productId)}
-      disabled={!row.productId}
-      className="text-left bg-white rounded-md border border-amber-200 p-3 hover:border-amber-400 transition-colors disabled:cursor-default"
-    >
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-gray-900 truncate">{row.productName}</p>
-          <p className="text-xs text-gray-500 truncate">{row.size} · SKU {row.sku}</p>
-        </div>
-        <Badge variant="warning" className="shrink-0">Low</Badge>
-      </div>
-      <div className="mt-2 text-xs text-gray-600 flex items-center justify-between">
-        <span>Stock <span className="font-medium text-gray-900">{row.totalStock}</span> / reorder {row.reorderPoint}</span>
-        {row.safetyStock > 0 && <span className="text-gray-400">Safety {row.safetyStock}</span>}
-      </div>
-    </button>
-  );
-}
-
-function LowMaterialItem(props: { row: MaterialLowStockRow; onOpen: (materialId: string) => void }) {
-  const { row } = props;
-  return (
-    <button
-      type="button"
-      onClick={() => props.onOpen(row.materialId)}
-      className="text-left bg-white rounded-md border border-amber-200 p-3 hover:border-amber-400 transition-colors"
-    >
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-gray-900 truncate">{row.name}</p>
-          <p className="text-xs text-gray-500 truncate">SKU {row.sku}{row.primarySupplier ? ` · ${row.primarySupplier}` : ''}</p>
-        </div>
-        <Badge variant={row.totalStock === 0 ? 'danger' : 'warning'} className="shrink-0">
-          {row.totalStock === 0 ? 'Out' : 'Low'}
-        </Badge>
-      </div>
-      <div className="mt-2 text-xs text-gray-600 flex items-center justify-between">
-        <span>
-          Stock <span className="font-medium text-gray-900">{row.totalStock.toLocaleString()}{row.unit && ` ${row.unit}`}</span>
-          {' '}/ reorder {row.reorderPoint.toLocaleString()}{row.unit && ` ${row.unit}`}
-        </span>
-        {row.daysOfCover != null && <span className="text-gray-400">{row.daysOfCover}d cover</span>}
-      </div>
-    </button>
-  );
-}
-
-// ----- Incoming POs -----
 
 function IncomingPOsCard(props: {
   rows: IncomingPORow[];
   count: number;
   totalValue: number;
-  onOpen: (id: string) => void;
-  onViewAll: () => void;
 }) {
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between gap-2">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <PackageCheck className="w-4 h-4 text-blue-600" /> Incoming POs to receive
-            {props.count > 0 && <Badge variant="warning">{props.count}</Badge>}
-          </CardTitle>
-          <Button variant="outline" size="sm" onClick={props.onViewAll} className="gap-1">
-            <ArrowRight className="w-4 h-4" />
-          </Button>
-        </div>
-      </CardHeader>
-      <CardContent>
-        {props.rows.length === 0 ? (
-          <p className="text-sm text-gray-500 py-4 text-center">Nothing inbound.</p>
-        ) : (
-          <div className="space-y-2">
-            <p className="text-xs text-gray-500">
-              Total inbound value: <span className="font-semibold">{formatWarehousePeso(props.totalValue)}</span>
-            </p>
+    <QueueTableCard
+      icon={<PackageCheck className="w-4 h-4 text-blue-600" />}
+      title="Incoming POs to receive"
+      count={props.count}
+      emptyText="Nothing inbound."
+      viewAllHref="/purchase-orders"
+      footer={`Total inbound value: ${formatWarehousePeso(props.totalValue)}`}
+    >
+      <div className="overflow-x-auto -mx-1 px-1">
+        <table className="w-full min-w-[480px] text-sm">
+          <thead>
+            <tr className="text-xs text-gray-500 uppercase tracking-wider border-b border-gray-200">
+              <th className="py-2 px-2 text-left font-semibold">PO</th>
+              <th className="py-2 px-2 text-left font-semibold">Supplier</th>
+              <th className="py-2 px-2 text-left font-semibold">Expect</th>
+              <th className="py-2 px-2 text-right font-semibold">Amount</th>
+              <th className="py-2 px-2 text-right font-semibold">Status</th>
+            </tr>
+          </thead>
+          <tbody>
             {props.rows.map((r) => (
-              <button
+              <DashTableRowLink
                 key={r.id}
-                type="button"
-                onClick={() => props.onOpen(r.id)}
-                className="w-full text-left rounded-md border border-gray-200 p-2 hover:border-blue-300 hover:bg-blue-50/30 transition-colors"
+                to={`/purchase-orders/${r.id}`}
+                title={`${r.poNumber} — right-click or Ctrl+click to open in new tab`}
               >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="font-mono text-xs text-gray-900">{r.poNumber}</span>
-                    <Badge variant={statusBadgeVariant(r.status)} className="text-[10px]">{r.status}</Badge>
-                  </div>
-                  <span className="text-xs font-medium text-gray-900 shrink-0">{formatWarehousePeso(r.totalAmount)}</span>
-                </div>
-                <div className="text-xs text-gray-600 mt-1 truncate">{r.supplierName ?? '—'}</div>
-                <div className="text-[11px] text-gray-400 mt-0.5 flex items-center justify-between gap-2">
-                  <span>Expect {formatDateShort(r.expectedDeliveryDate)}</span>
+                <td className="table-cell py-2 px-2 align-middle font-mono text-xs text-gray-900 whitespace-nowrap">
+                  {r.poNumber}
+                </td>
+                <td className="table-cell py-2 px-2 align-middle text-gray-700">
+                  <span className="block truncate max-w-[140px]" title={r.supplierName ?? undefined}>
+                    {r.supplierName ?? '—'}
+                  </span>
+                </td>
+                <td className="table-cell py-2 px-2 align-middle text-gray-600 whitespace-nowrap">
+                  {formatDateShort(r.expectedDeliveryDate)}
                   {r.daysUntilExpected != null && (
-                    <span className={r.daysUntilExpected < 0 ? 'text-red-600 font-medium' : 'text-gray-500'}>
+                    <span className={`block text-[11px] ${r.daysUntilExpected < 0 ? 'text-red-600 font-medium' : 'text-gray-400'}`}>
                       {r.daysUntilExpected < 0
                         ? `${Math.abs(r.daysUntilExpected)}d overdue`
                         : r.daysUntilExpected === 0
@@ -538,161 +521,163 @@ function IncomingPOsCard(props: {
                           : `${r.daysUntilExpected}d`}
                     </span>
                   )}
-                </div>
-              </button>
+                </td>
+                <td className="table-cell py-2 px-2 align-middle text-right font-medium text-gray-900 whitespace-nowrap">
+                  {formatWarehousePeso(r.totalAmount)}
+                </td>
+                <td className="table-cell py-2 px-2 align-middle text-right">
+                  <Badge variant={statusBadgeVariant(r.status)} className="text-[10px]">{r.status}</Badge>
+                </td>
+              </DashTableRowLink>
             ))}
-          </div>
-        )}
-      </CardContent>
-    </Card>
+          </tbody>
+        </table>
+      </div>
+    </QueueTableCard>
   );
 }
 
-// ----- Orders to fulfill -----
-
-function OrdersToFulfillCard(props: {
-  rows: OrderToFulfillRow[];
-  count: number;
-  onOpen: (id: string) => void;
-  onViewAll: () => void;
-}) {
+function OrdersToFulfillCard(props: { rows: OrderToFulfillRow[]; count: number }) {
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between gap-2">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Truck className="w-4 h-4 text-emerald-600" /> Orders awaiting fulfilment
-            {props.count > 0 && <Badge variant="warning">{props.count}</Badge>}
-          </CardTitle>
-          <Button variant="outline" size="sm" onClick={props.onViewAll} className="gap-1">
-            <ArrowRight className="w-4 h-4" />
-          </Button>
-        </div>
-      </CardHeader>
-      <CardContent>
-        {props.rows.length === 0 ? (
-          <p className="text-sm text-gray-500 py-4 text-center">No orders in the warehouse pipeline.</p>
-        ) : (
-          <div className="space-y-2">
+    <QueueTableCard
+      icon={<Truck className="w-4 h-4 text-emerald-600" />}
+      title="Orders awaiting fulfilment"
+      count={props.count}
+      emptyText="No orders in the warehouse pipeline."
+      viewAllHref="/warehouse"
+    >
+      <div className="overflow-x-auto -mx-1 px-1">
+        <table className="w-full min-w-[480px] text-sm">
+          <thead>
+            <tr className="text-xs text-gray-500 uppercase tracking-wider border-b border-gray-200">
+              <th className="py-2 px-2 text-left font-semibold">Order</th>
+              <th className="py-2 px-2 text-left font-semibold">Customer</th>
+              <th className="py-2 px-2 text-left font-semibold">Required</th>
+              <th className="py-2 px-2 text-right font-semibold">Amount</th>
+              <th className="py-2 px-2 text-right font-semibold">Status</th>
+            </tr>
+          </thead>
+          <tbody>
             {props.rows.map((r) => {
               const urgencyClass =
                 r.urgency === 'overdue'
                   ? 'text-red-600 font-semibold'
-                  : r.urgency === 'today'
+                  : r.urgency === 'today' || r.urgency === 'soon'
                     ? 'text-amber-600 font-medium'
-                    : r.urgency === 'soon'
-                      ? 'text-amber-600'
-                      : 'text-gray-500';
+                    : 'text-gray-600';
               return (
-                <button
+                <DashTableRowLink
                   key={r.id}
-                  type="button"
-                  onClick={() => props.onOpen(r.id)}
-                  className="w-full text-left rounded-md border border-gray-200 p-2 hover:border-emerald-300 hover:bg-emerald-50/30 transition-colors"
+                  to={`/orders/${r.id}`}
+                  title={`${r.orderNumber} — right-click or Ctrl+click to open in new tab`}
                 >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="font-mono text-xs text-gray-900">{r.orderNumber}</span>
-                      <Badge variant={statusBadgeVariant(r.status)} className="text-[10px]">{r.status}</Badge>
-                    </div>
-                    <span className="text-xs font-medium text-gray-900 shrink-0">{formatWarehousePeso(r.totalAmount)}</span>
-                  </div>
-                  <div className="text-xs text-gray-600 mt-1 truncate">{r.customerName}</div>
-                  <div className="text-[11px] mt-0.5 flex items-center justify-between gap-2">
-                    <span className="text-gray-400">{r.lineCount} line{r.lineCount === 1 ? '' : 's'} · {r.agentName ?? '—'}</span>
-                    <span className={urgencyClass}>
-                      {formatDateShort(r.requiredDate)}
-                      {r.daysUntilRequired != null && (
-                        <span className="ml-1">
-                          ({r.daysUntilRequired < 0
-                            ? `${Math.abs(r.daysUntilRequired)}d overdue`
-                            : r.daysUntilRequired === 0
-                              ? 'today'
-                              : `${r.daysUntilRequired}d`})
-                        </span>
-                      )}
+                  <td className="table-cell py-2 px-2 align-middle font-mono text-xs text-gray-900 whitespace-nowrap">
+                    {r.orderNumber}
+                  </td>
+                  <td className="table-cell py-2 px-2 align-middle text-gray-700">
+                    <span className="block truncate max-w-[140px]" title={r.customerName}>
+                      {r.customerName}
                     </span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-// ----- IBRs to fulfil -----
-
-function IBRsCard(props: {
-  rows: IBRToFulfillRow[];
-  count: number;
-  onOpen: (id: string) => void;
-  onViewAll: () => void;
-}) {
-  return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between gap-2">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Repeat className="w-4 h-4 text-violet-600" /> IBRs to fulfil
-            {props.count > 0 && <Badge variant="warning">{props.count}</Badge>}
-          </CardTitle>
-          <Button variant="outline" size="sm" onClick={props.onViewAll} className="gap-1">
-            <ArrowRight className="w-4 h-4" />
-          </Button>
-        </div>
-      </CardHeader>
-      <CardContent>
-        {props.rows.length === 0 ? (
-          <p className="text-sm text-gray-500 py-4 text-center">Nothing inbound from sister branches.</p>
-        ) : (
-          <div className="space-y-2">
-            {props.rows.map((r) => (
-              <button
-                key={r.id}
-                type="button"
-                onClick={() => props.onOpen(r.id)}
-                className="w-full text-left rounded-md border border-gray-200 p-2 hover:border-violet-300 hover:bg-violet-50/30 transition-colors"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-mono text-xs text-gray-900">{r.ibrNumber}</span>
-                  <Badge variant={statusBadgeVariant(r.status)} className="text-[10px]">{r.status}</Badge>
-                </div>
-                <div className="text-xs text-gray-600 mt-1 truncate">From {r.requestingBranchName ?? '—'}</div>
-                <div className="text-[11px] text-gray-400 mt-0.5 flex items-center justify-between gap-2">
-                  <span>{r.lineKindSummary}</span>
-                  <span>
-                    Depart {formatDateShort(r.scheduledDepartureDate)}
-                    {r.daysUntilDeparture != null && (
-                      <span className={r.daysUntilDeparture < 0 ? ' text-red-600 font-medium ml-1' : ' ml-1'}>
-                        ({r.daysUntilDeparture < 0
-                          ? `${Math.abs(r.daysUntilDeparture)}d overdue`
-                          : r.daysUntilDeparture === 0
+                    <span className="block text-[11px] text-gray-400 truncate">
+                      {r.lineCount} line{r.lineCount === 1 ? '' : 's'} · {r.agentName ?? '—'}
+                    </span>
+                  </td>
+                  <td className={`table-cell py-2 px-2 align-middle whitespace-nowrap ${urgencyClass}`}>
+                    {formatDateShort(r.requiredDate)}
+                    {r.daysUntilRequired != null && (
+                      <span className="block text-[11px]">
+                        {r.daysUntilRequired < 0
+                          ? `${Math.abs(r.daysUntilRequired)}d overdue`
+                          : r.daysUntilRequired === 0
                             ? 'today'
-                            : `${r.daysUntilDeparture}d`})
+                            : `${r.daysUntilRequired}d`}
                       </span>
                     )}
-                  </span>
-                </div>
-              </button>
-            ))}
-          </div>
-        )}
-      </CardContent>
-    </Card>
+                  </td>
+                  <td className="table-cell py-2 px-2 align-middle text-right font-medium text-gray-900 whitespace-nowrap">
+                    {formatWarehousePeso(r.totalAmount)}
+                  </td>
+                  <td className="table-cell py-2 px-2 align-middle text-right">
+                    <Badge variant={statusBadgeVariant(r.status)} className="text-[10px]">{r.status}</Badge>
+                  </td>
+                </DashTableRowLink>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </QueueTableCard>
   );
 }
 
-// ----- My PRs -----
+function IBRsCard(props: { rows: IBRToFulfillRow[]; count: number }) {
+  return (
+    <QueueTableCard
+      icon={<Repeat className="w-4 h-4 text-violet-600" />}
+      title="IBRs to fulfil"
+      count={props.count}
+      emptyText="Nothing inbound from sister branches."
+      viewAllHref="/inter-branch-requests"
+    >
+      <div className="overflow-x-auto -mx-1 px-1">
+        <table className="w-full min-w-[480px] text-sm">
+          <thead>
+            <tr className="text-xs text-gray-500 uppercase tracking-wider border-b border-gray-200">
+              <th className="py-2 px-2 text-left font-semibold">IBR</th>
+              <th className="py-2 px-2 text-left font-semibold">From</th>
+              <th className="py-2 px-2 text-left font-semibold">Depart</th>
+              <th className="py-2 px-2 text-left font-semibold">Lines</th>
+              <th className="py-2 px-2 text-right font-semibold">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {props.rows.map((r) => (
+              <DashTableRowLink
+                key={r.id}
+                to={`/inter-branch-requests/${r.id}`}
+                title={`${r.ibrNumber} — right-click or Ctrl+click to open in new tab`}
+              >
+                <td className="table-cell py-2 px-2 align-middle font-mono text-xs text-gray-900 whitespace-nowrap">
+                  {r.ibrNumber}
+                </td>
+                <td className="table-cell py-2 px-2 align-middle text-gray-700">
+                  <span className="block truncate max-w-[120px]" title={r.requestingBranchName ?? undefined}>
+                    {r.requestingBranchName ?? '—'}
+                  </span>
+                </td>
+                <td className="table-cell py-2 px-2 align-middle text-gray-600 whitespace-nowrap">
+                  {formatDateShort(r.scheduledDepartureDate)}
+                  {r.daysUntilDeparture != null && (
+                    <span className={`block text-[11px] ${r.daysUntilDeparture < 0 ? 'text-red-600 font-medium' : 'text-gray-400'}`}>
+                      {r.daysUntilDeparture < 0
+                        ? `${Math.abs(r.daysUntilDeparture)}d overdue`
+                        : r.daysUntilDeparture === 0
+                          ? 'today'
+                          : `${r.daysUntilDeparture}d`}
+                    </span>
+                  )}
+                </td>
+                <td className="table-cell py-2 px-2 align-middle text-gray-600">
+                  <span className="block truncate max-w-[120px]" title={r.lineKindSummary}>
+                    {r.lineKindSummary}
+                  </span>
+                </td>
+                <td className="table-cell py-2 px-2 align-middle text-right">
+                  <Badge variant={statusBadgeVariant(r.status)} className="text-[10px]">{r.status}</Badge>
+                </td>
+              </DashTableRowLink>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </QueueTableCard>
+  );
+}
 
 function MyPRsCard(props: {
   recent: MyPRRow[];
   statusCounts: Record<string, number>;
   activeCount: number;
-  onOpen: (id: string) => void;
-  onViewAll: () => void;
 }) {
   return (
     <Card>
@@ -702,9 +687,9 @@ function MyPRsCard(props: {
             <Factory className="w-4 h-4 text-orange-600" /> My production requests
             {props.activeCount > 0 && <Badge variant="warning">{props.activeCount} active</Badge>}
           </CardTitle>
-          <Button variant="outline" size="sm" onClick={props.onViewAll} className="gap-1">
+          <DashHeaderLink to="/production-requests">
             All <ArrowRight className="w-4 h-4" />
-          </Button>
+          </DashHeaderLink>
         </div>
       </CardHeader>
       <CardContent>
@@ -712,24 +697,39 @@ function MyPRsCard(props: {
         {props.recent.length === 0 ? (
           <p className="text-sm text-gray-500 py-4 text-center mt-2">You haven't raised any PRs yet.</p>
         ) : (
-          <div className="mt-3 space-y-2">
-            {props.recent.map((r) => (
-              <button
-                key={r.id}
-                type="button"
-                onClick={() => props.onOpen(r.id)}
-                className="w-full text-left rounded-md border border-gray-200 p-2 hover:bg-gray-50 transition-colors"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-mono text-xs text-gray-900">{r.prNumber}</span>
-                  <Badge variant={statusBadgeVariant(r.status)} className="text-[10px]">{r.status}</Badge>
-                </div>
-                <div className="text-xs text-gray-500 mt-1 flex items-center justify-between gap-2">
-                  <span>{r.itemCount} item{r.itemCount === 1 ? '' : 's'}</span>
-                  <span>Need by {formatDateShort(r.expectedCompletionDate)}</span>
-                </div>
-              </button>
-            ))}
+          <div className="mt-3 overflow-x-auto -mx-1 px-1">
+            <table className="w-full min-w-[420px] text-sm">
+              <thead>
+                <tr className="text-xs text-gray-500 uppercase tracking-wider border-b border-gray-200">
+                  <th className="py-2 px-2 text-left font-semibold">PR</th>
+                  <th className="py-2 px-2 text-left font-semibold">Items</th>
+                  <th className="py-2 px-2 text-left font-semibold">Need by</th>
+                  <th className="py-2 px-2 text-right font-semibold">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {props.recent.map((r) => (
+                  <DashTableRowLink
+                    key={r.id}
+                    to={`/production-requests/${r.id}`}
+                    title={`${r.prNumber} — right-click or Ctrl+click to open in new tab`}
+                  >
+                    <td className="table-cell py-2 px-2 align-middle font-mono text-xs text-gray-900 whitespace-nowrap">
+                      {r.prNumber}
+                    </td>
+                    <td className="table-cell py-2 px-2 align-middle text-gray-600 tabular-nums">
+                      {r.itemCount}
+                    </td>
+                    <td className="table-cell py-2 px-2 align-middle text-gray-600 whitespace-nowrap">
+                      {formatDateShort(r.expectedCompletionDate)}
+                    </td>
+                    <td className="table-cell py-2 px-2 align-middle text-right">
+                      <Badge variant={statusBadgeVariant(r.status)} className="text-[10px]">{r.status}</Badge>
+                    </td>
+                  </DashTableRowLink>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </CardContent>
@@ -737,14 +737,10 @@ function MyPRsCard(props: {
   );
 }
 
-// ----- My POs -----
-
 function MyPOsCard(props: {
   recent: MyPORow[];
   statusCounts: Record<string, number>;
   activeCount: number;
-  onOpen: (id: string) => void;
-  onViewAll: () => void;
 }) {
   return (
     <Card>
@@ -754,9 +750,9 @@ function MyPOsCard(props: {
             <ClipboardList className="w-4 h-4 text-blue-600" /> My purchase orders
             {props.activeCount > 0 && <Badge variant="warning">{props.activeCount} active</Badge>}
           </CardTitle>
-          <Button variant="outline" size="sm" onClick={props.onViewAll} className="gap-1">
+          <DashHeaderLink to="/purchase-orders">
             All <ArrowRight className="w-4 h-4" />
-          </Button>
+          </DashHeaderLink>
         </div>
       </CardHeader>
       <CardContent>
@@ -764,27 +760,45 @@ function MyPOsCard(props: {
         {props.recent.length === 0 ? (
           <p className="text-sm text-gray-500 py-4 text-center mt-2">You haven't raised any POs yet.</p>
         ) : (
-          <div className="mt-3 space-y-2">
-            {props.recent.map((r) => (
-              <button
-                key={r.id}
-                type="button"
-                onClick={() => props.onOpen(r.id)}
-                className="w-full text-left rounded-md border border-gray-200 p-2 hover:bg-gray-50 transition-colors"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="font-mono text-xs text-gray-900">{r.poNumber}</span>
-                    <Badge variant={statusBadgeVariant(r.status)} className="text-[10px]">{r.status}</Badge>
-                  </div>
-                  <span className="text-xs font-medium text-gray-900 shrink-0">{formatWarehousePeso(r.totalAmount)}</span>
-                </div>
-                <div className="text-xs text-gray-500 mt-1 flex items-center justify-between gap-2">
-                  <span className="truncate">{r.supplierName ?? '—'}</span>
-                  <span className="shrink-0">Expect {formatDateShort(r.expectedDeliveryDate)}</span>
-                </div>
-              </button>
-            ))}
+          <div className="mt-3 overflow-x-auto -mx-1 px-1">
+            <table className="w-full min-w-[420px] text-sm">
+              <thead>
+                <tr className="text-xs text-gray-500 uppercase tracking-wider border-b border-gray-200">
+                  <th className="py-2 px-2 text-left font-semibold">PO</th>
+                  <th className="py-2 px-2 text-left font-semibold">Supplier</th>
+                  <th className="py-2 px-2 text-left font-semibold">Expect</th>
+                  <th className="py-2 px-2 text-right font-semibold">Amount</th>
+                  <th className="py-2 px-2 text-right font-semibold">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {props.recent.map((r) => (
+                  <DashTableRowLink
+                    key={r.id}
+                    to={`/purchase-orders/${r.id}`}
+                    title={`${r.poNumber} — right-click or Ctrl+click to open in new tab`}
+                  >
+                    <td className="table-cell py-2 px-2 align-middle font-mono text-xs text-gray-900 whitespace-nowrap">
+                      {r.poNumber}
+                    </td>
+                    <td className="table-cell py-2 px-2 align-middle text-gray-700">
+                      <span className="block truncate max-w-[120px]" title={r.supplierName ?? undefined}>
+                        {r.supplierName ?? '—'}
+                      </span>
+                    </td>
+                    <td className="table-cell py-2 px-2 align-middle text-gray-600 whitespace-nowrap">
+                      {formatDateShort(r.expectedDeliveryDate)}
+                    </td>
+                    <td className="table-cell py-2 px-2 align-middle text-right font-medium text-gray-900 whitespace-nowrap">
+                      {formatWarehousePeso(r.totalAmount)}
+                    </td>
+                    <td className="table-cell py-2 px-2 align-middle text-right">
+                      <Badge variant={statusBadgeVariant(r.status)} className="text-[10px]">{r.status}</Badge>
+                    </td>
+                  </DashTableRowLink>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </CardContent>
@@ -885,29 +899,35 @@ function MovementsCard(props: {
                 </thead>
                 <tbody>
                   {props.recent.map((m) => (
-                    <tr key={`${m.kind}-${m.id}`} className="border-b border-gray-100">
-                      <td className="py-2 pr-3">
+                    <DashTableRowLink
+                      key={`${m.kind}-${m.id}`}
+                      to={movementHref(m)}
+                      title={`${m.itemName} — right-click or Ctrl+click to open in new tab`}
+                    >
+                      <td className="table-cell py-2 pr-3 align-middle">
                         <Badge variant={movementBadgeVariant(m.type)} className="text-[10px]">
                           {m.type}
                         </Badge>
                       </td>
-                      <td className="py-2 pr-3 text-gray-800">
+                      <td className="table-cell py-2 pr-3 align-middle text-gray-800">
                         <div className="flex flex-col leading-tight">
                           <span className="truncate max-w-[260px]">{m.itemName}</span>
                           <span className="text-xs text-gray-400">{m.sku ?? '—'} · {m.kind === 'product' ? 'Product' : 'Material'}</span>
                         </div>
                       </td>
-                      <td className="py-2 pr-3 text-right font-medium text-gray-900">
+                      <td className="table-cell py-2 pr-3 align-middle text-right font-medium text-gray-900">
                         {m.quantity.toLocaleString()}{m.unit ? ` ${m.unit}` : ''}
                       </td>
-                      <td className="py-2 pr-3 text-gray-600">{m.performedBy ?? '—'}</td>
-                      <td className="py-2 pr-3 text-gray-500">
+                      <td className="table-cell py-2 pr-3 align-middle text-gray-600">{m.performedBy ?? '—'}</td>
+                      <td className="table-cell py-2 pr-3 align-middle text-gray-500">
                         <span className="block max-w-[260px] truncate" title={m.reason ?? m.reference ?? ''}>
                           {m.reference ?? m.reason ?? '—'}
                         </span>
                       </td>
-                      <td className="py-2 text-gray-500 whitespace-nowrap">{formatDateShort(m.timestamp)}</td>
-                    </tr>
+                      <td className="table-cell py-2 align-middle text-gray-500 whitespace-nowrap">
+                        {formatDateShort(m.timestamp)}
+                      </td>
+                    </DashTableRowLink>
                   ))}
                 </tbody>
               </table>

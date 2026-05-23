@@ -25,7 +25,6 @@ import {
 import {
   computeDrivingRoute,
   RouteResult,
-  FUEL_COST_PER_KM_PHP,
   formatDuration,
 } from '@/src/lib/routePlanning';
 
@@ -819,14 +818,6 @@ export const RoutePlanningView: React.FC<RoutePlanningViewProps> = ({
                     <span className="font-semibold text-gray-900">
                       {routeResult
                         ? formatDuration(routeResult.totalDurationMinutes)
-                        : '—'}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-gray-600">Est. Fuel Cost</span>
-                    <span className="font-semibold text-gray-900">
-                      {routeResult
-                        ? `₱${(routeResult.totalDistanceKm * FUEL_COST_PER_KM_PHP).toFixed(0)}`
                         : '—'}
                     </span>
                   </div>

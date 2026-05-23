@@ -23,6 +23,16 @@ interface TripScheduleModalProps {
     tripNumber?: string;
     status?: string;
   }>;
+  /** Override default "Schedule Delivery Trip" heading. */
+  modalTitle?: string;
+  /** Override default confirm button label prefix. */
+  confirmLabel?: string;
+  /** Pre-select a date when the modal opens (YYYY-MM-DD). */
+  initialDate?: string;
+  /** `single` replaces selection on each click; default `multiple` toggles days on/off. */
+  selectionMode?: 'single' | 'multiple';
+  /** When true, past dates are selectable (e.g. inter-island container scheduling). */
+  allowPastDates?: boolean;
 }
 
 /** YYYY-MM-DD from a local Date (avoids UTC-shift). */
@@ -55,6 +65,11 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
   vehicleName,
   orderCount,
   existingBookings,
+  modalTitle = 'Schedule Delivery Trip',
+  confirmLabel = 'Schedule Trip',
+  initialDate,
+  selectionMode = 'multiple',
+  allowPastDates = false,
 }) => {
   const [year, setYear] = useState(() => new Date().getFullYear());
   const [month, setMonth] = useState(() => new Date().getMonth());
@@ -64,14 +79,28 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
   useEffect(() => {
     if (!isOpen) return;
     const n = new Date();
-    setYear(n.getFullYear());
-    setMonth(n.getMonth());
-    setSelectedDates([]);
+    const preset =
+      initialDate && /^\d{4}-\d{2}-\d{2}$/.test(initialDate.trim().slice(0, 10))
+        ? initialDate.trim().slice(0, 10)
+        : null;
+    if (preset) {
+      const d = new Date(`${preset}T12:00:00`);
+      setYear(d.getFullYear());
+      setMonth(d.getMonth());
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const presetIsPast = d < today;
+      setSelectedDates(!allowPastDates && presetIsPast ? [] : [preset]);
+    } else {
+      setYear(n.getFullYear());
+      setMonth(n.getMonth());
+      setSelectedDates([]);
+    }
     setSubmitting(false);
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => { document.body.style.overflow = prev; };
-  }, [isOpen]);
+  }, [isOpen, initialDate, allowPastDates]);
 
   if (!isOpen) return null;
 
@@ -95,13 +124,26 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
 
   const toggleDate = (key: string) => {
     if (submitting) return;
-    const d = new Date(key + 'T12:00:00');
-    const today = new Date(); today.setHours(0, 0, 0, 0);
-    if (d < today) return;
     if (bookingByDate.get(key)?.type === 'Maintenance') return;
-    setSelectedDates((prev) =>
-      prev.includes(key) ? prev.filter((x) => x !== key) : [...prev, key].sort()
-    );
+
+    if (selectionMode === 'single') {
+      setSelectedDates((prev) => (prev.includes(key) ? [] : [key]));
+      return;
+    }
+
+    if (selectedDates.includes(key)) {
+      setSelectedDates((prev) => prev.filter((x) => x !== key));
+      return;
+    }
+
+    if (!allowPastDates) {
+      const d = new Date(`${key}T12:00:00`);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      if (d < today) return;
+    }
+
+    setSelectedDates((prev) => [...prev, key].sort());
   };
 
   const cells = buildMonthGrid(year, month);
@@ -124,7 +166,7 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
         <div className="flex items-start justify-between gap-3 p-4 md:p-5 border-b border-gray-200">
           <div>
             <h2 className="text-lg md:text-xl font-bold text-gray-900">
-              Schedule Delivery Trip
+              {modalTitle}
             </h2>
             <p className="text-sm text-gray-600 mt-1">
               {orderCount} order{orderCount !== 1 ? 's' : ''} · {vehicleName}
@@ -224,8 +266,9 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
               const booking = bookingByDate.get(key);
               const isSelected = selectedDates.includes(key);
               const isToday = key === todayKey;
-              const today = new Date(); today.setHours(0, 0, 0, 0);
-              const isPast = date < today;
+              const today = new Date();
+              today.setHours(0, 0, 0, 0);
+              const isPast = !allowPastDates && date < today;
               const isMaint = booking?.type === 'Maintenance';
               const isTrip = booking?.type === 'Trip';
 
@@ -255,7 +298,7 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
                     {isSelected && (
                       <div className="truncate rounded px-0.5 py-0.5 text-[10px] leading-tight bg-blue-600 text-white font-medium flex items-center gap-0.5">
                         <CheckCircle className="w-2.5 h-2.5 shrink-0" />
-                        <span className="truncate">Scheduled</span>
+                        <span className="truncate">{selectionMode === 'single' ? 'Selected' : 'Scheduled'}</span>
                       </div>
                     )}
                     {!isSelected && isTrip && (
@@ -340,12 +383,12 @@ export const TripScheduleModal: React.FC<TripScheduleModalProps> = ({
             {submitting ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Creating trip…
+                Creating…
               </>
             ) : (
               <>
                 <CheckCircle className="w-4 h-4 mr-2" />
-                Schedule Trip ({selectedDates.length} {selectedDates.length === 1 ? 'day' : 'days'})
+                {confirmLabel} ({selectedDates.length} {selectedDates.length === 1 ? 'day' : 'days'})
               </>
             )}
           </Button>

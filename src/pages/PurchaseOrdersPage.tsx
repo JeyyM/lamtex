@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Ca
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagination';
+import { TABLE_ROW_CELL_CONTENT, TABLE_ROW_LINK_CLASS, TableRowCellOverlay } from '@/src/components/ui/tableRowLink';
 import { supabase } from '@/src/lib/supabase';
 import {
   DATE_PERIOD_OPTIONS,
@@ -638,40 +639,57 @@ export function PurchaseOrdersPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
-                    {pagedPOs.map(po => (
-                      <tr key={po.id} className="hover:bg-gray-50">
-                        <td className="px-6 py-4">
-                          <Link to={`/purchase-orders/${po.id}`} className="block font-medium text-blue-600 hover:underline">{po.po_number}</Link>
+                    {pagedPOs.map(po => {
+                      const href = `/purchase-orders/${po.id}`;
+                      const rowOverlay = (opts: { primary?: boolean }) => (
+                        <TableRowCellOverlay
+                          to={href}
+                          ariaLabel={`Open purchase order ${po.po_number}`}
+                          primary={opts.primary}
+                        />
+                      );
+                      return (
+                      <tr key={po.id} className={TABLE_ROW_LINK_CLASS}>
+                        <td className="relative px-6 py-4 align-top">
+                          <span className={`${TABLE_ROW_CELL_CONTENT} font-medium text-blue-600`}>{po.po_number}</span>
+                          {rowOverlay({ primary: true })}
                         </td>
-                        <td className="px-6 py-4 text-gray-600">
-                          <Link to={`/purchase-orders/${po.id}`} className="block">{fmt(po.order_date)}</Link>
+                        <td className="relative px-6 py-4 align-top text-gray-600">
+                          <span className={TABLE_ROW_CELL_CONTENT}>{fmt(po.order_date)}</span>
+                          {rowOverlay({})}
                         </td>
-                        <td className="px-6 py-4 font-medium text-gray-900">
-                          <Link to={`/purchase-orders/${po.id}`} className="block">{po.suppliers?.name ?? '—'}</Link>
+                        <td className="relative px-6 py-4 align-top font-medium text-gray-900">
+                          <span className={TABLE_ROW_CELL_CONTENT}>{po.suppliers?.name ?? '—'}</span>
+                          {rowOverlay({})}
                         </td>
-                        <td className="px-6 py-4 text-gray-600 tabular-nums">
-                          <Link to={`/purchase-orders/${po.id}`} className="block">{po.purchase_order_items.length}</Link>
+                        <td className="relative px-6 py-4 align-top text-gray-600 tabular-nums">
+                          <span className={TABLE_ROW_CELL_CONTENT}>{po.purchase_order_items.length}</span>
+                          {rowOverlay({})}
                         </td>
-                        <td className="px-6 py-4 font-medium text-gray-900">
-                          <Link to={`/purchase-orders/${po.id}`} className="block">{po.currency === 'USD' ? '$' : '₱'}{po.total_amount.toLocaleString()}</Link>
+                        <td className="relative px-6 py-4 align-top font-medium text-gray-900">
+                          <span className={TABLE_ROW_CELL_CONTENT}>
+                            {po.currency === 'USD' ? '$' : '₱'}{po.total_amount.toLocaleString()}
+                          </span>
+                          {rowOverlay({})}
                         </td>
-                        <td className="px-6 py-4">
-                          <Link to={`/purchase-orders/${po.id}`} className="block">
-                            <span className={isOverdue(po) ? 'text-red-600 font-medium flex items-center gap-1' : 'text-gray-600'}>
-                              {isOverdue(po) && <AlertTriangle className="w-3.5 h-3.5" />}
-                              {fmt(po.expected_delivery_date)}
-                            </span>
-                          </Link>
+                        <td className="relative px-6 py-4 align-top">
+                          <span className={`${TABLE_ROW_CELL_CONTENT} ${isOverdue(po) ? 'text-red-600 font-medium inline-flex items-center gap-1' : 'text-gray-600'}`}>
+                            {isOverdue(po) && <AlertTriangle className="w-3.5 h-3.5" />}
+                            {fmt(po.expected_delivery_date)}
+                          </span>
+                          {rowOverlay({})}
                         </td>
-                        <td className="px-6 py-4 text-center">
-                          <Link to={`/purchase-orders/${po.id}`} className="block">
+                        <td className="relative px-6 py-4 align-top text-center">
+                          <span className={`${TABLE_ROW_CELL_CONTENT} inline-flex [&_*]:pointer-events-none`}>
                             <Badge variant={getStatusVariant(po.status)} className="inline-flex items-center gap-1 whitespace-nowrap">
                               {getStatusIcon(po.status)} {po.status}
                             </Badge>
-                          </Link>
+                          </span>
+                          {rowOverlay({})}
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

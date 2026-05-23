@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
+import { effectiveInventoryBranch } from '@/src/lib/inventoryAccess';
 import { Button } from '@/src/components/ui/Button';
 import { Badge } from '@/src/components/ui/Badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { supabase } from '@/src/lib/supabase';
 import { deriveOrderDueDateForPersistence } from '@/src/lib/financeData';
-import type { OrderUrgency } from '@/src/types/orders';
+import type { OrderUrgency, DeliveryType } from '@/src/types/orders';
 import {
   X,
   Plus,
@@ -58,7 +59,8 @@ interface OrderItem {
 
 export function CreateOrderModal({ customerId: initialCustomerId, customerName: initialCustomerName, onClose, onSuccess }: CreateOrderModalProps) {
   const navigate = useNavigate();
-  const { branch, addAuditLog } = useAppContext();
+  const { branch, role, addAuditLog } = useAppContext();
+  const inventoryBranch = effectiveInventoryBranch(role, branch);
 
   // Customers fetched from Supabase
   const [allCustomers, setAllCustomers] = useState<{ id: string; name: string; email: string | null; phone: string | null; address: string | null; contact_person: string | null }[]>([]);
@@ -157,7 +159,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
         .from('product_categories')
         .select('id, name, image_url')
         .eq('is_active', true);
-      const b = (branch ?? '').trim();
+      const b = inventoryBranch ?? '';
       if (b) {
         cq = cq.or(`branch.eq.${b},branch.is.null`);
       }
@@ -166,7 +168,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
       setCategoriesLoading(false);
     };
     fetchCategories();
-  }, [branch]);
+  }, [inventoryBranch]);
 
   // Fetch products + variants when a category is selected
   const handleSelectCategory = async (cat: DBCategory) => {
@@ -178,7 +180,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
     const { data: branchRow } = await supabase
       .from('branches').select('id').eq('name', branch).single();
 
-    const b = (branch ?? '').trim();
+    const b = inventoryBranch ?? '';
     let pQuery = supabase
       .from('products')
       .select('id, name, image_url, product_variants(id, size, description, unit_price, total_stock, is_hidden, product_bulk_discounts(min_qty, max_qty, discount_percent, is_active))')
@@ -516,6 +518,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
           required_date:    deliveryDate,
           estimated_delivery: deliveryDate,
           delivery_address: deliveryAddress || null,
+          delivery_type: 'Truck' as DeliveryType,
           status:           'Draft',
           payment_status:   'Unbilled',
           subtotal,

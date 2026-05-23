@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from 'react';
 import { UserRole, Branch, AuditLog } from '../types';
 import { supabase } from '@/src/lib/supabase';
 import { fetchWarehouseAssignmentIds } from '@/src/lib/warehouseAssignments';
@@ -142,7 +142,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setAuditLogs((prev) => [newLog, ...prev]);
   };
 
-  const warehouseScope = buildWarehouseAssignmentScope(role, assignedProductIds, assignedMaterialIds);
+  const warehouseScope = useMemo(
+    () => buildWarehouseAssignmentScope(role, assignedProductIds, assignedMaterialIds),
+    [role, assignedProductIds, assignedMaterialIds],
+  );
 
   return (
     <AppContext.Provider

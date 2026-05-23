@@ -1,6 +1,7 @@
 import type { UserRole } from '@/src/types';
+import { executiveHasFullInventoryAccess } from '@/src/lib/inventoryAccess';
 
-/** When active, warehouse users only see assigned catalog rows. */
+/** When active, warehouse users only see assigned catalog rows. Never applies to Executive. */
 export type WarehouseAssignmentScope = {
   productIds: Set<string> | null;
   materialIds: Set<string> | null;
@@ -9,6 +10,7 @@ export type WarehouseAssignmentScope = {
 const EMPTY_UUID = '00000000-0000-0000-0000-000000000000';
 
 export function warehouseScopeIsActive(role: UserRole, productIds: string[] | null): boolean {
+  if (executiveHasFullInventoryAccess(role)) return false;
   return role === 'Warehouse' && productIds !== null;
 }
 

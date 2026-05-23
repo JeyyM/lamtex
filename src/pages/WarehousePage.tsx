@@ -27,8 +27,9 @@ import { supabase } from '@/src/lib/supabase';
 import { deriveOrderDueDateForPersistence } from '@/src/lib/financeData';
 import { useAppContext } from '@/src/store/AppContext';
 import { scopedMaterialIdList, scopedProductIdList } from '@/src/lib/warehouseScope';
+import { effectiveInventoryBranch } from '@/src/lib/inventoryAccess';
 import { computeStockStatus } from '@/src/lib/stockStatus';
-import { finishedGoodProductHref } from '@/src/lib/productRoutes';
+import { finishedGoodProductHref, materialCategoryHref, productCategoryHref } from '@/src/lib/productRoutes';
 import {
   OrderProductSelectionModal,
   type OrderProductSelectionConfirm,
@@ -138,6 +139,8 @@ interface RawMaterial {
   code: string;
   name: string;
   category: string;
+  /** `material_categories.slug` for routing to MaterialCategoryPage */
+  categorySlug: string;
   currentStock: number;
   unit: string;
   maxCapacity: number;
@@ -912,9 +915,10 @@ export default function WarehousePage() {
   const fetchWarehouseInventory = useCallback(async () => {
     setInventoryLoading(true);
     try {
+      const inventoryBranch = effectiveInventoryBranch(role, branch);
       let branchId: string | null = null;
-      if (branch) {
-        const { data: branchRow } = await supabase.from('branches').select('id').eq('name', branch).single();
+      if (branch?.trim()) {
+        const { data: branchRow } = await supabase.from('branches').select('id').eq('name', branch.trim()).single();
         branchId = branchRow?.id ?? null;
       }
 
@@ -938,7 +942,7 @@ export default function WarehousePage() {
           )
         `)
         .neq('status', 'Discontinued');
-      if (branch) pQuery = pQuery.eq('branch', branch);
+      if (inventoryBranch) pQuery = pQuery.eq('branch', inventoryBranch);
       if (scopedProductIds) pQuery = pQuery.in('id', scopedProductIds);
       const { data: prodRows, error: prodErr } = await pQuery;
       if (prodErr) throw prodErr;
@@ -1036,11 +1040,11 @@ export default function WarehousePage() {
         .select('id, branches ( name )')
         .eq('is_active', true);
 
-      const branchCategoryIds = branch
+      const branchCategoryIds = inventoryBranch
         ? (catRows ?? []).filter((c) => {
             const br = (c as { branches?: { name?: string } | { name?: string }[] | null }).branches;
             const n = Array.isArray(br) ? br[0]?.name : br?.name;
-            return n === branch;
+            return n === inventoryBranch;
           }).map((c: { id: string }) => c.id)
         : (catRows ?? []).map((c: { id: string }) => c.id);
 
@@ -1057,7 +1061,7 @@ export default function WarehousePage() {
             last_restock_date,
             status,
             unit_of_measure,
-            material_categories ( name )
+            material_categories ( name, slug )
           `)
           .in('category_id', branchCategoryIds)
           .neq('status', 'Discontinued');
@@ -1090,11 +1094,19 @@ export default function WarehousePage() {
             const uiStatus = stockComputeToUi(computed);
             const uom = m.unit_of_measure ?? 'kg';
             const maxCapacity = Math.max(100, reorderPoint * 4, stock + 1);
+            const cat = m.material_categories as { name?: string; slug?: string } | null;
+            const categoryName = cat?.name ?? 'Uncategorized';
+            const categorySlug = (cat?.slug?.trim() || categoryName
+              .toLowerCase()
+              .trim()
+              .replace(/[^a-z0-9]+/g, '-')
+              .replace(/^-+|-+$/g, '')) || 'uncategorized';
             return {
               id,
               code: String(m.sku ?? ''),
               name: String(m.name ?? ''),
-              category: (m.material_categories as { name?: string } | null)?.name ?? 'Uncategorized',
+              category: categoryName,
+              categorySlug,
               currentStock: stock,
               unit: String(uom),
               maxCapacity,
@@ -1113,7 +1125,7 @@ export default function WarehousePage() {
     } finally {
       setInventoryLoading(false);
     }
-  }, [branch, scopedProductIds?.join('|') ?? '', scopedMaterialIds?.join('|') ?? '']);
+  }, [branch, role, scopedProductIds?.join('|') ?? '', scopedMaterialIds?.join('|') ?? '']);
 
   const fetchSchedule = useCallback(async () => {
     setScheduleLoading(true);
@@ -3106,7 +3118,17 @@ export default function WarehousePage() {
                             </Link>
                           </td>
                           <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">{item.variantSize}</td>
-                          <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">{item.category}</td>
+                          <td className="px-3 py-3 whitespace-nowrap text-sm">
+                            <Link
+                              to={productCategoryHref(item.categorySlug, item.category)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title="Open product category in new tab"
+                              className="text-blue-600 hover:text-blue-800 hover:underline"
+                            >
+                              {item.category}
+                            </Link>
+                          </td>
                           <td className="px-3 py-3 whitespace-nowrap text-sm">
                             <span className="font-semibold text-gray-900">{item.currentStock}</span>
                             <span className="text-gray-500"> {item.unit}</span>
@@ -3169,7 +3191,16 @@ export default function WarehousePage() {
                             {item.productName}
                           </Link>
                           <p className="text-xs text-gray-600 mt-1">
-                            {item.variantSize && item.variantSize !== '—' ? `${item.variantSize} · ` : ''}{item.category}
+                            {item.variantSize && item.variantSize !== '—' ? `${item.variantSize} · ` : ''}
+                            <Link
+                              to={productCategoryHref(item.categorySlug, item.category)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title="Open product category in new tab"
+                              className="text-blue-600 hover:text-blue-800 hover:underline"
+                            >
+                              {item.category}
+                            </Link>
                           </p>
                         </div>
                         <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium border flex-shrink-0 ${getStatusColor(item.status)}`}>
@@ -3302,7 +3333,17 @@ export default function WarehousePage() {
                               {item.name}
                             </Link>
                           </td>
-                          <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">{item.category}</td>
+                          <td className="px-3 py-3 whitespace-nowrap text-sm">
+                            <Link
+                              to={materialCategoryHref(item.categorySlug, item.category)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title="Open material category in new tab"
+                              className="text-blue-600 hover:text-blue-800 hover:underline"
+                            >
+                              {item.category}
+                            </Link>
+                          </td>
                           <td className="px-3 py-3 whitespace-nowrap text-sm">
                             <span className="font-semibold text-gray-900">{item.currentStock}</span>
                             <span className="text-gray-500"> {item.unit}</span>
@@ -3361,7 +3402,17 @@ export default function WarehousePage() {
                           >
                             {item.name}
                           </Link>
-                          <p className="text-xs text-gray-600 mt-1">{item.category}</p>
+                          <p className="text-xs text-gray-600 mt-1">
+                            <Link
+                              to={materialCategoryHref(item.categorySlug, item.category)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title="Open material category in new tab"
+                              className="text-blue-600 hover:text-blue-800 hover:underline"
+                            >
+                              {item.category}
+                            </Link>
+                          </p>
                         </div>
                         <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium border flex-shrink-0 ${getStatusColor(item.status)}`}>
                           {getStatusIcon(item.status)}
@@ -5804,6 +5855,7 @@ export default function WarehousePage() {
             }
           }}
           orderNumber={warehouseMarkPackedOrder.orderNumber}
+          orderStatus={warehouseMarkPackedOrder.status}
           items={warehouseMarkPackedOrder.items}
           purpose="markPacked"
           submitting={inTransitSubmitting}

@@ -5,7 +5,9 @@ import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { supabase } from '@/src/lib/supabase';
 import { useAppContext } from '@/src/store/AppContext';
-import { OrderDetail, OrderStatus, OrderLineItem, OrderLog, ProofDocument, OrderUrgency } from '@/src/types/orders';
+import { effectiveInventoryBranch } from '@/src/lib/inventoryAccess';
+import { branchHasShippingContainers } from '@/src/lib/fleetContainers';
+import { OrderDetail, OrderStatus, OrderLineItem, OrderLog, ProofDocument, OrderUrgency, DeliveryType } from '@/src/types/orders';
 import { PaymentLink } from '@/src/types/payments';
 import { PaymentLinkModal } from '@/src/components/payments/PaymentLinkModal';
 import { OrderCustomerPortalCard } from '@/src/components/orders/OrderCustomerPortalCard';
@@ -74,12 +76,14 @@ import {
   tryExtractStoragePathFromPublicUrl,
 } from '@/src/lib/orderProofPayments';
 import { deriveOrderDueDateForPersistence, parseProofNotes } from '@/src/lib/financeData';
+import { cumulativeShippedForLine, remainingToShipForLine } from '@/src/lib/orderShipmentQuantities';
 
 /** Local proof uploads: images + common business documents (allowlist). */
 const ORDER_PROOF_UPLOAD_EXT =
   /\.(pdf|jpe?g|png|webp|gif|avif|bmp|jfif|doc|docx|xls|xlsx|ppt|pptx|txt|csv|rtf|odt|ods|odp)$/i;
 
 const ORDER_URGENCY_OPTIONS: OrderUrgency[] = ['Low', 'Medium', 'High', 'Critical'];
+const ORDER_DELIVERY_TYPE_OPTIONS: DeliveryType[] = ['Truck', 'Ship'];
 
 function parseOrderUrgency(v: unknown): OrderUrgency {
   if (v === 'Low' || v === 'Medium' || v === 'High' || v === 'Critical') return v;
@@ -104,7 +108,8 @@ function isPersistedOrderLineId(id: string): boolean {
 export function OrderDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { branch, addAuditLog, role, session, employeeName, setHideBranchSelector } = useAppContext();
+  const { branch, addAuditLog, role, session, employeeName, setHideBranchSelector, setBranch } = useAppContext();
+  const inventoryBranch = effectiveInventoryBranch(role, branch);
   const [isEditing, setIsEditing] = useState(false);
   const [editedOrder, setEditedOrder] = useState<OrderDetail | null>(null);
 
@@ -169,6 +174,9 @@ export function OrderDetailPage() {
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [rejectionReason, setRejectionReason] = useState('');
   const [approvalLoading, setApprovalLoading] = useState(false);
+  const [saveSubmitting, setSaveSubmitting] = useState(false);
+  const [saveSuccessVisible, setSaveSuccessVisible] = useState(false);
+  const saveSuccessTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showCancelModal, setShowCancelModal] = useState(false);
 
   /** Inline delivery input drafts keyed by line item id. */
@@ -214,6 +222,8 @@ export function OrderDetailPage() {
     { id: string; employee_name: string; employee_id: string; branch_name?: string }[]
   >([]);
   const [branchList, setBranchList] = useState<{ id: string; name: string }[]>([]);
+  /** Whether the order branch has shipping containers (Ship delivery only when true). */
+  const [branchHasShips, setBranchHasShips] = useState<boolean | null>(null);
 
   const patchEditedOrder = (patch: Partial<OrderDetail> | ((prev: OrderDetail) => Partial<OrderDetail>)) => {
     setEditedOrder((prev) => {
@@ -222,6 +232,50 @@ export function OrderDetailPage() {
       return { ...prev, ...next };
     });
   };
+
+  const shipCheckBranchName = useMemo(() => {
+    if (!isEditing || !editedOrder) return '';
+    if (editedOrder.branch?.trim()) return editedOrder.branch.trim();
+    if (editedOrder.branchId) {
+      const b = branchList.find((x) => x.id === editedOrder.branchId);
+      if (b?.name?.trim()) return b.name.trim();
+    }
+    return order?.branch?.trim() ?? '';
+  }, [isEditing, editedOrder, order?.branch, branchList]);
+
+  useEffect(() => {
+    if (!isEditing || !shipCheckBranchName) {
+      setBranchHasShips(null);
+      return;
+    }
+    let cancelled = false;
+    setBranchHasShips(null);
+    void branchHasShippingContainers(shipCheckBranchName).then((has) => {
+      if (!cancelled) setBranchHasShips(has);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isEditing, shipCheckBranchName]);
+
+  useEffect(() => {
+    if (!isEditing || !editedOrder || branchHasShips !== false) return;
+    if (editedOrder.deliveryType === 'Ship') {
+      patchEditedOrder({ deliveryType: 'Truck' });
+    }
+  }, [isEditing, editedOrder, branchHasShips]);
+
+  const showSaveSuccessBanner = () => {
+    setSaveSuccessVisible(true);
+    if (saveSuccessTimerRef.current) clearTimeout(saveSuccessTimerRef.current);
+    saveSuccessTimerRef.current = setTimeout(() => setSaveSuccessVisible(false), 6000);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (saveSuccessTimerRef.current) clearTimeout(saveSuccessTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (!id) return;
@@ -893,7 +947,7 @@ export function OrderDetailPage() {
         alert('Each sent quantity must be 0 or more.');
         return;
       }
-      const prevCumulative = li.quantityShipped ?? 0;
+      const prevCumulative = cumulativeShippedForLine(li, order.status);
       if (prevCumulative + ship > li.quantity) {
         alert(
           `“${li.productName}”: cannot send more than the remaining to fulfill this line (ordered ${li.quantity}, already ${prevCumulative} in transit to date, this shipment: ${ship}).`,
@@ -992,7 +1046,7 @@ export function OrderDetailPage() {
           if (mErr) throw mErr;
         }
 
-        const prevCum = l.quantityShipped ?? 0;
+        const prevCum = cumulativeShippedForLine(l, order.status);
         const nextCumulative = prevCum + ship;
         const { error: lineErr } = await supabase
           .from('order_line_items')
@@ -1205,12 +1259,14 @@ export function OrderDetailPage() {
   };
 
   const handleEdit = () => {
+    setSaveSuccessVisible(false);
     setIsEditing(true);
     setEditedOrder({ ...order, items: [...order.items] });
     addAuditLog('Started Edit Order', 'Order', `Started editing order ${order.id}`);
   };
 
   const handleCancelEdit = () => {
+    if (saveSubmitting) return;
     setIsEditing(false);
     setEditedOrder(null);
   };
@@ -1495,8 +1551,10 @@ export function OrderDetailPage() {
   };
 
   const handleSave = async () => {
-    if (!editedOrder || !id) return;
+    if (!editedOrder || !id || saveSubmitting) return;
 
+    setSaveSubmitting(true);
+    try {
     // Snapshot old state before save for diffing
     const oldOrder = order!;
 
@@ -1770,6 +1828,10 @@ export function OrderDetailPage() {
     setDeliveredDrafts({});
     setIsEditing(false);
     setEditedOrder(null);
+    showSaveSuccessBanner();
+    } finally {
+      setSaveSubmitting(false);
+    }
   };
 
   const handleSubmitForApproval = async () => {
@@ -1834,12 +1896,15 @@ export function OrderDetailPage() {
     // Load categories when opening the modal
     if (categories.length === 0) {
       setCategoriesLoading(true);
-      supabase
+      let cq = supabase
         .from('product_categories')
         .select('id, name, image_url')
-        .or(`branch.eq.${branch},branch.is.null`)
-        .eq('is_active', true)
-        .order('sort_order')
+        .eq('is_active', true);
+      const b = inventoryBranch ?? '';
+      if (b) {
+        cq = cq.or(`branch.eq.${b},branch.is.null`);
+      }
+      cq.order('sort_order')
         .then(({ data }) => {
           setCategories(data ?? []);
           setCategoriesLoading(false);
@@ -2867,12 +2932,26 @@ export function OrderDetailPage() {
         <div className="flex min-h-[2.75rem] flex-wrap items-center justify-end gap-2 self-center md:gap-3">
           {isEditing ? (
             <>
-              <Button variant="outline" onClick={handleCancelEdit}>
+              <Button variant="outline" onClick={handleCancelEdit} disabled={saveSubmitting}>
                 Cancel
               </Button>
-              <Button variant="primary" onClick={handleSave} className="gap-2">
-                <Save className="w-4 h-4" />
-                Save Changes
+              <Button
+                variant="primary"
+                onClick={() => void handleSave()}
+                disabled={saveSubmitting}
+                className="gap-2 min-w-[9.5rem]"
+              >
+                {saveSubmitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Saving…
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-4 h-4" />
+                    Save Changes
+                  </>
+                )}
               </Button>
             </>
           ) : (
@@ -2928,16 +3007,25 @@ export function OrderDetailPage() {
                   className="gap-2"
                   onClick={() => {
                     if (!id || !order) return;
-                    const q = new URLSearchParams({ tab: 'routes', order: id });
-                    if (order.requiredDate) {
-                      const rd = String(order.requiredDate).slice(0, 10);
+                    const isShip = order.deliveryType === 'Ship';
+                    if (order.branch?.trim()) setBranch(order.branch.trim());
+                    const q = new URLSearchParams({ order: id });
+                    if (isShip) {
+                      q.set('tab', 'dispatch');
+                      q.set('mode', 'interisland');
+                    } else {
+                      q.set('tab', 'routes');
+                    }
+                    const dateSource = order.scheduledDepartureDate || order.requiredDate;
+                    if (dateSource) {
+                      const rd = String(dateSource).slice(0, 10);
                       if (/^\d{4}-\d{2}-\d{2}$/.test(rd)) q.set('date', rd);
                     }
                     navigate(`/logistics?${q.toString()}`);
                   }}
                 >
                   <Route className="h-4 w-4" />
-                  Plan route
+                  {order.deliveryType === 'Ship' ? 'Schedule shipment' : 'Plan route'}
                 </Button>
               )}
               {logisticsReplacesFulfill && order.status === 'Scheduled' && (
@@ -2974,7 +3062,7 @@ export function OrderDetailPage() {
                     shipQtyNextOrderStatusRef.current = 'In Transit';
                     const rows = order.items.map((li) => ({
                       itemId: li.id,
-                      shippedQuantity: Math.max(0, li.quantity - (li.quantityShipped ?? 0)),
+                      shippedQuantity: remainingToShipForLine(li, order.status),
                     }));
                     void handleConfirmInTransit(rows);
                   }}
@@ -3025,6 +3113,30 @@ export function OrderDetailPage() {
         </div>
       </div>
 
+      {saveSuccessVisible && (
+        <div
+          className="flex items-center gap-3 rounded-xl border border-green-300 bg-green-50 p-4 shadow-sm"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-green-100">
+            <CheckCircle2 className="h-5 w-5 text-green-600" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-green-900">Changes saved successfully</p>
+            <p className="mt-0.5 text-xs text-green-700">Order details and line items were updated.</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSaveSuccessVisible(false)}
+            className="shrink-0 rounded-md p-1 text-green-700 hover:bg-green-100"
+            aria-label="Dismiss"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
       {!isEditing && (order.status === 'Approved' || order.status === 'Rejected') && (
         <div
           className={`flex items-center gap-3 rounded-xl border p-4 ${
@@ -3072,13 +3184,27 @@ export function OrderDetailPage() {
 
       {/* Edit Mode Banner */}
       {isEditing && (
-        <div className="bg-amber-50 border-l-4 border-amber-400 p-4 rounded-lg">
+        <div
+          className={`rounded-lg border-l-4 p-4 ${
+            saveSubmitting
+              ? 'border-blue-500 bg-blue-50'
+              : 'border-amber-400 bg-amber-50'
+          }`}
+        >
           <div className="flex items-center gap-3">
-            <AlertTriangle className="w-5 h-5 text-amber-600" />
+            {saveSubmitting ? (
+              <Loader2 className="w-5 h-5 text-blue-600 animate-spin shrink-0" />
+            ) : (
+              <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+            )}
             <div>
-              <p className="text-sm font-medium text-amber-900">Edit Mode Active</p>
-              <p className="text-xs text-amber-700 mt-1">
-                You can change order/payment status, modify quantities, add or remove products. Don't forget to save your changes.
+              <p className={`text-sm font-medium ${saveSubmitting ? 'text-blue-900' : 'text-amber-900'}`}>
+                {saveSubmitting ? 'Saving your changes…' : 'Edit mode active'}
+              </p>
+              <p className={`text-xs mt-1 ${saveSubmitting ? 'text-blue-700' : 'text-amber-700'}`}>
+                {saveSubmitting
+                  ? 'Please wait — do not leave this page until save completes.'
+                  : "You can change order/payment status, modify quantities, add or remove products. Click Save Changes when you're done."}
               </p>
             </div>
           </div>
@@ -3240,8 +3366,10 @@ export function OrderDetailPage() {
                 <div className="pt-2">
                   <p className="text-xs text-gray-500">
                     Planned departure is set in{' '}
-                    <span className="font-medium text-gray-700">Logistics → Route Planning</span> when this order is assigned
-                    to a truck trip.
+                    <span className="font-medium text-gray-700">
+                      Logistics → {order.deliveryType === 'Ship' ? 'Inter-Island Shipments' : 'Route Planning'}
+                    </span>{' '}
+                    when this order is assigned to a {order.deliveryType === 'Ship' ? 'container shipment' : 'truck trip'}.
                   </p>
                 </div>
               </div>
@@ -3278,12 +3406,18 @@ export function OrderDetailPage() {
                   </div>
                 ) : (
                   <p className="mt-3 text-xs text-gray-500">
-                    No planned departure yet — assign this order to a trip in{' '}
-                    <span className="font-medium text-gray-700">Logistics → Route Planning</span>
+                    No planned departure yet — assign this order in{' '}
+                    <span className="font-medium text-gray-700">
+                      Logistics → {order.deliveryType === 'Ship' ? 'Inter-Island Shipments' : 'Route Planning'}
+                    </span>
                     {order.status === 'Approved' || order.status === 'Partially Fulfilled' ? (
                       <>
                         {' '}
-                        (use <span className="text-gray-600">Plan route</span> above).
+                        (use{' '}
+                        <span className="text-gray-600">
+                          {order.deliveryType === 'Ship' ? 'Schedule shipment' : 'Plan route'}
+                        </span>{' '}
+                        above).
                       </>
                     ) : (
                       '.'
@@ -3348,10 +3482,36 @@ export function OrderDetailPage() {
                   <span className="font-medium text-gray-900">{order.actualDelivery}</span>
                 </div>
               )}
-              <div className="flex justify-between">
+              <div className="flex flex-col gap-1 sm:flex-row sm:justify-between sm:items-center">
                 <span className="text-gray-600">Delivery Type:</span>
-                <span className="font-medium text-gray-900">{order.deliveryType}</span>
+                {isEditing && editedOrder ? (
+                  branchHasShips === false ? (
+                    <span className="font-medium text-gray-900">Truck</span>
+                  ) : (
+                    <select
+                      className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm font-medium text-gray-900 w-full sm:w-auto max-w-[12rem] bg-white disabled:bg-gray-50 disabled:text-gray-500"
+                      value={editedOrder.deliveryType ?? 'Truck'}
+                      disabled={branchHasShips === null}
+                      onChange={(e) =>
+                        patchEditedOrder({ deliveryType: e.target.value as DeliveryType })
+                      }
+                    >
+                      {ORDER_DELIVERY_TYPE_OPTIONS.map((type) => (
+                        <option key={type} value={type}>
+                          {type}
+                        </option>
+                      ))}
+                    </select>
+                  )
+                ) : (
+                  <span className="font-medium text-gray-900">{order.deliveryType ?? 'Truck'}</span>
+                )}
               </div>
+              {isEditing && branchHasShips === false && (
+                <p className="text-xs text-gray-500">
+                  Ship delivery is unavailable — this branch has no shipping containers in fleet.
+                </p>
+              )}
               <div className="flex justify-between">
                 <span className="text-gray-600">Payment Terms:</span>
                 <span className="font-medium text-gray-900">{order.paymentTerms}</span>
@@ -5219,6 +5379,7 @@ export function OrderDetailPage() {
             }
           }}
           orderNumber={order.id}
+          orderStatus={order.status}
           items={order.items}
           purpose="markPacked"
           submitting={inTransitSubmitting}

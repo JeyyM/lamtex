@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { scopedProductIdList, warehouseScopeEmptyMessage } from '@/src/lib/warehouseScope';
+import { effectiveInventoryBranch } from '@/src/lib/inventoryAccess';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
@@ -261,7 +262,8 @@ async function downloadProductsWorkbook(
 
 export function ProductsPage() {
   const navigate = useNavigate();
-  const { branch, addAuditLog, warehouseScope, warehouseScopeLoading } = useAppContext();
+  const { branch, role, addAuditLog, warehouseScope, warehouseScopeLoading } = useAppContext();
+  const inventoryBranch = effectiveInventoryBranch(role, branch);
   const scopedProductIds = scopedProductIdList(warehouseScope);
 
   const [searchQuery, setSearchQuery]             = useState('');
@@ -287,14 +289,14 @@ export function ProductsPage() {
       .from('product_categories')
       .select('*')
       .order('sort_order', { ascending: true });
-    if (branch) q = q.eq('branch', branch);
+    if (inventoryBranch) q = q.eq('branch', inventoryBranch);
     const { data, error } = await q;
     if (!error) setCategories(data ?? []);
     setCategoriesLoading(false);
   };
 
   // â”€â”€ Fetch product stats (branch-aware) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  const fetchProductStats = async (currentBranch: string) => {
+  const fetchProductStats = async (currentBranch: string | null) => {
     setSummaryLoading(true);
     if (scopedProductIds && scopedProductIds.length === 1 && scopedProductIds[0] === '00000000-0000-0000-0000-000000000000') {
       setProductStats([]);
@@ -320,8 +322,8 @@ export function ProductsPage() {
     setSummaryLoading(false);
   };
 
-  useEffect(() => { fetchCategories(); }, [branch]);
-  useEffect(() => { fetchProductStats(branch); }, [branch, scopedProductIds?.join('|') ?? '']);
+  useEffect(() => { fetchCategories(); }, [inventoryBranch]);
+  useEffect(() => { fetchProductStats(inventoryBranch); }, [inventoryBranch, scopedProductIds?.join('|') ?? '']);
 
   const scopedCategoryIds = useMemo(() => {
     if (!scopedProductIds) return null;
@@ -440,17 +442,22 @@ export function ProductsPage() {
           <Button
             variant="outline"
             className="flex-1 sm:flex-none"
-            disabled={exportingProducts || categoriesLoading || !branch}
+            disabled={exportingProducts || categoriesLoading || (role !== 'Executive' && !branch)}
             onClick={async () => {
-              if (exportingProducts || categoriesLoading || !branch) return;
+              if (exportingProducts || categoriesLoading || (role !== 'Executive' && !branch)) return;
               setExportingProducts(true);
               try {
-                const { categories: exportCategories, variants } = await fetchProductCatalogForExport(branch);
-                await downloadProductsWorkbook(exportCategories, variants, branch);
+                const exportBranch = inventoryBranch ?? '';
+                const { categories: exportCategories, variants } = await fetchProductCatalogForExport(exportBranch);
+                await downloadProductsWorkbook(
+                  exportCategories,
+                  variants,
+                  exportBranch || 'All branches',
+                );
                 addAuditLog(
                   'Exported products workbook',
                   'Product',
-                  `${exportCategories.length} categories, ${variants.length} variants (${branch})`,
+                  `${exportCategories.length} categories, ${variants.length} variants (${exportBranch || 'All branches'})`,
                 );
               } catch (e) {
                 window.alert(e instanceof Error ? e.message : 'Export failed.');
