@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
+import { StatKpiCard } from '@/src/components/ui/StatKpiCard';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
@@ -362,59 +363,16 @@ export function InterBranchRequestsPage() {
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-slate-100 rounded-lg">
-                <Factory className="w-6 h-6 text-slate-700" />
-              </div>
-              <div>
-                <p className="text-sm text-gray-500">Total</p>
-                <p className="text-2xl font-bold text-gray-900">{totalIbr}</p>
-                {drafts > 0 && <p className="text-xs text-gray-500 mt-0.5">Draft: {drafts}</p>}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-amber-100 rounded-lg">
-                <ClipboardList className="w-6 h-6 text-amber-700" />
-              </div>
-              <div>
-                <p className="text-sm text-gray-500">Pending approval</p>
-                <p className="text-2xl font-bold text-gray-900">{pendingApproval}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-blue-100 rounded-lg">
-                <ThumbsUp className="w-6 h-6 text-blue-700" />
-              </div>
-              <div>
-                <p className="text-sm text-gray-500">Approved</p>
-                <p className="text-2xl font-bold text-gray-900">{approved}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-green-100 rounded-lg">
-                <CheckCircle className="w-6 h-6 text-green-700" />
-              </div>
-              <div>
-                <p className="text-sm text-gray-500">Fulfilled</p>
-                <p className="text-2xl font-bold text-gray-900">{fulfilled}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <StatKpiCard
+          label="Total"
+          value={String(totalIbr)}
+          tone="indigo"
+          icon={<Factory />}
+          sub={drafts > 0 ? `Draft: ${drafts}` : undefined}
+        />
+        <StatKpiCard label="Pending approval" value={String(pendingApproval)} tone="amber" icon={<ClipboardList />} />
+        <StatKpiCard label="Approved" value={String(approved)} tone="blue" icon={<ThumbsUp />} />
+        <StatKpiCard label="Fulfilled" value={String(fulfilled)} tone="emerald" icon={<CheckCircle />} />
       </div>
 
       <Card>

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
+import { StatKpiCard } from '@/src/components/ui/StatKpiCard';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
@@ -1020,71 +1021,34 @@ export function MaterialDetailPage() {
         {/* Summary Cards - Right side, 2 rows of 2 cards */}
         <div className="lg:col-span-3">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Card>
-              <CardContent className="p-4">
-                <div className="flex items-center gap-3">
-                  <div className="p-3 bg-blue-100 rounded-lg">
-                    <Box className="w-6 h-6 text-blue-600" />
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-500">Total Stock</p>
-                    <p className="text-2xl font-bold text-gray-900">
-                      {material.total_stock.toLocaleString()} <span className="text-sm font-normal uppercase">{material.unit_of_measure}</span>
-                    </p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardContent className="p-4">
-                <div className="flex items-center gap-3">
-                  <div className="p-3 bg-green-100 rounded-lg">
-                    <DollarSign className="w-6 h-6 text-green-600" />
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-500">Inventory Value</p>
-                    <p className="text-2xl font-bold text-gray-900">
-                      ₱{((material.total_stock * material.cost_per_unit) / 1000).toFixed(0)}K
-                    </p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardContent className="p-4">
-                <div className="flex items-center gap-3">
-                  <div className="p-3 bg-purple-100 rounded-lg">
-                    <TrendingUp className="w-6 h-6 text-purple-600" />
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-500">Monthly Consumption</p>
-                    <p className={`text-2xl font-bold ${hasMonthlyConsumptionData ? 'text-gray-900' : 'text-gray-400 font-normal'}`}>
-                      {hasMonthlyConsumptionData
-                        ? `${monthlyConsumptionValue.toLocaleString()} ${material.unit_of_measure}`
-                        : '—'}
-                    </p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardContent className="p-4">
-                <div className="flex items-center gap-3">
-                  <div className={`p-3 rounded-lg ${material.total_stock <= material.reorder_point ? 'bg-orange-100' : 'bg-gray-100'}`}>
-                    <AlertTriangle className={`w-6 h-6 ${material.total_stock <= material.reorder_point ? 'text-orange-600' : 'text-gray-600'}`} />
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-500">Reorder Point</p>
-                    <p className="text-2xl font-bold text-gray-900">
-                      {material.reorder_point.toLocaleString()}
-                    </p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+            <StatKpiCard
+              label="Total Stock"
+              value={`${material.total_stock.toLocaleString()} ${material.unit_of_measure}`}
+              tone="blue"
+              icon={<Box />}
+            />
+            <StatKpiCard
+              label="Inventory Value"
+              value={`₱${((material.total_stock * material.cost_per_unit) / 1000).toFixed(0)}K`}
+              tone="emerald"
+              icon={<DollarSign />}
+            />
+            <StatKpiCard
+              label="Monthly Consumption"
+              value={
+                hasMonthlyConsumptionData
+                  ? `${monthlyConsumptionValue.toLocaleString()} ${material.unit_of_measure}`
+                  : '—'
+              }
+              tone="violet"
+              icon={<TrendingUp />}
+            />
+            <StatKpiCard
+              label="Reorder Point"
+              value={material.reorder_point.toLocaleString()}
+              tone={material.total_stock <= material.reorder_point ? 'amber' : 'teal'}
+              icon={<AlertTriangle />}
+            />
           </div>
         </div>
 

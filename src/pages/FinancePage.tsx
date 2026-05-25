@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
+import { StatKpiCard } from '@/src/components/ui/StatKpiCard';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import {
@@ -425,86 +426,17 @@ export function FinancePage() {
 
       {/* Quick Stats */}
       <div className="grid grid-cols-1 md:grid-cols-6 gap-4">
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-500">Total Receivables</p>
-                <p className="text-xl font-bold text-blue-600 mt-1">{formatCurrency(totalReceivables)}</p>
-              </div>
-              <div className="p-3 bg-blue-100 rounded-lg">
-                <ArrowDownRight className="w-5 h-5 text-blue-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-500">Total Payables</p>
-                <p className="text-xl font-bold text-orange-600 mt-1">{formatCurrency(totalPayables)}</p>
-              </div>
-              <div className="p-3 bg-orange-100 rounded-lg">
-                <ArrowUpRight className="w-5 h-5 text-orange-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-500">Overdue (Receivable)</p>
-                <p className="text-xl font-bold text-red-600 mt-1">{formatCurrency(overdueReceivables)}</p>
-              </div>
-              <div className="p-3 bg-red-100 rounded-lg">
-                <AlertTriangle className="w-5 h-5 text-red-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-500">Overdue (Payable)</p>
-                <p className="text-xl font-bold text-red-600 mt-1">{formatCurrency(overduePayables)}</p>
-              </div>
-              <div className="p-3 bg-red-100 rounded-lg">
-                <AlertTriangle className="w-5 h-5 text-red-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-500">Paid This Month</p>
-                <p className="text-xl font-bold text-green-600 mt-1">
-                  {formatCurrency(MOCK_INVOICES.filter(inv => inv.status === 'Paid').reduce((sum, inv) => sum + inv.paidAmount, 0) / 2)}
-                </p>
-              </div>
-              <div className="p-3 bg-green-100 rounded-lg">
-                <CheckCircle className="w-5 h-5 text-green-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-500">Total Invoices</p>
-                <p className="text-xl font-bold text-gray-900 mt-1">{MOCK_INVOICES.length}</p>
-              </div>
-              <div className="p-3 bg-purple-100 rounded-lg">
-                <FileText className="w-5 h-5 text-purple-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <StatKpiCard label="Total Receivables" value={formatCurrency(totalReceivables)} tone="blue" icon={<ArrowDownRight />} />
+        <StatKpiCard label="Total Payables" value={formatCurrency(totalPayables)} tone="orange" icon={<ArrowUpRight />} />
+        <StatKpiCard label="Overdue (Receivable)" value={formatCurrency(overdueReceivables)} tone="rose" icon={<AlertTriangle />} />
+        <StatKpiCard label="Overdue (Payable)" value={formatCurrency(overduePayables)} tone="rose" icon={<AlertTriangle />} />
+        <StatKpiCard
+          label="Paid This Month"
+          value={formatCurrency(MOCK_INVOICES.filter((inv) => inv.status === 'Paid').reduce((sum, inv) => sum + inv.paidAmount, 0) / 2)}
+          tone="emerald"
+          icon={<CheckCircle />}
+        />
+        <StatKpiCard label="Total Invoices" value={String(MOCK_INVOICES.length)} tone="violet" icon={<FileText />} />
       </div>
 
       {/* View Mode Tabs */}

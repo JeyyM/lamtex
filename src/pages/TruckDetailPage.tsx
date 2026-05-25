@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
+import { StatKpiCard } from '@/src/components/ui/StatKpiCard';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import {
@@ -584,20 +585,7 @@ export function TruckDetailPage() {
 
       {/* Hero Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-500">Total Trips</p>
-                <p className="text-2xl font-bold text-gray-900 mt-1">{truck.totalTrips}</p>
-              </div>
-              <div className="p-3 bg-blue-100 rounded-lg">
-                <Package className="w-6 h-6 text-blue-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
+        <StatKpiCard label="Total Trips" value={String(truck.totalTrips)} tone="blue" icon={<Package />} />
         <Card className="h-full">
           <CardContent className="p-6">
             <div className="flex items-center justify-between gap-3">
@@ -632,19 +620,7 @@ export function TruckDetailPage() {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-500">Utilization (Week)</p>
-                <p className="text-2xl font-bold text-gray-900 mt-1">{truck.utilizationPercent}%</p>
-              </div>
-              <div className="p-3 bg-purple-100 rounded-lg">
-                <TrendingUp className="w-6 h-6 text-purple-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <StatKpiCard label="Utilization (Week)" value={`${truck.utilizationPercent}%`} tone="violet" icon={<TrendingUp />} />
       </div>
 
       {/* Alerts Section */}

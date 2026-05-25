@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
+import { StatKpiCard } from '@/src/components/ui/StatKpiCard';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
@@ -421,33 +422,10 @@ export function PurchaseOrdersPage() {
 
       {/* ── KPI Cards ── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card><CardContent className="p-4">
-          <div className="flex items-center gap-3">
-            <div className="p-3 bg-blue-100 rounded-lg"><ShoppingCart className="w-6 h-6 text-blue-600" /></div>
-            <div><p className="text-sm text-gray-500">Total POs</p><p className="text-2xl font-bold text-gray-900">{totalPOs}</p></div>
-          </div>
-        </CardContent></Card>
-
-        <Card><CardContent className="p-4">
-          <div className="flex items-center gap-3">
-            <div className="p-3 bg-orange-100 rounded-lg"><Clock className="w-6 h-6 text-orange-600" /></div>
-            <div><p className="text-sm text-gray-500">In Progress</p><p className="text-2xl font-bold text-gray-900">{pendingPOs}</p></div>
-          </div>
-        </CardContent></Card>
-
-        <Card><CardContent className="p-4">
-          <div className="flex items-center gap-3">
-            <div className="p-3 bg-green-100 rounded-lg"><CheckCircle className="w-6 h-6 text-green-600" /></div>
-            <div><p className="text-sm text-gray-500">Completed</p><p className="text-2xl font-bold text-gray-900">{completedPOs}</p></div>
-          </div>
-        </CardContent></Card>
-
-        <Card><CardContent className="p-4">
-          <div className="flex items-center gap-3">
-            <div className="p-3 bg-purple-100 rounded-lg"><FileText className="w-6 h-6 text-purple-600" /></div>
-            <div><p className="text-sm text-gray-500">Total Value</p><p className="text-2xl font-bold text-gray-900">₱{(totalValue / 1_000_000).toFixed(1)}M</p></div>
-          </div>
-        </CardContent></Card>
+        <StatKpiCard label="Total POs" value={String(totalPOs)} tone="blue" icon={<ShoppingCart />} />
+        <StatKpiCard label="In Progress" value={String(pendingPOs)} tone="amber" icon={<Clock />} />
+        <StatKpiCard label="Completed" value={String(completedPOs)} tone="emerald" icon={<CheckCircle />} />
+        <StatKpiCard label="Total Value" value={`₱${(totalValue / 1_000_000).toFixed(1)}M`} tone="violet" icon={<FileText />} />
       </div>
 
       {/* ── Filters ── */}

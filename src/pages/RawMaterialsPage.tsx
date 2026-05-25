@@ -4,6 +4,7 @@ import { useAppContext } from '@/src/store/AppContext';
 import { scopedMaterialIdList, warehouseScopeEmptyMessage } from '@/src/lib/warehouseScope';
 import { effectiveInventoryBranch } from '@/src/lib/inventoryAccess';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
+import { StatKpiCard } from '@/src/components/ui/StatKpiCard';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import {
@@ -556,74 +557,41 @@ export function RawMaterialsPage() {
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
-            <Card>
-              <CardContent className="p-4">
-                <div className="flex items-center gap-3">
-                  <div className="p-3 bg-blue-100 rounded-lg">
-                    <Package className="w-6 h-6 text-blue-600" />
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-500">Total Materials</p>
-                    <p className="text-2xl font-bold text-gray-900">
-                      {summaryLoading ? '…' : summaryStats.totalMaterials}
-                    </p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardContent className="p-4">
-                <div className="flex items-center gap-3">
-                  <div className="p-3 bg-green-100 rounded-lg">
-                    <DollarSign className="w-6 h-6 text-green-600" />
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-500">Total Inventory Value</p>
-                    <p className="text-2xl font-bold text-gray-900">
-                      {summaryLoading
-                        ? '…'
-                        : summaryStats.totalValue >= 1_000_000
-                          ? `₱${(summaryStats.totalValue / 1_000_000).toFixed(2)}M`
-                          : `₱${summaryStats.totalValue.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-                    </p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardContent className="p-4">
-                <div className="flex items-center gap-3">
-                  <div className="p-3 bg-orange-100 rounded-lg">
-                    <AlertTriangle className="w-6 h-6 text-orange-600" />
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-500">Low Stock Items</p>
-                    <p className="text-2xl font-bold text-gray-900">
-                      {summaryLoading ? '…' : summaryStats.lowStockCount}
-                    </p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardContent className="p-4">
-                <div className="flex items-center gap-3">
-                  <div className="p-3 bg-red-100 rounded-lg">
-                    <TrendingDown className="w-6 h-6 text-red-600" />
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-500">Reorder Required</p>
-                    <p className="text-2xl font-bold text-gray-900">
-                      {summaryLoading ? '…' : summaryStats.reorderCount}
-                    </p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+        <StatKpiCard
+          label="Total Materials"
+          value={summaryLoading ? '…' : String(summaryStats.totalMaterials)}
+          tone="blue"
+          icon={<Package />}
+          loading={summaryLoading}
+        />
+        <StatKpiCard
+          label="Total Inventory Value"
+          value={
+            summaryLoading
+              ? '…'
+              : summaryStats.totalValue >= 1_000_000
+                ? `₱${(summaryStats.totalValue / 1_000_000).toFixed(2)}M`
+                : `₱${summaryStats.totalValue.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+          }
+          tone="emerald"
+          icon={<DollarSign />}
+          loading={summaryLoading}
+        />
+        <StatKpiCard
+          label="Low Stock Items"
+          value={summaryLoading ? '…' : String(summaryStats.lowStockCount)}
+          tone="amber"
+          icon={<AlertTriangle />}
+          loading={summaryLoading}
+        />
+        <StatKpiCard
+          label="Reorder Required"
+          value={summaryLoading ? '…' : String(summaryStats.reorderCount)}
+          tone="rose"
+          icon={<TrendingDown />}
+          loading={summaryLoading}
+        />
+      </div>
 
           {/* Stock Alerts */}
           {alertsLoading ? (

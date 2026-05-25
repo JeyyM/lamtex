@@ -43,7 +43,10 @@ import {
   PieChart as PieChartIcon,
   Medal,
   Table2,
+  ClipboardList,
+  Plus,
 } from 'lucide-react';
+import RawMaterialPickerModal from '@/src/components/products/RawMaterialPickerModal';
 import {
   ComposedChart,
   LineChart,
@@ -74,6 +77,9 @@ import {
   type ReportsCategoryMarginRow,
   type ReportsProductVariantRow,
   type ReportsInventorySupplierRow,
+  // type ReportsLogisticsTripRow,
+  type ReportsRawMaterialConsumptionReport,
+  type ReportsRawMaterialConsumptionByProductRow,
 } from '@/src/lib/reportsData';
 import { finishedGoodProductHref, productCategoryHref } from '@/src/lib/productRoutes';
 import {
@@ -84,7 +90,7 @@ import {
   type DatePeriodKind,
 } from '@/src/lib/datePeriodQuery';
 
-type ViewMode = 'overview' | 'sales' | 'agents' | 'products' | 'inventory' | 'operations';
+type ViewMode = 'overview' | 'sales' | 'agents' | 'products' | 'inventory';
 type RevenueTrendMode = 'scoped' | 'allBranches';
 type AgentCompareMode = 'scoped' | 'allBranches';
 type SortDir = 'asc' | 'desc';
@@ -403,6 +409,80 @@ function sortInventorySupplierRows(
   });
 }
 
+/*
+function sortLogisticsTripRows(
+  rows: ReportsLogisticsTripRow[],
+  sortKey: string,
+  sortDir: SortDir,
+): ReportsLogisticsTripRow[] {
+  return [...rows].sort((a, b) => {
+    let av: string | number;
+    let bv: string | number;
+    switch (sortKey) {
+      case 'tripNumber':
+        av = a.tripNumber.toLowerCase();
+        bv = b.tripNumber.toLowerCase();
+        break;
+      case 'status':
+        av = a.status.toLowerCase();
+        bv = b.status.toLowerCase();
+        break;
+      case 'scheduledDate':
+        av = a.scheduledDate;
+        bv = b.scheduledDate;
+        break;
+      case 'vehicle':
+        av = (a.vehicleName ?? '').toLowerCase();
+        bv = (b.vehicleName ?? '').toLowerCase();
+        break;
+      case 'driver':
+        av = (a.driverName ?? '').toLowerCase();
+        bv = (b.driverName ?? '').toLowerCase();
+        break;
+      case 'orderCount':
+      default:
+        av = a.orderCount;
+        bv = b.orderCount;
+    }
+    return compareReportSort(av, bv, sortDir);
+  });
+}
+*/
+
+function sortConsumptionByProductRows(
+  rows: ReportsRawMaterialConsumptionByProductRow[],
+  sortKey: string,
+  sortDir: SortDir,
+): ReportsRawMaterialConsumptionByProductRow[] {
+  return [...rows].sort((a, b) => {
+    let av: string | number;
+    let bv: string | number;
+    switch (sortKey) {
+      case 'product':
+        av = a.productName.toLowerCase();
+        bv = b.productName.toLowerCase();
+        break;
+      case 'material':
+        av = a.materialName.toLowerCase();
+        bv = b.materialName.toLowerCase();
+        break;
+      case 'qty':
+        av = a.qty;
+        bv = b.qty;
+        break;
+      case 'events':
+        av = a.eventCount;
+        bv = b.eventCount;
+        break;
+      case 'cost':
+      default:
+        av = a.cost;
+        bv = b.cost;
+    }
+    return compareReportSort(av, bv, sortDir);
+  });
+}
+
 function reportsChartLegendProps(lineCount: number): { wrapperStyle: React.CSSProperties } {
   if (lineCount <= 4) return { wrapperStyle: { fontSize: 11 } };
   return {
@@ -622,6 +702,7 @@ export function ReportsPage(): React.ReactElement {
   const [productSearch, setProductSearch] = useState('');
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
   const inventorySuppliersSort = useReportTableSort('spend', 'desc');
+  // const logisticsTripsSort = useReportTableSort('scheduledDate', 'desc');
   const [materialSpendChartMode, setMaterialSpendChartMode] = useState<MaterialSpendChartMode>('overall');
   const [visibleMaterialCategoryNames, setVisibleMaterialCategoryNames] = useState<string[]>([]);
 
@@ -750,7 +831,7 @@ export function ReportsPage(): React.ReactElement {
     { id: 'agents', label: 'Agents', icon: <Users className="w-4 h-4" /> },
     { id: 'products', label: 'Products', icon: <Package className="w-4 h-4" /> },
     { id: 'inventory', label: 'Inventory', icon: <PackageCheck className="w-4 h-4" /> },
-    { id: 'operations', label: 'Operations', icon: <Truck className="w-4 h-4" /> },
+    // { id: 'logistics', label: 'Logistics', icon: <Truck className="w-4 h-4" /> },
   ];
 
   const periodLabel = bundle?.period.displayLabel ?? periodQuery.displayLabel;
@@ -1452,6 +1533,28 @@ export function ReportsPage(): React.ReactElement {
 
   const inv = bundle.inventoryReport;
   const invSummary = inv.summary;
+
+  /*
+  const log = bundle.logisticsReport;
+  const logSummary = log.summary;
+
+  const sortedLogisticsTrips = sortLogisticsTripRows(
+    log.recentTrips,
+    logisticsTripsSort.sortKey,
+    logisticsTripsSort.sortDir,
+  );
+
+  const fulfillmentPipelineChart = log.fulfillmentPipeline.map((s) => ({
+    status: s.status,
+    orders: s.orderCount,
+    value: s.totalValue,
+  }));
+
+  const tripStatusChart = log.tripStatusBreakdown.map((s) => ({
+    name: s.status,
+    value: s.tripCount,
+  }));
+  */
 
   const sortedInventorySuppliers = sortInventorySupplierRows(
     inv.suppliers,
@@ -3801,62 +3904,247 @@ export function ReportsPage(): React.ReactElement {
             </Card>
           </div>
 
+          <RawMaterialConsumptionCard
+            branchLabel={branchLabel}
+            branchName={branch}
+            periodLabel={periodLabel}
+            consumption={inv.consumption}
+          />
+
         </div>
       )}
 
-      {/* OPERATIONS */}
-      {viewMode === 'operations' && (
+      {/* LOGISTICS TAB — disabled; revisit later
+      {viewMode === 'logistics' && (
         <div className="space-y-6">
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <StatKpiCard label="Trips MTD" value={String(executive.logistics.totalTripsMTD)} tone="blue" icon={<Truck />} />
-            <StatKpiCard label="On-time rate" value={`${executive.logistics.onTimeRate.toFixed(0)}%`} tone="emerald" icon={<CheckCircle />} />
-            <StatKpiCard label="Delayed MTD" value={String(executive.logistics.delayedTripsMTD)} tone="amber" icon={<AlertTriangle />} />
-            <StatKpiCard label="In transit now" value={String(executive.logistics.inTransitNow)} tone="indigo" icon={<Activity />} />
+            <StatKpiCard
+              label="Trips scheduled"
+              value={String(logSummary.totalTrips)}
+              tone="blue"
+              icon={<Truck />}
+              sub={`${logSummary.completedTrips} completed · ${logSummary.delayedTrips} delayed · ${logSummary.failedTrips} failed`}
+            />
+            <StatKpiCard
+              label="On-time delivery"
+              value={`${logSummary.onTimeRate.toFixed(0)}%`}
+              tone="emerald"
+              icon={<CheckCircle />}
+              sub="Completed ÷ closed trips in period"
+            />
+            <StatKpiCard
+              label="Orders delivered"
+              value={String(logSummary.ordersDelivered)}
+              tone="violet"
+              icon={<PackageCheck />}
+              sub={`${logSummary.ordersOnTrips} orders on trips in period`}
+            />
+            <StatKpiCard
+              label="Avg order cycle"
+              value={logSummary.cycleSampleSize > 0 ? `${logSummary.avgCycleDays.toFixed(1)} days` : '—'}
+              tone="amber"
+              icon={<CalendarRange />}
+              sub={
+                logSummary.cycleSampleSize > 0
+                  ? `Median ${logSummary.medianCycleDays.toFixed(1)} days · ${logSummary.cycleSampleSize} orders`
+                  : 'No delivered orders in period'
+              }
+            />
+            <StatKpiCard
+              label="In transit now"
+              value={String(logSummary.inTransitNow)}
+              tone="indigo"
+              icon={<Activity />}
+              sub={`${logSummary.loadingNow} loading · live snapshot`}
+            />
+            <StatKpiCard
+              label="Awaiting dispatch"
+              value={String(logSummary.ordersAwaitingDispatch)}
+              tone="orange"
+              icon={<ShoppingCart />}
+              sub="Approved orders not on an active trip"
+            />
+            <StatKpiCard
+              label="Fleet available"
+              value={logSummary.fleetTotal > 0 ? String(logSummary.fleetAvailable) : '—'}
+              tone="teal"
+              icon={<Truck />}
+              sub={
+                logSummary.fleetTotal > 0
+                  ? `${logSummary.fleetTotal} total · ${logSummary.fleetOnTrip} on trip · ${logSummary.fleetMaintenance} in maintenance`
+                  : 'No vehicles for this branch'
+              }
+            />
+            <StatKpiCard
+              label="Open delay cases"
+              value={String(logSummary.openDelayExceptions)}
+              tone="rose"
+              icon={<AlertTriangle />}
+              sub={`${log.delayBreakdown.reduce((s, d) => s + d.count, 0)} exceptions in ${periodLabel}`}
+            />
           </div>
 
           <Card>
-            <CardHeader><CardTitle>On-time delivery trend (6 months)</CardTitle></CardHeader>
+            <CardHeader>
+              <CardTitle>Trip volume & on-time performance</CardTitle>
+              <p className="text-xs text-gray-500 mt-1">
+                {branchLabel} · {periodLabel} · trips by scheduled date
+              </p>
+            </CardHeader>
             <CardContent>
-              {enh.onTimeTrend.length === 0 ? (
-                <p className="text-sm text-gray-500 py-8 text-center">No trip data for trend.</p>
+              {log.tripVolumeSeries.every((p) => p.totalTrips === 0) ? (
+                <p className="text-sm text-gray-500 py-8 text-center">No trips scheduled in this period.</p>
               ) : (
-                <div className="h-72">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <ComposedChart data={enh.onTimeTrend}>
+                <ReportsChartFrame
+                  height={288}
+                  render={({ width, height }) => (
+                    <ComposedChart width={width} height={height} data={log.tripVolumeSeries}>
                       <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-                      <YAxis yAxisId="left" tickFormatter={(v) => `${v}%`} domain={[0, 100]} />
-                      <YAxis yAxisId="right" orientation="right" allowDecimals={false} />
-                      <Tooltip formatter={(v: number, name: string) =>
-                        name === 'On-time %' ? `${v.toFixed(1)}%` : v
-                      } />
+                      <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                      <YAxis yAxisId="left" allowDecimals={false} tick={{ fontSize: 10 }} width={36} />
+                      <YAxis
+                        yAxisId="right"
+                        orientation="right"
+                        domain={[0, 100]}
+                        tickFormatter={(v) => `${v}%`}
+                        tick={{ fontSize: 10 }}
+                        width={40}
+                      />
+                      <Tooltip
+                        formatter={(v: number, name: string) =>
+                          name === 'On-time %' ? `${Number(v).toFixed(1)}%` : v
+                        }
+                      />
                       <Legend />
-                      <Line yAxisId="left" type="monotone" dataKey="onTimePct" name="On-time %" stroke="#10B981" strokeWidth={2} />
-                      <Bar yAxisId="right" dataKey="delayed" name="Delayed" fill="#F59E0B" barSize={16} />
-                      <Bar yAxisId="right" dataKey="failed" name="Failed" fill="#EF4444" barSize={16} />
+                      <Bar yAxisId="left" dataKey="totalTrips" name="Trips" fill="#3B82F6" barSize={18} />
+                      <Bar yAxisId="left" dataKey="delayed" name="Delayed" fill="#F59E0B" barSize={18} />
+                      <Bar yAxisId="left" dataKey="failed" name="Failed" fill="#EF4444" barSize={18} />
+                      <Line
+                        yAxisId="right"
+                        type="monotone"
+                        dataKey="onTimePct"
+                        name="On-time %"
+                        stroke="#10B981"
+                        strokeWidth={2}
+                        dot={{ r: 3, fill: '#10B981' }}
+                      />
                     </ComposedChart>
-                  </ResponsiveContainer>
-                </div>
+                  )}
+                />
               )}
             </CardContent>
           </Card>
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <Card>
-              <CardHeader><CardTitle>Order cycle time</CardTitle></CardHeader>
-              <CardContent className="space-y-2 text-sm">
-                {enh.cycleTime.sampleSize === 0 ? (
-                  <p className="text-gray-500">No delivered orders in period.</p>
+              <CardHeader>
+                <CardTitle>Order fulfillment pipeline</CardTitle>
+                <p className="text-xs text-gray-500 mt-1">Current order backlog by fulfillment stage</p>
+              </CardHeader>
+              <CardContent>
+                {fulfillmentPipelineChart.length === 0 ? (
+                  <p className="text-sm text-gray-500 py-8 text-center">No orders in fulfillment stages.</p>
+                ) : (
+                  <ReportsChartFrame
+                    height={Math.max(220, fulfillmentPipelineChart.length * 36)}
+                    render={({ width, height }) => (
+                      <BarChart
+                        width={width}
+                        height={height}
+                        data={fulfillmentPipelineChart}
+                        layout="vertical"
+                        margin={{ left: 8, right: 16, top: 4, bottom: 4 }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                        <XAxis type="number" allowDecimals={false} tick={{ fontSize: 10 }} />
+                        <YAxis type="category" dataKey="status" width={96} tick={{ fontSize: 10 }} />
+                        <Tooltip
+                          formatter={(v: number, name: string) =>
+                            name === 'Order value' ? formatReportsPesoFull(v) : v
+                          }
+                        />
+                        <Bar dataKey="orders" name="Orders" fill="#6366F1" barSize={14} radius={[0, 4, 4, 0]} />
+                      </BarChart>
+                    )}
+                  />
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Trip status mix</CardTitle>
+                <p className="text-xs text-gray-500 mt-1">{periodLabel}</p>
+              </CardHeader>
+              <CardContent>
+                {tripStatusChart.length === 0 ? (
+                  <p className="text-sm text-gray-500 py-8 text-center">No trips in this period.</p>
+                ) : (
+                  <div className="h-64">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={tripStatusChart}
+                          dataKey="value"
+                          nameKey="name"
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={50}
+                          outerRadius={80}
+                          paddingAngle={2}
+                        >
+                          {tripStatusChart.map((_, i) => (
+                            <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                          ))}
+                        </Pie>
+                        <Tooltip />
+                        <Legend wrapperStyle={{ fontSize: 11 }} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Order-to-delivery cycle time</CardTitle>
+                <p className="text-xs text-gray-500 mt-1">{branchLabel} · {periodLabel}</p>
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm">
+                {log.cycleTime.sampleSize === 0 ? (
+                  <p className="text-gray-500 py-4 text-center">No delivered orders with delivery dates in this period.</p>
                 ) : (
                   <>
-                    <FinanceRow label="Average" value={`${enh.cycleTime.avgDays.toFixed(1)} days`} />
-                    <FinanceRow label="Median" value={`${enh.cycleTime.medianDays.toFixed(1)} days`} />
-                    <FinanceRow label="Sample size" value={String(enh.cycleTime.sampleSize)} />
-                    <div className="pt-2 space-y-1">
-                      {enh.cycleTime.buckets.map((b) => (
-                        <div key={b.label} className="flex justify-between text-xs text-gray-600">
-                          <span>{b.label}</span>
-                          <span>{b.count}</span>
+                    <div className="grid grid-cols-3 gap-3">
+                      <div className="rounded-lg bg-gray-50 p-3 text-center">
+                        <p className="text-xs text-gray-500">Average</p>
+                        <p className="text-lg font-bold text-gray-900">{log.cycleTime.avgDays.toFixed(1)}d</p>
+                      </div>
+                      <div className="rounded-lg bg-gray-50 p-3 text-center">
+                        <p className="text-xs text-gray-500">Median</p>
+                        <p className="text-lg font-bold text-gray-900">{log.cycleTime.medianDays.toFixed(1)}d</p>
+                      </div>
+                      <div className="rounded-lg bg-gray-50 p-3 text-center">
+                        <p className="text-xs text-gray-500">Sample</p>
+                        <p className="text-lg font-bold text-gray-900">{log.cycleTime.sampleSize}</p>
+                      </div>
+                    </div>
+                    <div className="space-y-2 pt-1">
+                      {log.cycleTime.buckets.map((b) => (
+                        <div key={b.label} className="flex items-center gap-3">
+                          <span className="text-xs text-gray-600 w-20 shrink-0">{b.label}</span>
+                          <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-violet-500 rounded-full"
+                              style={{
+                                width: `${log.cycleTime.sampleSize > 0 ? (b.count / log.cycleTime.sampleSize) * 100 : 0}%`,
+                              }}
+                            />
+                          </div>
+                          <span className="text-xs tabular-nums text-gray-700 w-8 text-right">{b.count}</span>
                         </div>
                       ))}
                     </div>
@@ -3866,16 +4154,22 @@ export function ReportsPage(): React.ReactElement {
             </Card>
 
             <Card>
-              <CardHeader><CardTitle>Delay root causes</CardTitle></CardHeader>
+              <CardHeader>
+                <CardTitle>Delay root causes</CardTitle>
+                <p className="text-xs text-gray-500 mt-1">{periodLabel}</p>
+              </CardHeader>
               <CardContent>
-                {enh.delayBreakdown.length === 0 ? (
-                  <p className="text-sm text-gray-500">No delay exceptions in period.</p>
+                {log.delayBreakdown.length === 0 ? (
+                  <p className="text-sm text-gray-500 py-8 text-center">No delay exceptions recorded in this period.</p>
                 ) : (
                   <div className="space-y-2">
-                    {enh.delayBreakdown.map((d) => (
-                      <div key={d.type} className="flex items-center justify-between text-sm border-b border-gray-100 pb-2">
-                        <span>{d.type}</span>
-                        <span className="text-gray-600">
+                    {log.delayBreakdown.map((d) => (
+                      <div
+                        key={d.type}
+                        className="flex items-center justify-between text-sm border-b border-gray-100 pb-2 last:border-0"
+                      >
+                        <span className="font-medium text-gray-800">{d.type}</span>
+                        <span className="text-gray-600 tabular-nums">
                           {d.count} total{d.openCount > 0 ? ` · ${d.openCount} open` : ''}
                         </span>
                       </div>
@@ -3884,42 +4178,102 @@ export function ReportsPage(): React.ReactElement {
                 )}
               </CardContent>
             </Card>
-
-            <Card>
-              <CardHeader><CardTitle>Procurement pipeline</CardTitle></CardHeader>
-              <CardContent className="space-y-2 text-sm">
-                <OpsRow label="Pending POs" count={executive.approvals.pendingPurchaseOrderCount} value={formatReportsPeso(executive.approvals.pendingPurchaseOrderValue)} />
-                <OpsRow label="Pending PRs" count={executive.approvals.pendingProductionRequestCount} />
-                <OpsRow label="Pending IBRs" count={executive.approvals.pendingInterBranchRequestCount} />
-                <OpsRow label="Orders awaiting approval" count={executive.approvals.pendingOrderCount} value={formatReportsPeso(executive.approvals.pendingOrderValue)} />
-              </CardContent>
-            </Card>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <Card>
-              <CardHeader><CardTitle>Approval backlog</CardTitle></CardHeader>
-              <CardContent className="space-y-2 text-sm">
-                <OpsRow label="Orders pending approval" count={executive.approvals.pendingOrderCount} value={formatReportsPeso(executive.approvals.pendingOrderValue)} />
-                <OpsRow label="Production requests" count={executive.approvals.pendingProductionRequestCount} />
-                <OpsRow label="Purchase orders" count={executive.approvals.pendingPurchaseOrderCount} value={formatReportsPeso(executive.approvals.pendingPurchaseOrderValue)} />
-                <OpsRow label="Inter-branch requests" count={executive.approvals.pendingInterBranchRequestCount} />
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader><CardTitle>Logistics summary (MTD)</CardTitle></CardHeader>
-              <CardContent className="space-y-2 text-sm">
-                <FinanceRow label="Completed trips" value={String(executive.logistics.completedTripsMTD)} />
-                <FinanceRow label="Failed trips" value={String(executive.logistics.failedTripsMTD)} />
-                <FinanceRow label="Delayed trips" value={String(executive.logistics.delayedTripsMTD)} />
-                <Button variant="outline" size="sm" className="mt-2" onClick={() => navigate('/logistics')}>
+          <Card>
+            <CardHeader>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <CardTitle>Trips in period</CardTitle>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {branchLabel} · {periodLabel} · {sortedLogisticsTrips.length} trip
+                    {sortedLogisticsTrips.length === 1 ? '' : 's'}
+                  </p>
+                </div>
+                <Button variant="outline" size="sm" onClick={() => navigate('/logistics')}>
                   Open Logistics
                 </Button>
-              </CardContent>
-            </Card>
-          </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {sortedLogisticsTrips.length === 0 ? (
+                <p className="text-sm text-gray-500 py-8 text-center">No trips scheduled in this period.</p>
+              ) : (
+                <div className="overflow-x-auto -mx-1">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-200 text-gray-600 text-left">
+                        <ReportsSortTh
+                          col="tripNumber"
+                          label="Trip #"
+                          sortKey={logisticsTripsSort.sortKey}
+                          sortDir={logisticsTripsSort.sortDir}
+                          onSort={logisticsTripsSort.onSort}
+                        />
+                        <ReportsSortTh
+                          col="scheduledDate"
+                          label="Scheduled"
+                          sortKey={logisticsTripsSort.sortKey}
+                          sortDir={logisticsTripsSort.sortDir}
+                          onSort={logisticsTripsSort.onSort}
+                        />
+                        <ReportsSortTh
+                          col="status"
+                          label="Status"
+                          sortKey={logisticsTripsSort.sortKey}
+                          sortDir={logisticsTripsSort.sortDir}
+                          onSort={logisticsTripsSort.onSort}
+                        />
+                        <ReportsSortTh
+                          col="vehicle"
+                          label="Vehicle"
+                          sortKey={logisticsTripsSort.sortKey}
+                          sortDir={logisticsTripsSort.sortDir}
+                          onSort={logisticsTripsSort.onSort}
+                          className="hidden md:table-cell"
+                        />
+                        <ReportsSortTh
+                          col="driver"
+                          label="Driver"
+                          sortKey={logisticsTripsSort.sortKey}
+                          sortDir={logisticsTripsSort.sortDir}
+                          onSort={logisticsTripsSort.onSort}
+                          className="hidden lg:table-cell"
+                        />
+                        <ReportsSortTh
+                          col="orderCount"
+                          label="Orders"
+                          sortKey={logisticsTripsSort.sortKey}
+                          sortDir={logisticsTripsSort.sortDir}
+                          onSort={logisticsTripsSort.onSort}
+                          align="right"
+                        />
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {sortedLogisticsTrips.map((t) => (
+                        <tr key={t.tripId} className="hover:bg-gray-50/80">
+                          <td className="py-2.5 px-3 font-medium text-gray-900">{t.tripNumber}</td>
+                          <td className="py-2.5 px-3 text-gray-700 tabular-nums">{t.scheduledDate}</td>
+                          <td className="py-2.5 px-3">
+                            <Badge variant={t.status === 'Completed' ? 'success' : t.status === 'Delayed' || t.status === 'Failed' ? 'warning' : 'default'}>
+                              {t.status}
+                            </Badge>
+                          </td>
+                          <td className="py-2.5 px-3 text-gray-700 hidden md:table-cell">{t.vehicleName ?? '—'}</td>
+                          <td className="py-2.5 px-3 text-gray-700 hidden lg:table-cell">{t.driverName ?? '—'}</td>
+                          <td className="py-2.5 px-3 text-right tabular-nums">{t.orderCount}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </div>
       )}
+      */}
 
       <p className="text-xs text-gray-400 text-right">
         Generated {new Date(bundle.generatedAt).toLocaleString()}
@@ -4224,5 +4578,676 @@ function OpsRow(props: { label: string; count: number; value?: string }) {
         {props.value ? ` · ${props.value}` : ''}
       </span>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Raw Material Consumption (Inventory tab — bottom section)
+// ---------------------------------------------------------------------------
+//
+// Picks one or more raw materials and shows their actual consumption pulled
+// from the `material_consumption` ledger (the BOM-driven draws that production
+// requests and finished-good stock increases write through bomConsumption.ts).
+// No theoretical / BOM × units projections — only ledger facts.
+//
+// Branch + period scope is inherited from the parent Reports filters.
+
+type RawMaterialConsumptionMetric = 'qty' | 'cost';
+type RawMaterialConsumptionViewMode = 'chart' | 'table';
+
+function formatMaterialQty(qty: number, unit: string): string {
+  if (!Number.isFinite(qty)) return `0 ${unit}`;
+  const abs = Math.abs(qty);
+  const formatted =
+    abs >= 1000
+      ? qty.toLocaleString('en-PH', { maximumFractionDigits: 0 })
+      : qty.toLocaleString('en-PH', { maximumFractionDigits: 2 });
+  return `${formatted} ${unit}`;
+}
+
+function RawMaterialConsumptionCard(props: {
+  branchLabel: string;
+  branchName: string;
+  periodLabel: string;
+  consumption: ReportsRawMaterialConsumptionReport;
+}) {
+  const { branchLabel, branchName, periodLabel, consumption } = props;
+  const { options, monthlyByMaterial, byProductByMaterial, labels, monthKeys } = consumption;
+
+  const [metric, setMetric] = useState<RawMaterialConsumptionMetric>('cost');
+  const [viewMode, setViewMode] = useState<RawMaterialConsumptionViewMode>('chart');
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [showMaterialPicker, setShowMaterialPicker] = useState(false);
+  const [byProductSearch, setByProductSearch] = useState('');
+  const [byProductMaterialFilter, setByProductMaterialFilter] = useState('');
+  const byProductSort = useReportTableSort('cost', 'desc');
+  /** Name/unit for materials picked from the catalogue that have no ledger rows in this period. */
+  const [extraMaterialMeta, setExtraMaterialMeta] = useState<
+    Map<string, { materialName: string; unit: string }>
+  >(() => new Map());
+
+  // Auto-select #1 most-consumed when nothing is selected yet.
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      if (prev.length > 0) return prev;
+      if (options.length === 0) return [];
+      return [options[0].materialId];
+    });
+  }, [options]);
+
+  // Drop extra metadata once the material appears in fetched consumption options.
+  useEffect(() => {
+    setExtraMaterialMeta((prev) => {
+      if (prev.size === 0) return prev;
+      let changed = false;
+      const next = new Map(prev);
+      for (const o of options) {
+        if (next.delete(o.materialId)) changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [options]);
+
+  useEffect(() => {
+    if (!byProductMaterialFilter) return;
+    const stillValid = byProductByMaterial.some(
+      (r) => r.materialId === byProductMaterialFilter && selectedIds.includes(r.materialId),
+    );
+    if (!stillValid) setByProductMaterialFilter('');
+  }, [byProductMaterialFilter, byProductByMaterial, selectedIds]);
+
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const colorByMaterial = useMemo(() => {
+    const map = new Map<string, string>();
+    selectedIds.forEach((id, i) => map.set(id, agentChartColorAt(i)));
+    return map;
+  }, [selectedIds]);
+
+  const unitByMaterial = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const o of options) map.set(o.materialId, o.unit);
+    for (const [id, meta] of extraMaterialMeta) map.set(id, meta.unit);
+    return map;
+  }, [options, extraMaterialMeta]);
+
+  const nameByMaterial = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const o of options) map.set(o.materialId, o.materialName);
+    for (const [id, meta] of extraMaterialMeta) map.set(id, meta.materialName);
+    return map;
+  }, [options, extraMaterialMeta]);
+
+  const selectedMonthlyLines = useMemo(() => {
+    const lineById = new Map(monthlyByMaterial.map((l) => [l.materialId, l]));
+    const zeroMonth = () => Array(labels.length).fill(0) as number[];
+    return selectedIds.map((id) => {
+      const existing = lineById.get(id);
+      if (existing) return existing;
+      const fromOptions = options.find((o) => o.materialId === id);
+      const extra = extraMaterialMeta.get(id);
+      return {
+        materialId: id,
+        materialName: fromOptions?.materialName ?? extra?.materialName ?? 'Unknown material',
+        unit: fromOptions?.unit ?? extra?.unit ?? 'kg',
+        qtyByMonth: zeroMonth(),
+        costByMonth: zeroMonth(),
+      };
+    });
+  }, [selectedIds, monthlyByMaterial, labels.length, options, extraMaterialMeta]);
+
+  // Chart data: row per month, column per selected material.
+  const chartData = useMemo(() => {
+    return labels.map((label, i) => {
+      const row: Record<string, string | number> = { label };
+      for (const line of selectedMonthlyLines) {
+        const v = metric === 'qty' ? line.qtyByMonth[i] ?? 0 : line.costByMonth[i] ?? 0;
+        row[line.materialId] = v;
+      }
+      return row;
+    });
+  }, [labels, selectedMonthlyLines, metric]);
+
+  const baseByProductRows = useMemo(
+    () => byProductByMaterial.filter((r) => selectedSet.has(r.materialId)),
+    [byProductByMaterial, selectedSet],
+  );
+
+  const byProductMaterialOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const r of baseByProductRows) {
+      if (!seen.has(r.materialId)) seen.set(r.materialId, r.materialName);
+    }
+    return [...seen.entries()]
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [baseByProductRows]);
+
+  const filteredByProductRows = useMemo(() => {
+    const q = byProductSearch.trim().toLowerCase();
+    return baseByProductRows.filter((r) => {
+      if (byProductMaterialFilter && r.materialId !== byProductMaterialFilter) return false;
+      if (!q) return true;
+      return (
+        r.productName.toLowerCase().includes(q) ||
+        r.materialName.toLowerCase().includes(q)
+      );
+    });
+  }, [baseByProductRows, byProductSearch, byProductMaterialFilter]);
+
+  const sortedByProductRows = useMemo(
+    () => sortConsumptionByProductRows(filteredByProductRows, byProductSort.sortKey, byProductSort.sortDir),
+    [filteredByProductRows, byProductSort.sortKey, byProductSort.sortDir],
+  );
+
+  const selectedOptions = useMemo(
+    () =>
+      selectedIds.map((id) => {
+        const fromOptions = options.find((o) => o.materialId === id);
+        if (fromOptions) return fromOptions;
+        const extra = extraMaterialMeta.get(id);
+        return {
+          materialId: id,
+          materialName: extra?.materialName ?? 'Unknown material',
+          unit: extra?.unit ?? 'kg',
+          totalQty: 0,
+          totalCost: 0,
+          eventCount: 0,
+        };
+      }),
+    [selectedIds, options, extraMaterialMeta],
+  );
+
+  const totalSelectedQtyByUnit = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const o of selectedOptions) {
+      totals.set(o.unit, (totals.get(o.unit) ?? 0) + o.totalQty);
+    }
+    return [...totals.entries()].map(([unit, qty]) => ({ unit, qty }));
+  }, [selectedOptions]);
+
+  const totalSelectedCost = useMemo(
+    () => selectedOptions.reduce((s, o) => s + o.totalCost, 0),
+    [selectedOptions],
+  );
+  const totalSelectedEvents = useMemo(
+    () => selectedOptions.reduce((s, o) => s + o.eventCount, 0),
+    [selectedOptions],
+  );
+  const totalSelectedProducts = useMemo(() => {
+    const productIds = new Set<string>();
+    for (const r of baseByProductRows) {
+      productIds.add(r.productId ?? `__none__:${r.materialId}`);
+    }
+    return productIds.size;
+  }, [baseByProductRows]);
+
+  const removeMaterial = (materialId: string) => {
+    setSelectedIds((prev) => prev.filter((id) => id !== materialId));
+    setExtraMaterialMeta((prev) => {
+      if (!prev.has(materialId)) return prev;
+      const next = new Map(prev);
+      next.delete(materialId);
+      return next;
+    });
+  };
+
+  const addMaterialFromPicker = (mat: { materialId: string; name: string; unit: string }) => {
+    setSelectedIds((prev) => (prev.includes(mat.materialId) ? prev : [...prev, mat.materialId]));
+    if (!options.some((o) => o.materialId === mat.materialId)) {
+      setExtraMaterialMeta((prev) => {
+        const next = new Map(prev);
+        next.set(mat.materialId, { materialName: mat.name, unit: mat.unit });
+        return next;
+      });
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <CardTitle>Raw material consumption</CardTitle>
+            <p className="text-xs text-gray-500 mt-1">
+              {branchLabel} · {periodLabel} · actual draws from the material_consumption ledger (BOM-driven)
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div
+              className="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-0.5"
+              role="tablist"
+              aria-label="Consumption metric"
+            >
+              {(['cost', 'qty'] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  role="tab"
+                  aria-selected={metric === m}
+                  onClick={() => setMetric(m)}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                    metric === m ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  {m === 'cost' ? 'Cost (₱)' : 'Quantity'}
+                </button>
+              ))}
+            </div>
+            <div
+              className="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-0.5"
+              role="tablist"
+              aria-label="Consumption view mode"
+            >
+              {(['chart', 'table'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  role="tab"
+                  aria-selected={viewMode === mode}
+                  onClick={() => setViewMode(mode)}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                    viewMode === mode ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  {mode === 'chart' ? (
+                    <span className="inline-flex items-center gap-1">
+                      <TrendingUp className="w-3.5 h-3.5" /> Chart
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1">
+                      <Table2 className="w-3.5 h-3.5" /> Table
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        {options.length === 0 && selectedIds.length === 0 && (
+          <p className="text-sm text-gray-500 py-2 text-center bg-gray-50 rounded-lg border border-dashed border-gray-200">
+            No raw material consumption recorded for this branch and period yet. You can still add
+            materials below — they will show as zero on the chart.
+          </p>
+        )}
+        <>
+            {/* Selected materials KPIs */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              <StatKpiCard
+                label="Selected materials"
+                value={String(selectedOptions.length)}
+                tone="violet"
+                icon={<PackageCheck />}
+                sub={
+                  options.length > 0
+                    ? `${options.length} with activity in ${periodLabel}`
+                    : undefined
+                }
+              />
+              <StatKpiCard
+                label="Total consumed cost"
+                value={formatReportsPeso(totalSelectedCost)}
+                tone="emerald"
+                icon={<DollarSign />}
+              />
+              <StatKpiCard
+                label="Total consumed qty"
+                value={
+                  totalSelectedQtyByUnit.length === 0
+                    ? '—'
+                    : totalSelectedQtyByUnit.length === 1
+                      ? formatMaterialQty(totalSelectedQtyByUnit[0].qty, totalSelectedQtyByUnit[0].unit)
+                      : `${totalSelectedQtyByUnit.length} units`
+                }
+                tone="blue"
+                icon={<Activity />}
+                sub={
+                  totalSelectedQtyByUnit.length > 1
+                    ? totalSelectedQtyByUnit
+                        .map((t) => `${t.qty.toLocaleString('en-PH', { maximumFractionDigits: 1 })} ${t.unit}`)
+                        .join(' · ')
+                    : undefined
+                }
+              />
+              <StatKpiCard
+                label="Ledger events"
+                value={String(totalSelectedEvents)}
+                tone="indigo"
+                icon={<ClipboardList />}
+                sub={`${totalSelectedProducts} distinct products`}
+              />
+            </div>
+
+            {/* Selected materials — PO-style add-to-list */}
+            <div className="rounded-xl border border-gray-200 bg-white p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+                  <Package className="w-4 h-4" />
+                  Raw materials
+                  <span className="text-xs font-normal text-gray-400">
+                    ({selectedOptions.length} item{selectedOptions.length === 1 ? '' : 's'})
+                  </span>
+                </h3>
+                {options.length > 0 && (
+                  <span className="text-xs text-gray-500">
+                    {options.length} with consumption in {periodLabel}
+                  </span>
+                )}
+              </div>
+
+              {selectedOptions.length === 0 ? (
+                <p className="text-sm text-gray-500 py-3 text-center">
+                  No materials selected yet. Add raw materials below to compare consumption on the chart.
+                </p>
+              ) : (
+                <div className="space-y-2 mb-3">
+                  {selectedOptions.map((o) => {
+                    const color = colorByMaterial.get(o.materialId);
+                    return (
+                      <div
+                        key={o.materialId}
+                        className="flex items-center gap-3 p-3 rounded-xl border border-gray-200 bg-gray-50/60"
+                      >
+                        <span
+                          className="inline-block w-2.5 h-2.5 rounded-full shrink-0"
+                          style={{ backgroundColor: color }}
+                          aria-hidden
+                        />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold text-gray-900 truncate">{o.materialName}</p>
+                          <p className="text-xs text-gray-500 mt-0.5 tabular-nums">
+                            {formatReportsPesoFull(o.totalCost)} consumed ·{' '}
+                            {formatMaterialQty(o.totalQty, o.unit)} · {o.eventCount} ledger events
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeMaterial(o.materialId)}
+                          className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors shrink-0"
+                          aria-label={`Remove ${o.materialName}`}
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setShowMaterialPicker(true)}
+                className="w-full flex items-center gap-3 px-4 py-3 border-2 border-dashed border-gray-300 rounded-xl hover:border-violet-400 hover:bg-violet-50 transition-all text-left group"
+              >
+                <div className="w-10 h-10 rounded-lg bg-gray-100 group-hover:bg-violet-100 flex items-center justify-center flex-shrink-0 transition-colors">
+                  <Plus className="w-5 h-5 text-gray-400 group-hover:text-violet-600" />
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-gray-600 group-hover:text-violet-700">
+                    Add a Raw Material
+                  </p>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    Browse by category · Materials without consumption show as zero
+                  </p>
+                </div>
+              </button>
+            </div>
+
+            {/* Chart or Table — full width */}
+            <div className="min-w-0">
+              {viewMode === 'chart' ? (
+                selectedMonthlyLines.length === 0 ? (
+                  <div className="flex items-center justify-center h-72 rounded-lg border border-dashed border-gray-200 bg-gray-50/50 text-sm text-gray-500">
+                    Add raw materials above to see consumption trends.
+                  </div>
+                ) : (
+                  <ReportsChartFrame
+                    height={320}
+                    render={({ width, height }) => (
+                      <LineChart width={width} height={height} data={chartData}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                        <YAxis
+                          tickFormatter={(v) =>
+                            metric === 'cost'
+                              ? formatReportsPeso(v as number)
+                              : (v as number).toLocaleString('en-PH', { maximumFractionDigits: 1 })
+                          }
+                          tick={{ fontSize: 10 }}
+                          width={metric === 'cost' ? 56 : 48}
+                        />
+                        <Tooltip
+                          formatter={(v: number, dataKey: string) => {
+                            const name = nameByMaterial.get(dataKey) ?? dataKey;
+                            if (metric === 'cost') return [formatReportsPesoFull(v), name];
+                            const unit = unitByMaterial.get(dataKey) ?? '';
+                            return [formatMaterialQty(v, unit), name];
+                          }}
+                        />
+                        <Legend
+                          {...reportsChartLegendProps(selectedMonthlyLines.length)}
+                          formatter={(value) => nameByMaterial.get(String(value)) ?? String(value)}
+                        />
+                        {selectedMonthlyLines.map((line) => {
+                          const color = colorByMaterial.get(line.materialId) ?? '#8B5CF6';
+                          return (
+                            <Line
+                              key={line.materialId}
+                              type="monotone"
+                              dataKey={line.materialId}
+                              name={line.materialId}
+                              stroke={color}
+                              strokeWidth={2}
+                              dot={{ r: 3, fill: color }}
+                              activeDot={{ r: 5 }}
+                            />
+                          );
+                        })}
+                      </LineChart>
+                    )}
+                  />
+                )
+              ) : selectedMonthlyLines.length === 0 ? (
+                <div className="flex items-center justify-center h-40 rounded-lg border border-dashed border-gray-200 bg-gray-50/50 text-sm text-gray-500">
+                  Add raw materials above to populate the table.
+                </div>
+              ) : (
+                <div className="overflow-x-auto rounded-lg border border-gray-200">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50">
+                      <tr className="text-gray-600 text-left">
+                        <th className="py-2 px-3 font-medium">Month</th>
+                        {selectedMonthlyLines.map((line) => (
+                          <th
+                            key={line.materialId}
+                            className="py-2 px-3 font-medium text-right whitespace-nowrap"
+                          >
+                            <span className="inline-flex items-center gap-1.5 justify-end">
+                              <span
+                                className="inline-block w-2.5 h-2.5 rounded-full"
+                                style={{ backgroundColor: colorByMaterial.get(line.materialId) }}
+                              />
+                              <span>
+                                {line.materialName}
+                                {metric === 'qty' ? ` (${line.unit})` : ''}
+                              </span>
+                            </span>
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {labels.map((label, i) => (
+                        <tr key={monthKeys[i] ?? label} className="hover:bg-gray-50/80">
+                          <td className="py-2 px-3 text-gray-700">{label}</td>
+                          {selectedMonthlyLines.map((line) => {
+                            const v = metric === 'qty' ? line.qtyByMonth[i] ?? 0 : line.costByMonth[i] ?? 0;
+                            return (
+                              <td key={line.materialId} className="py-2 px-3 text-right tabular-nums">
+                                {metric === 'cost'
+                                  ? formatReportsPesoFull(v)
+                                  : formatMaterialQty(v, line.unit)}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                      <tr className="bg-gray-50 font-semibold">
+                        <td className="py-2 px-3 text-gray-800">Total ({periodLabel})</td>
+                        {selectedMonthlyLines.map((line) => {
+                          const total =
+                            metric === 'qty'
+                              ? line.qtyByMonth.reduce((s, v) => s + v, 0)
+                              : line.costByMonth.reduce((s, v) => s + v, 0);
+                          return (
+                            <td
+                              key={line.materialId}
+                              className="py-2 px-3 text-right tabular-nums text-gray-900"
+                            >
+                              {metric === 'cost'
+                                ? formatReportsPesoFull(total)
+                                : formatMaterialQty(total, line.unit)}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <RawMaterialPickerModal
+              isOpen={showMaterialPicker}
+              onClose={() => setShowMaterialPicker(false)}
+              onSelect={(mat) => addMaterialFromPicker(mat)}
+              branch={branchName}
+              alreadyAdded={selectedIds}
+              contextNote={`${branchLabel} · ${periodLabel}`}
+            />
+
+            {/* By-product breakdown */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-sm font-semibold text-gray-900">Which products consumed it</h3>
+              </div>
+              {baseByProductRows.length === 0 ? (
+                <p className="text-sm text-gray-500 py-4 text-center bg-gray-50 rounded-lg">
+                  No product attribution for the selected materials in this period.
+                </p>
+              ) : (
+                <>
+                  <ReportsTableToolbar
+                    search={byProductSearch}
+                    onSearchChange={setByProductSearch}
+                    placeholder="Search product or raw material…"
+                    resultLabel={`${sortedByProductRows.length} of ${baseByProductRows.length} rows`}
+                  >
+                    {byProductMaterialOptions.length > 1 ? (
+                      <ReportsFilterSelect
+                        label="Filter by raw material"
+                        value={byProductMaterialFilter}
+                        onChange={setByProductMaterialFilter}
+                        options={[
+                          { value: '', label: 'All raw materials' },
+                          ...byProductMaterialOptions,
+                        ]}
+                      />
+                    ) : null}
+                  </ReportsTableToolbar>
+                  {sortedByProductRows.length === 0 ? (
+                    <p className="text-sm text-gray-500 py-4 text-center bg-gray-50 rounded-lg">
+                      No rows match your search or filters.
+                    </p>
+                  ) : (
+                    <div className="overflow-x-auto rounded-lg border border-gray-200">
+                      <table className="w-full text-sm">
+                        <thead className="bg-gray-50 text-xs text-gray-500 uppercase border-y border-gray-200">
+                          <tr>
+                            <ReportsSortTh
+                              col="product"
+                              label="Product"
+                              sortKey={byProductSort.sortKey}
+                              sortDir={byProductSort.sortDir}
+                              onSort={byProductSort.onSort}
+                            />
+                            <ReportsSortTh
+                              col="material"
+                              label="Raw material"
+                              sortKey={byProductSort.sortKey}
+                              sortDir={byProductSort.sortDir}
+                              onSort={byProductSort.onSort}
+                            />
+                            <ReportsSortTh
+                              col="qty"
+                              label="Qty"
+                              sortKey={byProductSort.sortKey}
+                              sortDir={byProductSort.sortDir}
+                              onSort={byProductSort.onSort}
+                              align="right"
+                            />
+                            <ReportsSortTh
+                              col="cost"
+                              label="Cost"
+                              sortKey={byProductSort.sortKey}
+                              sortDir={byProductSort.sortDir}
+                              onSort={byProductSort.onSort}
+                              align="right"
+                            />
+                            <ReportsSortTh
+                              col="events"
+                              label="Events"
+                              sortKey={byProductSort.sortKey}
+                              sortDir={byProductSort.sortDir}
+                              onSort={byProductSort.onSort}
+                              align="right"
+                            />
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {sortedByProductRows.map((r) => (
+                            <tr key={`${r.materialId}:${r.productId ?? '__none__'}`} className="hover:bg-gray-50/80">
+                              <td className="py-2 px-3">
+                                {r.productId ? (
+                                  <DashLink
+                                    to={finishedGoodProductHref(r.productId)}
+                                    className={`${DASH_LINK_CLASS} font-medium`}
+                                  >
+                                    {r.productName}
+                                  </DashLink>
+                                ) : (
+                                  <span className="text-gray-500 italic">{r.productName}</span>
+                                )}
+                              </td>
+                              <td className="py-2 px-3">
+                                <span className="inline-flex items-center gap-1.5">
+                                  <span
+                                    className="inline-block w-2 h-2 rounded-full"
+                                    style={{ backgroundColor: colorByMaterial.get(r.materialId) }}
+                                    aria-hidden
+                                  />
+                                  <span className="text-gray-700">{r.materialName}</span>
+                                </span>
+                              </td>
+                              <td className="py-2 px-3 text-right tabular-nums">
+                                {formatMaterialQty(r.qty, r.unit)}
+                              </td>
+                              <td className="py-2 px-3 text-right tabular-nums font-semibold text-blue-700">
+                                {formatReportsPesoFull(r.cost)}
+                              </td>
+                              <td className="py-2 px-3 text-right tabular-nums text-gray-600">{r.eventCount}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+        </>
+      </CardContent>
+    </Card>
   );
 }

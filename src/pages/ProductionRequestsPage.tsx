@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
+import { StatKpiCard } from '@/src/components/ui/StatKpiCard';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
@@ -400,59 +401,16 @@ export function ProductionRequestsPage() {
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-slate-100 rounded-lg">
-                <Factory className="w-6 h-6 text-slate-700" />
-              </div>
-              <div>
-                <p className="text-sm text-gray-500">Total</p>
-                <p className="text-2xl font-bold text-gray-900">{totalPRs}</p>
-                {drafts > 0 && <p className="text-xs text-gray-500 mt-0.5">Draft: {drafts}</p>}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-amber-100 rounded-lg">
-                <ClipboardList className="w-6 h-6 text-amber-700" />
-              </div>
-              <div>
-                <p className="text-sm text-gray-500">Pending approval</p>
-                <p className="text-2xl font-bold text-gray-900">{awaiting}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-blue-100 rounded-lg">
-                <PlayCircle className="w-6 h-6 text-blue-700" />
-              </div>
-              <div>
-                <p className="text-sm text-gray-500">In progress</p>
-                <p className="text-2xl font-bold text-gray-900">{inProgress}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-green-100 rounded-lg">
-                <CheckCircle className="w-6 h-6 text-green-700" />
-              </div>
-              <div>
-                <p className="text-sm text-gray-500">Completed</p>
-                <p className="text-2xl font-bold text-gray-900">{completed}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <StatKpiCard
+          label="Total"
+          value={String(totalPRs)}
+          tone="indigo"
+          icon={<Factory />}
+          sub={drafts > 0 ? `Draft: ${drafts}` : undefined}
+        />
+        <StatKpiCard label="Pending approval" value={String(awaiting)} tone="amber" icon={<ClipboardList />} />
+        <StatKpiCard label="In progress" value={String(inProgress)} tone="blue" icon={<PlayCircle />} />
+        <StatKpiCard label="Completed" value={String(completed)} tone="emerald" icon={<CheckCircle />} />
       </div>
 
       <Card>

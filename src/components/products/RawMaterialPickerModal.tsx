@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { X, ChevronRight, ArrowLeft, Search, Package, Loader2, Building2 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAppContext } from '@/src/store/AppContext';
@@ -52,6 +53,10 @@ interface Props {
   /** Inter-branch: when both are set, only materials with `material_stock` at both branches are listed. */
   interBranchRequestingBranchId?: string | null;
   interBranchFulfillingBranchId?: string | null;
+  /** When set, only these material IDs appear (e.g. materials with consumption in a reports period). */
+  allowedMaterialIds?: string[] | null;
+  /** Optional banner below the header (e.g. reports scope hint). */
+  contextNote?: string | null;
 }
 
 function CategoryImage({ url, name }: { url: string | null; name: string }) {
@@ -97,6 +102,8 @@ export default function RawMaterialPickerModal({
   supplierId = null, supplierName = null,
   interBranchRequestingBranchId = null,
   interBranchFulfillingBranchId = null,
+  allowedMaterialIds = null,
+  contextNote = null,
 }: Props) {
   const { branch: navbarBranchCtx } = useAppContext();
   const effectiveBranch = (branchProp.trim() || (navbarBranchCtx ?? '').trim() || '');
@@ -146,6 +153,20 @@ export default function RawMaterialPickerModal({
   /** When supplier is selected: category IDs that have ≥1 of that supplier’s materials; empty = none */
   const [supplierCategoryIds, setSupplierCategoryIds] = useState<Set<string> | null>(null);
   const [loadingSupplier, setLoadingSupplier]   = useState(false);
+
+  const allowedMaterialIdSet = useMemo(
+    () => (allowedMaterialIds?.length ? new Set(allowedMaterialIds) : null),
+    [allowedMaterialIds],
+  );
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [isOpen]);
 
   // Fetch supplier catalogue, then which categories actually contain those materials
   useEffect(() => {
@@ -355,6 +376,9 @@ export default function RawMaterialPickerModal({
           ? list.filter((m) => dualBranchMaterialIds.has(m.id))
           : [];
     }
+    if (allowedMaterialIdSet) {
+      list = list.filter((m) => allowedMaterialIdSet.has(m.id));
+    }
     setMaterials(list);
     setLoadingMats(false);
   };
@@ -432,9 +456,17 @@ export default function RawMaterialPickerModal({
 
   if (!isOpen) return null;
 
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col">
+  const overlay = (
+    <div
+      className="fixed top-0 left-0 right-0 bottom-0 z-[200] flex w-[100vw] min-h-[100dvh] h-[100dvh] items-center justify-center bg-black/50 p-4"
+      role="presentation"
+    >
+      <div
+        className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col"
+        role="dialog"
+        aria-modal="true"
+        onClick={(e) => e.stopPropagation()}
+      >
 
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 flex-shrink-0">
@@ -480,6 +512,12 @@ export default function RawMaterialPickerModal({
                   </span>
                 </>
             }
+          </div>
+        )}
+
+        {contextNote && (
+          <div className="px-6 py-2 text-xs border-b bg-violet-50 text-violet-800 border-violet-100">
+            {contextNote}
           </div>
         )}
 
@@ -565,7 +603,9 @@ export default function RawMaterialPickerModal({
                 <p className="text-sm">
                   {supplierId
                     ? `No materials from ${supplierName ?? 'this supplier'} in this category`
-                    : 'No materials found in this category'}
+                    : allowedMaterialIdSet
+                      ? 'No materials with consumption in this period in this category'
+                      : 'No materials found in this category'}
                 </p>
                 {supplierId && (
                   <p className="text-xs text-center max-w-xs">
@@ -617,4 +657,6 @@ export default function RawMaterialPickerModal({
       </div>
     </div>
   );
+
+  return typeof document !== 'undefined' ? createPortal(overlay, document.body) : null;
 }

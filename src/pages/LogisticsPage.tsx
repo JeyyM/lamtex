@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Link, useLocation } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
+import { StatKpiCard } from '@/src/components/ui/StatKpiCard';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
@@ -810,70 +811,25 @@ export function LogisticsPage() {
 
           {/* Quick Stats */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 w-full">
-            <Card className="w-full">
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-gray-500">
-                      {isInterIsland ? 'Active Shipments' : 'Active Trips'}
-                    </p>
-                    <p className="text-2xl font-bold text-gray-900 mt-1">
-                      {trips.filter(t => t.status === 'In Transit' || t.status === 'Loading').length}
-                    </p>
-                  </div>
-                  <div className={`p-3 rounded-lg ${isInterIsland ? 'bg-cyan-100' : 'bg-blue-100'}`}>
-                    {isInterIsland ? (
-                      <Ship className="w-6 h-6 text-cyan-600" />
-                    ) : (
-                      <Truck className="w-6 h-6 text-blue-600" />
-                    )}
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-            <Card className="w-full">
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-gray-500">Orders Ready</p>
-                    <p className="text-2xl font-bold text-gray-900 mt-1">{ordersReady.length}</p>
-                  </div>
-                  <div className="p-3 bg-green-100 rounded-lg">
-                    <Package className="w-6 h-6 text-green-600" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-            <Card className="w-full">
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-gray-500">{isInterIsland ? 'Available Containers' : 'Available Trucks'}</p>
-                    <p className="text-2xl font-bold text-gray-900 mt-1">
-                      {vehiclesForStats.filter((v) => v.status === 'Available').length}
-                    </p>
-                  </div>
-                  <div className="p-3 bg-green-100 rounded-lg">
-                    <CheckCircle className="w-6 h-6 text-green-600" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-            <Card className="w-full">
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-gray-500">Delayed</p>
-                    <p className="text-2xl font-bold text-gray-900 mt-1">
-                      {trips.filter(t => t.status === 'Delayed').length}
-                    </p>
-                  </div>
-                  <div className="p-3 bg-red-100 rounded-lg">
-                    <AlertTriangle className="w-6 h-6 text-red-600" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+            <StatKpiCard
+              label={isInterIsland ? 'Active Shipments' : 'Active Trips'}
+              value={String(trips.filter((t) => t.status === 'In Transit' || t.status === 'Loading').length)}
+              tone={isInterIsland ? 'cyan' : 'blue'}
+              icon={isInterIsland ? <Ship /> : <Truck />}
+            />
+            <StatKpiCard label="Orders Ready" value={String(ordersReady.length)} tone="emerald" icon={<Package />} />
+            <StatKpiCard
+              label={isInterIsland ? 'Available Containers' : 'Available Trucks'}
+              value={String(vehiclesForStats.filter((v) => v.status === 'Available').length)}
+              tone="teal"
+              icon={<CheckCircle />}
+            />
+            <StatKpiCard
+              label="Delayed"
+              value={String(trips.filter((t) => t.status === 'Delayed').length)}
+              tone="rose"
+              icon={<AlertTriangle />}
+            />
           </div>
 
           {liveDispatch && (

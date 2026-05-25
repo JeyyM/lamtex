@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { mockAgentAnalytics } from '../mock/agentAnalytics';
 import { mockAgentProfiles } from '../mock/agentProfiles';
+import { StatKpiCard } from '@/src/components/ui/StatKpiCard';
 
 const AgentProfilePage: React.FC = () => {
   const { agentId, employeeId } = useParams<{ agentId?: string; employeeId?: string }>();
@@ -503,28 +504,30 @@ const AgentProfilePage: React.FC = () => {
           <div className="space-y-6">
             {/* Customer Portfolio Stats */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="bg-white rounded-lg border border-gray-200 p-4">
-                <p className="text-sm text-gray-600 mb-1">Total Customers</p>
-                <p className="text-2xl font-bold text-gray-900">{agentProfile.customerAssignments.length}</p>
-              </div>
-              <div className="bg-white rounded-lg border border-gray-200 p-4">
-                <p className="text-sm text-gray-600 mb-1">Active</p>
-                <p className="text-2xl font-bold text-green-600">
-                  {agentProfile.customerAssignments.filter(c => c.status === 'Active').length}
-                </p>
-              </div>
-              <div className="bg-white rounded-lg border border-gray-200 p-4">
-                <p className="text-sm text-gray-600 mb-1">VIP</p>
-                <p className="text-2xl font-bold text-purple-600">
-                  {agentProfile.customerAssignments.filter(c => c.status === 'VIP').length}
-                </p>
-              </div>
-              <div className="bg-white rounded-lg border border-gray-200 p-4">
-                <p className="text-sm text-gray-600 mb-1">At Risk</p>
-                <p className="text-2xl font-bold text-orange-600">
-                  {agentProfile.customerAssignments.filter(c => c.status === 'At Risk').length}
-                </p>
-              </div>
+              <StatKpiCard
+                label="Total Customers"
+                value={String(agentProfile.customerAssignments.length)}
+                tone="blue"
+                icon={<Users />}
+              />
+              <StatKpiCard
+                label="Active"
+                value={String(agentProfile.customerAssignments.filter((c) => c.status === 'Active').length)}
+                tone="emerald"
+                icon={<CheckCircle />}
+              />
+              <StatKpiCard
+                label="VIP"
+                value={String(agentProfile.customerAssignments.filter((c) => c.status === 'VIP').length)}
+                tone="violet"
+                icon={<Star />}
+              />
+              <StatKpiCard
+                label="At Risk"
+                value={String(agentProfile.customerAssignments.filter((c) => c.status === 'At Risk').length)}
+                tone="amber"
+                icon={<AlertCircle />}
+              />
             </div>
 
             {/* Customer List */}
@@ -1028,53 +1031,30 @@ const AgentProfilePage: React.FC = () => {
 
       {/* Quick Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white rounded-xl border border-gray-200 p-5">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
-              <Users className="w-5 h-5 text-blue-600" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-600">Active Customers</p>
-              <p className="text-2xl font-bold text-gray-900">{agent.customerMetrics.activeCustomers}</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-xl border border-gray-200 p-5">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center">
-              <Award className="w-5 h-5 text-green-600" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-600">Performance Rank</p>
-              <p className="text-2xl font-bold text-gray-900">#{agent.ranking.rankByRevenue}</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-xl border border-gray-200 p-5">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center">
-              <Briefcase className="w-5 h-5 text-purple-600" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-600">Commission Tier</p>
-              <p className="text-lg font-bold text-gray-900">{agent.incentives.bonusTier.split(' - ')[0]}</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-xl border border-gray-200 p-5">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-orange-100 rounded-lg flex items-center justify-center">
-              <MapPin className="w-5 h-5 text-orange-600" />
-            </div>
-            <div>
-              <p className="text-sm text-gray-600">Territory</p>
-              <p className="text-sm font-semibold text-gray-900">{agent.operationalMetrics.territoryCoverage}</p>
-            </div>
-          </div>
-        </div>
+        <StatKpiCard
+          label="Active Customers"
+          value={String(agent.customerMetrics.activeCustomers)}
+          tone="blue"
+          icon={<Users />}
+        />
+        <StatKpiCard
+          label="Performance Rank"
+          value={`#${agent.ranking.rankByRevenue}`}
+          tone="emerald"
+          icon={<Award />}
+        />
+        <StatKpiCard
+          label="Commission Tier"
+          value={agent.incentives.bonusTier.split(' - ')[0]}
+          tone="violet"
+          icon={<Briefcase />}
+        />
+        <StatKpiCard
+          label="Territory"
+          value={agent.operationalMetrics.territoryCoverage}
+          tone="orange"
+          icon={<MapPin />}
+        />
       </div>
 
       {/* Tabs */}

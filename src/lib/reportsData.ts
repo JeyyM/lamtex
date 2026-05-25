@@ -384,6 +384,56 @@ export interface ReportsInventoryProductionRequestRow {
   createdBy: string | null;
 }
 
+export interface ReportsRawMaterialConsumptionOption {
+  materialId: string;
+  materialName: string;
+  unit: string;
+  totalQty: number;
+  totalCost: number;
+  eventCount: number;
+}
+
+export interface ReportsRawMaterialConsumptionMonthlyLine {
+  materialId: string;
+  materialName: string;
+  unit: string;
+  qtyByMonth: number[];
+  costByMonth: number[];
+}
+
+export interface ReportsRawMaterialConsumptionByProductRow {
+  materialId: string;
+  materialName: string;
+  unit: string;
+  productId: string | null;
+  productName: string;
+  qty: number;
+  cost: number;
+  eventCount: number;
+}
+
+export interface ReportsRawMaterialConsumptionLedgerRow {
+  id: string;
+  materialId: string;
+  materialName: string;
+  unit: string;
+  date: string;
+  productId: string | null;
+  productName: string;
+  qty: number;
+  cost: number;
+  remarks: string | null;
+}
+
+export interface ReportsRawMaterialConsumptionReport {
+  monthKeys: string[];
+  labels: string[];
+  options: ReportsRawMaterialConsumptionOption[];
+  monthlyByMaterial: ReportsRawMaterialConsumptionMonthlyLine[];
+  byProductByMaterial: ReportsRawMaterialConsumptionByProductRow[];
+  ledger: ReportsRawMaterialConsumptionLedgerRow[];
+}
+
 export interface ReportsInventoryReport {
   summary: ReportsInventorySummary;
   expenditureSeries: ReportsInventoryExpenditurePoint[];
@@ -395,7 +445,67 @@ export interface ReportsInventoryReport {
   materials: ReportsInventoryMaterialRow[];
   purchaseOrders: ReportsInventoryPurchaseOrderRow[];
   productionRequests: ReportsInventoryProductionRequestRow[];
+  consumption: ReportsRawMaterialConsumptionReport;
 }
+
+/* LOGISTICS REPORT — disabled; revisit later
+export interface ReportsLogisticsSummary {
+  totalTrips: number;
+  completedTrips: number;
+  delayedTrips: number;
+  failedTrips: number;
+  onTimeRate: number;
+  inTransitNow: number;
+  loadingNow: number;
+  ordersDelivered: number;
+  ordersAwaitingDispatch: number;
+  ordersOnTrips: number;
+  avgCycleDays: number;
+  medianCycleDays: number;
+  cycleSampleSize: number;
+  openDelayExceptions: number;
+  fleetTotal: number;
+  fleetAvailable: number;
+  fleetOnTrip: number;
+  fleetMaintenance: number;
+}
+
+export interface ReportsLogisticsTripVolumePoint {
+  label: string;
+  monthKey: string;
+  totalTrips: number;
+  completed: number;
+  delayed: number;
+  failed: number;
+  onTimePct: number;
+}
+
+export interface ReportsLogisticsStatusRow {
+  status: string;
+  tripCount: number;
+}
+
+export interface ReportsLogisticsTripRow {
+  tripId: string;
+  tripNumber: string;
+  status: string;
+  scheduledDate: string;
+  vehicleName: string | null;
+  driverName: string | null;
+  orderCount: number;
+  destinationPreview: string | null;
+}
+
+export interface ReportsLogisticsReport {
+  summary: ReportsLogisticsSummary;
+  tripVolumeSeries: ReportsLogisticsTripVolumePoint[];
+  tripStatusBreakdown: ReportsLogisticsStatusRow[];
+  fulfillmentPipeline: ReportsPipelineStage[];
+  cycleTime: ReportsCycleTimeStats;
+  delayBreakdown: ReportsDelayBreakdownRow[];
+  recentTrips: ReportsLogisticsTripRow[];
+}
+*/
 
 export interface ReportsBundle {
   branchId: string | null;
@@ -418,6 +528,7 @@ export interface ReportsBundle {
   /** Period revenue by branch — always org-wide (ignores topbar branch filter). */
   branchRevenueShare: ReportsBranchRevenueShareRow[];
   inventoryReport: ReportsInventoryReport;
+  // logisticsReport: ReportsLogisticsReport;
 }
 
 const REVENUE_ORDER_STATUSES = [
@@ -1085,6 +1196,34 @@ const PIPELINE_STATUS_ORDER = [
   'Completed',
   'Cancelled',
 ] as const;
+
+/* LOGISTICS REPORT — disabled; revisit later
+const LOGISTICS_FULFILLMENT_STATUSES = new Set<string>([
+  'Approved',
+  'Scheduled',
+  'Loading',
+  'Packed',
+  'Ready',
+  'In Transit',
+  'Partially Fulfilled',
+  'Delivered',
+  'Completed',
+]);
+
+const LOGISTICS_TRIP_HOLDING_STATUSES = new Set([
+  'Scheduled',
+  'Loading',
+  'Packed',
+  'Ready',
+  'In Transit',
+  'Delayed',
+  'Planned',
+  'Pending',
+]);
+
+const LOGISTICS_ORDER_DISPATCH_STATUSES = ['Approved', 'Partially Fulfilled'] as const;
+const LOGISTICS_OPEN_DELAY_STATUSES = ['Open', 'In Progress', 'Escalated'] as const;
+*/
 
 const AR_AGING_LABELS = ['Current', '1–30 days', '31–60 days', '61–90 days', '90+ days'] as const;
 
@@ -2476,6 +2615,193 @@ async function fetchInventoryMaterialsForBranch(
   return { rows: flatRows, error: flatRows.length === 0 ? flatError : null };
 }
 
+async function fetchReportsRawMaterialConsumption(
+  branchId: string | null,
+  from: string,
+  to: string,
+): Promise<ReportsRawMaterialConsumptionReport> {
+  const { monthKeys, labels } = monthKeysInRange(from, to);
+  const empty: ReportsRawMaterialConsumptionReport = {
+    monthKeys,
+    labels,
+    options: [],
+    monthlyByMaterial: [],
+    byProductByMaterial: [],
+    ledger: [],
+  };
+
+  try {
+    let branchCode: string | null = null;
+    if (branchId) {
+      const { data: br } = await supabase
+        .from('branches')
+        .select('code')
+        .eq('id', branchId)
+        .maybeSingle();
+      branchCode = br?.code != null ? String(br.code) : null;
+      if (!branchCode) return empty;
+    }
+
+    let q = supabase
+      .from('material_consumption')
+      .select(
+        `id, material_id, consumption_date, quantity_consumed, total_cost, cost_per_unit,
+         product_id, product_name, remarks, branch,
+         raw_materials(id, name, unit_of_measure)`,
+      )
+      .gte('consumption_date', from)
+      .lte('consumption_date', to)
+      .order('consumption_date', { ascending: false })
+      .limit(5000);
+
+    if (branchCode) q = q.eq('branch', branchCode);
+
+    const { data, error } = await q;
+    if (error) {
+      if (import.meta.env.DEV) console.warn('[reports] material consumption', error);
+      return empty;
+    }
+
+    const optionsAgg = new Map<
+      string,
+      { name: string; unit: string; qty: number; cost: number; count: number }
+    >();
+    const monthlyAgg = new Map<
+      string,
+      { name: string; unit: string; qty: number[]; cost: number[] }
+    >();
+    const byProductAgg = new Map<
+      string,
+      {
+        materialId: string;
+        materialName: string;
+        unit: string;
+        productId: string | null;
+        productName: string;
+        qty: number;
+        cost: number;
+        count: number;
+      }
+    >();
+    const ledger: ReportsRawMaterialConsumptionLedgerRow[] = [];
+
+    for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+      const materialId = toStr(row.material_id);
+      if (!materialId) continue;
+
+      let materialName = 'Unknown material';
+      let unit = 'kg';
+      const rmEmbed = row.raw_materials;
+      if (rmEmbed && typeof rmEmbed === 'object' && !Array.isArray(rmEmbed)) {
+        const rec = rmEmbed as Record<string, unknown>;
+        materialName = toStr(rec.name) ?? materialName;
+        unit = toStr(rec.unit_of_measure) ?? unit;
+      }
+
+      const qty = toNumber(row.quantity_consumed);
+      const cost = toNumber(row.total_cost) || toNumber(row.cost_per_unit) * qty;
+      const date = toStr(row.consumption_date) ?? '';
+      const monthKey = date.slice(0, 7);
+      const monthIdx = monthKeys.indexOf(monthKey);
+
+      const productId = toStr(row.product_id);
+      const productName = toStr(row.product_name) ?? (productId ? 'Unnamed product' : 'Unattributed');
+
+      const opt =
+        optionsAgg.get(materialId) ??
+        { name: materialName, unit, qty: 0, cost: 0, count: 0 };
+      opt.qty += qty;
+      opt.cost += cost;
+      opt.count += 1;
+      if (!opt.name && materialName) opt.name = materialName;
+      optionsAgg.set(materialId, opt);
+
+      let monthly = monthlyAgg.get(materialId);
+      if (!monthly) {
+        monthly = {
+          name: materialName,
+          unit,
+          qty: monthKeys.map(() => 0),
+          cost: monthKeys.map(() => 0),
+        };
+        monthlyAgg.set(materialId, monthly);
+      }
+      if (monthIdx >= 0) {
+        monthly.qty[monthIdx] += qty;
+        monthly.cost[monthIdx] += cost;
+      }
+
+      const productKey = `${materialId}:${productId ?? '__none__'}`;
+      const bp =
+        byProductAgg.get(productKey) ??
+        {
+          materialId,
+          materialName,
+          unit,
+          productId,
+          productName,
+          qty: 0,
+          cost: 0,
+          count: 0,
+        };
+      bp.qty += qty;
+      bp.cost += cost;
+      bp.count += 1;
+      byProductAgg.set(productKey, bp);
+
+      ledger.push({
+        id: String(row.id),
+        materialId,
+        materialName,
+        unit,
+        date,
+        productId,
+        productName,
+        qty,
+        cost,
+        remarks: toStr(row.remarks),
+      });
+    }
+
+    const options: ReportsRawMaterialConsumptionOption[] = [...optionsAgg.entries()]
+      .map(([materialId, v]) => ({
+        materialId,
+        materialName: v.name,
+        unit: v.unit,
+        totalQty: v.qty,
+        totalCost: v.cost,
+        eventCount: v.count,
+      }))
+      .sort((a, b) => b.totalCost - a.totalCost || b.totalQty - a.totalQty);
+
+    const monthlyByMaterial: ReportsRawMaterialConsumptionMonthlyLine[] = [...monthlyAgg.entries()]
+      .map(([materialId, v]) => ({
+        materialId,
+        materialName: v.name,
+        unit: v.unit,
+        qtyByMonth: v.qty,
+        costByMonth: v.cost,
+      }));
+
+    const byProductByMaterial: ReportsRawMaterialConsumptionByProductRow[] = [...byProductAgg.values()]
+      .map((v) => ({
+        materialId: v.materialId,
+        materialName: v.materialName,
+        unit: v.unit,
+        productId: v.productId,
+        productName: v.productName,
+        qty: v.qty,
+        cost: v.cost,
+        eventCount: v.count,
+      }));
+
+    return { monthKeys, labels, options, monthlyByMaterial, byProductByMaterial, ledger };
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn('[reports] material consumption', e);
+    return empty;
+  }
+}
+
 async function fetchReportsInventoryReport(
   branchId: string | null,
   from: string,
@@ -2506,6 +2832,14 @@ async function fetchReportsInventoryReport(
     materials: [],
     purchaseOrders: [],
     productionRequests: [],
+    consumption: {
+      monthKeys: [],
+      labels: [],
+      options: [],
+      monthlyByMaterial: [],
+      byProductByMaterial: [],
+      ledger: [],
+    },
   };
 
   try {
@@ -2545,12 +2879,13 @@ async function fetchReportsInventoryReport(
       .eq('status', INVENTORY_PR_PENDING);
     if (branchId) pendingPrQ = pendingPrQ.eq('branch_id', branchId);
 
-    const [poRes, prRes, matResult, pendingPoRes, pendingPrRes] = await Promise.all([
+    const [poRes, prRes, matResult, pendingPoRes, pendingPrRes, consumption] = await Promise.all([
       poQ,
       prQ,
       fetchInventoryMaterialsForBranch(branchId),
       pendingPoQ,
       pendingPrQ,
+      fetchReportsRawMaterialConsumption(branchId, from, to),
     ]);
 
     if (poRes.error && import.meta.env.DEV) console.warn('[reports] inventory POs', poRes.error);
@@ -2775,12 +3110,337 @@ async function fetchReportsInventoryReport(
       materials,
       purchaseOrders,
       productionRequests,
+      consumption,
     };
   } catch (e) {
     if (import.meta.env.DEV) console.warn('[reports] inventory report', e);
     return emptyResult;
   }
 }
+
+/* LOGISTICS REPORT — disabled; revisit later
+function emptyLogisticsReport(from: string, to: string): ReportsLogisticsReport {
+  const { monthKeys, labels } = monthKeysInRange(from, to);
+  const bucketDefs = [
+    { label: '0–3 days', min: 0, max: 3 },
+    { label: '4–7 days', min: 4, max: 7 },
+    { label: '8–14 days', min: 8, max: 14 },
+    { label: '15+ days', min: 15, max: Infinity },
+  ];
+  return {
+    summary: {
+      totalTrips: 0,
+      completedTrips: 0,
+      delayedTrips: 0,
+      failedTrips: 0,
+      onTimeRate: 0,
+      inTransitNow: 0,
+      loadingNow: 0,
+      ordersDelivered: 0,
+      ordersAwaitingDispatch: 0,
+      ordersOnTrips: 0,
+      avgCycleDays: 0,
+      medianCycleDays: 0,
+      cycleSampleSize: 0,
+      openDelayExceptions: 0,
+      fleetTotal: 0,
+      fleetAvailable: 0,
+      fleetOnTrip: 0,
+      fleetMaintenance: 0,
+    },
+    tripVolumeSeries: monthKeys.map((monthKey, i) => ({
+      label: labels[i] ?? monthKey,
+      monthKey,
+      totalTrips: 0,
+      completed: 0,
+      delayed: 0,
+      failed: 0,
+      onTimePct: 0,
+    })),
+    tripStatusBreakdown: [],
+    fulfillmentPipeline: [],
+    cycleTime: {
+      avgDays: 0,
+      medianDays: 0,
+      sampleSize: 0,
+      buckets: bucketDefs.map((b) => ({ label: b.label, count: 0 })),
+    },
+    delayBreakdown: [],
+    recentTrips: [],
+  };
+}
+
+async function countOrdersDeliveredInPeriod(
+  branchId: string | null,
+  from: string,
+  to: string,
+): Promise<number> {
+  try {
+    let q = supabase
+      .from('orders')
+      .select('id', { count: 'exact', head: true })
+      .gte('actual_delivery', from)
+      .lte('actual_delivery', to)
+      .not('actual_delivery', 'is', null)
+      .in('status', ['Delivered', 'Completed', 'Partially Fulfilled']);
+    if (branchId) q = q.eq('branch_id', branchId);
+    const { count, error } = await q;
+    if (error) throw error;
+    return count ?? 0;
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn('[reports] orders delivered', e);
+    return 0;
+  }
+}
+
+async function countOpenDelayExceptions(branchId: string | null): Promise<number> {
+  try {
+    let q = supabase
+      .from('delay_exceptions')
+      .select('id', { count: 'exact', head: true })
+      .in('status', [...LOGISTICS_OPEN_DELAY_STATUSES]);
+    if (branchId) q = q.eq('branch_id', branchId);
+    const { count, error } = await q;
+    if (error) throw error;
+    return count ?? 0;
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn('[reports] open delays', e);
+    return 0;
+  }
+}
+
+async function countOrdersAwaitingDispatch(branchId: string | null): Promise<number> {
+  try {
+    let tripQ = supabase.from('trips').select('order_ids, status');
+    if (branchId) tripQ = tripQ.eq('branch_id', branchId);
+    const { data: tripRows, error: tripErr } = await tripQ;
+    if (tripErr) throw tripErr;
+
+    const assigned = new Set<string>();
+    for (const t of (tripRows ?? []) as Array<Record<string, unknown>>) {
+      if (!LOGISTICS_TRIP_HOLDING_STATUSES.has(toStr(t.status) ?? '')) continue;
+      for (const id of ((t.order_ids as string[] | null) ?? [])) {
+        if (id) assigned.add(id);
+      }
+    }
+
+    let orderQ = supabase
+      .from('orders')
+      .select('id')
+      .in('status', [...LOGISTICS_ORDER_DISPATCH_STATUSES]);
+    if (branchId) orderQ = orderQ.eq('branch_id', branchId);
+    const { data: orders, error: orderErr } = await orderQ;
+    if (orderErr) throw orderErr;
+
+    return ((orders ?? []) as Array<{ id: string }>).filter((o) => !assigned.has(String(o.id))).length;
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn('[reports] awaiting dispatch', e);
+    return 0;
+  }
+}
+
+async function fetchReportsFleetSummary(branchId: string | null): Promise<{
+  total: number;
+  available: number;
+  onTrip: number;
+  maintenance: number;
+}> {
+  try {
+    let q = supabase.from('vehicles').select('status');
+    if (branchId) q = q.eq('branch_id', branchId);
+    const { data, error } = await q;
+    if (error) throw error;
+
+    const summary = { total: 0, available: 0, onTrip: 0, maintenance: 0 };
+    for (const r of (data ?? []) as Array<Record<string, unknown>>) {
+      summary.total += 1;
+      const status = toStr(r.status);
+      if (status === 'Available') summary.available += 1;
+      else if (status === 'On Trip' || status === 'Loading') summary.onTrip += 1;
+      else if (status === 'Maintenance') summary.maintenance += 1;
+    }
+    return summary;
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn('[reports] fleet summary', e);
+    return { total: 0, available: 0, onTrip: 0, maintenance: 0 };
+  }
+}
+
+async function fetchActiveTripCounts(branchId: string | null): Promise<{ inTransit: number; loading: number }> {
+  try {
+    let q = supabase.from('trips').select('status').in('status', ['In Transit', 'Loading', 'Delayed']);
+    if (branchId) q = q.eq('branch_id', branchId);
+    const { data, error } = await q;
+    if (error) throw error;
+
+    let inTransit = 0;
+    let loading = 0;
+    for (const r of (data ?? []) as Array<Record<string, unknown>>) {
+      const status = toStr(r.status);
+      if (status === 'In Transit' || status === 'Delayed') inTransit += 1;
+      if (status === 'Loading') loading += 1;
+    }
+    return { inTransit, loading };
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn('[reports] active trips', e);
+    return { inTransit: 0, loading: 0 };
+  }
+}
+
+function filterLogisticsPipeline(stages: ReportsPipelineStage[]): ReportsPipelineStage[] {
+  return stages.filter((s) => LOGISTICS_FULFILLMENT_STATUSES.has(s.status));
+}
+
+async function fetchReportsLogisticsReport(
+  branchId: string | null,
+  from: string,
+  to: string,
+): Promise<ReportsLogisticsReport> {
+  const empty = emptyLogisticsReport(from, to);
+  const { monthKeys, labels } = monthKeysInRange(from, to);
+
+  try {
+    let tripsQ = supabase
+      .from('trips')
+      .select(
+        'id, trip_number, status, scheduled_date, vehicle_name, driver_name, destinations, order_ids',
+      )
+      .gte('scheduled_date', from)
+      .lte('scheduled_date', to)
+      .order('scheduled_date', { ascending: false })
+      .limit(500);
+    if (branchId) tripsQ = tripsQ.eq('branch_id', branchId);
+
+    const [
+      tripsRes,
+      cycleTime,
+      delayBreakdown,
+      pipelineAll,
+      ordersDelivered,
+      fleet,
+      activeTrips,
+      openDelays,
+      awaitingDispatch,
+    ] = await Promise.all([
+      tripsQ,
+      fetchOrderCycleTime(branchId, from, to),
+      fetchDelayBreakdown(branchId, from, to),
+      fetchOrderPipeline(branchId),
+      countOrdersDeliveredInPeriod(branchId, from, to),
+      fetchReportsFleetSummary(branchId),
+      fetchActiveTripCounts(branchId),
+      countOpenDelayExceptions(branchId),
+      countOrdersAwaitingDispatch(branchId),
+    ]);
+
+    if (tripsRes.error) throw tripsRes.error;
+    const tripRows = (tripsRes.data ?? []) as Array<Record<string, unknown>>;
+
+    let completedTrips = 0;
+    let delayedTrips = 0;
+    let failedTrips = 0;
+    let ordersOnTrips = 0;
+    const statusAgg = new Map<string, number>();
+    const monthlyAgg = new Map<string, { completed: number; delayed: number; failed: number; total: number }>();
+
+    for (const mk of monthKeys) {
+      monthlyAgg.set(mk, { completed: 0, delayed: 0, failed: 0, total: 0 });
+    }
+
+    for (const r of tripRows) {
+      const status = toStr(r.status) ?? 'Unknown';
+      statusAgg.set(status, (statusAgg.get(status) ?? 0) + 1);
+      const orderIds = (r.order_ids as string[] | null) ?? [];
+      ordersOnTrips += orderIds.length;
+
+      const rawDate = toStr(r.scheduled_date);
+      const monthKey = rawDate?.slice(0, 7) ?? '';
+      const bucket = monthlyAgg.get(monthKey);
+      if (bucket) {
+        bucket.total += 1;
+        if (status === 'Completed') {
+          bucket.completed += 1;
+          completedTrips += 1;
+        } else if (status === 'Delayed') {
+          bucket.delayed += 1;
+          delayedTrips += 1;
+        } else if (status === 'Failed') {
+          bucket.failed += 1;
+          failedTrips += 1;
+        }
+      } else if (status === 'Completed') completedTrips += 1;
+      else if (status === 'Delayed') delayedTrips += 1;
+      else if (status === 'Failed') failedTrips += 1;
+    }
+
+    const totalTrips = tripRows.length;
+    const onTimeRate = computeOnTimePct(completedTrips, delayedTrips, failedTrips);
+
+    const tripVolumeSeries: ReportsLogisticsTripVolumePoint[] = monthKeys.map((monthKey, i) => {
+      const agg = monthlyAgg.get(monthKey) ?? { completed: 0, delayed: 0, failed: 0, total: 0 };
+      return {
+        label: labels[i] ?? monthKey,
+        monthKey,
+        totalTrips: agg.total,
+        completed: agg.completed,
+        delayed: agg.delayed,
+        failed: agg.failed,
+        onTimePct: computeOnTimePct(agg.completed, agg.delayed, agg.failed),
+      };
+    });
+
+    const tripStatusBreakdown: ReportsLogisticsStatusRow[] = [...statusAgg.entries()]
+      .map(([status, tripCount]) => ({ status, tripCount }))
+      .sort((a, b) => b.tripCount - a.tripCount);
+
+    const recentTrips: ReportsLogisticsTripRow[] = tripRows.slice(0, 50).map((r) => {
+      const destinations = (r.destinations as string[] | null) ?? [];
+      return {
+        tripId: String(r.id),
+        tripNumber: toStr(r.trip_number) ?? '—',
+        status: toStr(r.status) ?? '—',
+        scheduledDate: toStr(r.scheduled_date) ?? '—',
+        vehicleName: toStr(r.vehicle_name),
+        driverName: toStr(r.driver_name),
+        orderCount: ((r.order_ids as string[] | null) ?? []).length,
+        destinationPreview: destinations[0]?.slice(0, 80) ?? null,
+      };
+    });
+
+    return {
+      summary: {
+        totalTrips,
+        completedTrips,
+        delayedTrips,
+        failedTrips,
+        onTimeRate,
+        inTransitNow: activeTrips.inTransit,
+        loadingNow: activeTrips.loading,
+        ordersDelivered,
+        ordersAwaitingDispatch: awaitingDispatch,
+        ordersOnTrips,
+        avgCycleDays: cycleTime.avgDays,
+        medianCycleDays: cycleTime.medianDays,
+        cycleSampleSize: cycleTime.sampleSize,
+        openDelayExceptions: openDelays,
+        fleetTotal: fleet.total,
+        fleetAvailable: fleet.available,
+        fleetOnTrip: fleet.onTrip,
+        fleetMaintenance: fleet.maintenance,
+      },
+      tripVolumeSeries,
+      tripStatusBreakdown,
+      fulfillmentPipeline: filterLogisticsPipeline(pipelineAll),
+      cycleTime,
+      delayBreakdown,
+      recentTrips,
+    };
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn('[reports] logistics report', e);
+    return empty;
+  }
+}
+*/
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -2823,6 +3483,7 @@ export async function fetchReportsBundle(opts: {
     fetchBranchTrendCompare(),
     fetchBranchRevenueShare(period.start, period.end),
     fetchReportsInventoryReport(branchId, period.start, period.end),
+    // fetchReportsLogisticsReport(branchId, period.start, period.end),
   ]);
 
   const enhancements = await fetchReportsEnhancements({ branchId, period, agents });
@@ -2846,6 +3507,7 @@ export async function fetchReportsBundle(opts: {
     branchTrendCompare,
     branchRevenueShare,
     inventoryReport,
+    // logisticsReport,
   };
 }
 

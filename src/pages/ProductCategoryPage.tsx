@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
+import { StatKpiCard } from '../components/ui/StatKpiCard';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { useAppContext } from '../store/AppContext';
@@ -511,41 +512,27 @@ export default function ProductCategoryPage() {
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 md:gap-4">
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-blue-100 rounded-lg"><Package className="w-6 h-6 text-blue-600" /></div>
-              <div>
-                <p className="text-sm text-gray-500">Product Families</p>
-                <p className="text-2xl font-bold text-gray-900">{loading ? '...' : filteredProducts.length}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-orange-100 rounded-lg"><AlertTriangle className="w-6 h-6 text-orange-600" /></div>
-              <div>
-                <p className="text-sm text-gray-500">Low Stock</p>
-                <p className="text-2xl font-bold text-gray-900">{loading ? '...' : lowStockCount}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-green-100 rounded-lg"><DollarSign className="w-6 h-6 text-green-600" /></div>
-              <div>
-                <p className="text-sm text-gray-500">Category Revenue</p>
-                <p className="text-2xl font-bold text-gray-900">
-                  {loading ? '...' : `₱${(totalRevenue / 1_000_000).toFixed(2)}M`}
-                </p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <StatKpiCard
+          label="Product Families"
+          value={loading ? '…' : String(filteredProducts.length)}
+          tone="blue"
+          icon={<Package />}
+          loading={loading}
+        />
+        <StatKpiCard
+          label="Low Stock"
+          value={loading ? '…' : String(lowStockCount)}
+          tone="amber"
+          icon={<AlertTriangle />}
+          loading={loading}
+        />
+        <StatKpiCard
+          label="Category Revenue"
+          value={loading ? '…' : `₱${(totalRevenue / 1_000_000).toFixed(2)}M`}
+          tone="emerald"
+          icon={<DollarSign />}
+          loading={loading}
+        />
       </div>
 
       {/* Filters */}

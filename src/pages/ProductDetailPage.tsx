@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
+import { StatKpiCard } from '@/src/components/ui/StatKpiCard';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { VariantModal } from '@/src/components/products/VariantModal';
@@ -349,63 +350,10 @@ export function ProductDetailPage() {
 
       {/* Product Summary Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-blue-100 rounded-lg">
-                <Box className="w-6 h-6 text-blue-600" />
-              </div>
-              <div>
-                <p className="text-sm text-gray-500">Total Variants</p>
-                <p className="text-2xl font-bold text-gray-900">{product.totalVariants}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-green-100 rounded-lg">
-                <Package className="w-6 h-6 text-green-600" />
-              </div>
-              <div>
-                <p className="text-sm text-gray-500">Total Stock</p>
-                <p className="text-2xl font-bold text-gray-900">{product.totalStock.toLocaleString()}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-purple-100 rounded-lg">
-                <TrendingUp className="w-6 h-6 text-purple-600" />
-              </div>
-              <div>
-                <p className="text-sm text-gray-500">Units Sold YTD</p>
-                <p className="text-2xl font-bold text-gray-900">{product.totalUnitsSold.toLocaleString()}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-yellow-100 rounded-lg">
-                <DollarSign className="w-6 h-6 text-yellow-600" />
-              </div>
-              <div>
-                <p className="text-sm text-gray-500">Revenue YTD</p>
-                <p className="text-2xl font-bold text-gray-900">
-                  ₱{(product.totalRevenue / 1000).toFixed(0)}K
-                </p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <StatKpiCard label="Total Variants" value={String(product.totalVariants)} tone="blue" icon={<Box />} />
+        <StatKpiCard label="Total Stock" value={product.totalStock.toLocaleString()} tone="emerald" icon={<Package />} />
+        <StatKpiCard label="Units Sold YTD" value={product.totalUnitsSold.toLocaleString()} tone="violet" icon={<TrendingUp />} />
+        <StatKpiCard label="Revenue YTD" value={`₱${(product.totalRevenue / 1000).toFixed(0)}K`} tone="amber" icon={<DollarSign />} />
       </div>
 
       {/* Product Info & Status */}
@@ -952,30 +900,10 @@ export function ProductDetailPage() {
 
             {/* Forecast KPI Grid */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
-              <Card>
-                <CardContent className="p-4">
-                  <p className="text-sm text-gray-500">Forecast Units (Next 30 Days)</p>
-                  <p className="text-2xl font-bold text-gray-900">{forecastUnits.toLocaleString()}</p>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardContent className="p-4">
-                  <p className="text-sm text-gray-500">Forecast Revenue (Next 30 Days)</p>
-                  <p className="text-2xl font-bold text-gray-900">₱{forecastRevenue.toLocaleString()}</p>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardContent className="p-4">
-                  <p className="text-sm text-gray-500">Projected Growth %</p>
-                  <p className="text-2xl font-bold text-gray-900">{growthRatePercent}%</p>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardContent className="p-4">
-                  <p className="text-sm text-gray-500">Priority Variants Count</p>
-                  <p className="text-2xl font-bold text-gray-900">{priorityVariants.length}</p>
-                </CardContent>
-              </Card>
+              <StatKpiCard label="Forecast Units (Next 30 Days)" value={forecastUnits.toLocaleString()} tone="blue" icon={<Box />} />
+              <StatKpiCard label="Forecast Revenue (Next 30 Days)" value={`₱${forecastRevenue.toLocaleString()}`} tone="emerald" icon={<DollarSign />} />
+              <StatKpiCard label="Projected Growth %" value={`${growthRatePercent}%`} tone="violet" icon={<TrendingUp />} />
+              <StatKpiCard label="Priority Variants Count" value={String(priorityVariants.length)} tone="amber" icon={<Package />} />
             </div>
 
             {/* Priority Variants Section */}

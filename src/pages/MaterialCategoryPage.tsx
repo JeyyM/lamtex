@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { Card, CardContent } from '../components/ui/Card';
+import { StatKpiCard } from '../components/ui/StatKpiCard';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { useAppContext } from '../store/AppContext';
@@ -477,39 +478,9 @@ export default function MaterialCategoryPage() {
         <>
           {/* Summary Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 md:gap-4">
-            <Card>
-              <CardContent className="p-4">
-                <div className="flex items-center gap-3">
-                  <div className="p-3 bg-blue-100 rounded-lg"><Package className="w-6 h-6 text-blue-600" /></div>
-                  <div>
-                    <p className="text-sm text-gray-500">Total Items</p>
-                    <p className="text-2xl font-bold text-gray-900">{filteredMaterials.length}</p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="p-4">
-                <div className="flex items-center gap-3">
-                  <div className="p-3 bg-orange-100 rounded-lg"><AlertTriangle className="w-6 h-6 text-orange-600" /></div>
-                  <div>
-                    <p className="text-sm text-gray-500">Low Stock Items</p>
-                    <p className="text-2xl font-bold text-gray-900">{lowStockCount}</p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="p-4">
-                <div className="flex items-center gap-3">
-                  <div className="p-3 bg-green-100 rounded-lg"><TrendingUp className="w-6 h-6 text-green-600" /></div>
-                  <div>
-                    <p className="text-sm text-gray-500">Category Value</p>
-                    <p className="text-2xl font-bold text-gray-900">₱{(totalValue / 1000000).toFixed(2)}M</p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+            <StatKpiCard label="Total Items" value={String(filteredMaterials.length)} tone="blue" icon={<Package />} />
+            <StatKpiCard label="Low Stock Items" value={String(lowStockCount)} tone="amber" icon={<AlertTriangle />} />
+            <StatKpiCard label="Category Value" value={`₱${(totalValue / 1000000).toFixed(2)}M`} tone="emerald" icon={<TrendingUp />} />
           </div>
 
           {/* Filters */}

@@ -5,6 +5,7 @@ import { FulfillOrderModal, type FulfillmentData } from '@/src/components/orders
 import { MarkInTransitModal } from '@/src/components/orders/MarkInTransitModal';
 import type { OrderLineItem } from '@/src/types/orders';
 import { Button } from '@/src/components/ui/Button';
+import { StatKpiCard } from '@/src/components/ui/StatKpiCard';
 import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagination';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
@@ -4104,26 +4105,34 @@ export default function WarehousePage() {
 
             {/* Header with Stats */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
-              <div className="bg-white rounded-lg border border-gray-200 p-4">
-                <p className="text-sm text-gray-600">Waiting to be scheduled</p>
-                <p className="text-2xl font-bold text-amber-600">{warehouseLoadingStats.awaitingSchedule}</p>
-                <p className="text-xs text-gray-500 mt-1">On a trip below — approved, not yet scheduled to load</p>
-              </div>
-              <div className="bg-white rounded-lg border border-gray-200 p-4">
-                <p className="text-sm text-gray-600">Ready to load</p>
-                <p className="text-2xl font-bold text-blue-600">{warehouseLoadingStats.readyToLoad}</p>
-                <p className="text-xs text-gray-500 mt-1">Scheduled — not yet loading</p>
-              </div>
-              <div className="bg-white rounded-lg border border-gray-200 p-4">
-                <p className="text-sm text-gray-600">Ready to depart</p>
-                <p className="text-2xl font-bold text-green-600">{warehouseLoadingStats.readyToDepart}</p>
-                <p className="text-xs text-gray-500 mt-1">Cleared — release when dispatch departs</p>
-              </div>
-              <div className="bg-white rounded-lg border border-gray-200 p-4">
-                <p className="text-sm text-gray-600">Stock issues</p>
-                <p className="text-2xl font-bold text-red-600">{warehouseLoadingStats.stockIssues}</p>
-                <p className="text-xs text-gray-500 mt-1">Short vs remaining to ship</p>
-              </div>
+              <StatKpiCard
+                label="Waiting to be scheduled"
+                value={String(warehouseLoadingStats.awaitingSchedule)}
+                tone="amber"
+                icon={<Clock />}
+                sub="On a trip below — approved, not yet scheduled to load"
+              />
+              <StatKpiCard
+                label="Ready to load"
+                value={String(warehouseLoadingStats.readyToLoad)}
+                tone="blue"
+                icon={<Package />}
+                sub="Scheduled — not yet loading"
+              />
+              <StatKpiCard
+                label="Ready to depart"
+                value={String(warehouseLoadingStats.readyToDepart)}
+                tone="emerald"
+                icon={<CheckCircle />}
+                sub="Cleared — release when dispatch departs"
+              />
+              <StatKpiCard
+                label="Stock issues"
+                value={String(warehouseLoadingStats.stockIssues)}
+                tone="rose"
+                icon={<AlertTriangle />}
+                sub="Short vs remaining to ship"
+              />
             </div>
 
             {/* Orders — live from DB */}

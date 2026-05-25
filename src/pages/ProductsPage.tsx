@@ -4,6 +4,7 @@ import { useAppContext } from '@/src/store/AppContext';
 import { scopedProductIdList, warehouseScopeEmptyMessage } from '@/src/lib/warehouseScope';
 import { effectiveInventoryBranch } from '@/src/lib/inventoryAccess';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
+import { StatKpiCard } from '@/src/components/ui/StatKpiCard';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import {
@@ -478,58 +479,39 @@ export function ProductsPage() {
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-blue-100 rounded-lg"><Package className="w-6 h-6 text-blue-600" /></div>
-              <div>
-                <p className="text-sm text-gray-500">Product Families</p>
-                <p className="text-2xl font-bold text-gray-900">{summaryLoading ? '...' : summaryStats.totalProducts}</p>
-                {!summaryLoading && summaryStats.lowStockCount > 0 && (
-                  <p className="text-xs text-orange-600 font-medium mt-0.5 flex items-center gap-1">
-                    <AlertTriangle className="w-3 h-3" />
-                    {summaryStats.lowStockCount} low / critical stock
-                  </p>
-                )}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-green-100 rounded-lg"><Box className="w-6 h-6 text-green-600" /></div>
-              <div>
-                <p className="text-sm text-gray-500">Total Variants</p>
-                <p className="text-2xl font-bold text-gray-900">{summaryLoading ? '...' : summaryStats.totalVariants}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-orange-100 rounded-lg"><AlertTriangle className="w-6 h-6 text-orange-600" /></div>
-              <div>
-                <p className="text-sm text-gray-500">Low / Out of Stock</p>
-                <p className="text-2xl font-bold text-gray-900">{summaryLoading ? '...' : summaryStats.lowStockCount}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-purple-100 rounded-lg"><DollarSign className="w-6 h-6 text-purple-600" /></div>
-              <div>
-                <p className="text-sm text-gray-500">Revenue YTD</p>
-                <p className="text-2xl font-bold text-gray-900">
-                  {summaryLoading ? '...' : `₱${(summaryStats.totalRevenue / 1_000_000).toFixed(1)}M`}
-                </p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <StatKpiCard
+          label="Product Families"
+          value={summaryLoading ? '…' : String(summaryStats.totalProducts)}
+          tone="blue"
+          icon={<Package />}
+          loading={summaryLoading}
+          sub={
+            !summaryLoading && summaryStats.lowStockCount > 0
+              ? `${summaryStats.lowStockCount} low / critical stock`
+              : undefined
+          }
+        />
+        <StatKpiCard
+          label="Total Variants"
+          value={summaryLoading ? '…' : String(summaryStats.totalVariants)}
+          tone="emerald"
+          icon={<Box />}
+          loading={summaryLoading}
+        />
+        <StatKpiCard
+          label="Low / Out of Stock"
+          value={summaryLoading ? '…' : String(summaryStats.lowStockCount)}
+          tone="amber"
+          icon={<AlertTriangle />}
+          loading={summaryLoading}
+        />
+        <StatKpiCard
+          label="Revenue YTD"
+          value={summaryLoading ? '…' : `₱${(summaryStats.totalRevenue / 1_000_000).toFixed(1)}M`}
+          tone="violet"
+          icon={<DollarSign />}
+          loading={summaryLoading}
+        />
       </div>
 
       {/* Search */}

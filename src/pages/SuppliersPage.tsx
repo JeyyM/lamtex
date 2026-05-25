@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
+import { StatKpiCard } from '@/src/components/ui/StatKpiCard';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { supabase } from '@/src/lib/supabase';
@@ -350,56 +351,15 @@ export function SuppliersPage() {
 
       {/* ── Quick Stats ──────────────────────────────────── */}
       <div className="grid grid-cols-2 sm:grid-cols-2 2xl:grid-cols-4 gap-3 sm:gap-4">
-        <Card>
-          <CardContent className="p-3 sm:p-4 md:p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs sm:text-sm text-gray-500">Total Suppliers</p>
-                <p className="text-xl sm:text-2xl font-bold text-gray-900 mt-1">{branchFilteredSuppliers.length}</p>
-              </div>
-              <div className="p-3 bg-blue-100 rounded-lg"><Factory className="w-6 h-6 text-blue-600" /></div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-3 sm:p-4 md:p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs sm:text-sm text-gray-500">Preferred</p>
-                <p className="text-xl sm:text-2xl font-bold text-gray-900 mt-1">
-                  {branchFilteredSuppliers.filter(s => s.preferred_supplier).length}
-                </p>
-              </div>
-              <div className="p-3 bg-green-100 rounded-lg"><Award className="w-6 h-6 text-green-600" /></div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-3 sm:p-4 md:p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs sm:text-sm text-gray-500">YTD Spending</p>
-                <p className="text-xl sm:text-2xl font-bold text-gray-900 mt-1">
-                  {formatCurrency(branchYtdDashboard.spend)}
-                </p>
-              </div>
-              <div className="p-3 bg-orange-100 rounded-lg"><DollarSign className="w-6 h-6 text-orange-600" /></div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-3 sm:p-4 md:p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs sm:text-sm text-gray-500">Total Orders YTD</p>
-                <p className="text-xl sm:text-2xl font-bold text-gray-900 mt-1">
-                  {branchYtdDashboard.ordersYtd}
-                </p>
-              </div>
-              <div className="p-3 bg-purple-100 rounded-lg"><ShoppingCart className="w-6 h-6 text-purple-600" /></div>
-            </div>
-          </CardContent>
-        </Card>
+        <StatKpiCard label="Total Suppliers" value={String(branchFilteredSuppliers.length)} tone="blue" icon={<Factory />} />
+        <StatKpiCard
+          label="Preferred"
+          value={String(branchFilteredSuppliers.filter((s) => s.preferred_supplier).length)}
+          tone="emerald"
+          icon={<Award />}
+        />
+        <StatKpiCard label="YTD Spending" value={formatCurrency(branchYtdDashboard.spend)} tone="orange" icon={<DollarSign />} />
+        <StatKpiCard label="Total Orders YTD" value={String(branchYtdDashboard.ordersYtd)} tone="violet" icon={<ShoppingCart />} />
         {/*
          * [REVISIT — Avg Performance quick stat] Was the 5th card (avg of supplier.performance_score). Restore with performance metrics tab.
          */}

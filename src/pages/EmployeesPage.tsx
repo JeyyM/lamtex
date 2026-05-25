@@ -7,6 +7,7 @@ import {
   Plus, Download,
 } from 'lucide-react';
 import { Button } from '@/src/components/ui/Button';
+import { StatKpiCard } from '@/src/components/ui/StatKpiCard';
 import { downloadEmployeesWorkbook } from '@/src/lib/employeesExport';
 import type { EmployeeRole } from '@/src/types/employee';
 import {
@@ -286,37 +287,10 @@ const EmployeesPage: React.FC = () => {
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white rounded-lg border border-gray-200 p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <UserCheck className="w-5 h-5 text-blue-600" />
-            <span className="text-sm font-medium text-gray-600">Sales Agents</span>
-          </div>
-          <p className="text-2xl font-bold text-gray-900">{roleStats['Sales Agent']}</p>
-        </div>
-
-        <div className="bg-white rounded-lg border border-gray-200 p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Briefcase className="w-5 h-5 text-purple-600" />
-            <span className="text-sm font-medium text-gray-600">Logistics Mgrs</span>
-          </div>
-          <p className="text-2xl font-bold text-gray-900">{roleStats['Logistics Manager']}</p>
-        </div>
-
-        <div className="bg-white rounded-lg border border-gray-200 p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Package className="w-5 h-5 text-green-600" />
-            <span className="text-sm font-medium text-gray-600">Warehouse Mgrs</span>
-          </div>
-          <p className="text-2xl font-bold text-gray-900">{roleStats['Warehouse Manager']}</p>
-        </div>
-
-        <div className="bg-white rounded-lg border border-gray-200 p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Truck className="w-5 h-5 text-yellow-600" />
-            <span className="text-sm font-medium text-gray-600">Truck Drivers</span>
-          </div>
-          <p className="text-2xl font-bold text-gray-900">{roleStats['Truck Driver']}</p>
-        </div>
+        <StatKpiCard label="Sales Agents" value={String(roleStats['Sales Agent'])} tone="blue" icon={<UserCheck />} />
+        <StatKpiCard label="Logistics Mgrs" value={String(roleStats['Logistics Manager'])} tone="violet" icon={<Briefcase />} />
+        <StatKpiCard label="Warehouse Mgrs" value={String(roleStats['Warehouse Manager'])} tone="emerald" icon={<Package />} />
+        <StatKpiCard label="Truck Drivers" value={String(roleStats['Truck Driver'])} tone="amber" icon={<Truck />} />
       </div>
 
       {/* Filters */}

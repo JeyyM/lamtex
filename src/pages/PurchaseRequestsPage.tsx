@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card, CardHeader, CardTitle, CardContent } from '@/src/components/ui/Card';
+import { StatKpiCard } from '@/src/components/ui/StatKpiCard';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { useAppContext } from '@/src/store/AppContext';
@@ -507,61 +508,10 @@ export function PurchaseRequestsPage() {
 
       {/* KPI Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-blue-100 rounded-lg">
-                <Package className="w-6 h-6 text-blue-600" />
-              </div>
-              <div>
-                <p className="text-sm text-gray-500">Total Requests</p>
-                <p className="text-2xl font-bold text-gray-900">{totalRequests}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-yellow-100 rounded-lg">
-                <Clock className="w-6 h-6 text-yellow-600" />
-              </div>
-              <div>
-                <p className="text-sm text-gray-500">Pending Approval</p>
-                <p className="text-2xl font-bold text-gray-900">{pendingApproval}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-red-100 rounded-lg">
-                <AlertTriangle className="w-6 h-6 text-red-600" />
-              </div>
-              <div>
-                <p className="text-sm text-gray-500">Delayed</p>
-                <p className="text-2xl font-bold text-gray-900">{delayedRequests}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-green-100 rounded-lg">
-                <CheckCircle className="w-6 h-6 text-green-600" />
-              </div>
-              <div>
-                <p className="text-sm text-gray-500">Received This Month</p>
-                <p className="text-2xl font-bold text-gray-900">{receivedThisMonth}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <StatKpiCard label="Total Requests" value={String(totalRequests)} tone="blue" icon={<Package />} />
+        <StatKpiCard label="Pending Approval" value={String(pendingApproval)} tone="amber" icon={<Clock />} />
+        <StatKpiCard label="Delayed" value={String(delayedRequests)} tone="rose" icon={<AlertTriangle />} />
+        <StatKpiCard label="Received This Month" value={String(receivedThisMonth)} tone="emerald" icon={<CheckCircle />} />
       </div>
 
       {/* Filters */}

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
+import { StatKpiCard } from '@/src/components/ui/StatKpiCard';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import {
@@ -323,79 +324,31 @@ export function CustomersPage() {
 
       {/* Quick Stats */}
       <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-500">Total Customers</p>
-                <p className="text-2xl font-bold text-gray-900 mt-1">{MOCK_CUSTOMERS.length}</p>
-              </div>
-              <div className="p-3 bg-blue-100 rounded-lg">
-                <Building2 className="w-6 h-6 text-blue-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-500">Active Accounts</p>
-                <p className="text-2xl font-bold text-gray-900 mt-1">
-                  {MOCK_CUSTOMERS.filter(c => c.status === 'Active').length}
-                </p>
-              </div>
-              <div className="p-3 bg-green-100 rounded-lg">
-                <CheckCircle className="w-6 h-6 text-green-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-500">Total Receivables</p>
-                <p className="text-2xl font-bold text-gray-900 mt-1">
-                  {formatCurrency(MOCK_CUSTOMERS.reduce((sum, c) => sum + c.outstandingBalance, 0))}
-                </p>
-              </div>
-              <div className="p-3 bg-orange-100 rounded-lg">
-                <DollarSign className="w-6 h-6 text-orange-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-500">Overdue Amount</p>
-                <p className="text-2xl font-bold text-gray-900 mt-1">
-                  {formatCurrency(MOCK_CUSTOMERS.reduce((sum, c) => sum + c.overdueAmount, 0))}
-                </p>
-              </div>
-              <div className="p-3 bg-red-100 rounded-lg">
-                <AlertTriangle className="w-6 h-6 text-red-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-500">YTD Sales</p>
-                <p className="text-2xl font-bold text-gray-900 mt-1">
-                  {formatCurrency(MOCK_CUSTOMERS.reduce((sum, c) => sum + c.totalPurchasesYTD, 0))}
-                </p>
-              </div>
-              <div className="p-3 bg-purple-100 rounded-lg">
-                <TrendingUp className="w-6 h-6 text-purple-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <StatKpiCard label="Total Customers" value={String(MOCK_CUSTOMERS.length)} tone="blue" icon={<Building2 />} />
+        <StatKpiCard
+          label="Active Accounts"
+          value={String(MOCK_CUSTOMERS.filter((c) => c.status === 'Active').length)}
+          tone="emerald"
+          icon={<CheckCircle />}
+        />
+        <StatKpiCard
+          label="Total Receivables"
+          value={formatCurrency(MOCK_CUSTOMERS.reduce((sum, c) => sum + c.outstandingBalance, 0))}
+          tone="orange"
+          icon={<DollarSign />}
+        />
+        <StatKpiCard
+          label="Overdue Amount"
+          value={formatCurrency(MOCK_CUSTOMERS.reduce((sum, c) => sum + c.overdueAmount, 0))}
+          tone="rose"
+          icon={<AlertTriangle />}
+        />
+        <StatKpiCard
+          label="YTD Sales"
+          value={formatCurrency(MOCK_CUSTOMERS.reduce((sum, c) => sum + c.totalPurchasesYTD, 0))}
+          tone="violet"
+          icon={<TrendingUp />}
+        />
       </div>
 
       {/* View Mode Tabs */}
