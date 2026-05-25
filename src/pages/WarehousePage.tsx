@@ -5,6 +5,7 @@ import { FulfillOrderModal, type FulfillmentData } from '@/src/components/orders
 import { MarkInTransitModal } from '@/src/components/orders/MarkInTransitModal';
 import type { OrderLineItem } from '@/src/types/orders';
 import { Button } from '@/src/components/ui/Button';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagination';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import OrderDetailModal from '../components/logistics/OrderDetailModal';
@@ -29,6 +30,8 @@ import { useAppContext } from '@/src/store/AppContext';
 import { scopedMaterialIdList, scopedProductIdList } from '@/src/lib/warehouseScope';
 import { effectiveInventoryBranch } from '@/src/lib/inventoryAccess';
 import { computeStockStatus } from '@/src/lib/stockStatus';
+import { reportTripDelay } from '@/src/lib/orderTripDelay';
+import { resolveBranchIdByName } from '@/src/lib/branchCompanySettings';
 import { finishedGoodProductHref, materialCategoryHref, productCategoryHref } from '@/src/lib/productRoutes';
 import {
   OrderProductSelectionModal,
@@ -2199,18 +2202,24 @@ export default function WarehousePage() {
         alert('Enter a delay explanation.');
         throw new Error('Empty message');
       }
-      const now = new Date().toISOString();
-      const { error } = await supabase
-        .from('trips')
-        .update({
-          status: 'Delayed',
-          delay_reason: delayReason,
-          updated_at: now,
-        })
-        .eq('id', trip.id);
-      if (error) {
-        alert(error.message);
-        throw error;
+      const branchId = branch?.trim() ? await resolveBranchIdByName(branch.trim()) : null;
+      const orderNumbers = tripLoadingModalOrders.map((o) => o.orderNumber).filter(Boolean);
+      const customerNames = [
+        ...new Set(tripLoadingModalOrders.map((o) => o.customerName).filter(Boolean)),
+      ];
+      const result = await reportTripDelay({
+        tripId: trip.id,
+        tripNumber: trip.tripNumber,
+        branchId,
+        delayReason,
+        orderIds: tripLoadingModalOrderIds,
+        orderNumbers,
+        customerNames,
+        owner: employeeName || session?.user?.email || role,
+      });
+      if (!result.ok) {
+        alert(result.error ?? 'Could not report delay.');
+        throw new Error(result.error ?? 'Could not report delay.');
       }
       addAuditLog('Reported trip delay', 'Warehouse', `${trip.tripNumber}: ${delayReason.slice(0, 200)}`);
       setTripLoadingModalTrip((t) =>
@@ -2218,7 +2227,17 @@ export default function WarehousePage() {
       );
       void fetchWarehouseOrders({ silent: true });
     },
-    [tripLoadingModalTrip, addAuditLog, fetchWarehouseOrders],
+    [
+      tripLoadingModalTrip,
+      tripLoadingModalOrderIds,
+      tripLoadingModalOrders,
+      branch,
+      employeeName,
+      session,
+      role,
+      addAuditLog,
+      fetchWarehouseOrders,
+    ],
   );
 
   const handleFulfillOrder = useCallback(async (fulfillmentData: FulfillmentData[], _proofImageUrls: string[]) => {
@@ -5354,12 +5373,11 @@ export default function WarehousePage() {
         );
       })()}
 
-      {schedulePeriodModalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40"
-          role="presentation"
-          onClick={() => setSchedulePeriodModalOpen(false)}
-        >
+      <PortalModalOverlay
+        open={schedulePeriodModalOpen}
+        onClose={() => setSchedulePeriodModalOpen(false)}
+        mobileBottomSheet
+      >
           <div
             className="bg-white w-full sm:max-w-lg sm:rounded-xl shadow-xl max-h-[90vh] overflow-y-auto"
             role="dialog"
@@ -5448,8 +5466,7 @@ export default function WarehousePage() {
               )}
             </div>
           </div>
-        </div>
-      )}
+      </PortalModalOverlay>
 
       {/* Full warehouse schedule calendar (month view; includes IBR) */}
       {scheduleCalendarModalOpen && (

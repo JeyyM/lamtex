@@ -42,6 +42,7 @@ import {
   ShoppingCart,
 } from 'lucide-react';
 import { Button } from '@/src/components/ui/Button';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 import { Badge } from '@/src/components/ui/Badge';
 import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagination';
 import type { EmployeeRole } from '@/src/types/employee';
@@ -5363,12 +5364,11 @@ export default function EmployeeDetailPage() {
         />
       ) : null}
 
-      {agentOrdersPeriodModalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40"
-          role="presentation"
-          onClick={() => setAgentOrdersPeriodModalOpen(false)}
-        >
+      <PortalModalOverlay
+        open={agentOrdersPeriodModalOpen}
+        onClose={() => setAgentOrdersPeriodModalOpen(false)}
+        mobileBottomSheet
+      >
           <div
             className="bg-white w-full sm:max-w-lg sm:rounded-xl shadow-xl max-h-[90vh] overflow-y-auto"
             role="dialog"
@@ -5452,15 +5452,13 @@ export default function EmployeeDetailPage() {
               )}
             </div>
           </div>
-        </div>
-      )}
+      </PortalModalOverlay>
 
-      {tripHistoryPeriodModalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40"
-          role="presentation"
-          onClick={() => setTripHistoryPeriodModalOpen(false)}
-        >
+      <PortalModalOverlay
+        open={tripHistoryPeriodModalOpen}
+        onClose={() => setTripHistoryPeriodModalOpen(false)}
+        mobileBottomSheet
+      >
           <div
             className="bg-white w-full sm:max-w-lg sm:rounded-xl shadow-xl max-h-[90vh] overflow-y-auto"
             role="dialog"
@@ -5546,15 +5544,13 @@ export default function EmployeeDetailPage() {
               )}
             </div>
           </div>
-        </div>
-      )}
+      </PortalModalOverlay>
 
-      {warehouseRequestsPeriodModalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40"
-          role="presentation"
-          onClick={() => setWarehouseRequestsPeriodModalOpen(false)}
-        >
+      <PortalModalOverlay
+        open={warehouseRequestsPeriodModalOpen}
+        onClose={() => setWarehouseRequestsPeriodModalOpen(false)}
+        mobileBottomSheet
+      >
           <div
             className="bg-white w-full sm:max-w-lg sm:rounded-xl shadow-xl max-h-[90vh] overflow-y-auto"
             role="dialog"
@@ -5642,8 +5638,7 @@ export default function EmployeeDetailPage() {
               )}
             </div>
           </div>
-        </div>
-      )}
+      </PortalModalOverlay>
 
       {tripDetailTrip && (
         <TripDetailsModal

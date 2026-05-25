@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Ca
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { LogisticsKpiStrip } from '@/src/components/logistics/LogisticsKpiStrip';
+import { LogisticsDispatchCalendar } from '@/src/components/logistics/LogisticsDispatchCalendar';
 import {
   DashLink,
   DashTableRowLink,
@@ -16,31 +17,17 @@ import {
   AlertTriangle,
   Package,
   ArrowRight,
-  Activity,
   Calendar,
   Loader2,
   RefreshCw,
-  Repeat,
   ChevronRight,
 } from 'lucide-react';
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
-} from 'recharts';
 import {
   fetchLogisticsDashboard,
   type LogisticsDashboardBundle,
   type LogisticsTripRow,
   type LogisticsOrderToDispatchRow,
-  type LogisticsIbrRow,
   type LogisticsDelayRow,
-  type LogisticsPerformancePoint,
 } from '@/src/lib/logisticsDashboard';
 
 // ---------------------------------------------------------------------------
@@ -68,10 +55,6 @@ function orderHref(orderId: string): string {
 
 function customerHref(customerId: string | null | undefined, orderId: string): string {
   return customerId ? `/customers/${customerId}` : orderHref(orderId);
-}
-
-function ibrHref(ibrId: string): string {
-  return `/inter-branch-requests/${ibrId}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -271,12 +254,9 @@ export function LogisticsDashboard(): React.ReactElement {
         <OrdersToDispatchCard rows={bundle.ordersAwaitingDispatch} count={bundle.ordersAwaitingDispatchCount} />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <IbrCard rows={bundle.ibrs} count={bundle.ibrCount} />
-        <DelaysCard rows={bundle.delays} count={bundle.delayCount} />
-      </div>
+      <DelaysCard rows={bundle.delays} count={bundle.delayCount} />
 
-      <PerformanceCard performance={bundle.performance} />
+      <LogisticsDispatchCalendar branchId={bundle.branchId} branchLabel={branchLabel} />
 
       <p className="text-xs text-gray-400 text-right">
         Generated {new Date(bundle.generatedAt).toLocaleString()}
@@ -331,70 +311,81 @@ function QueueTableCard(props: {
 const DASH_LINK_MONO =
   'font-mono text-xs text-blue-600 hover:text-blue-800 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 rounded-sm';
 
-function TripTable(props: {
+function formatScheduleRange(
+  scheduledDate: string | null | undefined,
+  eta: string | null | undefined,
+  departureTime: string | null | undefined,
+): string {
+  const start = scheduledDate?.trim().slice(0, 10) ?? '';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) return '—';
+  const end = eta?.trim().slice(0, 10) ?? start;
+
+  let datePart: string;
+  if (end !== start && /^\d{4}-\d{2}-\d{2}$/.test(end)) {
+    const startD = new Date(`${start}T12:00:00`);
+    const endD = new Date(`${end}T12:00:00`);
+    const sameMonth =
+      startD.getMonth() === endD.getMonth() && startD.getFullYear() === endD.getFullYear();
+    if (sameMonth) {
+      const month = startD.toLocaleDateString(undefined, { month: 'short' });
+      datePart = `${month} ${startD.getDate()}, ${endD.getDate()}`;
+    } else {
+      datePart = `${formatDateShort(start)} – ${formatDateShort(end)}`;
+    }
+  } else {
+    datePart = formatDateShort(start);
+  }
+
+  const time = formatTime(departureTime);
+  return time ? `${datePart} · ${time}` : datePart;
+}
+
+function TripQueueList(props: {
   rows: LogisticsTripRow[];
-  /** When true, right column shows scheduled date (and time if set). */
+  /** When true, footer shows scheduled date range (and departure time if set). */
   showScheduledDate?: boolean;
 }) {
   return (
-    <div className="overflow-x-auto -mx-1 px-1">
-      <table className="w-full min-w-[640px] text-sm">
-        <thead>
-          <tr className="text-xs text-gray-500 uppercase tracking-wider border-b border-gray-200">
-            <th className="py-2 px-2 text-left font-semibold">Trip</th>
-            <th className="py-2 px-2 text-left font-semibold">Vehicle</th>
-            <th className="py-2 px-2 text-left font-semibold">Driver</th>
-            <th className="py-2 px-2 text-center font-semibold">Orders</th>
-            <th className="py-2 px-2 text-right font-semibold">
-              {props.showScheduledDate ? 'Scheduled' : 'ETA'}
-            </th>
-            <th className="py-2 px-2 text-right font-semibold">Status</th>
-            <th className="py-2 px-1 w-8" aria-hidden />
-          </tr>
-        </thead>
-        <tbody>
-          {props.rows.map((t) => (
-            <DashTableRowLink
-              key={t.id}
-              to={tripHref(t.id)}
-              title={`${t.tripNumber} — right-click or Ctrl+click to open in new tab`}
-            >
-              <td className="table-cell py-2 px-2 align-middle font-mono text-xs whitespace-nowrap">
-                <DashLink to={tripHref(t.id)} className={DASH_LINK_MONO} title={t.tripNumber}>
-                  {t.tripNumber}
-                </DashLink>
-              </td>
-              <td className="table-cell py-2 px-2 align-middle max-w-[140px]">
-                <TripVehicleCell trip={t} />
-              </td>
-              <td className="table-cell py-2 px-2 align-middle max-w-[120px]">
-                <TripDriverCell trip={t} />
-              </td>
-              <td className="table-cell py-2 px-2 align-middle text-center tabular-nums text-gray-700">
-                {t.orderCount}
-              </td>
-              <td className="table-cell py-2 px-2 align-middle text-right text-gray-600 whitespace-nowrap">
-                {props.showScheduledDate ? (
-                  <>
-                    {formatDateShort(t.scheduledDate)}
-                    {formatTime(t.departureTime) && (
-                      <span className="block text-[11px] text-gray-400">{formatTime(t.departureTime)}</span>
-                    )}
-                  </>
-                ) : (
-                  formatTime(t.eta) ?? formatDateShort(t.scheduledDate)
-                )}
-              </td>
-              <td className="table-cell py-2 px-2 align-middle text-right">
-                <Badge variant={tripStatusVariant(t.status)} className="text-[10px]">{t.status}</Badge>
-              </td>
-              <td className="table-cell py-2 px-1 align-middle text-right">
-                <ChevronRight className="w-4 h-4 text-gray-400 inline-block" />
-              </td>
-            </DashTableRowLink>
-          ))}
-        </tbody>
-      </table>
+    <div className="divide-y divide-gray-100 -mx-1">
+      {props.rows.map((t) => (
+        <DashQueueLink
+          key={t.id}
+          to={tripHref(t.id)}
+          title={`${t.tripNumber} — right-click or Ctrl+click to open in new tab`}
+          className="group block px-2 py-3 hover:bg-gray-50 rounded-md"
+        >
+          <div className="mb-2 flex items-start justify-between gap-2">
+            <DashLink to={tripHref(t.id)} className={`${DASH_LINK_MONO} truncate`} title={t.tripNumber}>
+              {t.tripNumber}
+            </DashLink>
+            <Badge variant={tripStatusVariant(t.status)} className="shrink-0 text-[10px]">
+              {t.status}
+            </Badge>
+          </div>
+          <div className="grid grid-cols-1 gap-x-4 gap-y-2 text-sm sm:grid-cols-2">
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Vehicle</p>
+              <TripVehicleCell trip={t} />
+            </div>
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Driver</p>
+              <TripDriverCell trip={t} />
+            </div>
+          </div>
+          <p className="mt-2 text-xs text-gray-600">
+            <span className="text-gray-500">{props.showScheduledDate ? 'Scheduled: ' : 'ETA: '}</span>
+            <span className="font-medium text-gray-800">
+              {props.showScheduledDate
+                ? formatScheduleRange(t.scheduledDate, t.eta, t.departureTime)
+                : (formatTime(t.eta) ?? formatDateShort(t.scheduledDate))}
+            </span>
+            <span className="text-gray-400"> · </span>
+            <span>
+              {t.orderCount} order{t.orderCount !== 1 ? 's' : ''}
+            </span>
+          </p>
+        </DashQueueLink>
+      ))}
     </div>
   );
 }
@@ -414,7 +405,7 @@ function WeekScheduleCard(props: { rows: LogisticsTripRow[]; count: number }) {
       viewAllHref={LOGISTICS_DISPATCH}
       viewAllLabel="Plan trips"
     >
-      <TripTable rows={props.rows.slice(0, 8)} showScheduledDate />
+      <TripQueueList rows={props.rows.slice(0, 8)} showScheduledDate />
     </QueueTableCard>
   );
 }
@@ -490,70 +481,6 @@ function OrdersToDispatchCard(props: { rows: LogisticsOrderToDispatchRow[]; coun
   );
 }
 
-function IbrCard(props: { rows: LogisticsIbrRow[]; count: number }) {
-  return (
-    <QueueTableCard
-      icon={<Repeat className="w-5 h-5 text-indigo-600" />}
-      title="IBR transfers"
-      count={props.count}
-      badgeVariant={props.count > 0 ? 'info' : 'default'}
-      emptyText="No inter-branch transfers in flight."
-      viewAllHref="/inter-branch-requests"
-      viewAllLabel="All IBRs"
-    >
-      <div className="overflow-x-auto -mx-1 px-1">
-        <table className="w-full min-w-[320px] text-sm">
-          <thead>
-            <tr className="text-xs text-gray-500 uppercase tracking-wider border-b border-gray-200">
-              <th className="py-2 px-2 text-left font-semibold">IBR</th>
-              <th className="py-2 px-2 text-left font-semibold">Route</th>
-              <th className="py-2 px-2 text-right font-semibold">Depart</th>
-              <th className="py-2 px-1 w-8" aria-hidden />
-            </tr>
-          </thead>
-          <tbody>
-            {props.rows.map((r) => (
-              <DashTableRowLink
-                key={r.id}
-                to={ibrHref(r.id)}
-                title={`${r.ibrNumber} — right-click or Ctrl+click to open in new tab`}
-              >
-                <td className="table-cell py-2 px-2 align-middle">
-                  <DashLink to={ibrHref(r.id)} className={DASH_LINK_MONO} title={r.ibrNumber}>
-                    {r.ibrNumber}
-                  </DashLink>
-                  <Badge variant={tripStatusVariant(r.status)} className="mt-1 text-[10px]">{r.status}</Badge>
-                </td>
-                <td className="table-cell py-2 px-2 align-middle text-xs text-gray-600">
-                  {r.direction === 'outgoing'
-                    ? `→ ${r.requestingBranchName ?? '—'}`
-                    : `← ${r.fulfillingBranchName ?? '—'}`}
-                  <span className="block text-[11px] text-gray-400">
-                    {r.itemCount} item{r.itemCount === 1 ? '' : 's'} · {r.direction}
-                  </span>
-                </td>
-                <td className={`table-cell py-2 px-2 align-middle text-right whitespace-nowrap ${daysClass(r.daysUntilDeparture)}`}>
-                  {r.scheduledDepartureDate ? (
-                    <>
-                      {formatDateShort(r.scheduledDepartureDate)}
-                      <span className="block text-[11px]">{daysLabel(r.daysUntilDeparture)}</span>
-                    </>
-                  ) : (
-                    '—'
-                  )}
-                </td>
-                <td className="table-cell py-2 px-1 align-middle text-right">
-                  <ChevronRight className="w-4 h-4 text-gray-400 inline-block" />
-                </td>
-              </DashTableRowLink>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </QueueTableCard>
-  );
-}
-
 function DelaysCard(props: { rows: LogisticsDelayRow[]; count: number }) {
   return (
     <QueueTableCard
@@ -610,91 +537,5 @@ function DelaysCard(props: { rows: LogisticsDelayRow[]; count: number }) {
         </table>
       </div>
     </QueueTableCard>
-  );
-}
-
-function PerformanceCard(props: {
-  performance: {
-    points: LogisticsPerformancePoint[];
-    completed: number;
-    delayed: number;
-    failed: number;
-    onTimePct: number;
-    completionPct: number;
-  };
-}) {
-  const { performance } = props;
-  const closed = performance.completed + performance.delayed + performance.failed;
-
-  return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between gap-2">
-          <CardTitle className="flex items-center gap-2">
-            <Activity className="w-5 h-5 text-emerald-600" />
-            7-day delivery performance
-          </CardTitle>
-          <DashHeaderLink to={LOGISTICS_DISPATCH} className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm">
-            Trips <ArrowRight className="w-4 h-4" />
-          </DashHeaderLink>
-        </div>
-      </CardHeader>
-      <CardContent>
-        <div className="grid grid-cols-3 gap-3 mb-4">
-          <Metric label="Completed" value={performance.completed} tone="good" />
-          <Metric label="Delayed" value={performance.delayed} tone="warning" />
-          <Metric label="Failed" value={performance.failed} tone="danger" />
-        </div>
-        <div className="grid grid-cols-2 gap-3 mb-4">
-          <Metric
-            label="On-time %"
-            value={closed > 0 ? `${performance.onTimePct.toFixed(0)}%` : '—'}
-            tone={performance.onTimePct >= 90 ? 'good' : performance.onTimePct >= 75 ? 'warning' : 'danger'}
-            subtitle={`${performance.completed}/${closed} on time`}
-          />
-          <Metric
-            label="Completion %"
-            value={closed > 0 ? `${performance.completionPct.toFixed(0)}%` : '—'}
-            tone={performance.completionPct >= 95 ? 'good' : 'warning'}
-            subtitle={`${performance.completed + performance.delayed}/${closed} delivered`}
-          />
-        </div>
-        <div className="h-56">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={performance.points}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-              <XAxis dataKey="label" tick={{ fontSize: 12 }} />
-              <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
-              <Tooltip />
-              <Legend />
-              <Bar dataKey="completed" name="Completed" stackId="a" fill="#10b981" />
-              <Bar dataKey="delayed" name="Delayed" stackId="a" fill="#f59e0b" />
-              <Bar dataKey="failed" name="Failed" stackId="a" fill="#ef4444" />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function Metric(props: {
-  label: string;
-  value: number | string;
-  tone: 'good' | 'warning' | 'danger' | 'default';
-  subtitle?: string;
-}) {
-  const cls = {
-    good: 'border-emerald-200 bg-emerald-50/40 text-emerald-700',
-    warning: 'border-amber-200 bg-amber-50/40 text-amber-700',
-    danger: 'border-red-200 bg-red-50/40 text-red-700',
-    default: 'border-gray-200 bg-white text-gray-700',
-  }[props.tone];
-  return (
-    <div className={`rounded-md border ${cls} p-3`}>
-      <p className="text-xs uppercase tracking-wider opacity-80">{props.label}</p>
-      <p className="text-2xl font-bold mt-1">{props.value}</p>
-      {props.subtitle && <p className="text-xs text-gray-500 mt-1">{props.subtitle}</p>}
-    </div>
   );
 }

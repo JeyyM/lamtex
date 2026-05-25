@@ -8,6 +8,7 @@ import { getNotificationsByBranch } from '@/src/mock/executiveDashboard';
 import lamtexLogo from '../../assets/Lamtex Logo.png';
 import { supabase } from '@/src/lib/supabase';
 import { LAMTEX_BRANCHES_CHANGED_EVENT } from '@/src/lib/branches';
+import { getSelectedBranch } from '@/src/lib/selectedBranchStorage';
 
 export function Topbar() {
   const { role, setRole, branch, setBranch, isMobileMenuOpen, setIsMobileMenuOpen, hideBranchSelector } = useAppContext();
@@ -46,9 +47,13 @@ export function Topbar() {
   }, []);
 
   useEffect(() => {
-    if (branches.length > 0 && !branch) {
-      setBranch(branches[0]);
-    }
+    if (branches.length === 0) return;
+    if (branch && branches.includes(branch)) return;
+
+    const stored = getSelectedBranch();
+    const fallback =
+      stored && branches.includes(stored) ? stored : branches[0];
+    setBranch(fallback);
   }, [branches, branch, setBranch]);
 
   useEffect(() => {

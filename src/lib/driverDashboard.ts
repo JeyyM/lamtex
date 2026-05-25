@@ -3,24 +3,17 @@
  *
  * Drivers see only trips assigned to them (`driver_id` or legacy `driver_name`).
  * Their core workflows: view assigned trips, report delays, upload proof of delivery
- * (handled in TripDetailsModal / FulfillOrderModal), and status notifications (future).
+ * (handled in TripDetailsModal / FulfillOrderModal).
  */
 
 import { supabase } from '@/src/lib/supabase';
 import { resolveBranchIdByName } from '@/src/lib/branchCompanySettings';
+import { reportTripDelay } from '@/src/lib/orderTripDelay';
 import type { Trip } from '@/src/types/logistics';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-
-export interface DriverKPI {
-  id: string;
-  label: string;
-  value: string;
-  subtitle?: string;
-  status: 'good' | 'warning' | 'danger' | 'neutral';
-}
 
 export interface DriverTripSummary {
   id: string;
@@ -49,8 +42,24 @@ export interface DriverOrderStop {
   tripId: string;
   tripNumber: string;
   phone: string | null;
+  mapLat: number | null;
+  mapLng: number | null;
   /** True when driver can upload proof / mark delivered from this stop. */
   canDeliver: boolean;
+}
+
+export interface DriverDeliveryLineItem {
+  id: string;
+  orderId: string;
+  orderNumber: string;
+  customerName: string;
+  orderStatus: string | null;
+  productName: string;
+  variantDescription: string | null;
+  sku: string | null;
+  imageUrl: string | null;
+  quantity: number;
+  quantityDelivered: number;
 }
 
 export interface DriverDashboardBundle {
@@ -59,12 +68,15 @@ export interface DriverDashboardBundle {
   branchId: string | null;
   branchName: string | null;
   generatedAt: string;
-  kpis: DriverKPI[];
 
   activeTrip: DriverTripSummary | null;
+  /** Soonest trip that still has deliveries to complete. */
+  nextTrip: DriverTripSummary | null;
   activeTrips: DriverTripSummary[];
   upcomingTrips: DriverTripSummary[];
   recentTrips: DriverTripSummary[];
+  /** All completed / failed trips (newest first). */
+  pastTrips: DriverTripSummary[];
 
   orderStops: DriverOrderStop[];
   pendingDeliveryCount: number;
@@ -95,13 +107,10 @@ export const DRIVER_DELAY_TYPES: DriverDelayType[] = [
 
 const TERMINAL_DB_STATUSES = ['Completed', 'Failed'];
 const DELIVERABLE_ORDER_STATUSES = new Set(['Scheduled', 'Loading', 'Packed', 'Ready', 'In Transit']);
+const UPCOMING_TRIP_DB_STATUSES = new Set(['Pending', 'Planned', 'Scheduled']);
 
-const TRIP_SELECT = `
-  id, trip_number, status, scheduled_date, departure_time, eta, delay_reason,
-  vehicle_id, vehicle_name, driver_id, driver_name, destinations, order_ids,
-  capacity_used_percent,
-  vehicles ( plate_number )
-`;
+const TRIP_SELECT =
+  'id, trip_number, status, scheduled_date, departure_time, eta, delay_reason, vehicle_id, vehicle_name, driver_id, driver_name, destinations, order_ids, capacity_used_percent, branch_id';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -146,14 +155,11 @@ function logDev(scope: string, err: unknown): void {
   if (import.meta.env.DEV) console.warn(`[driver dashboard] ${scope}`, err);
 }
 
-function mapTripRow(row: Record<string, unknown>): DriverTripSummary {
+function mapTripRow(row: Record<string, unknown>, plateByVehicleId?: Map<string, string>): DriverTripSummary {
+  const vehicleId = toStr(row.vehicle_id);
   const plate =
-    row.vehicles && typeof row.vehicles === 'object'
-      ? toStr(
-          Array.isArray(row.vehicles)
-            ? (row.vehicles[0] as { plate_number?: unknown } | undefined)?.plate_number
-            : (row.vehicles as { plate_number?: unknown }).plate_number,
-        )
+    vehicleId && plateByVehicleId?.get(vehicleId)
+      ? plateByVehicleId.get(vehicleId)!
       : null;
   const dbStatus = toStr(row.status) ?? 'Planned';
   const orderIds = ((row.order_ids as string[] | null) ?? []).filter(Boolean);
@@ -163,9 +169,9 @@ function mapTripRow(row: Record<string, unknown>): DriverTripSummary {
     tripNumber: toStr(row.trip_number) ?? String(row.id),
     status: mapDbStatus(dbStatus),
     dbStatus,
-    scheduledDate: toStr(row.scheduled_date),
+    scheduledDate: toStr(row.scheduled_date)?.slice(0, 10) ?? null,
     departureTime: toStr(row.departure_time),
-    eta: toStr(row.eta),
+    eta: toStr(row.eta)?.slice(0, 10) ?? null,
     vehicleName: toStr(row.vehicle_name),
     plateNumber: plate,
     destinations: ((row.destinations as string[] | null) ?? []).filter(Boolean),
@@ -176,10 +182,62 @@ function mapTripRow(row: Record<string, unknown>): DriverTripSummary {
   };
 }
 
+async function loadPlateByVehicleId(vehicleIds: string[]): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  const ids = [...new Set(vehicleIds.filter(Boolean))];
+  if (!ids.length) return map;
+  const { data } = await supabase.from('vehicles').select('id, plate_number').in('id', ids);
+  for (const row of data ?? []) {
+    const id = toStr((row as Record<string, unknown>).id);
+    const plate = toStr((row as Record<string, unknown>).plate_number);
+    if (id && plate) map.set(id, plate);
+  }
+  return map;
+}
+
 function tripMatchesDriver(row: Record<string, unknown>, driverId: string, driverName: string): boolean {
   const did = toStr(row.driver_id);
   if (did && did === driverId) return true;
   return driverNamesMatch(toStr(row.driver_name), driverName);
+}
+
+async function resolveDriverProfile(opts: {
+  driverId: string | null;
+  driverName: string | null;
+  sessionEmail?: string | null;
+}): Promise<{ driverId: string | null; driverName: string | null; employeeBranchId: string | null }> {
+  let driverId = opts.driverId?.trim() || null;
+  let driverName = opts.driverName?.trim() || null;
+  let employeeBranchId: string | null = null;
+
+  if (driverId) {
+    const { data } = await supabase
+      .from('employees')
+      .select('id, employee_name, branch_id')
+      .eq('id', driverId)
+      .maybeSingle();
+    if (data) {
+      driverName = driverName || toStr((data as Record<string, unknown>).employee_name);
+      employeeBranchId = toStr((data as Record<string, unknown>).branch_id);
+    }
+    return { driverId, driverName, employeeBranchId };
+  }
+
+  const email = opts.sessionEmail?.trim();
+  if (email) {
+    const { data } = await supabase
+      .from('employees')
+      .select('id, employee_name, branch_id')
+      .eq('email', email)
+      .maybeSingle();
+    if (data) {
+      driverId = toStr((data as Record<string, unknown>).id);
+      driverName = driverName || toStr((data as Record<string, unknown>).employee_name);
+      employeeBranchId = toStr((data as Record<string, unknown>).branch_id);
+    }
+  }
+
+  return { driverId, driverName, employeeBranchId };
 }
 
 async function fetchDriverTripRows(opts: {
@@ -187,18 +245,67 @@ async function fetchDriverTripRows(opts: {
   driverName: string;
   branchId: string | null;
 }): Promise<DriverTripSummary[]> {
-  let q = supabase.from('trips').select(TRIP_SELECT).order('scheduled_date', { ascending: true });
+  const name = opts.driverName.trim();
 
-  if (opts.branchId) q = q.eq('branch_id', opts.branchId);
+  const { data: byId, error: idErr } = await supabase
+    .from('trips')
+    .select(TRIP_SELECT)
+    .eq('driver_id', opts.driverId)
+    .order('scheduled_date', { ascending: true });
+  if (idErr) throw idErr;
 
-  const { data, error } = await q;
-  if (error) throw error;
+  let rows = (byId ?? []) as Array<Record<string, unknown>>;
 
-  const rows = ((data ?? []) as Array<Record<string, unknown>>).filter((r) =>
-    tripMatchesDriver(r, opts.driverId, opts.driverName),
-  );
+  if (!rows.length && name) {
+    const { data: byName, error: nameErr } = await supabase
+      .from('trips')
+      .select(TRIP_SELECT)
+      .eq('driver_name', name)
+      .order('scheduled_date', { ascending: true });
+    if (nameErr) throw nameErr;
+    rows = (byName ?? []) as Array<Record<string, unknown>>;
+  }
 
-  return rows.map(mapTripRow);
+  if (opts.branchId) {
+    rows = rows.filter((r) => {
+      const bid = toStr(r.branch_id);
+      return !bid || bid === opts.branchId;
+    });
+  }
+
+  rows = rows.filter((r) => tripMatchesDriver(r, opts.driverId, name));
+
+  const vehicleIds = rows.map((r) => toStr(r.vehicle_id)).filter((id): id is string => Boolean(id));
+  const plateByVehicleId = await loadPlateByVehicleId(vehicleIds);
+
+  return rows.map((r) => mapTripRow(r, plateByVehicleId));
+}
+
+function pickNextUndeliveredTrip(trips: DriverTripSummary[], today: string): DriverTripSummary | null {
+  const isTerminal = (t: DriverTripSummary) => TERMINAL_DB_STATUSES.includes(t.dbStatus);
+
+  const candidates = trips.filter((t) => !isTerminal(t));
+  if (candidates.length === 0) return null;
+
+  const priority = (t: DriverTripSummary): number => {
+    if (t.dbStatus === 'In Transit') return 0;
+    if (t.dbStatus === 'Delayed') return 1;
+    if (t.dbStatus === 'Loading') return 2;
+    if (t.scheduledDate && t.scheduledDate <= today) return 3;
+    return 4;
+  };
+
+  candidates.sort((a, b) => {
+    const pa = priority(a);
+    const pb = priority(b);
+    if (pa !== pb) return pa - pb;
+    const da = a.scheduledDate ?? '9999-12-31';
+    const db = b.scheduledDate ?? '9999-12-31';
+    if (da !== db) return da.localeCompare(db);
+    return (a.departureTime ?? '').localeCompare(b.departureTime ?? '');
+  });
+
+  return candidates[0] ?? null;
 }
 
 async function fetchOrderStops(trips: DriverTripSummary[]): Promise<DriverOrderStop[]> {
@@ -230,11 +337,21 @@ async function fetchOrderStops(trips: DriverTripSummary[]): Promise<DriverOrderS
       ),
     ];
     const phoneByCustomer = new Map<string, string>();
+    const coordsByCustomer = new Map<string, { lat: number; lng: number }>();
     if (customerIds.length) {
-      const { data: custRows } = await supabase.from('customers').select('id, phone').in('id', customerIds);
+      const { data: custRows } = await supabase
+        .from('customers')
+        .select('id, phone, map_lat, map_lng')
+        .in('id', customerIds);
       for (const c of custRows ?? []) {
-        const phone = toStr((c as Record<string, unknown>).phone);
-        if (phone) phoneByCustomer.set(String(c.id), phone);
+        const row = c as Record<string, unknown>;
+        const phone = toStr(row.phone);
+        if (phone) phoneByCustomer.set(String(row.id), phone);
+        const lat = row.map_lat != null ? Number(row.map_lat) : NaN;
+        const lng = row.map_lng != null ? Number(row.map_lng) : NaN;
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+          coordsByCustomer.set(String(row.id), { lat, lng });
+        }
       }
     }
 
@@ -245,6 +362,7 @@ async function fetchOrderStops(trips: DriverTripSummary[]): Promise<DriverOrderS
       if (!trip) continue;
       const status = toStr(r.status) ?? '—';
       const custId = toStr(r.customer_id);
+      const coords = custId ? coordsByCustomer.get(custId) : undefined;
       stops.push({
         id,
         orderNumber: toStr(r.order_number) ?? id,
@@ -255,6 +373,8 @@ async function fetchOrderStops(trips: DriverTripSummary[]): Promise<DriverOrderS
         tripId: trip.id,
         tripNumber: trip.tripNumber,
         phone: custId ? phoneByCustomer.get(custId) ?? null : null,
+        mapLat: coords?.lat ?? null,
+        mapLng: coords?.lng ?? null,
         canDeliver: DELIVERABLE_ORDER_STATUSES.has(status),
       });
     }
@@ -272,52 +392,6 @@ async function fetchOrderStops(trips: DriverTripSummary[]): Promise<DriverOrderS
   }
 }
 
-function buildKpis(opts: {
-  activeCount: number;
-  pendingDeliveries: number;
-  upcomingCount: number;
-  completedWeek: number;
-  delayedCount: number;
-}): DriverKPI[] {
-  return [
-    {
-      id: 'kpi-active',
-      label: 'Active trips',
-      value: opts.activeCount.toString(),
-      subtitle: opts.activeCount > 0 ? 'In progress now' : 'Nothing active',
-      status: opts.activeCount > 0 ? 'warning' : 'good',
-    },
-    {
-      id: 'kpi-deliveries',
-      label: 'Stops left',
-      value: opts.pendingDeliveries.toString(),
-      subtitle: 'Orders still to deliver',
-      status: opts.pendingDeliveries > 0 ? 'warning' : 'good',
-    },
-    {
-      id: 'kpi-upcoming',
-      label: 'Upcoming',
-      value: opts.upcomingCount.toString(),
-      subtitle: 'Scheduled ahead',
-      status: opts.upcomingCount > 0 ? 'neutral' : 'good',
-    },
-    {
-      id: 'kpi-week',
-      label: 'Completed (7d)',
-      value: opts.completedWeek.toString(),
-      subtitle: 'Trips finished this week',
-      status: 'good',
-    },
-    {
-      id: 'kpi-delayed',
-      label: 'Delayed',
-      value: opts.delayedCount.toString(),
-      subtitle: opts.delayedCount > 0 ? 'Needs attention' : 'On schedule',
-      status: opts.delayedCount > 0 ? 'danger' : 'good',
-    },
-  ];
-}
-
 // ---------------------------------------------------------------------------
 // Public fetch
 // ---------------------------------------------------------------------------
@@ -326,25 +400,34 @@ export async function fetchDriverDashboard(opts: {
   driverId: string | null;
   driverName: string | null;
   branchName: string | null;
+  sessionEmail?: string | null;
 }): Promise<DriverDashboardBundle> {
-  const driverId = opts.driverId?.trim() || null;
-  const driverName = opts.driverName?.trim() || null;
   const branchTrim = opts.branchName?.trim() || '';
   const branchName = branchTrim === '' ? null : branchTrim;
-  const branchId = branchName ? await resolveBranchIdByName(branchName) : null;
+  const topbarBranchId = branchName ? await resolveBranchIdByName(branchName) : null;
 
-  if (!driverId) {
+  const profile = await resolveDriverProfile({
+    driverId: opts.driverId,
+    driverName: opts.driverName,
+    sessionEmail: opts.sessionEmail,
+  });
+  const driverId = profile.driverId;
+  const driverName = profile.driverName;
+  const branchId = topbarBranchId ?? profile.employeeBranchId;
+
+  if (!driverId && !driverName) {
     return {
-      driverId,
-      driverName,
+      driverId: null,
+      driverName: null,
       branchId,
       branchName,
       generatedAt: new Date().toISOString(),
-      kpis: buildKpis({ activeCount: 0, pendingDeliveries: 0, upcomingCount: 0, completedWeek: 0, delayedCount: 0 }),
       activeTrip: null,
+      nextTrip: null,
       activeTrips: [],
       upcomingTrips: [],
       recentTrips: [],
+      pastTrips: [],
       orderStops: [],
       pendingDeliveryCount: 0,
     };
@@ -352,11 +435,30 @@ export async function fetchDriverDashboard(opts: {
 
   let allTrips: DriverTripSummary[] = [];
   try {
-    allTrips = await fetchDriverTripRows({
-      driverId,
-      driverName: driverName ?? '',
-      branchId,
-    });
+    if (driverId) {
+      allTrips = await fetchDriverTripRows({
+        driverId,
+        driverName: driverName ?? '',
+        branchId,
+      });
+    } else if (driverName) {
+      const { data, error } = await supabase
+        .from('trips')
+        .select(TRIP_SELECT)
+        .ilike('driver_name', driverName)
+        .order('scheduled_date', { ascending: true });
+      if (error) throw error;
+      let rows = (data ?? []) as Array<Record<string, unknown>>;
+      if (branchId) {
+        rows = rows.filter((r) => {
+          const bid = toStr(r.branch_id);
+          return !bid || bid === branchId;
+        });
+      }
+      const vehicleIds = rows.map((r) => toStr(r.vehicle_id)).filter((id): id is string => Boolean(id));
+      const plateByVehicleId = await loadPlateByVehicleId(vehicleIds);
+      allTrips = rows.map((r) => mapTripRow(r, plateByVehicleId));
+    }
   } catch (e) {
     logDev('trips', e);
   }
@@ -375,7 +477,8 @@ export async function fetchDriverDashboard(opts: {
 
   const upcomingTrips = allTrips.filter((t) => {
     if (isTerminal(t) || isMoving(t)) return false;
-    return Boolean(t.scheduledDate && t.scheduledDate > today);
+    if (t.scheduledDate && t.scheduledDate > today) return true;
+    return UPCOMING_TRIP_DB_STATUSES.has(t.dbStatus) && !t.scheduledDate;
   });
 
   const recentTrips = allTrips
@@ -383,25 +486,21 @@ export async function fetchDriverDashboard(opts: {
     .sort((a, b) => (b.scheduledDate ?? '').localeCompare(a.scheduledDate ?? ''))
     .slice(0, 8);
 
-  const activeTrip =
-    workingTrips.find((t) => isMoving(t)) ?? workingTrips[0] ?? null;
+  const pastTrips = allTrips
+    .filter((t) => t.dbStatus === 'Completed' || t.dbStatus === 'Failed')
+    .sort((a, b) => (b.scheduledDate ?? '').localeCompare(a.scheduledDate ?? ''));
 
-  const orderStops = await fetchOrderStops(workingTrips);
+  const nextTrip = pickNextUndeliveredTrip(allTrips, today);
+  const activeTrip = nextTrip;
+
+  const tripsForStops = new Map<string, DriverTripSummary>();
+  for (const t of workingTrips) tripsForStops.set(t.id, t);
+  for (const t of upcomingTrips) tripsForStops.set(t.id, t);
+  for (const t of pastTrips) tripsForStops.set(t.id, t);
+  if (nextTrip) tripsForStops.set(nextTrip.id, nextTrip);
+
+  const orderStops = await fetchOrderStops([...tripsForStops.values()]);
   const pendingDeliveryCount = orderStops.filter((s) => s.canDeliver).length;
-
-  const completedWeek = allTrips.filter(
-    (t) => t.dbStatus === 'Completed' && t.scheduledDate && t.scheduledDate >= weekAgo,
-  ).length;
-
-  const delayedCount = workingTrips.filter((t) => t.dbStatus === 'Delayed').length;
-
-  const kpis = buildKpis({
-    activeCount: workingTrips.length,
-    pendingDeliveries: pendingDeliveryCount,
-    upcomingCount: upcomingTrips.length,
-    completedWeek,
-    delayedCount,
-  });
 
   return {
     driverId,
@@ -409,14 +508,86 @@ export async function fetchDriverDashboard(opts: {
     branchId,
     branchName,
     generatedAt: new Date().toISOString(),
-    kpis,
     activeTrip,
+    nextTrip,
     activeTrips: workingTrips,
     upcomingTrips,
     recentTrips,
+    pastTrips,
     orderStops,
     pendingDeliveryCount,
   };
+}
+
+/** Line items for orders on a trip (driver delivery manifest). */
+export async function fetchDriverTripLineItems(orderIds: string[]): Promise<DriverDeliveryLineItem[]> {
+  const ids = [...new Set(orderIds.filter(Boolean))];
+  if (!ids.length) return [];
+
+  const mapRows = (data: unknown): DriverDeliveryLineItem[] => {
+    const items: DriverDeliveryLineItem[] = [];
+    for (const r of (data ?? []) as Array<Record<string, unknown>>) {
+      const orderRaw = r.orders;
+      const orderRow = (
+        Array.isArray(orderRaw) ? orderRaw[0] : orderRaw
+      ) as Record<string, unknown> | null | undefined;
+
+      const variantRaw = r.product_variants;
+      const variantRow = (
+        Array.isArray(variantRaw) ? variantRaw[0] : variantRaw
+      ) as Record<string, unknown> | null | undefined;
+      const productRaw = variantRow?.products;
+      const productRow = (
+        Array.isArray(productRaw) ? productRaw[0] : productRaw
+      ) as Record<string, unknown> | null | undefined;
+
+      items.push({
+        id: String(r.id),
+        orderId: String(r.order_id),
+        orderNumber: toStr(orderRow?.order_number) ?? String(r.order_id),
+        customerName: toStr(orderRow?.customer_name) ?? '—',
+        orderStatus: toStr(orderRow?.status),
+        productName: toStr(r.product_name) ?? '—',
+        variantDescription: toStr(r.variant_description),
+        sku: toStr(r.sku),
+        imageUrl: toStr(productRow?.image_url),
+        quantity: toNumber(r.quantity),
+        quantityDelivered: toNumber(r.quantity_delivered),
+      });
+    }
+
+    items.sort((a, b) => {
+      if (a.orderNumber !== b.orderNumber) return a.orderNumber.localeCompare(b.orderNumber);
+      return a.productName.localeCompare(b.productName);
+    });
+    return items;
+  };
+
+  try {
+    const { data, error } = await supabase
+      .from('order_line_items')
+      .select(
+        'id, order_id, sku, product_name, variant_description, quantity, quantity_delivered, variant_id, orders ( order_number, customer_name, status ), product_variants ( products ( image_url ) )',
+      )
+      .in('order_id', ids);
+    if (error) throw error;
+    return mapRows(data);
+  } catch (e) {
+    logDev('trip line items (with images)', e);
+    try {
+      const { data, error } = await supabase
+        .from('order_line_items')
+        .select(
+          'id, order_id, sku, product_name, variant_description, quantity, quantity_delivered, orders ( order_number, customer_name, status )',
+        )
+        .in('order_id', ids);
+      if (error) throw error;
+      return mapRows(data);
+    } catch (fallbackErr) {
+      logDev('trip line items', fallbackErr);
+      return [];
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -431,47 +602,25 @@ export async function reportDriverTripDelay(params: {
   driverName: string;
   delayType: DriverDelayType;
   explanation: string;
+  orderIds?: string[];
   orderNumbers?: string[];
   customerNames?: string[];
 }): Promise<{ ok: boolean; error?: string }> {
   const text = params.explanation.trim();
   if (!text) return { ok: false, error: 'Please describe what happened.' };
 
-  const now = new Date().toISOString();
   const fullReason = params.delayType === 'Other' ? text : `${params.delayType}: ${text}`;
 
-  const { error: tripErr } = await supabase
-    .from('trips')
-    .update({
-      status: 'Delayed',
-      delay_reason: fullReason,
-      updated_at: now,
-    })
-    .eq('id', params.tripId);
-
-  if (tripErr) return { ok: false, error: tripErr.message };
-
-  const today = isoDate(new Date());
-  const { error: delayErr } = await supabase.from('delay_exceptions').insert({
-    type: params.delayType,
-    affected_trip: params.tripNumber,
-    trip_id: params.tripId,
-    affected_orders: params.orderNumbers ?? [],
-    customers_affected: params.customerNames ?? [],
-    days_late: 0,
+  return reportTripDelay({
+    tripId: params.tripId,
+    tripNumber: params.tripNumber,
+    branchId: params.branchId,
+    delayReason: fullReason,
+    orderIds: params.orderIds,
+    orderNumbers: params.orderNumbers,
+    customerNames: params.customerNames,
     owner: params.driverName,
-    status: 'Open',
-    reported_date: today,
-    branch_id: params.branchId,
-    resolution: null,
   });
-
-  if (delayErr) {
-    // Trip is already marked delayed; log but don't fail the driver action.
-    logDev('delay_exceptions insert', delayErr);
-  }
-
-  return { ok: true };
 }
 
 /** Reload a single trip as the full Trip type (for TripDetailsModal). */

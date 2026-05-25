@@ -12,7 +12,9 @@ import {
   formatCurrencyShort,
   formatNumber,
   formatPercent,
+  agentChartColor,
 } from '@/src/lib/agentAnalytics';
+import { AgentColorSwatch } from '@/src/components/agentAnalytics/AgentColorSwatch';
 
 type SortField =
   | 'revenue'
@@ -162,13 +164,16 @@ export function AgentLeaderboard({ rows, title = 'Leaderboard' }: Props) {
                 <td className="px-4 py-2.5">
                   <Link
                     to={employeeProfilePathFromAgent(r.employeePublicId, r.agentId)}
-                    className="block rounded-md -mx-1 px-1 py-0.5 text-left hover:bg-blue-50/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-0"
+                    className="flex items-center gap-2 rounded-md -mx-1 px-1 py-0.5 text-left hover:bg-blue-50/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-0 min-w-0"
                   >
-                    <span className="font-semibold text-blue-700 hover:underline">{r.agentName}</span>
-                    <span className="block text-xs text-gray-600">{r.branchName ?? '—'}</span>
+                    <AgentColorSwatch agentId={r.agentId} title={r.agentName} />
+                    <span className="min-w-0">
+                      <span className="font-semibold text-blue-700 hover:underline block truncate">{r.agentName}</span>
+                      <span className="block text-xs text-gray-600 truncate">{r.branchName ?? '—'}</span>
+                    </span>
                   </Link>
                 </td>
-                <td className="px-3 py-2.5 text-right font-semibold text-gray-900 tabular-nums">
+                <td className="px-3 py-2.5 text-right font-semibold tabular-nums" style={{ color: agentChartColor(r.agentId) }}>
                   {formatCurrencyShort(r.revenue)}
                 </td>
                 <td className="px-3 py-2.5 text-right">

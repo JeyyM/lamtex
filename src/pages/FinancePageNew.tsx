@@ -5,8 +5,8 @@
  *   - Customer credit utilization
  *   - Commission release: orders with payment proofs on file
  */
-import React, { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle,
   ArrowDown,
@@ -30,8 +30,15 @@ import {
 
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
+import { StatKpiCard } from '@/src/components/ui/StatKpiCard';
 import { useAppContext } from '@/src/store/AppContext';
+import { resolveBranchIdByName } from '@/src/lib/branchCompanySettings';
+import {
+  fetchAgentPendingCommissions,
+  mergeAgentPendingIntoCommissionOrders,
+} from '@/src/lib/agentDashboard';
 
 import {
   fetchCustomerCredit,
@@ -39,6 +46,7 @@ import {
   fetchOrderCommissionModalData,
   fetchOrdersWithPaymentProofs,
   fetchOutstandingOrders,
+  commissionOrderMatchesAgent,
   type CustomerCreditRow,
   type FinanceMetrics,
   type OrderCommissionProofRow,
@@ -198,11 +206,18 @@ const PAYMENT_STATUS_FILTER_OPTIONS = [
 
 type ToastState = { kind: 'success' | 'error'; message: string } | null;
 
-export function FinancePageNew() {
-  const { role, employeeName, branch, addAuditLog } = useAppContext();
-  const isExecutive = role === 'Executive';
+function parseFinanceTab(value: string | null): TabId | null {
+  if (value === 'outstanding' || value === 'credit' || value === 'commissions') return value;
+  return null;
+}
 
-  const [tab, setTab] = useState<TabId>('outstanding');
+export function FinancePageNew() {
+  const { role, employeeName, employeeId, branch, addAuditLog } = useAppContext();
+  const isExecutive = role === 'Executive';
+  const isAgent = role === 'Agent';
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const [tab, setTabState] = useState<TabId>(() => parseFinanceTab(searchParams.get('tab')) ?? 'outstanding');
   const [toast, setToast] = useState<ToastState>(null);
 
   const [metrics, setMetrics] = useState<FinanceMetrics | null>(null);
@@ -228,7 +243,7 @@ export function FinancePageNew() {
   const [exportingOutstanding, setExportingOutstanding] = useState(false);
 
   // Commission release (orders with payment proofs)
-  const [commissionSortKey, setCommissionSortKey] = useState<string>('orderNumber');
+  const [commissionSortKey, setCommissionSortKey] = useState<string>('pendingCommissions');
   const [commissionSortDir, setCommissionSortDir] = useState<'asc' | 'desc'>('desc');
   const [commissionPage, setCommissionPage] = useState(1);
 
@@ -241,6 +256,31 @@ export function FinancePageNew() {
 
   const [creditEdit, setCreditEdit] = useState<CustomerCreditRow | null>(null);
   const [commissionModalOrder, setCommissionModalOrder] = useState<OrderWithPaymentProofsRow | null>(null);
+
+  const setTab = useCallback(
+    (next: TabId) => {
+      setTabState(next);
+      setSearchParams(
+        (prev) => {
+          const params = new URLSearchParams(prev);
+          if (next === 'outstanding') params.delete('tab');
+          else params.set('tab', next);
+          return params;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+
+  useEffect(() => {
+    const fromUrl = parseFinanceTab(searchParams.get('tab'));
+    if (fromUrl) {
+      setTabState(fromUrl);
+      return;
+    }
+    if (isAgent) setTabState('commissions');
+  }, [searchParams, isAgent]);
 
   /** Toast auto-dismiss. */
   useEffect(() => {
@@ -285,22 +325,30 @@ export function FinancePageNew() {
     }
   };
 
-  const loadOrdersWithProofs = async () => {
+  const loadOrdersWithProofs = useCallback(async () => {
     setLoading((s) => ({ ...s, commissions: true }));
     try {
-      const rows = await fetchOrdersWithPaymentProofs();
+      let rows = await fetchOrdersWithPaymentProofs();
+      if (isAgent && employeeId) {
+        const branchId = branch?.trim() ? await resolveBranchIdByName(branch) : null;
+        const pending = await fetchAgentPendingCommissions(employeeId, branchId);
+        rows = mergeAgentPendingIntoCommissionOrders(rows, pending, employeeId, employeeName);
+      }
       setOrdersWithProofs(rows);
     } catch (e) {
       setToast({ kind: 'error', message: e instanceof Error ? e.message : 'Failed to load orders with proofs' });
     } finally {
       setLoading((s) => ({ ...s, commissions: false }));
     }
-  };
+  }, [isAgent, employeeId, employeeName, branch]);
 
   useEffect(() => {
     void loadMetrics();
     void loadOutstanding();
-  }, []);
+    if (isAgent || parseFinanceTab(searchParams.get('tab')) === 'commissions') {
+      void loadOrdersWithProofs();
+    }
+  }, [isAgent, loadOrdersWithProofs, searchParams]);
 
   useEffect(() => {
     if (tab === 'credit') void loadCredits();
@@ -308,8 +356,7 @@ export function FinancePageNew() {
       void loadOrdersWithProofs();
       void loadMetrics();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab]);
+  }, [tab, loadOrdersWithProofs]);
 
   const handleSort = (key: string) => {
     if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -327,7 +374,7 @@ export function FinancePageNew() {
     if (commissionSortKey === key) setCommissionSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
     else {
       setCommissionSortKey(key);
-      setCommissionSortDir('asc');
+      setCommissionSortDir(key === 'pendingCommissions' ? 'desc' : 'asc');
     }
   };
 
@@ -474,6 +521,11 @@ export function FinancePageNew() {
   const filteredOrdersWithProofs = useMemo(() => {
     const q = commissionSearch.trim().toLowerCase();
     let rows = ordersWithProofs;
+    if (isAgent && employeeId) {
+      rows = rows.filter(
+        (r) => commissionOrderMatchesAgent(r, employeeId) && r.pendingCashCommissionCount > 0,
+      );
+    }
     if (q) {
       rows = rows.filter((r) =>
         [r.orderNumber, r.customerName, r.agentName].some((v) => v?.toLowerCase().includes(q)),
@@ -511,6 +563,10 @@ export function FinancePageNew() {
           av = a.proofCount;
           bv = b.proofCount;
           break;
+        case 'pendingCommissions':
+          av = a.pendingCashCommissionCount;
+          bv = b.pendingCashCommissionCount;
+          break;
         case 'lastProofAt':
           av = a.lastProofAt ?? '';
           bv = b.lastProofAt ?? '';
@@ -524,7 +580,12 @@ export function FinancePageNew() {
           bv = b.lastProofAt ?? '';
       }
       if (typeof av === 'number' && typeof bv === 'number') {
-        return commissionSortDir === 'asc' ? av - bv : bv - av;
+        const cmp = commissionSortDir === 'asc' ? av - bv : bv - av;
+        if (cmp !== 0) return cmp;
+        // Tie-break: most recent proof first when pending counts match
+        const ta = a.lastProofAt ? new Date(a.lastProofAt).getTime() : 0;
+        const tb = b.lastProofAt ? new Date(b.lastProofAt).getTime() : 0;
+        return tb - ta;
       }
       const as = String(av);
       const bs = String(bv);
@@ -532,7 +593,7 @@ export function FinancePageNew() {
       if (as > bs) return commissionSortDir === 'asc' ? 1 : -1;
       return 0;
     });
-  }, [ordersWithProofs, commissionSearch, commissionSortKey, commissionSortDir]);
+  }, [ordersWithProofs, commissionSearch, commissionSortKey, commissionSortDir, isAgent, employeeId]);
 
   const commissionTotalPages = Math.max(1, Math.ceil(filteredOrdersWithProofs.length / COMMISSION_PAGE_SIZE));
 
@@ -577,46 +638,44 @@ export function FinancePageNew() {
 
       {/* KPIs */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-        <KpiCard
+        <StatKpiCard
           label="Total Outstanding"
           value={formatPeso(metrics?.totalOutstanding)}
           sub="Across active orders"
-          icon={<CircleDollarSign className="w-6 h-6 text-blue-600" />}
-          accent="bg-blue-100"
+          icon={<CircleDollarSign />}
+          tone="blue"
           loading={loading.metrics}
         />
-        <KpiCard
+        <StatKpiCard
           label="Overdue"
           value={formatPeso(metrics?.totalOverdue)}
           sub={metrics ? `${metrics.overdueCount} order(s) past due` : '—'}
-          icon={<AlertTriangle className="w-6 h-6 text-red-600" />}
-          accent="bg-red-100"
+          icon={<AlertTriangle />}
+          tone="rose"
           loading={loading.metrics}
-          valueClass="text-red-600"
         />
-        <KpiCard
+        <StatKpiCard
           label="Commissions Paid Out"
           value={formatPeso(metrics?.commissionsPaidOut)}
           sub="Released on cash payment proofs"
-          icon={<TrendingUp className="w-6 h-6 text-green-600" />}
-          accent="bg-green-100"
+          icon={<TrendingUp />}
+          tone="emerald"
           loading={loading.metrics}
-          valueClass="text-green-600"
         />
-        <KpiCard
+        <StatKpiCard
           label="Pending Commissions"
           value={formatPeso(metrics?.pendingCommissions)}
           sub={
             metrics?.pendingCommissionCount
-              ? `${metrics.pendingCommissionCount} cash proof(s) awaiting payout`
+              ? `${metrics.pendingCommissionCount} cash proof(s) awaiting payout · open Commission Release`
               : 'Awaiting executive release'
           }
-          icon={<Wallet className="w-6 h-6 text-purple-600" />}
-          accent="bg-purple-100"
+          icon={<Wallet />}
+          tone="amber"
           loading={loading.metrics}
-          valueClass={metrics?.pendingCommissions ? 'text-amber-700' : undefined}
+          onClick={() => setTab('commissions')}
         />
-              </div>
+      </div>
 
       {/* Tabs */}
       <div className="border-b border-gray-200 overflow-x-auto">
@@ -627,7 +686,14 @@ export function FinancePageNew() {
           <TabButton active={tab === 'credit'} onClick={() => setTab('credit')} icon={<CreditCard className="w-4 h-4" />}>
             Customer Credit
           </TabButton>
-          <TabButton active={tab === 'commissions'} onClick={() => setTab('commissions')} icon={<Wallet className="w-4 h-4" />}>
+          <TabButton
+            active={tab === 'commissions'}
+            onClick={() => setTab('commissions')}
+            icon={<Wallet className="w-4 h-4" />}
+            badge={
+              (metrics?.pendingCommissionCount ?? 0) > 0 ? metrics!.pendingCommissionCount : undefined
+            }
+          >
             Commission Release
           </TabButton>
               </div>
@@ -917,7 +983,11 @@ export function FinancePageNew() {
                 <Loader2 className="w-6 h-6 animate-spin" />
               </div>
             ) : filteredOrdersWithProofs.length === 0 ? (
-              <p className="py-10 text-center text-sm text-gray-500">No orders with payment proofs yet.</p>
+              <p className="py-10 text-center text-sm text-gray-500">
+                {isAgent
+                  ? 'No cash payment proofs awaiting commission payout on your orders.'
+                  : 'No orders with payment proofs yet.'}
+              </p>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -941,7 +1011,14 @@ export function FinancePageNew() {
                       <th onClick={() => handleCommissionSort('proofCount')} className="text-center py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100">
                         <span className="flex items-center justify-center">Proofs{commissionSortIcon('proofCount')}</span>
                       </th>
-                      <th className="text-center py-2.5 px-3 font-semibold">Commission</th>
+                      <th
+                        onClick={() => handleCommissionSort('pendingCommissions')}
+                        className="text-center py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100"
+                      >
+                        <span className="flex items-center justify-center">
+                          Commission{commissionSortIcon('pendingCommissions')}
+                        </span>
+                      </th>
                       <th onClick={() => handleCommissionSort('status')} className="text-center py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100">
                         <span className="flex items-center justify-center">Status{commissionSortIcon('status')}</span>
                       </th>
@@ -1041,12 +1118,11 @@ export function FinancePageNew() {
         </Card>
       )}
 
-      {exportPeriodModalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40"
-          role="presentation"
-          onClick={() => setExportPeriodModalOpen(false)}
-        >
+      <PortalModalOverlay
+        open={exportPeriodModalOpen}
+        onClose={() => setExportPeriodModalOpen(false)}
+        mobileBottomSheet
+      >
           <div
             className="bg-white w-full sm:max-w-lg sm:rounded-xl shadow-xl max-h-[90vh] overflow-y-auto"
             role="dialog"
@@ -1130,8 +1206,7 @@ export function FinancePageNew() {
               )}
             </div>
           </div>
-        </div>
-      )}
+      </PortalModalOverlay>
 
       {commissionModalOrder && (
         <OrderCommissionProofsModal
@@ -1176,36 +1251,13 @@ export function FinancePageNew() {
 
 /* ----------------------------- Sub components ----------------------------- */
 
-function KpiCard(props: {
-  label: string;
-  value: string;
-  sub: string;
+function TabButton(props: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
   icon: React.ReactNode;
-  accent: string;
-  loading?: boolean;
-  valueClass?: string;
+  badge?: number;
 }) {
-  return (
-    <Card>
-      <CardContent className="p-4 sm:p-6">
-        <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-xs sm:text-sm font-medium text-gray-600">{props.label}</p>
-            <p className={`text-xl sm:text-2xl font-bold mt-2 ${props.valueClass ?? 'text-gray-900'}`}>
-              {props.loading ? '…' : props.value}
-            </p>
-            <p className="text-xs text-gray-500 mt-1 truncate">{props.sub}</p>
-                  </div>
-          <div className={`w-10 sm:w-12 h-10 sm:h-12 rounded-lg flex items-center justify-center flex-shrink-0 ${props.accent}`}>
-            {props.icon}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-  );
-}
-
-function TabButton(props: { active: boolean; onClick: () => void; children: React.ReactNode; icon: React.ReactNode }) {
   return (
     <button
       onClick={props.onClick}
@@ -1215,6 +1267,11 @@ function TabButton(props: { active: boolean; onClick: () => void; children: Reac
     >
       {props.icon}
       {props.children}
+      {props.badge != null && props.badge > 0 && (
+        <span className="ml-1 inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
+          {props.badge}
+        </span>
+      )}
     </button>
   );
 }

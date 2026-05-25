@@ -23,6 +23,10 @@ import {
   isFleetVehicleUuid,
 } from '@/src/lib/fleetTrucks';
 import {
+  tripOccupiedDateKeys,
+  tripsConflictingVehicleOnDates,
+} from '@/src/lib/logisticsScheduling';
+import {
   computeDrivingRoute,
   RouteResult,
   formatDuration,
@@ -32,11 +36,13 @@ import {
 export interface TripCreatedFeedback {
   tripNumber: string;
   scheduledDate: string;
+  /** Last day when the trip spans multiple calendar days. */
+  scheduledEndDate?: string;
   orderCount: number;
   vehicleName: string;
 }
 
-function formatTripDateBanner(d: string): string {
+function formatTripDateLabel(d: string): string {
   const t = d?.trim().slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(t)) return d;
   const [y, mo, day] = t.split('-').map(Number);
@@ -48,8 +54,17 @@ function formatTripDateBanner(d: string): string {
   });
 }
 
+function formatTripDateBanner(start: string, end?: string): string {
+  const s = start?.trim().slice(0, 10);
+  const e = end?.trim().slice(0, 10);
+  if (!e || e === s) return formatTripDateLabel(s);
+  return `${formatTripDateLabel(s)} – ${formatTripDateLabel(e)}`;
+}
+
 interface RoutePlanningViewProps {
   ordersReady: OrderReadyForDispatch[];
+  /** True while the planning queue is still loading from the database. */
+  ordersLoading?: boolean;
   vehicles: Vehicle[];
   /** Scheduled / active trips for this branch (truck + driver + date conflict checks). */
   existingTrips: Trip[];
@@ -58,7 +73,7 @@ interface RoutePlanningViewProps {
   onCreateTrip: (
     selectedOrders: string[],
     vehicleId: string,
-    scheduledDate: string,
+    scheduledDates: string[],
     driverId: string | null,
   ) => void | Promise<TripCreatedFeedback | void>;
   /** Deep link: pre-select orders already in `ordersReady` (order UUIDs). */
@@ -96,6 +111,7 @@ type SortOption =
 
 export const RoutePlanningView: React.FC<RoutePlanningViewProps> = ({
   ordersReady,
+  ordersLoading = false,
   vehicles,
   existingTrips,
   drivers,
@@ -275,18 +291,25 @@ export const RoutePlanningView: React.FC<RoutePlanningViewProps> = ({
 
   const tripBookingsForVehicle = useMemo(() => {
     if (!selectedVehicle) return [];
-    return existingTrips
-      .filter(
-        (t) =>
-          t.vehicleId === selectedVehicle &&
-          TRIP_CONFLICT_STATUSES.includes(t.status as (typeof TRIP_CONFLICT_STATUSES)[number]),
-      )
-      .map((t) => ({
-        date: t.scheduledDate,
-        type: 'Trip' as const,
-        tripNumber: t.tripNumber,
-        status: t.status,
-      }));
+    const entries: Array<{
+      date: string;
+      type: 'Trip';
+      tripNumber: string;
+      status: string;
+    }> = [];
+    for (const t of existingTrips) {
+      if (t.vehicleId !== selectedVehicle) continue;
+      if (!TRIP_CONFLICT_STATUSES.includes(t.status as (typeof TRIP_CONFLICT_STATUSES)[number])) continue;
+      for (const date of tripOccupiedDateKeys(t)) {
+        entries.push({
+          date,
+          type: 'Trip',
+          tripNumber: t.tripNumber,
+          status: t.status,
+        });
+      }
+    }
+    return entries;
   }, [existingTrips, selectedVehicle]);
 
   const assignableVehicles = useMemo(
@@ -472,7 +495,7 @@ export const RoutePlanningView: React.FC<RoutePlanningViewProps> = ({
               <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0 space-y-1">
                   <CardTitle className="text-base sm:text-lg">
-                    Available Orders ({filteredAndSortedOrders.length})
+                    Available Orders ({ordersLoading ? '…' : filteredAndSortedOrders.length})
                   </CardTitle>
                   <p className="text-sm font-medium text-gray-600">
                     {selectedOrders.length} Selected
@@ -490,7 +513,8 @@ export const RoutePlanningView: React.FC<RoutePlanningViewProps> = ({
                       id="lamtex-route-urgency-filter"
                       value={urgencyFilter}
                       onChange={(e) => setUrgencyFilter(e.target.value as UrgencyFilter)}
-                      className="w-full rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      disabled={ordersLoading}
+                      className="w-full rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-gray-50"
                     >
                       <option value="All">All urgencies</option>
                       <option value="High">High</option>
@@ -506,7 +530,8 @@ export const RoutePlanningView: React.FC<RoutePlanningViewProps> = ({
                       id="lamtex-route-sort"
                       value={sortBy}
                       onChange={(e) => setSortBy(e.target.value as SortOption)}
-                      className="w-full rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      disabled={ordersLoading}
+                      className="w-full rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-gray-50"
                     >
                       <option value="urgency_desc">Urgency (high → low)</option>
                       <option value="urgency_asc">Urgency (low → high)</option>
@@ -521,14 +546,20 @@ export const RoutePlanningView: React.FC<RoutePlanningViewProps> = ({
             </CardHeader>
             <CardContent>
               <div className="max-h-96 space-y-2 overflow-y-auto">
-                {filteredAndSortedOrders.length === 0 && (
+                {ordersLoading ? (
+                  <div className="flex flex-col items-center justify-center gap-2 py-12 text-gray-500">
+                    <Loader2 className="h-7 w-7 animate-spin text-blue-600" aria-hidden />
+                    <p className="text-sm">Loading available orders…</p>
+                  </div>
+                ) : filteredAndSortedOrders.length === 0 ? (
                   <p className="py-8 text-center text-sm text-gray-500">
                     {ordersReady.length === 0
                       ? 'No orders in the planning queue for this branch.'
                       : 'No orders match this urgency filter.'}
                   </p>
-                )}
-                {filteredAndSortedOrders.map((order) => {
+                ) : null}
+                {!ordersLoading &&
+                  filteredAndSortedOrders.map((order) => {
                   const isSelected = selectedOrders.includes(order.id);
                   return (
                     <div
@@ -862,6 +893,9 @@ export const RoutePlanningView: React.FC<RoutePlanningViewProps> = ({
               <Truck className="w-4 h-4 mr-2" />
               Create Delivery Trip
             </Button>
+            <p className="text-xs text-gray-500 text-center px-1">
+              In the calendar you can select one or more days if the route will run across multiple days.
+            </p>
             <Button
               variant="outline"
               className="w-full"
@@ -879,16 +913,22 @@ export const RoutePlanningView: React.FC<RoutePlanningViewProps> = ({
         isOpen={showScheduleModal}
         onClose={() => setShowScheduleModal(false)}
         onConfirm={async (selectedDates) => {
-          const date = selectedDates[0];
-          if (!selectedVehicle || !date) return;
-          if (selectedVehicleMaintDates.includes(date)) {
+          const scheduledDates = [...new Set(selectedDates.map((d) => d.trim().slice(0, 10)).filter(Boolean))].sort();
+          if (!selectedVehicle || scheduledDates.length === 0) return;
+          const maintDay = scheduledDates.find((d) => selectedVehicleMaintDates.includes(d));
+          if (maintDay) {
             window.alert(
-              `This truck is scheduled for maintenance on ${date}. Choose another date or truck.`,
+              `This truck is scheduled for maintenance on ${maintDay}. Choose another date or truck.`,
             );
             return;
           }
+          const conflicts = tripsConflictingVehicleOnDates(existingTrips, selectedVehicle, scheduledDates);
+          if (conflicts.length > 0) {
+            window.alert('This truck is already booked on one or more of the selected days.');
+            return;
+          }
           const created = await Promise.resolve(
-            onCreateTrip(selectedOrders, selectedVehicle, date, selectedDriver || null),
+            onCreateTrip(selectedOrders, selectedVehicle, scheduledDates, selectedDriver || null),
           );
           if (!created) return;
           setShowScheduleModal(false);
@@ -900,6 +940,7 @@ export const RoutePlanningView: React.FC<RoutePlanningViewProps> = ({
         vehicleName={vehicle?.vehicleName || 'Selected Vehicle'}
         orderCount={selectedOrders.length}
         existingBookings={scheduleModalBookings}
+        initialDate={initialTripDate}
       />
 
       {tripCreatedFeedback && (
@@ -932,7 +973,10 @@ export const RoutePlanningView: React.FC<RoutePlanningViewProps> = ({
                 </span>
                 <span className="block text-gray-800">
                   <span className="font-medium text-gray-900">Scheduled: </span>
-                  {formatTripDateBanner(tripCreatedFeedback.scheduledDate)}
+                  {formatTripDateBanner(
+                    tripCreatedFeedback.scheduledDate,
+                    tripCreatedFeedback.scheduledEndDate,
+                  )}
                 </span>
                 <span className="flex items-start gap-2 text-gray-800">
                   <Truck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" aria-hidden />

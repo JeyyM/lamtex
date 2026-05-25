@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Ca
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { WarehouseKpiStrip } from '@/src/components/warehouse/WarehouseKpiStrip';
+import { WarehousePrPoCalendar } from '@/src/components/warehouse/WarehousePrPoCalendar';
 import {
   DashTableRowLink,
   DashHeaderLink,
@@ -13,13 +14,11 @@ import {
   AlertTriangle,
   ArrowRight,
   Truck,
-  Factory,
   Box,
   Loader2,
   RefreshCw,
   PackageCheck,
   Repeat,
-  ClipboardList,
   Activity,
   TrendingUp,
   TrendingDown,
@@ -43,8 +42,6 @@ import {
   type IncomingPORow,
   type OrderToFulfillRow,
   type IBRToFulfillRow,
-  type MyPRRow,
-  type MyPORow,
   type RecentMovementRow,
 } from '@/src/lib/warehouseDashboard';
 import { buildWarehouseAssignmentScope } from '@/src/lib/warehouseScope';
@@ -249,18 +246,7 @@ export function WarehouseDashboard(): React.ReactElement {
         <IBRsCard rows={bundle.ibrsToFulfill} count={bundle.ibrsToFulfillCount} />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <MyPRsCard
-          recent={bundle.myProductionRequests.recent}
-          statusCounts={bundle.myProductionRequests.statusCounts}
-          activeCount={bundle.myProductionRequests.activeCount}
-        />
-        <MyPOsCard
-          recent={bundle.myPurchaseOrders.recent}
-          statusCounts={bundle.myPurchaseOrders.statusCounts}
-          activeCount={bundle.myPurchaseOrders.activeCount}
-        />
-      </div>
+      <WarehousePrPoCalendar branchId={bundle.branchId} branchLabel={branchLabel} />
 
       {WAREHOUSE_DASHBOARD_SHOW_STOCK_MOVEMENTS && (
         <MovementsCard
@@ -671,154 +657,6 @@ function IBRsCard(props: { rows: IBRToFulfillRow[]; count: number }) {
         </table>
       </div>
     </QueueTableCard>
-  );
-}
-
-function MyPRsCard(props: {
-  recent: MyPRRow[];
-  statusCounts: Record<string, number>;
-  activeCount: number;
-}) {
-  return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between gap-2">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Factory className="w-4 h-4 text-orange-600" /> My production requests
-            {props.activeCount > 0 && <Badge variant="warning">{props.activeCount} active</Badge>}
-          </CardTitle>
-          <DashHeaderLink to="/production-requests">
-            All <ArrowRight className="w-4 h-4" />
-          </DashHeaderLink>
-        </div>
-      </CardHeader>
-      <CardContent>
-        <StatusCountStrip counts={props.statusCounts} />
-        {props.recent.length === 0 ? (
-          <p className="text-sm text-gray-500 py-4 text-center mt-2">You haven't raised any PRs yet.</p>
-        ) : (
-          <div className="mt-3 overflow-x-auto -mx-1 px-1">
-            <table className="w-full min-w-[420px] text-sm">
-              <thead>
-                <tr className="text-xs text-gray-500 uppercase tracking-wider border-b border-gray-200">
-                  <th className="py-2 px-2 text-left font-semibold">PR</th>
-                  <th className="py-2 px-2 text-left font-semibold">Items</th>
-                  <th className="py-2 px-2 text-left font-semibold">Need by</th>
-                  <th className="py-2 px-2 text-right font-semibold">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {props.recent.map((r) => (
-                  <DashTableRowLink
-                    key={r.id}
-                    to={`/production-requests/${r.id}`}
-                    title={`${r.prNumber} — right-click or Ctrl+click to open in new tab`}
-                  >
-                    <td className="table-cell py-2 px-2 align-middle font-mono text-xs text-gray-900 whitespace-nowrap">
-                      {r.prNumber}
-                    </td>
-                    <td className="table-cell py-2 px-2 align-middle text-gray-600 tabular-nums">
-                      {r.itemCount}
-                    </td>
-                    <td className="table-cell py-2 px-2 align-middle text-gray-600 whitespace-nowrap">
-                      {formatDateShort(r.expectedCompletionDate)}
-                    </td>
-                    <td className="table-cell py-2 px-2 align-middle text-right">
-                      <Badge variant={statusBadgeVariant(r.status)} className="text-[10px]">{r.status}</Badge>
-                    </td>
-                  </DashTableRowLink>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function MyPOsCard(props: {
-  recent: MyPORow[];
-  statusCounts: Record<string, number>;
-  activeCount: number;
-}) {
-  return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between gap-2">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <ClipboardList className="w-4 h-4 text-blue-600" /> My purchase orders
-            {props.activeCount > 0 && <Badge variant="warning">{props.activeCount} active</Badge>}
-          </CardTitle>
-          <DashHeaderLink to="/purchase-orders">
-            All <ArrowRight className="w-4 h-4" />
-          </DashHeaderLink>
-        </div>
-      </CardHeader>
-      <CardContent>
-        <StatusCountStrip counts={props.statusCounts} />
-        {props.recent.length === 0 ? (
-          <p className="text-sm text-gray-500 py-4 text-center mt-2">You haven't raised any POs yet.</p>
-        ) : (
-          <div className="mt-3 overflow-x-auto -mx-1 px-1">
-            <table className="w-full min-w-[420px] text-sm">
-              <thead>
-                <tr className="text-xs text-gray-500 uppercase tracking-wider border-b border-gray-200">
-                  <th className="py-2 px-2 text-left font-semibold">PO</th>
-                  <th className="py-2 px-2 text-left font-semibold">Supplier</th>
-                  <th className="py-2 px-2 text-left font-semibold">Expect</th>
-                  <th className="py-2 px-2 text-right font-semibold">Amount</th>
-                  <th className="py-2 px-2 text-right font-semibold">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {props.recent.map((r) => (
-                  <DashTableRowLink
-                    key={r.id}
-                    to={`/purchase-orders/${r.id}`}
-                    title={`${r.poNumber} — right-click or Ctrl+click to open in new tab`}
-                  >
-                    <td className="table-cell py-2 px-2 align-middle font-mono text-xs text-gray-900 whitespace-nowrap">
-                      {r.poNumber}
-                    </td>
-                    <td className="table-cell py-2 px-2 align-middle text-gray-700">
-                      <span className="block truncate max-w-[120px]" title={r.supplierName ?? undefined}>
-                        {r.supplierName ?? '—'}
-                      </span>
-                    </td>
-                    <td className="table-cell py-2 px-2 align-middle text-gray-600 whitespace-nowrap">
-                      {formatDateShort(r.expectedDeliveryDate)}
-                    </td>
-                    <td className="table-cell py-2 px-2 align-middle text-right font-medium text-gray-900 whitespace-nowrap">
-                      {formatWarehousePeso(r.totalAmount)}
-                    </td>
-                    <td className="table-cell py-2 px-2 align-middle text-right">
-                      <Badge variant={statusBadgeVariant(r.status)} className="text-[10px]">{r.status}</Badge>
-                    </td>
-                  </DashTableRowLink>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function StatusCountStrip(props: { counts: Record<string, number> }) {
-  const entries = Object.entries(props.counts);
-  if (entries.length === 0) {
-    return <p className="text-xs text-gray-400">No history yet.</p>;
-  }
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      {entries.map(([status, count]) => (
-        <Badge key={status} variant={statusBadgeVariant(status)} className="text-[10px]">
-          {status} · {count}
-        </Badge>
-      ))}
-    </div>
   );
 }
 

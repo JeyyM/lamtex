@@ -67,6 +67,10 @@ export type OrderWithPaymentProofsRow = {
   customerName: string | null;
   agentName: string | null;
   agentId: string | null;
+  /** Order's direct agent_id (for agent-scoped views). */
+  orderAgentId: string | null;
+  /** Customer's assigned_agent_id when set. */
+  assignedAgentId: string | null;
   orderStatus: string;
   totalAmount: number;
   amountPaid: number;
@@ -522,6 +526,39 @@ function proofRowAmount(r: Record<string, unknown>): number {
   return Math.round((cash + credit + adj + Number.EPSILON) * 100) / 100;
 }
 
+function proofLiteFromRecord(r: Record<string, unknown>) {
+  const notes = asString(r.notes);
+  return {
+    id: String(r.id ?? ''),
+    type: 'payment' as const,
+    payment_cash_amount: r.payment_cash_amount as number | string | null | undefined,
+    payment_credit_amount: r.payment_credit_amount as number | string | null | undefined,
+    payment_adjustment: r.payment_adjustment as number | string | null | undefined,
+    notes,
+  };
+}
+
+function proofCashFromRecord(r: Record<string, unknown>): number {
+  const notes = asString(r.notes);
+  return proofPaymentParts({
+    id: String(r.id ?? ''),
+    order_id: String(r.order_id ?? ''),
+    type: 'payment',
+    title: null,
+    file_name: null,
+    file_url: '',
+    file_size: null,
+    uploaded_by: null,
+    uploaded_by_role: null,
+    status: null,
+    notes,
+    uploaded_at: String(r.uploaded_at ?? ''),
+    payment_cash_amount: r.payment_cash_amount as number | string | null | undefined,
+    payment_credit_amount: r.payment_credit_amount as number | string | null | undefined,
+    payment_adjustment: r.payment_adjustment as number | string | null | undefined,
+  }).cash;
+}
+
 /** Orders that have one or more payment proof documents (grouped per order). */
 export async function fetchOrdersWithPaymentProofs(): Promise<OrderWithPaymentProofsRow[]> {
   const { data, error } = await supabase
@@ -529,41 +566,56 @@ export async function fetchOrdersWithPaymentProofs(): Promise<OrderWithPaymentPr
     .select(
       `id, order_id, uploaded_at, type,
        payment_cash_amount, payment_credit_amount, payment_adjustment, notes,
-       commission_paid_at,
-       orders(id, order_number, customer_id, customer_name, agent_id, agent_name, status,
-         total_amount, amount_paid, balance_due, payment_status,
-         customers(name, assigned_agent_id, employees!assigned_agent_id(employee_name)))`,
+       commission_paid_at`,
     )
     .eq('type', 'payment')
     .order('uploaded_at', { ascending: false });
 
   if (error) throw error;
 
+  const proofRows = (data ?? []) as Array<Record<string, unknown>>;
+  if (proofRows.length === 0) return [];
+
+  const orderIds = [...new Set(proofRows.map((r) => String(r.order_id ?? '')))].filter(Boolean);
+  const orderById = new Map<string, Record<string, unknown>>();
+  const chunkSz = 120;
+  for (let j = 0; j < orderIds.length; j += chunkSz) {
+    const slice = orderIds.slice(j, j + chunkSz);
+    const { data: orderRows, error: orderErr } = await supabase
+      .from('orders')
+      .select(
+        `id, order_number, customer_id, customer_name, agent_id, agent_name, status,
+         total_amount, amount_paid, balance_due, payment_status,
+         customers(name, assigned_agent_id, employees!assigned_agent_id(employee_name))`,
+      )
+      .in('id', slice);
+    if (orderErr) throw orderErr;
+    for (const o of (orderRows ?? []) as Record<string, unknown>[]) {
+      orderById.set(String(o.id ?? ''), o);
+    }
+  }
+
   const byOrder = new Map<
     string,
     OrderWithPaymentProofsRow & { _lastMs: number; _proofs: Array<Record<string, unknown>> }
   >();
 
-  for (const r of (data ?? []) as Array<Record<string, unknown>>) {
-    const orderId = String(r.order_id);
-    const order = (r.orders ?? null) as Record<string, unknown> | null;
+  for (const r of proofRows) {
+    const orderId = String(r.order_id ?? '');
+    const order = orderById.get(orderId) ?? null;
     if (!order) continue;
 
     const custEmbed = order.customers ?? null;
     const assigned = assignedAgentFromCustomerEmbed(custEmbed);
+    const orderAgentId = asString(order.agent_id);
     const orderAgentName = asString(order.agent_name);
     const agentName = assigned.id != null ? (assigned.name ?? '—') : orderAgentName;
     const uploadedAt = String(r.uploaded_at ?? '');
     const uploadedMs = uploadedAt ? new Date(uploadedAt).getTime() : 0;
     const amt = proofRowAmount(r);
-    const cash = proofCashAmount({
-      id: String(r.id),
-      type: 'payment',
-      payment_cash_amount: r.payment_cash_amount,
-      payment_credit_amount: r.payment_credit_amount,
-      payment_adjustment: r.payment_adjustment,
-      notes: asString(r.notes),
-    });
+    const cash = proofCashFromRecord(r);
+    const lite = proofLiteFromRecord(r);
+    const isCashProof = proofRequiresCommissionPayout(lite);
 
     const existing = byOrder.get(orderId);
     if (!existing) {
@@ -573,7 +625,9 @@ export async function fetchOrdersWithPaymentProofs(): Promise<OrderWithPaymentPr
         customerId: asString(order.customer_id),
         customerName: nestedName(custEmbed) ?? asString(order.customer_name),
         agentName,
-        agentId: assigned.id ?? asString(order.agent_id),
+        agentId: assigned.id ?? orderAgentId,
+        orderAgentId,
+        assignedAgentId: assigned.id,
         orderStatus: asString(order.status) ?? '—',
         totalAmount: num(order.total_amount),
         amountPaid: num(order.amount_paid),
@@ -582,16 +636,7 @@ export async function fetchOrdersWithPaymentProofs(): Promise<OrderWithPaymentPr
         proofCount: 1,
         totalProofAmount: amt,
         totalCashOnProofs: cash,
-        cashProofCount: proofRequiresCommissionPayout({
-          id: String(r.id),
-          type: 'payment',
-          payment_cash_amount: r.payment_cash_amount,
-          payment_credit_amount: r.payment_credit_amount,
-          payment_adjustment: r.payment_adjustment,
-          notes: asString(r.notes),
-        })
-          ? 1
-          : 0,
+        cashProofCount: isCashProof ? 1 : 0,
         lastProofAt: uploadedAt || null,
         pendingCashCommissionCount: 0,
         allCashCommissionsReleased: true,
@@ -602,18 +647,7 @@ export async function fetchOrdersWithPaymentProofs(): Promise<OrderWithPaymentPr
       existing.proofCount += 1;
       existing.totalProofAmount = Math.round((existing.totalProofAmount + amt + Number.EPSILON) * 100) / 100;
       existing.totalCashOnProofs = Math.round((existing.totalCashOnProofs + cash + Number.EPSILON) * 100) / 100;
-      if (
-        proofRequiresCommissionPayout({
-          id: String(r.id),
-          type: 'payment',
-          payment_cash_amount: r.payment_cash_amount,
-          payment_credit_amount: r.payment_credit_amount,
-          payment_adjustment: r.payment_adjustment,
-          notes: asString(r.notes),
-        })
-      ) {
-        existing.cashProofCount += 1;
-      }
+      if (isCashProof) existing.cashProofCount += 1;
       existing._proofs.push(r);
       if (uploadedMs > existing._lastMs) {
         existing._lastMs = uploadedMs;
@@ -626,10 +660,10 @@ export async function fetchOrdersWithPaymentProofs(): Promise<OrderWithPaymentPr
     .map(({ _lastMs: _, _proofs, ...row }) => {
       const proofLites = _proofs.map((p) => ({
         id: String(p.id),
-        type: 'payment',
-        payment_cash_amount: p.payment_cash_amount,
-        payment_credit_amount: p.payment_credit_amount,
-        payment_adjustment: p.payment_adjustment,
+        type: 'payment' as const,
+        payment_cash_amount: p.payment_cash_amount as number | string | null | undefined,
+        payment_credit_amount: p.payment_credit_amount as number | string | null | undefined,
+        payment_adjustment: p.payment_adjustment as number | string | null | undefined,
         notes: asString(p.notes),
         commission_paid_at: p.commission_paid_at != null ? String(p.commission_paid_at) : null,
       }));
@@ -650,6 +684,18 @@ export async function fetchOrdersWithPaymentProofs(): Promise<OrderWithPaymentPr
       const tb = b.lastProofAt ? new Date(b.lastProofAt).getTime() : 0;
       return tb - ta;
     });
+}
+
+/** Agent dashboard / finance views: order agent or assigned customer agent. */
+function normEmployeeId(v: string | null | undefined): string | null {
+  const t = v?.trim();
+  return t ? t.toLowerCase() : null;
+}
+
+export function commissionOrderMatchesAgent(row: OrderWithPaymentProofsRow, employeeId: string): boolean {
+  const me = normEmployeeId(employeeId);
+  if (!me) return false;
+  return normEmployeeId(row.orderAgentId) === me;
 }
 
 async function fetchCustomerClientType(customerId: string | null): Promise<ClientType> {

@@ -3,6 +3,7 @@ import { useNavigate, useParams, Link } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
+import { PortalModalOverlay } from '../components/ui/PortalModalOverlay';
 import { useAppContext } from '../store/AppContext';
 import ImageGalleryModal from '../components/ImageGalleryModal';
 import StockAdjustmentModal from '../components/warehouse/StockAdjustmentModal';
@@ -2167,12 +2168,10 @@ export default function ProductFamilyPage() {
         />
       )}
 
-      {comparisonPeriodModalOpen && (
-        <div
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
-          role="presentation"
-          onClick={() => setComparisonPeriodModalOpen(false)}
-        >
+      <PortalModalOverlay
+        open={comparisonPeriodModalOpen}
+        onClose={() => setComparisonPeriodModalOpen(false)}
+      >
           <div
             className="bg-white rounded-lg shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto"
             role="dialog"
@@ -2251,8 +2250,7 @@ export default function ProductFamilyPage() {
               )}
             </div>
           </div>
-        </div>
-      )}
+      </PortalModalOverlay>
     </div>
   );
 }

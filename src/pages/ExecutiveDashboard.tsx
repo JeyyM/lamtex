@@ -55,6 +55,7 @@ import {
   DASH_LINK_CLASS,
 } from '@/src/components/executive/executiveLinks';
 import { finishedGoodProductHref } from '@/src/lib/productRoutes';
+import { AgentColorSwatch } from '@/src/components/agentAnalytics/AgentColorSwatch';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1039,17 +1040,20 @@ function TopAgentsCard(props: {
           <div className="space-y-3">
             {props.rows.map((a) => (
               <div key={a.agentId} className="flex items-center justify-between gap-3 hover:bg-gray-50 rounded-md p-2 -mx-2 transition-colors">
-                <div className="min-w-0 flex-1">
-                  <DashLink
-                    to={`/employees/${a.agentId}`}
-                    className={`${DASH_LINK_CLASS} text-sm block truncate`}
-                    title={a.agentName}
-                  >
-                    {a.agentName}
-                  </DashLink>
-                  <p className="text-xs text-gray-500 truncate">
-                    {a.branchName ?? '—'} · {a.orderCountMTD.toLocaleString()} orders
-                  </p>
+                <div className="min-w-0 flex-1 flex items-center gap-2">
+                  <AgentColorSwatch agentId={a.agentId} title={a.agentName} />
+                  <div className="min-w-0 flex-1">
+                    <DashLink
+                      to={`/employees/${a.agentId}`}
+                      className={`${DASH_LINK_CLASS} text-sm block truncate`}
+                      title={a.agentName}
+                    >
+                      {a.agentName}
+                    </DashLink>
+                    <p className="text-xs text-gray-500 truncate">
+                      {a.branchName ?? '—'} · {a.orderCountMTD.toLocaleString()} orders
+                    </p>
+                  </div>
                 </div>
                 <span className="text-sm font-semibold text-gray-900 shrink-0">{formatExecutivePeso(a.revenueMTD)}</span>
               </div>

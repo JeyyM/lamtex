@@ -3,6 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 import { supabase } from '@/src/lib/supabase';
 import { CompanyMapPicker } from '@/src/components/maps/CompanyMapPicker';
 import { GoogleMapEmbed } from '@/src/components/maps/GoogleMapEmbed';
@@ -1437,12 +1438,11 @@ export function SupplierDetailPage() {
         </CardContent>
       </Card>
 
-      {exportPeriodModalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40"
-          role="presentation"
-          onClick={() => setExportPeriodModalOpen(false)}
-        >
+      <PortalModalOverlay
+        open={exportPeriodModalOpen}
+        onClose={() => setExportPeriodModalOpen(false)}
+        mobileBottomSheet
+      >
           <div
             className="bg-white w-full sm:max-w-lg sm:rounded-xl shadow-xl max-h-[90vh] overflow-y-auto"
             role="dialog"
@@ -1526,8 +1526,7 @@ export function SupplierDetailPage() {
               )}
             </div>
           </div>
-        </div>
-      )}
+      </PortalModalOverlay>
 
       <RawMaterialPickerModal
         isOpen={showAddMaterialPicker}

@@ -426,7 +426,7 @@ export function ProductsPage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Product Catalog</h1>
           <p className="text-sm text-gray-500 mt-1">
-            Browse products by category{branch ? ` · ${branch}` : ' · All Branches'}
+            Browse products by category{inventoryBranch ? ` · ${inventoryBranch}` : ' · All branches'}
           </p>
         </div>
         <div className="flex flex-wrap gap-2 justify-end w-full md:w-auto">

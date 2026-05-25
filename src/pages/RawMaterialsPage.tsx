@@ -126,34 +126,54 @@ export function RawMaterialsPage() {
 
   const allMaterials = getAllRawMaterials();
 
-  // Fetch material categories from Supabase
+  // Fetch material categories from Supabase (branch-aware)
   const fetchCategories = async () => {
     setCategoriesLoading(true);
     setCategoriesError(null);
 
+    let branchId: string | null = null;
+    if (inventoryBranch) {
+      const { data: branchRow } = await supabase
+        .from('branches')
+        .select('id')
+        .eq('name', inventoryBranch)
+        .maybeSingle();
+      branchId = branchRow?.id ?? null;
+    }
+
+    let catQuery = supabase
+      .from('material_categories')
+      .select('*, branches ( name )')
+      .eq('is_active', true)
+      .order('sort_order', { ascending: true });
+    if (branchId) catQuery = catQuery.eq('branch_id', branchId);
+
     const [catResult, countResult] = await Promise.all([
-      supabase
-        .from('material_categories')
-        .select('*, branches ( name )')
-        .eq('is_active', true)
-        .order('sort_order', { ascending: true }),
+      catQuery,
       supabase
         .from('raw_materials')
         .select('id, category_id, status'),
     ]);
 
+    const categoryRows = (catResult.data ?? []) as MaterialCategoryRow[];
+
     if (catResult.error) {
       console.error('Failed to fetch material categories:', catResult.error);
       setCategoriesError(catResult.error.message);
+      setCategories([]);
     } else {
-      setCategories(catResult.data ?? []);
+      setCategories(categoryRows);
     }
 
     if (!countResult.error) {
+      const branchCategoryIds = new Set(categoryRows.map((c) => c.id));
       let rows = (countResult.data ?? []) as MaterialCountRow[];
+      if (inventoryBranch) {
+        rows = rows.filter((row) => branchCategoryIds.has(row.category_id));
+      }
       if (scopedMaterialIds) {
         const allowed = new Set(scopedMaterialIds);
-        rows = rows.filter(row => allowed.has(row.id));
+        rows = rows.filter((row) => allowed.has(row.id));
       }
       setMaterialCounts(rows);
     }
@@ -245,7 +265,7 @@ export function RawMaterialsPage() {
 
   useEffect(() => {
     void fetchCategories();
-  }, [scopedMaterialIds?.join('|') ?? '']);
+  }, [inventoryBranch, scopedMaterialIds?.join('|') ?? '']);
 
   useEffect(() => {
     if (inventoryBranch) {
@@ -481,7 +501,9 @@ export function RawMaterialsPage() {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="min-w-0">
           <h1 className="text-xl md:text-2xl font-bold text-gray-900 truncate">Raw Materials</h1>
-          <p className="text-sm text-gray-500 mt-1">Browse materials by category</p>
+          <p className="text-sm text-gray-500 mt-1">
+            Browse materials by category{inventoryBranch ? ` · ${inventoryBranch}` : ' · All branches'}
+          </p>
         </div>
         <div className="flex gap-2 flex-wrap">
           <Button

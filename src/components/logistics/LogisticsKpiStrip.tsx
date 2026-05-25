@@ -134,7 +134,7 @@ function KpiCardContent(props: { kpi: LogisticsKPI; clickable: boolean }) {
 
 export function LogisticsKpiStrip({ kpis }: Props): React.ReactElement {
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
       {kpis.map((kpi) => {
         const clickable = Boolean(kpi.href);
         const className = `${CARD_CLASS} ${gradientClass(kpi)} ${

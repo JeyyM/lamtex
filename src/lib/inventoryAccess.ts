@@ -10,15 +10,29 @@ export function executiveHasFullInventoryAccess(role: UserRole): boolean {
 
 /**
  * Branch filter for inventory / catalog queries (`products.branch`, category branch, etc.).
- * Returns `null` for executives → org-wide (no `.eq('branch', …)` filter).
+ * Returns the topbar branch when set; `null` only when no branch is selected (org-wide view).
  */
 export function effectiveInventoryBranch(
   role: UserRole,
   branch: string | null | undefined,
 ): string | null {
-  if (executiveHasFullInventoryAccess(role)) return null;
+  void role;
   const trimmed = branch?.trim();
   return trimmed ? trimmed : null;
+}
+
+/**
+ * Branch scope for order create/edit pickers (customers, products, categories).
+ * Always respects the order branch or topbar selection — even for executives.
+ */
+export function orderCatalogBranch(
+  topbarBranch: string | null | undefined,
+  orderBranchName?: string | null,
+): string | null {
+  const fromOrder = orderBranchName?.trim();
+  if (fromOrder) return fromOrder;
+  const fromTopbar = topbarBranch?.trim();
+  return fromTopbar ? fromTopbar : null;
 }
 
 /**

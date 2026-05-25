@@ -3,6 +3,7 @@ import { UserRole, Branch, AuditLog } from '../types';
 import { supabase } from '@/src/lib/supabase';
 import { fetchWarehouseAssignmentIds } from '@/src/lib/warehouseAssignments';
 import { buildWarehouseAssignmentScope, type WarehouseAssignmentScope } from '@/src/lib/warehouseScope';
+import { getSelectedBranch, setSelectedBranch, SELECTED_BRANCH_STORAGE_KEY } from '@/src/lib/selectedBranchStorage';
 import type { Session } from '@supabase/supabase-js';
 
 interface AppContextType {
@@ -34,7 +35,7 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [role, setRole] = useState<UserRole>('Executive');
-  const [branch, setBranch] = useState<Branch>('');
+  const [branch, setBranchState] = useState<Branch>(() => getSelectedBranch());
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [hideBranchSelector, setHideBranchSelector] = useState(false);
@@ -83,6 +84,20 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const refreshWarehouseScope = useCallback(async () => {
     await loadWarehouseScope(employeeId, role);
   }, [employeeId, loadWarehouseScope, role]);
+
+  const setBranch = useCallback((next: Branch) => {
+    setBranchState(next);
+    setSelectedBranch(next);
+  }, []);
+
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== SELECTED_BRANCH_STORAGE_KEY) return;
+      setBranchState((event.newValue ?? '') as Branch);
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
 
   const fetchEmployeeSession = async (email: string) => {
     const { data } = await supabase

@@ -30,6 +30,9 @@ const ACCOUNTS: AccountEntry[] = [
   { branch: LAMTEX_BRANCH_NCR, id: 'LOG-MNL-002', name: 'Jasmine Cruz', email: 'jasmine.cruz.manila@lamtex.com', role: 'Logistics', password: 'Lamtex@2026' },
   { branch: LAMTEX_BRANCH_NCR, id: 'WH-MNL-001', name: 'Jose Ramos', email: 'jose.ramos.manila@lamtex.com', role: 'Warehouse', password: 'Lamtex@2026' },
   { branch: LAMTEX_BRANCH_NCR, id: 'WH-MNL-002', name: 'Patricia Navarro', email: 'patricia.navarro.manila@lamtex.com', role: 'Warehouse', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_NCR, id: 'DRV-MNL-001', name: 'Danilo Ramos', email: 'danilo.ramos.drv.manila@lamtex.com', role: 'Driver', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_NCR, id: 'DRV-MNL-002', name: 'Ernesto Cruz', email: 'ernesto.cruz.drv.manila@lamtex.com', role: 'Driver', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_NCR, id: 'DRV-MNL-003', name: 'Ferdinand Reyes', email: 'ferdinand.reyes.drv.manila@lamtex.com', role: 'Driver', password: 'Lamtex@2026' },
   // Cebu (Visayas)
   { branch: LAMTEX_BRANCH_VISAYAS, id: 'AGT-CEB-001', name: 'Marco Villanueva', email: 'marco.villanueva.cebu@lamtex.com', role: 'Agent', password: 'Lamtex@2026' },
   { branch: LAMTEX_BRANCH_VISAYAS, id: 'AGT-CEB-002', name: 'Sofia Tan', email: 'sofia.tan.cebu@lamtex.com', role: 'Agent', password: 'Lamtex@2026' },
@@ -38,6 +41,9 @@ const ACCOUNTS: AccountEntry[] = [
   { branch: LAMTEX_BRANCH_VISAYAS, id: 'LOG-CEB-002', name: 'Elena Reyes', email: 'elena.reyes.cebu@lamtex.com', role: 'Logistics', password: 'Lamtex@2026' },
   { branch: LAMTEX_BRANCH_VISAYAS, id: 'WH-CEB-001', name: 'Antonio Garces', email: 'antonio.garces.cebu@lamtex.com', role: 'Warehouse', password: 'Lamtex@2026' },
   { branch: LAMTEX_BRANCH_VISAYAS, id: 'WH-CEB-002', name: 'Maria Ledesma', email: 'maria.ledesma.cebu@lamtex.com', role: 'Warehouse', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_VISAYAS, id: 'DRV-CEB-001', name: 'Gregorio Salazar', email: 'gregorio.salazar.drv.cebu@lamtex.com', role: 'Driver', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_VISAYAS, id: 'DRV-CEB-002', name: 'Hernando Tolentino', email: 'hernando.tolentino.drv.cebu@lamtex.com', role: 'Driver', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_VISAYAS, id: 'DRV-CEB-003', name: 'Isidro Ramos', email: 'isidro.ramos.drv.cebu@lamtex.com', role: 'Driver', password: 'Lamtex@2026' },
   // Batangas (Calabarzon)
   { branch: LAMTEX_BRANCH_CALABARZON, id: 'AGT-BTG-001', name: 'Leo Marasigan', email: 'leo.marasigan.batangas@lamtex.com', role: 'Agent', password: 'Lamtex@2026' },
   { branch: LAMTEX_BRANCH_CALABARZON, id: 'AGT-BTG-002', name: 'Nina Ilagan', email: 'nina.ilagan.batangas@lamtex.com', role: 'Agent', password: 'Lamtex@2026' },
@@ -46,6 +52,9 @@ const ACCOUNTS: AccountEntry[] = [
   { branch: LAMTEX_BRANCH_CALABARZON, id: 'LOG-BTG-002', name: 'Cynthia Bautista', email: 'cynthia.bautista.batangas@lamtex.com', role: 'Logistics', password: 'Lamtex@2026' },
   { branch: LAMTEX_BRANCH_CALABARZON, id: 'WH-BTG-001', name: 'Roberto Mendoza', email: 'roberto.mendoza.batangas@lamtex.com', role: 'Warehouse', password: 'Lamtex@2026' },
   { branch: LAMTEX_BRANCH_CALABARZON, id: 'WH-BTG-002', name: 'Luz Aguilar', email: 'luz.aguilar.batangas@lamtex.com', role: 'Warehouse', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_CALABARZON, id: 'DRV-BTG-001', name: 'Jaime Navarro', email: 'jaime.navarro.drv.batangas@lamtex.com', role: 'Driver', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_CALABARZON, id: 'DRV-BTG-002', name: 'Karlo Paredes', email: 'karlo.paredes.drv.batangas@lamtex.com', role: 'Driver', password: 'Lamtex@2026' },
+  { branch: LAMTEX_BRANCH_CALABARZON, id: 'DRV-BTG-003', name: 'Lorenzo Dizon', email: 'lorenzo.dizon.drv.batangas@lamtex.com', role: 'Driver', password: 'Lamtex@2026' },
   // Quezon
   { branch: LAMTEX_BRANCH_QUEZON, id: 'AGT-QZN-001', name: 'Ina Morales', email: 'ina.morales.quezon@lamtex.com', role: 'Agent', password: 'Lamtex@2026' },
   { branch: LAMTEX_BRANCH_QUEZON, id: 'AGT-QZN-002', name: 'Gabriel Ramos', email: 'gabriel.ramos.quezon@lamtex.com', role: 'Agent', password: 'Lamtex@2026' },
@@ -69,6 +78,7 @@ const ROLE_COLORS: Record<string, string> = {
   Agent:     'text-gray-500',
   Logistics: 'text-green-600',
   Warehouse: 'text-rose-600',
+  Driver:    'text-sky-600',
 };
 
 const BRANCH_OPTIONS = [

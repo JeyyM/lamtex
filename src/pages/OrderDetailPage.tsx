@@ -5,8 +5,12 @@ import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { supabase } from '@/src/lib/supabase';
 import { useAppContext } from '@/src/store/AppContext';
-import { effectiveInventoryBranch } from '@/src/lib/inventoryAccess';
+import { orderCatalogBranch } from '@/src/lib/inventoryAccess';
 import { branchHasShippingContainers } from '@/src/lib/fleetContainers';
+import {
+  releaseOrderFromActiveTrips,
+  shouldReleaseOrderFromTrips,
+} from '@/src/lib/logisticsScheduling';
 import { OrderDetail, OrderStatus, OrderLineItem, OrderLog, ProofDocument, OrderUrgency, DeliveryType } from '@/src/types/orders';
 import { PaymentLink } from '@/src/types/payments';
 import { PaymentLinkModal } from '@/src/components/payments/PaymentLinkModal';
@@ -109,7 +113,6 @@ export function OrderDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { branch, addAuditLog, role, session, employeeName, setHideBranchSelector, setBranch } = useAppContext();
-  const inventoryBranch = effectiveInventoryBranch(role, branch);
   const [isEditing, setIsEditing] = useState(false);
   const [editedOrder, setEditedOrder] = useState<OrderDetail | null>(null);
 
@@ -224,6 +227,27 @@ export function OrderDetailPage() {
   const [branchList, setBranchList] = useState<{ id: string; name: string }[]>([]);
   /** Whether the order branch has shipping containers (Ship delivery only when true). */
   const [branchHasShips, setBranchHasShips] = useState<boolean | null>(null);
+
+  const orderBranchName = useMemo(() => {
+    if (isEditing && editedOrder) {
+      if (editedOrder.branch?.trim()) return editedOrder.branch.trim();
+      if (editedOrder.branchId) {
+        const b = branchList.find((x) => x.id === editedOrder.branchId);
+        if (b?.name?.trim()) return b.name.trim();
+      }
+    }
+    if (order?.branch?.trim()) return order.branch.trim();
+    return null;
+  }, [isEditing, editedOrder, order?.branch, branchList]);
+
+  const catalogBranch = orderCatalogBranch(branch, orderBranchName);
+
+  useEffect(() => {
+    if (!isEditing) return;
+    setCategories([]);
+    setSelectedCategory(null);
+    setCategoryProducts([]);
+  }, [catalogBranch, isEditing]);
 
   const patchEditedOrder = (patch: Partial<OrderDetail> | ((prev: OrderDetail) => Partial<OrderDetail>)) => {
     setEditedOrder((prev) => {
@@ -1450,6 +1474,12 @@ export function OrderDetailPage() {
       .update({ status: 'Rejected', rejected_by: role, rejection_reason: rejectionReason || null, approved_by: null, approved_date: null })
       .eq('id', id);
     if (error) { alert('Failed to reject: ' + error.message); setApprovalLoading(false); return; }
+    if (shouldReleaseOrderFromTrips(order.status, 'Rejected')) {
+      const release = await releaseOrderFromActiveTrips(id);
+      if (!release.ok) {
+        alert(`Order rejected but could not update linked trip(s): ${release.error ?? 'Unknown error'}`);
+      }
+    }
     setOrder({ ...order, status: 'Rejected' as any, rejectedBy: role, rejectionReason: rejectionReason || undefined, approvedBy: undefined, approvedDate: undefined });
     await insertOrderLog(
       'rejected',
@@ -1480,6 +1510,13 @@ export function OrderDetailPage() {
       })
       .eq('id', id);
     if (orderErr) { alert('Failed to cancel order: ' + orderErr.message); return; }
+
+    if (shouldReleaseOrderFromTrips(order.status, 'Cancelled')) {
+      const release = await releaseOrderFromActiveTrips(id);
+      if (!release.ok) {
+        alert(`Order cancelled but could not update linked trip(s): ${release.error ?? 'Unknown error'}`);
+      }
+    }
 
     // 2. Return stock if requested and order had stock deducted (In Transit or later)
     if (data.restockItems && order.branchId) {
@@ -1598,6 +1635,13 @@ export function OrderDetailPage() {
       customer_payment_terms: customerDefaultTerms,
     });
 
+    const releasingFromTrip =
+      oldOrder.status !== editedOrder.status &&
+      shouldReleaseOrderFromTrips(oldOrder.status, editedOrder.status);
+    const clearScheduledDeparture =
+      releasingFromTrip &&
+      (editedOrder.status === 'Approved' || editedOrder.status === 'Partially Fulfilled');
+
     // Update the order header
     const { error: orderErr } = await supabase
       .from('orders')
@@ -1611,7 +1655,9 @@ export function OrderDetailPage() {
         balance_due: derivedPay.balanceDue,
         required_date: editedOrder.requiredDate || null,
         estimated_delivery: editedOrder.estimatedDelivery || null,
-        scheduled_departure_date: editedOrder.scheduledDepartureDate || null,
+        scheduled_departure_date: clearScheduledDeparture
+          ? null
+          : editedOrder.scheduledDepartureDate || null,
         delivery_type: editedOrder.deliveryType,
         payment_terms: editedOrder.paymentTerms,
         payment_method: editedOrder.paymentMethod,
@@ -1690,6 +1736,47 @@ export function OrderDetailPage() {
         { status: oldOrder.status },
         { status: editedOrder.status },
       );
+
+      if (releasingFromTrip) {
+        const release = await releaseOrderFromActiveTrips(id);
+        if (!release.ok) {
+          alert(`Order saved but could not update linked trip(s): ${release.error ?? 'Unknown error'}`);
+        } else if (release.tripsDeleted > 0 || release.tripsUpdated > 0) {
+          const parts: string[] = [];
+          if (release.tripsDeleted > 0) {
+            parts.push(`${release.tripsDeleted} trip${release.tripsDeleted === 1 ? '' : 's'} removed`);
+          }
+          if (release.tripsUpdated > 0) {
+            parts.push(`${release.tripsUpdated} trip${release.tripsUpdated === 1 ? '' : 's'} updated`);
+          }
+          addAuditLog(
+            'Released order from trip',
+            'Order',
+            `Order ${editedOrder.id} unscheduled — ${parts.join(', ')}`,
+          );
+        }
+        const { data: tripRows } = await supabase
+          .from('trips')
+          .select('id, trip_number, status, order_ids, delay_reason')
+          .contains('order_ids', [id]);
+        const tripsForOrder = (tripRows ?? []).filter((t: { order_ids?: string[] | null }) => {
+          const oids = (t.order_ids ?? []) as string[];
+          return oids.includes(id);
+        });
+        setOrderTripsWithDelayInfo(
+          tripsForOrder.map(
+            (t: { id?: string; trip_number?: string; status?: string; delay_reason?: string | null }) => ({
+              id: String(t.id ?? ''),
+              tripNumber: String(t.trip_number ?? '—'),
+              status: String(t.status ?? ''),
+              delayReason:
+                t.delay_reason != null && String(t.delay_reason).trim() !== ''
+                  ? String(t.delay_reason)
+                  : null,
+            }),
+          ),
+        );
+      }
     }
 
     // 2. Payment status change
@@ -1813,6 +1900,7 @@ export function OrderDetailPage() {
       amountPaid: savedPay.amountPaid,
       balanceDue: savedPay.balanceDue,
       dueDate: persistedDueDate ?? editedOrder.dueDate,
+      scheduledDepartureDate: clearScheduledDeparture ? undefined : editedOrder.scheduledDepartureDate,
       items: savedItems,
     });
     const { data: payProofCheck } = await supabase
@@ -1900,7 +1988,7 @@ export function OrderDetailPage() {
         .from('product_categories')
         .select('id, name, image_url')
         .eq('is_active', true);
-      const b = inventoryBranch ?? '';
+      const b = catalogBranch ?? '';
       if (b) {
         cq = cq.or(`branch.eq.${b},branch.is.null`);
       }
@@ -1917,13 +2005,20 @@ export function OrderDetailPage() {
     setSelectedCategory(cat);
     setProductsLoading(true);
     setCategoryProducts([]);
-    const { data: branchRow } = await supabase.from('branches').select('id').eq('name', branch).single();
-    const { data: productsData } = await supabase
+    const branchNameForStock = catalogBranch ?? branch ?? '';
+    const { data: branchRow } = branchNameForStock
+      ? await supabase.from('branches').select('id').eq('name', branchNameForStock).maybeSingle()
+      : { data: null };
+    let pQuery = supabase
       .from('products')
       .select('id, name, image_url, product_variants(id, size, description, unit_price, total_stock, is_hidden, product_bulk_discounts(min_qty, max_qty, discount_percent, is_active))')
       .eq('category_id', cat.id)
-      .eq('status', 'Active')
-      .order('name');
+      .eq('status', 'Active');
+    const b = catalogBranch ?? '';
+    if (b) {
+      pQuery = pQuery.or(`branch.eq.${b},branch.is.null`);
+    }
+    const { data: productsData } = await pQuery.order('name');
     if (!productsData) { setProductsLoading(false); return; }
     const allVariantIds = productsData.flatMap((p: any) => p.product_variants?.map((v: any) => v.id) ?? []);
     const stockMap: Record<string, number> = {};
@@ -3544,6 +3639,8 @@ export function OrderDetailPage() {
                         branch: b?.name ?? '',
                         agentId: '',
                         agent: '',
+                        customerId: '',
+                        customer: '',
                       });
                     }}
                   >

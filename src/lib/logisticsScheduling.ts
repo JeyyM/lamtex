@@ -851,7 +851,8 @@ export async function createTripFromPlanning(params: {
   branchName: string;
   vehicleUuid: string;
   orderUuids: string[];
-  scheduledDate: string;
+  /** One or more calendar days the truck is out (earliest = departure). */
+  scheduledDates: string[];
   totalWeightKg: number;
   totalVolumeCbm: number;
   driverUuid?: string | null;
@@ -861,20 +862,28 @@ export async function createTripFromPlanning(params: {
   if (!bid) return { ok: false, error: 'Branch not found' };
   if (!params.vehicleUuid) return { ok: false, error: 'Select a truck' };
   if (!params.orderUuids.length) return { ok: false, error: 'Select at least one order' };
-  const d = params.scheduledDate.trim().slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return { ok: false, error: 'Invalid date' };
+  const sortedDates = [...new Set(params.scheduledDates.map((x) => fmtDate(x)).filter(Boolean))].sort();
+  if (!sortedDates.length || sortedDates.some((d) => !/^\d{4}-\d{2}-\d{2}$/.test(d))) {
+    return { ok: false, error: 'Invalid date' };
+  }
+  const d = sortedDates[0];
+  const endD = sortedDates[sortedDates.length - 1];
 
-  const { data: maintRow } = await supabase
-    .from('maintenance_records')
-    .select('id, status')
-    .eq('vehicle_id', params.vehicleUuid)
-    .eq('scheduled_date', d)
-    .limit(5);
-  const blocked = (maintRow ?? []).some((r: { status?: string | null }) => {
-    const st = String(r.status ?? '').trim().toLowerCase();
-    return st !== 'completed';
-  });
-  if (blocked) return { ok: false, error: 'This truck has maintenance scheduled on that date.' };
+  for (const day of sortedDates) {
+    const { data: maintRow } = await supabase
+      .from('maintenance_records')
+      .select('id, status')
+      .eq('vehicle_id', params.vehicleUuid)
+      .eq('scheduled_date', day)
+      .limit(5);
+    const blocked = (maintRow ?? []).some((r: { status?: string | null }) => {
+      const st = String(r.status ?? '').trim().toLowerCase();
+      return st !== 'completed';
+    });
+    if (blocked) {
+      return { ok: false, error: `This truck has maintenance scheduled on ${day}.` };
+    }
+  }
 
   const { data: veh, error: vErr } = await supabase
     .from('vehicles')
@@ -902,6 +911,7 @@ export async function createTripFromPlanning(params: {
       driver_name: params.driverName ?? null,
       status: toDbTripStatus('Scheduled'),
       scheduled_date: d,
+      eta: sortedDates.length > 1 ? `${endD}T23:59:59.999Z` : null,
       order_ids: params.orderUuids,
       destinations: [],
       weight_used_kg: params.totalWeightKg,
@@ -1098,6 +1108,19 @@ export async function updateTrip(params: {
 
   if (updErr) return { ok: false, error: updErr.message };
 
+  if (params.orderUuids.length === 0) {
+    const removed = params.previousOrderUuids;
+    if (removed.length > 0) {
+      await supabase
+        .from('orders')
+        .update({ status: 'Approved', scheduled_departure_date: null, updated_at: new Date().toISOString() })
+        .in('id', removed);
+    }
+    const { error: delErr } = await supabase.from('trips').delete().eq('id', params.tripId);
+    if (delErr) return { ok: false, error: delErr.message };
+    return { ok: true };
+  }
+
   // Orders removed from this trip → revert to Approved
   const removed = params.previousOrderUuids.filter((id) => !params.orderUuids.includes(id));
   if (removed.length > 0) {
@@ -1118,4 +1141,140 @@ export async function updateTrip(params: {
   }
 
   return { ok: true };
+}
+
+/** Order statuses that imply the order is assigned on an active trip row. */
+export const ORDER_TRIP_LINKED_STATUSES = [
+  'Scheduled',
+  'Loading',
+  'Packed',
+  'Ready',
+  'In Transit',
+] as const;
+
+/** Statuses that should no longer occupy a trip — order returns to dispatch queue or exits logistics. */
+export const ORDER_RELEASE_TRIP_TO_STATUSES = [
+  'Approved',
+  'Partially Fulfilled',
+  'Cancelled',
+  'Rejected',
+  'Draft',
+  'Pending',
+] as const;
+
+/** True when reverting or unscheduling should detach the order from `trips.order_ids`. */
+export function shouldReleaseOrderFromTrips(prevStatus: string, nextStatus: string): boolean {
+  const prev = String(prevStatus ?? '').trim();
+  const next = String(nextStatus ?? '').trim();
+  if (!(ORDER_TRIP_LINKED_STATUSES as readonly string[]).includes(prev)) return false;
+  return (ORDER_RELEASE_TRIP_TO_STATUSES as readonly string[]).includes(next);
+}
+
+export type ReleaseOrderFromTripsResult = {
+  ok: boolean;
+  error?: string;
+  tripsUpdated: number;
+  tripsDeleted: number;
+  tripIds: string[];
+};
+
+async function recalcTripLoadFromOrders(
+  orderIds: string[],
+  maxWeightKg: number,
+  maxVolumeCbm: number,
+): Promise<{ weightKg: number; volumeCbm: number; capacityPct: number }> {
+  if (!orderIds.length) return { weightKg: 0, volumeCbm: 0, capacityPct: 0 };
+
+  const { data: orders, error } = await supabase
+    .from('orders')
+    .select('weight_kg, volume_cbm')
+    .in('id', orderIds);
+  if (error) throw new Error(error.message);
+
+  let weightKg = 0;
+  let volumeCbm = 0;
+  for (const o of orders ?? []) {
+    weightKg += num((o as { weight_kg?: unknown }).weight_kg, 0);
+    volumeCbm += num((o as { volume_cbm?: unknown }).volume_cbm, 0);
+  }
+  const wPct = maxWeightKg > 0 ? (weightKg / maxWeightKg) * 100 : 0;
+  const vPct = maxVolumeCbm > 0 ? (volumeCbm / maxVolumeCbm) * 100 : 0;
+  const capacityPct = Math.min(100, Math.round(Math.max(wPct, vPct)));
+  return { weightKg, volumeCbm, capacityPct };
+}
+
+/**
+ * Remove an order from active trips when it is unscheduled or leaves the logistics flow.
+ * Deletes the trip when it was the only order; otherwise updates load totals on the trip.
+ */
+export async function releaseOrderFromActiveTrips(orderId: string): Promise<ReleaseOrderFromTripsResult> {
+  const oid = orderId.trim();
+  if (!oid) {
+    return { ok: false, error: 'Order id required', tripsUpdated: 0, tripsDeleted: 0, tripIds: [] };
+  }
+
+  const { data: tripRows, error: fetchErr } = await supabase
+    .from('trips')
+    .select('id, order_ids, status, max_weight_kg, max_volume_cbm')
+    .contains('order_ids', [oid]);
+
+  if (fetchErr) {
+    return { ok: false, error: fetchErr.message, tripsUpdated: 0, tripsDeleted: 0, tripIds: [] };
+  }
+
+  let tripsUpdated = 0;
+  let tripsDeleted = 0;
+  const tripIds: string[] = [];
+  const now = new Date().toISOString();
+
+  for (const raw of tripRows ?? []) {
+    const row = raw as Record<string, unknown>;
+    if (!isActiveTripStatus(String(row.status ?? ''))) continue;
+
+    const orderIds = ((row.order_ids ?? []) as string[]).filter(Boolean);
+    if (!orderIds.includes(oid)) continue;
+
+    const tripId = String(row.id ?? '');
+    if (!tripId) continue;
+    tripIds.push(tripId);
+
+    const remaining = orderIds.filter((id) => id !== oid);
+
+    if (remaining.length === 0) {
+      const { error: delErr } = await supabase.from('trips').delete().eq('id', tripId);
+      if (delErr) {
+        return { ok: false, error: delErr.message, tripsUpdated, tripsDeleted, tripIds };
+      }
+      tripsDeleted += 1;
+      continue;
+    }
+
+    const maxW = num(row.max_weight_kg, 5000);
+    const maxV = num(row.max_volume_cbm, 25);
+    let load: { weightKg: number; volumeCbm: number; capacityPct: number };
+    try {
+      load = await recalcTripLoadFromOrders(remaining, maxW, maxV);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Could not recalculate trip load';
+      return { ok: false, error: msg, tripsUpdated, tripsDeleted, tripIds };
+    }
+
+    const { error: updErr } = await supabase
+      .from('trips')
+      .update({
+        order_ids: remaining,
+        weight_used_kg: load.weightKg,
+        volume_used_cbm: load.volumeCbm,
+        capacity_used_percent: load.capacityPct,
+        updated_at: now,
+      })
+      .eq('id', tripId);
+
+    if (updErr) {
+      return { ok: false, error: updErr.message, tripsUpdated, tripsDeleted, tripIds };
+    }
+    tripsUpdated += 1;
+  }
+
+  return { ok: true, tripsUpdated, tripsDeleted, tripIds };
 }

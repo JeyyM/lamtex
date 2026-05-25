@@ -1,15 +1,19 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, Navigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagination';
 import { ProofOfDeliveryModal } from '@/src/components/orders/ProofOfDeliveryModal';
 import { useAppContext } from '@/src/store/AppContext';
 import { supabase } from '@/src/lib/supabase';
 import { getPeriodRange, type PeriodKey } from '@/src/lib/agentAnalytics';
-import type { OrderUrgency } from '@/src/types/orders';
-
+import {
+  fetchDelayedTripOrderIdsForBranch,
+  markOrdersDelayedForTrip,
+  orderListDisplayStatus,
+} from '@/src/lib/orderTripDelay';
 const orderLogRoleMap: Record<string, 'Agent' | 'Warehouse Staff' | 'Manager' | 'Admin' | 'System' | 'Logistics'> = {
   Executive: 'Admin',
   Manager: 'Manager',
@@ -74,6 +78,7 @@ interface OrderRow {
   balance_due: number;
   status: string;
   payment_status: string;
+  delivery_status: string | null;
   requires_approval: boolean;
   delivery_address: string | null;
   urgency: string | null;
@@ -314,6 +319,7 @@ function mapFetchedOrderRow(
     balance_due: Number(raw.balance_due ?? 0),
     status: String(raw.status ?? ''),
     payment_status: String(raw.payment_status ?? ''),
+    delivery_status: (raw.delivery_status as string | null) ?? null,
     requires_approval: Boolean(raw.requires_approval),
     delivery_address: (raw.delivery_address as string | null) ?? null,
     urgency: (raw.urgency as string | null) ?? null,
@@ -452,6 +458,7 @@ export function OrdersPage() {
   const [showProofModal, setShowProofModal] = useState(false);
   const [selectedOrderForProof, setSelectedOrderForProof] = useState<{ id: string; customer: string } | null>(null);
   const [allOrders, setAllOrders] = useState<OrderRow[]>([]);
+  const [delayedTripOrderIds, setDelayedTripOrderIds] = useState<Set<string>>(() => new Set());
   /** UUID from `branches` for the navbar branch; export only rows matching this (avoids stale cross-branch data). */
   const [resolvedBranchIdForList, setResolvedBranchIdForList] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -564,6 +571,7 @@ export function OrdersPage() {
           balance_due,
           status,
           payment_status,
+          delivery_status,
           requires_approval,
           delivery_address,
           urgency,
@@ -599,6 +607,10 @@ export function OrdersPage() {
 
     if (isStale()) return;
 
+    const delayedIds = await fetchDelayedTripOrderIdsForBranch(branchData.id);
+    if (isStale()) return;
+
+    setDelayedTripOrderIds(delayedIds);
     setAllOrders(
       orderRows.map((raw) => {
         const id = String(raw.id ?? '');
@@ -701,6 +713,7 @@ export function OrdersPage() {
       'Packed',
       'Ready',
       'In Transit',
+      'Delayed',
       'Partially Fulfilled',
       'Delivered',
       'Completed',
@@ -710,8 +723,15 @@ export function OrdersPage() {
     [],
   );
 
+  const orderDisplayStatus = useCallback(
+    (o: OrderRow) => orderListDisplayStatus(o.status, o.delivery_status, delayedTripOrderIds.has(o.id)),
+    [delayedTripOrderIds],
+  );
+
   const distinctOrderStatuses = useMemo(() => {
-    const s = new Set<string>(allOrders.map((o) => o.status).filter((v): v is string => Boolean(v)));
+    const s = new Set<string>();
+    for (const o of allOrders) s.add(orderDisplayStatus(o));
+    s.add('Delayed');
     return Array.from(s).sort((a, b) => {
       const ia = orderStatusListOrder.indexOf(a);
       const ib = orderStatusListOrder.indexOf(b);
@@ -720,7 +740,7 @@ export function OrdersPage() {
       if (ib === -1) return -1;
       return ia - ib;
     });
-  }, [allOrders, orderStatusListOrder]);
+  }, [allOrders, orderStatusListOrder, orderDisplayStatus]);
 
   // Canonical payment-status filter options. Listed in lifecycle order so the
   // dropdown reads naturally. 'Invoiced' is intentionally excluded because the
@@ -735,7 +755,8 @@ export function OrdersPage() {
       order.order_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
       (order.customer_name ?? '').toLowerCase().includes(searchTerm.toLowerCase());
 
-    const matchesHeaderStatus = headerStatusFilter === '' || order.status === headerStatusFilter;
+    const matchesHeaderStatus =
+      headerStatusFilter === '' || orderDisplayStatus(order) === headerStatusFilter;
     const matchesHeaderPayment = headerPaymentFilter === '' || order.payment_status === headerPaymentFilter;
 
     return matchesSearch && matchesHeaderStatus && matchesHeaderPayment;
@@ -767,7 +788,7 @@ export function OrdersPage() {
         case 'order_date': av = a.order_date ?? ''; bv = b.order_date ?? ''; break;
         case 'required_date': av = a.required_date ?? ''; bv = b.required_date ?? ''; break;
         case 'amount': av = a.total_amount; bv = b.total_amount; break;
-        case 'status': av = a.status; bv = b.status; break;
+        case 'status': av = orderDisplayStatus(a); bv = orderDisplayStatus(b); break;
         case 'urgency': {
           const rank = (u: string | null) => {
             const x = (u === 'Low' || u === 'Medium' || u === 'High' || u === 'Critical' ? u : 'Medium') as OrderUrgency;
@@ -791,7 +812,7 @@ export function OrdersPage() {
       if (as > bs) return sortDir === 'asc' ? 1 : -1;
       return 0;
     });
-  }, [filteredOrders, sortKey, sortDir]);
+  }, [filteredOrders, sortKey, sortDir, orderDisplayStatus]);
 
   const totalListPages = Math.max(1, Math.ceil(sortedOrders.length / TABLE_PAGE_SIZE) || 1);
   const pagedOrders = useMemo(() => {
@@ -805,6 +826,7 @@ export function OrdersPage() {
   }, [tablePage, totalListPages]);
 
   const getStatusBadgeVariant = (status: string): 'success' | 'warning' | 'danger' | 'info' | 'default' | 'neutral' | 'outline' | 'destructive' => {
+    if (status === 'Delayed') return 'danger';
     if (['Delivered', 'Completed', 'Approved'].includes(status)) return 'success';
     if (['Pending', 'Scheduled', 'Loading', 'Packed', 'Ready'].includes(status)) return 'warning';
     if (['Rejected', 'Cancelled'].includes(status)) return 'danger';
@@ -901,96 +923,9 @@ export function OrdersPage() {
     addAuditLog('Uploaded Proof of Delivery', 'Order', `Uploaded delivery proof for order ${orderId}`);
   };
 
-  // Driver Simplified View
+  // Drivers use the dashboard for trips — not the orders list
   if (role === 'Driver') {
-    const driverOrders = allOrders.filter(order =>
-      order.status === 'In Transit' || ['Delivered', 'Completed'].includes(order.status)
-    ).filter(order =>
-      order.order_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (order.customer_name ?? '').toLowerCase().includes(searchTerm.toLowerCase())
-    );
-
-    return (
-      <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">My Deliveries</h1>
-          <p className="text-sm text-gray-500 mt-1">Track and complete your assigned deliveries</p>
-        </div>
-        <Card>
-          <CardHeader>
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <input type="text" placeholder="Search by order # or customer..." value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none" />
-            </div>
-          </CardHeader>
-        </Card>
-        <div className="grid gap-4">
-          {driverOrders.map((order) => (
-            <Card key={order.id} className="hover:shadow-md transition-shadow">
-              <CardContent className="p-6">
-                <div className="space-y-4">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        <h3 className="text-lg font-semibold text-gray-900">{order.order_number}</h3>
-                        <Badge variant={getStatusBadgeVariant(order.status)} className="text-xs">{order.status}</Badge>
-                      </div>
-                      <p className="text-sm text-gray-500">Customer: {order.customer_name}</p>
-                    </div>
-                    {order.status === 'In Transit' && (
-                      <Button variant="primary" size="sm" className="gap-2 flex-shrink-0"
-                        onClick={() => handleSendProof(order.id, order.customer_name ?? '')}>
-                        <Camera className="w-4 h-4" />Send Proof
-                      </Button>
-                    )}
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 p-4 bg-gray-50 rounded-lg">
-                    <div className="flex items-start gap-3">
-                      <MapPin className="w-5 h-5 text-gray-400 flex-shrink-0 mt-0.5" />
-                      <div><p className="text-xs text-gray-500 mb-0.5">Delivery Address</p>
-                        <p className="text-sm font-medium text-gray-900">{order.delivery_address || '—'}</p></div>
-                    </div>
-                    <div className="flex items-start gap-3">
-                      <Calendar className="w-5 h-5 text-gray-400 flex-shrink-0 mt-0.5" />
-                      <div><p className="text-xs text-gray-500 mb-0.5">Required Date</p>
-                        <p className="text-sm font-medium text-gray-900">{order.required_date ?? '—'}</p></div>
-                    </div>
-                    <div className="flex items-start gap-3">
-                      <Package className="w-5 h-5 text-gray-400 flex-shrink-0 mt-0.5" />
-                      <div><p className="text-xs text-gray-500 mb-0.5">Total</p>
-                        <p className="text-sm font-medium text-gray-900">₱{order.total_amount.toLocaleString()}</p></div>
-                    </div>
-                  </div>
-                  <div className="flex flex-col sm:flex-row gap-2 pt-2 border-t border-gray-200">
-                    <Link
-                      to={`/orders/${order.id}`}
-                      onClick={() => logOrderOpenedFromList(order.id)}
-                      className="inline-flex items-center justify-center font-medium transition-colors rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 h-8 px-3 text-xs gap-2 flex-1 sm:flex-initial"
-                    >
-                      <FileText className="w-4 h-4" aria-hidden />
-                      View Details
-                    </Link>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-          {driverOrders.length === 0 && (
-            <Card><CardContent className="py-12 text-center text-gray-500">
-              <Truck className="w-12 h-12 mx-auto mb-3 text-gray-400" />
-              <p className="font-medium">No deliveries found</p>
-            </CardContent></Card>
-          )}
-        </div>
-        {showProofModal && selectedOrderForProof && (
-          <ProofOfDeliveryModal orderId={selectedOrderForProof.id} customerName={selectedOrderForProof.customer}
-            onClose={() => { setShowProofModal(false); setSelectedOrderForProof(null); }}
-            onSubmit={handleProofSubmit} />
-        )}
-      </div>
-    );
+    return <Navigate to="/" replace />;
   }
 
   // Regular view
@@ -1156,7 +1091,7 @@ export function OrdersPage() {
                           {order.requires_approval && <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />}
                         </div>
                         <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                          <Badge variant={getStatusBadgeVariant(order.status)} className="text-xs">{order.status}</Badge>
+                          <Badge variant={getStatusBadgeVariant(orderDisplayStatus(order))} className="text-xs">{orderDisplayStatus(order)}</Badge>
                           <Badge variant={getUrgencyBadgeVariant(order.urgency)} className="text-xs">
                             {displayUrgency(order.urgency)}
                           </Badge>
@@ -1308,7 +1243,7 @@ export function OrdersPage() {
                         <td className="relative px-6 py-4 align-top">
                           {rowOverlay({})}
                           <span className="relative z-10 inline-flex pointer-events-none">
-                            <Badge variant={getStatusBadgeVariant(order.status)} className="min-w-[120px] justify-center">{order.status}</Badge>
+                            <Badge variant={getStatusBadgeVariant(orderDisplayStatus(order))} className="min-w-[120px] justify-center">{orderDisplayStatus(order)}</Badge>
                           </span>
                         </td>
                         <td className="relative px-6 py-4 align-top">
@@ -1349,12 +1284,7 @@ export function OrdersPage() {
         </CardContent>
       </Card>
 
-      {periodModalOpen && (
-        <div
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
-          role="presentation"
-          onClick={() => setPeriodModalOpen(false)}
-        >
+      <PortalModalOverlay open={periodModalOpen} onClose={() => setPeriodModalOpen(false)}>
           <div
             className="bg-white rounded-lg shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto"
             role="dialog"
@@ -1433,8 +1363,7 @@ export function OrdersPage() {
               )}
             </div>
           </div>
-        </div>
-      )}
+      </PortalModalOverlay>
 
       {showProofModal && selectedOrderForProof && (
         <ProofOfDeliveryModal orderId={selectedOrderForProof.id} customerName={selectedOrderForProof.customer}

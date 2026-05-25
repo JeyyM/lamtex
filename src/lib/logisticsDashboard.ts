@@ -10,10 +10,8 @@
  *     an active trip)
  *   - Fleet status breakdown (vehicles per status, maintenance due)
  *   - Driver availability
- *   - Inter-branch transfers their branch is shipping out (`In Transit`,
- *     `Scheduled`, etc., where they're the requesting branch)
  *   - Open delay exceptions
- *   - 7-day delivery performance (completed / delayed / failed)
+ *   - Month dispatch calendar (loaded separately by `LogisticsDispatchCalendar`)
  *
  * Branch scope: a logistics manager works inside a single branch — we hard
  * resolve the branch UUID via `resolveBranchIdByName` and rely on `branch_id`
@@ -22,6 +20,7 @@
 
 import { supabase } from '@/src/lib/supabase';
 import { resolveBranchIdByName } from '@/src/lib/branchCompanySettings';
+import { parseDelayTypeFromReason } from '@/src/lib/orderTripDelay';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -93,18 +92,6 @@ export interface LogisticsDriverRow {
   activeTripNumber: string | null;
 }
 
-export interface LogisticsIbrRow {
-  id: string;
-  ibrNumber: string;
-  status: string;
-  fulfillingBranchName: string | null;
-  requestingBranchName: string | null;
-  scheduledDepartureDate: string | null;
-  daysUntilDeparture: number | null;
-  direction: 'outgoing' | 'incoming';
-  itemCount: number;
-}
-
 export interface LogisticsDelayRow {
   id: string;
   type: string;
@@ -130,16 +117,6 @@ export interface LogisticsMaintenanceRow {
   status: string;
   vendor: string | null;
   cost: number;
-}
-
-export interface LogisticsPerformancePoint {
-  /** `YYYY-MM-DD` */
-  dayKey: string;
-  label: string;
-  completed: number;
-  delayed: number;
-  failed: number;
-  total: number;
 }
 
 export interface LogisticsFleetSummary {
@@ -172,20 +149,8 @@ export interface LogisticsDashboardBundle {
   ordersAwaitingDispatch: LogisticsOrderToDispatchRow[];
   ordersAwaitingDispatchCount: number;
 
-  ibrs: LogisticsIbrRow[];
-  ibrCount: number;
-
   delays: LogisticsDelayRow[];
   delayCount: number;
-
-  performance: {
-    points: LogisticsPerformancePoint[];
-    completed: number;
-    delayed: number;
-    failed: number;
-    onTimePct: number;
-    completionPct: number;
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -194,7 +159,6 @@ export interface LogisticsDashboardBundle {
 
 const ACTIVE_TRIP_STATUSES = ['Loading', 'In Transit', 'Delayed'];
 
-const OUTBOUND_IBR_STATUSES = ['Approved', 'Scheduled', 'Loading', 'Packed', 'Ready', 'In Transit', 'Partially Fulfilled'];
 const ORDER_DISPATCH_STATUSES = ['Approved', 'Partially Fulfilled'];
 const OPEN_DELAY_STATUSES = ['Open', 'In Progress', 'Escalated'];
 const ACTIVE_MAINTENANCE_STATUSES = ['Scheduled', 'In Progress'];
@@ -218,17 +182,6 @@ function toStr(v: unknown): string | null {
     return t === '' ? null : t;
   }
   if (typeof v === 'number') return String(v);
-  return null;
-}
-
-function nestedName(value: unknown): string | null {
-  if (!value) return null;
-  if (Array.isArray(value)) {
-    return toStr((value[0] as { name?: unknown } | undefined)?.name ?? null);
-  }
-  if (typeof value === 'object') {
-    return toStr((value as { name?: unknown }).name ?? null);
-  }
   return null;
 }
 
@@ -258,34 +211,50 @@ function logDev(scope: string, err: unknown): void {
 // Sub-fetchers
 // ---------------------------------------------------------------------------
 
-const TRIP_SELECT = `
+const TRIP_SELECT_BASE = `
   id, trip_number, status, scheduled_date, departure_time, eta, actual_arrival, delay_reason,
   vehicle_id, vehicle_name, driver_id, driver_name, destinations, order_ids,
-  capacity_used_percent, weight_used_kg, volume_used_cbm, max_weight_kg, max_volume_cbm,
-  vehicles ( plate_number )
+  capacity_used_percent, weight_used_kg, volume_used_cbm, max_weight_kg, max_volume_cbm
 `;
 
+/** @deprecated Prefer TRIP_SELECT_BASE — kept as alias for call sites. */
+const TRIP_SELECT = TRIP_SELECT_BASE;
+
+function tripOverlapsWeek(
+  scheduledDate: string | null,
+  eta: string | null,
+  weekStart: string,
+  weekEnd: string,
+): boolean {
+  const start = scheduledDate?.trim().slice(0, 10) ?? '';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) return false;
+  const end = (eta?.trim().slice(0, 10) || start);
+  return start <= weekEnd && end >= weekStart;
+}
+
+function mapTripStatusLabel(status: string | null | undefined): string {
+  const s = String(status ?? '').trim();
+  if (s === 'Planned') return 'Scheduled';
+  if (s === 'Completed') return 'Complete';
+  if (s === 'Failed') return 'Cancelled';
+  return s || '—';
+}
+
 function mapTripRow(row: Record<string, unknown>): LogisticsTripRow {
-  const plate = row.vehicles && typeof row.vehicles === 'object'
-    ? toStr(
-        Array.isArray(row.vehicles)
-          ? (row.vehicles[0] as { plate_number?: unknown } | undefined)?.plate_number
-          : (row.vehicles as { plate_number?: unknown }).plate_number,
-      )
-    : null;
   const destinations = (row.destinations as string[] | null) ?? [];
   const orderIds = (row.order_ids as string[] | null) ?? [];
+  const rawStatus = toStr(row.status) ?? '—';
 
   return {
     id: String(row.id),
     tripNumber: toStr(row.trip_number) ?? String(row.id),
-    status: toStr(row.status) ?? '—',
-    scheduledDate: toStr(row.scheduled_date),
+    status: mapTripStatusLabel(rawStatus),
+    scheduledDate: toStr(row.scheduled_date)?.slice(0, 10) ?? null,
     departureTime: toStr(row.departure_time),
     eta: toStr(row.eta),
     vehicleUuid: toStr(row.vehicle_id),
     vehicleName: toStr(row.vehicle_name),
-    plateNumber: plate,
+    plateNumber: null,
     driverUuid: toStr(row.driver_id),
     driverName: toStr(row.driver_name),
     destinations,
@@ -324,17 +293,27 @@ async function fetchWeekSchedule(branchId: string | null): Promise<LogisticsTrip
     const endDt = new Date();
     endDt.setDate(endDt.getDate() + 6);
     const end = isoDate(endDt);
+
+    // Pull trips that start on/before week end; filter overlap client-side so multi-day
+    // container voyages (scheduled_date … eta) still appear in the window.
     const { data, error } = await supabase
       .from('trips')
-      .select(TRIP_SELECT)
+      .select(TRIP_SELECT_BASE)
       .eq('branch_id', branchId)
-      .gte('scheduled_date', start)
       .lte('scheduled_date', end)
+      .not('status', 'in', '("Completed","Failed")')
       .order('scheduled_date', { ascending: true })
       .order('departure_time', { ascending: true })
-      .limit(50);
+      .limit(100);
+
     if (error) throw error;
-    return ((data ?? []) as Array<Record<string, unknown>>).map(mapTripRow);
+
+    return ((data ?? []) as Array<Record<string, unknown>>)
+      .filter((row) =>
+        tripOverlapsWeek(toStr(row.scheduled_date), toStr(row.eta), start, end),
+      )
+      .map(mapTripRow)
+      .slice(0, 50);
   } catch (e) {
     logDev('week schedule', e);
     return [];
@@ -557,63 +536,28 @@ async function fetchDriversSnapshot(
   }
 }
 
-async function fetchInterBranchTransfers(branchId: string | null): Promise<LogisticsIbrRow[]> {
-  if (!branchId) return [];
-  try {
-    const { data, error } = await supabase
-      .from('inter_branch_requests')
-      .select(
-        `id, ibr_number, status, scheduled_departure_date,
-         requesting_branch_id, fulfilling_branch_id,
-         req_br:branches!requesting_branch_id(name),
-         ful_br:branches!fulfilling_branch_id(name),
-         inter_branch_request_items(id)`,
-      )
-      .or(`requesting_branch_id.eq.${branchId},fulfilling_branch_id.eq.${branchId}`)
-      .in('status', OUTBOUND_IBR_STATUSES)
-      .order('scheduled_departure_date', { ascending: true })
-      .limit(10);
-    if (error) throw error;
-
-    const now = new Date();
-    return ((data ?? []) as Array<Record<string, unknown>>).map((r) => {
-      const fulfillingBranch = nestedName(r.ful_br);
-      const requestingBranch = nestedName(r.req_br);
-      const isOutgoing = toStr(r.fulfilling_branch_id) === branchId;
-      const departure = toStr(r.scheduled_departure_date);
-      return {
-        id: String(r.id),
-        ibrNumber: toStr(r.ibr_number) ?? String(r.id),
-        status: toStr(r.status) ?? '—',
-        fulfillingBranchName: fulfillingBranch,
-        requestingBranchName: requestingBranch,
-        scheduledDepartureDate: departure,
-        daysUntilDeparture: diffDays(departure, now),
-        direction: isOutgoing ? 'outgoing' : 'incoming',
-        itemCount: Array.isArray(r.inter_branch_request_items)
-          ? (r.inter_branch_request_items as unknown[]).length
-          : 0,
-      };
-    });
-  } catch (e) {
-    logDev('IBRs', e);
-    return [];
-  }
-}
-
 async function fetchOpenDelayExceptions(branchId: string | null): Promise<LogisticsDelayRow[]> {
   if (!branchId) return [];
   try {
-    const { data, error } = await supabase
-      .from('delay_exceptions')
-      .select('id, type, affected_trip, days_late, owner, status, reported_date, affected_orders, customers_affected')
-      .eq('branch_id', branchId)
-      .in('status', OPEN_DELAY_STATUSES)
-      .order('reported_date', { ascending: false })
-      .limit(10);
-    if (error) throw error;
+    const [{ data: exceptionRows, error: exErr }, { data: delayedTrips, error: tripErr }] = await Promise.all([
+      supabase
+        .from('delay_exceptions')
+        .select(
+          'id, type, affected_trip, trip_id, days_late, owner, status, reported_date, affected_orders, customers_affected',
+        )
+        .eq('branch_id', branchId)
+        .in('status', OPEN_DELAY_STATUSES)
+        .order('reported_date', { ascending: false }),
+      supabase
+        .from('trips')
+        .select('id, trip_number, delay_reason, order_ids, scheduled_date, driver_name, updated_at')
+        .eq('branch_id', branchId)
+        .eq('status', 'Delayed'),
+    ]);
+    if (exErr) throw exErr;
+    if (tripErr) throw tripErr;
 
-    return ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
+    const rows: LogisticsDelayRow[] = ((exceptionRows ?? []) as Array<Record<string, unknown>>).map((r) => ({
       id: String(r.id),
       type: toStr(r.type) ?? '—',
       affectedTripNumber: toStr(r.affected_trip),
@@ -624,6 +568,73 @@ async function fetchOpenDelayExceptions(branchId: string | null): Promise<Logist
       affectedOrders: Array.isArray(r.affected_orders) ? (r.affected_orders as unknown[]).length : 0,
       customersAffected: Array.isArray(r.customers_affected) ? (r.customers_affected as unknown[]).length : 0,
     }));
+
+    const coveredTripIds = new Set(
+      ((exceptionRows ?? []) as Array<Record<string, unknown>>)
+        .map((r) => toStr(r.trip_id))
+        .filter(Boolean) as string[],
+    );
+
+    const uncoveredTrips = ((delayedTrips ?? []) as Array<Record<string, unknown>>).filter(
+      (t) => !coveredTripIds.has(String(t.id)),
+    );
+
+    if (uncoveredTrips.length > 0) {
+      const orderIds = [
+        ...new Set(
+          uncoveredTrips.flatMap((t) =>
+            Array.isArray(t.order_ids) ? (t.order_ids as unknown[]).map(String).filter(Boolean) : [],
+          ),
+        ),
+      ];
+      const orderMeta = new Map<string, { orderNumber: string; customerName: string }>();
+      if (orderIds.length) {
+        const { data: orderRows } = await supabase
+          .from('orders')
+          .select('id, order_number, customer_name')
+          .in('id', orderIds);
+        for (const o of (orderRows ?? []) as Array<Record<string, unknown>>) {
+          orderMeta.set(String(o.id), {
+            orderNumber: toStr(o.order_number) ?? '—',
+            customerName: toStr(o.customer_name) ?? '—',
+          });
+        }
+      }
+
+      const today = isoDate(new Date());
+      for (const t of uncoveredTrips) {
+        const tripId = String(t.id);
+        const orderIdList = Array.isArray(t.order_ids)
+          ? (t.order_ids as unknown[]).map(String).filter(Boolean)
+          : [];
+        const orderNumbers = orderIdList.map((id) => orderMeta.get(id)?.orderNumber ?? id);
+        const customerNames = [
+          ...new Set(orderIdList.map((id) => orderMeta.get(id)?.customerName).filter(Boolean) as string[]),
+        ];
+        const scheduled = toStr(t.scheduled_date);
+        let daysLate = 0;
+        if (scheduled) {
+          const sched = new Date(`${scheduled}T12:00:00`);
+          const now = new Date(`${today}T12:00:00`);
+          daysLate = Math.max(0, Math.floor((now.getTime() - sched.getTime()) / 86_400_000));
+        }
+        const delayReason = toStr(t.delay_reason) ?? '';
+        rows.push({
+          id: `trip-${tripId}`,
+          type: delayReason ? parseDelayTypeFromReason(delayReason) : 'Other',
+          affectedTripNumber: toStr(t.trip_number),
+          daysLate,
+          status: 'Open',
+          owner: toStr(t.driver_name),
+          reportedDate: toStr(t.updated_at)?.slice(0, 10) ?? today,
+          affectedOrders: orderNumbers.length,
+          customersAffected: customerNames.length,
+        });
+      }
+    }
+
+    rows.sort((a, b) => (b.reportedDate ?? '').localeCompare(a.reportedDate ?? ''));
+    return rows;
   } catch (e) {
     logDev('delay exceptions', e);
     return [];
@@ -690,73 +701,6 @@ async function fetchUpcomingMaintenance(
   }
 }
 
-async function fetchPerformanceTrend(branchId: string | null): Promise<{
-  points: LogisticsPerformancePoint[];
-  completed: number;
-  delayed: number;
-  failed: number;
-  onTimePct: number;
-  completionPct: number;
-}> {
-  const points: LogisticsPerformancePoint[] = [];
-  const now = new Date();
-  for (let i = 6; i >= 0; i--) {
-    const dt = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
-    points.push({
-      dayKey: isoDate(dt),
-      label: dt.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
-      completed: 0,
-      delayed: 0,
-      failed: 0,
-      total: 0,
-    });
-  }
-  if (!branchId) {
-    return { points, completed: 0, delayed: 0, failed: 0, onTimePct: 0, completionPct: 0 };
-  }
-  try {
-    const since = points[0]?.dayKey ?? isoDate(now);
-    const { data, error } = await supabase
-      .from('trips')
-      .select('scheduled_date, status')
-      .eq('branch_id', branchId)
-      .gte('scheduled_date', since)
-      .lte('scheduled_date', isoDate(now));
-    if (error) throw error;
-
-    const index = new Map(points.map((p) => [p.dayKey, p]));
-    let completed = 0;
-    let delayed = 0;
-    let failed = 0;
-    for (const r of (data ?? []) as Array<Record<string, unknown>>) {
-      const day = toStr(r.scheduled_date);
-      const status = toStr(r.status);
-      if (!day || !status) continue;
-      const pt = index.get(day);
-      if (!pt) continue;
-      pt.total += 1;
-      if (status === 'Completed') {
-        pt.completed += 1;
-        completed += 1;
-      } else if (status === 'Delayed') {
-        pt.delayed += 1;
-        delayed += 1;
-      } else if (status === 'Failed') {
-        pt.failed += 1;
-        failed += 1;
-      }
-    }
-
-    const closed = completed + delayed + failed;
-    const onTimePct = closed > 0 ? (completed / closed) * 100 : 0;
-    const completionPct = closed > 0 ? ((completed + delayed) / closed) * 100 : 0;
-    return { points, completed, delayed, failed, onTimePct, completionPct };
-  } catch (e) {
-    logDev('performance', e);
-    return { points, completed: 0, delayed: 0, failed: 0, onTimePct: 0, completionPct: 0 };
-  }
-}
-
 // ---------------------------------------------------------------------------
 // KPI builder
 // ---------------------------------------------------------------------------
@@ -765,10 +709,7 @@ function buildKpis(opts: {
   weekScheduled: number;
   ordersAwaitingDispatch: number;
   delays: number;
-  performance: { completed: number; delayed: number; failed: number; onTimePct: number };
 }): LogisticsKPI[] {
-  const closed = opts.performance.completed + opts.performance.delayed + opts.performance.failed;
-
   return [
     {
       id: 'kpi-week',
@@ -790,24 +731,6 @@ function buildKpis(opts: {
       href: '/logistics?tab=dispatch',
     },
     {
-      id: 'kpi-on-time',
-      label: 'On-time (7d)',
-      value: closed > 0 ? `${opts.performance.onTimePct.toFixed(0)}%` : '—',
-      subtitle:
-        closed > 0
-          ? `${opts.performance.completed}/${closed} closed trips`
-          : 'No trips closed in last 7 days',
-      status:
-        closed === 0
-          ? 'neutral'
-          : opts.performance.onTimePct >= 90
-            ? 'good'
-            : opts.performance.onTimePct >= 75
-              ? 'warning'
-              : 'danger',
-      href: '/logistics?tab=dispatch',
-    },
-    {
       id: 'kpi-delays',
       label: 'Open delays',
       value: opts.delays.toString(),
@@ -816,6 +739,39 @@ function buildKpis(opts: {
       href: '/logistics?tab=dispatch',
     },
   ];
+}
+
+/** Trips overlapping a calendar month (includes multi-day voyages). */
+export async function fetchCalendarTrips(
+  branchId: string,
+  year: number,
+  month: number,
+): Promise<LogisticsTripRow[]> {
+  try {
+    const monthStart = isoDate(new Date(year, month, 1));
+    const monthEnd = isoDate(new Date(year, month + 1, 0));
+
+    const { data, error } = await supabase
+      .from('trips')
+      .select(TRIP_SELECT_BASE)
+      .eq('branch_id', branchId)
+      .lte('scheduled_date', monthEnd)
+      .not('status', 'eq', 'Failed')
+      .order('scheduled_date', { ascending: true })
+      .order('departure_time', { ascending: true })
+      .limit(500);
+
+    if (error) throw error;
+
+    return ((data ?? []) as Array<Record<string, unknown>>)
+      .filter((row) =>
+        tripOverlapsWeek(toStr(row.scheduled_date), toStr(row.eta), monthStart, monthEnd),
+      )
+      .map(mapTripRow);
+  } catch (e) {
+    logDev('calendar trips', e);
+    return [];
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -829,25 +785,16 @@ export async function fetchLogisticsDashboard(opts: {
   const branchName = branchTrim === '' ? null : branchTrim;
   const branchId = branchName ? await resolveBranchIdByName(branchName) : null;
 
-  const [
-    weekSchedule,
-    ordersAwaitingDispatch,
-    ibrs,
-    delays,
-    performance,
-  ] = await Promise.all([
+  const [weekSchedule, ordersAwaitingDispatch, allDelays] = await Promise.all([
     fetchWeekSchedule(branchId),
     fetchOrdersAwaitingDispatch(branchId),
-    fetchInterBranchTransfers(branchId),
     fetchOpenDelayExceptions(branchId),
-    fetchPerformanceTrend(branchId),
   ]);
 
   const kpis = buildKpis({
     weekScheduled: weekSchedule.length,
     ordersAwaitingDispatch: ordersAwaitingDispatch.length,
-    delays: delays.length,
-    performance,
+    delays: allDelays.length,
   });
 
   return {
@@ -862,13 +809,8 @@ export async function fetchLogisticsDashboard(opts: {
     ordersAwaitingDispatch,
     ordersAwaitingDispatchCount: ordersAwaitingDispatch.length,
 
-    ibrs,
-    ibrCount: ibrs.length,
-
-    delays,
-    delayCount: delays.length,
-
-    performance,
+    delays: allDelays.slice(0, 10),
+    delayCount: allDelays.length,
   };
 }
 

@@ -23,6 +23,7 @@ export interface ContainerShipmentCreatedFeedback {
 
 interface ContainerScheduleViewProps {
   ordersReady: OrderReadyForDispatch[];
+  ordersLoading?: boolean;
   containers: Vehicle[];
   existingTrips: Trip[];
   initialSelectedOrderIds?: string[];
@@ -37,6 +38,7 @@ interface ContainerScheduleViewProps {
 
 export function ContainerScheduleView({
   ordersReady,
+  ordersLoading = false,
   containers,
   existingTrips,
   initialSelectedOrderIds,
@@ -180,7 +182,12 @@ export function ContainerScheduleView({
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <div className="lg:col-span-2 space-y-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Orders ready to ship</p>
-            {ordersReady.length === 0 ? (
+            {ordersLoading ? (
+              <div className="flex flex-col items-center justify-center gap-2 py-10 text-gray-500 border border-dashed border-gray-200 rounded-lg">
+                <Loader2 className="h-6 w-6 animate-spin text-cyan-700" aria-hidden />
+                <p className="text-sm">Loading available orders…</p>
+              </div>
+            ) : ordersReady.length === 0 ? (
               <p className="text-sm text-gray-500 py-6 text-center border border-dashed border-gray-200 rounded-lg">
                 No approved orders with delivery type Ship are waiting for a container.
               </p>

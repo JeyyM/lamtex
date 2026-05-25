@@ -1,1007 +1,522 @@
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAppContext } from '@/src/store/AppContext';
-import { KpiTile } from '@/src/components/dashboard/KpiTile';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { CreateOrderModal } from '@/src/components/orders/CreateOrderModal';
+import { AgentPersonalKpiStrip } from '@/src/components/agent/AgentPersonalKpiStrip';
 import {
-  User,
+  DashQueueLink,
+  DashTableRowLink,
+  DashHeaderLink,
+  DASH_LINK_CLASS,
+} from '@/src/components/executive/executiveLinks';
+import {
   ShoppingCart,
-  DollarSign,
-  FileText,
   AlertTriangle,
+  Loader2,
+  RefreshCw,
+  Target,
   TrendingUp,
-  TrendingDown,
-  Phone,
-  Mail,
-  MapPin,
-  Calendar,
-  CheckCircle,
-  XCircle,
-  Clock,
-  Package,
+  Users,
   ArrowRight,
-  Star,
-  BarChart3,
-  PieChart as PieChartIcon,
+  ChevronRight,
+  Award,
 } from 'lucide-react';
 import {
-  ComposedChart,
-  Line,
+  BarChart,
   Bar,
-  Area,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
   Legend,
   ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
+  ReferenceLine,
 } from 'recharts';
 import {
-  getAgentKPIsByBranch,
-  getAgentCustomersByBranch,
-  getAgentOrdersByBranch,
-  getPODCollectionsByBranch,
-  getPaymentCollectionsByBranch,
-  getPurchaseRequestsByBranch,
-  getAgentPerformanceByBranch,
-  getCommissionsByBranch,
-  getAgentActivitiesByBranch,
-  getAgentAlertsByBranch,
-} from '@/src/mock/agentDashboard';
+  fetchAgentDashboard,
+  formatCurrencyShort,
+  formatPercent,
+  type AgentDashboardBundle,
+  type AgentDashboardOrderRow,
+  type AgentDashboardCustomerRow,
+  type AgentDashboardPendingCommissionRow,
+} from '@/src/lib/agentDashboard';
 
-export function AgentDashboard() {
-  const { branch, addAuditLog } = useAppContext();
-  const navigate = useNavigate();
+function formatDateShort(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return iso.slice(0, 10);
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function orderStatusVariant(status: string): 'success' | 'warning' | 'danger' | 'info' | 'default' | 'neutral' {
+  if (status === 'Delivered' || status === 'Approved') return 'success';
+  if (status === 'Pending' || status === 'Draft' || status === 'Scheduled' || status === 'Loading') return 'warning';
+  if (status === 'Cancelled' || status === 'Rejected' || status === 'Delayed') return 'danger';
+  if (status === 'In Transit' || status === 'Ready') return 'info';
+  return 'default';
+}
+
+function paymentStatusVariant(status: string): 'success' | 'warning' | 'danger' | 'default' {
+  if (status === 'Paid') return 'success';
+  if (status === 'Overdue' || status === 'Partial') return 'danger';
+  if (status === 'Unbilled' || status === 'Pending') return 'warning';
+  return 'default';
+}
+
+const DASH_LINK_MONO =
+  'font-mono text-xs text-blue-600 hover:text-blue-800 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 rounded-sm';
+
+export function AgentDashboard(): React.ReactElement {
+  const { branch, employeeId, employeeName, addAuditLog } = useAppContext();
+  const [bundle, setBundle] = useState<AgentDashboardBundle | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
 
-  // Get branch-specific data (limited for dashboard preview)
-  const kpis = getAgentKPIsByBranch(branch);
-  const customers = getAgentCustomersByBranch(branch).slice(0, 5);
-  const orders = getAgentOrdersByBranch(branch).slice(0, 5);
-  const pods = getPODCollectionsByBranch(branch).slice(0, 4);
-  const payments = getPaymentCollectionsByBranch(branch).slice(0, 5);
-  const purchaseRequests = getPurchaseRequestsByBranch(branch).slice(0, 3);
-  const performance = getAgentPerformanceByBranch(branch).slice(0, 4);
-  const commissions = getCommissionsByBranch(branch).slice(0, 2);
-  const activities = getAgentActivitiesByBranch(branch).slice(0, 5);
-  const alerts = getAgentAlertsByBranch(branch).slice(0, 4);
+  const load = useCallback(
+    async (silent = false) => {
+      if (!silent) setLoading(true);
+      setRefreshing(silent);
+      setError(null);
+      try {
+        const data = await fetchAgentDashboard({
+          agentId: employeeId,
+          agentName: employeeName,
+          branchName: branch,
+        });
+        setBundle(data);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Failed to load agent dashboard');
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [branch, employeeId, employeeName],
+  );
 
-  const getPaymentStatusColor = (status: string) => {
-    if (status === 'Paid') return 'success';
-    if (status === 'Current' || status === 'Pending') return 'default';
-    if (status === 'Partial' || status === 'Overdue') return 'warning';
-    if (status === 'Critical') return 'danger';
-    return 'default';
-  };
+  useEffect(() => {
+    void load();
+  }, [load]);
 
-  const getOrderStatusColor = (status: string) => {
-    if (status === 'Approved' || status === 'Delivered') return 'success';
-    if (status === 'Pending Approval' || status === 'In Fulfillment' || status === 'Ready for Dispatch') return 'warning';
-    if (status === 'Rejected' || status === 'Cancelled') return 'danger';
-    return 'default';
-  };
+  const greeting = useMemo(() => {
+    const h = new Date().getHours();
+    if (h < 12) return 'Good morning';
+    if (h < 17) return 'Good afternoon';
+    return 'Good evening';
+  }, []);
 
-  const getPRStatusColor = (status: string) => {
-    if (status === 'Approved' || status === 'Received') return 'success';
-    if (status === 'Submitted' || status === 'Under Review' || status === 'Ordered') return 'warning';
-    if (status === 'Rejected') return 'danger';
-    return 'default';
-  };
+  const branchLabel = useMemo(() => {
+    if (bundle?.branchName) return bundle.branchName;
+    if (branch?.trim()) return branch;
+    return 'All branches';
+  }, [bundle?.branchName, branch]);
 
-  const getHealthScoreColor = (score: string) => {
-    if (score === 'Excellent') return 'success';
-    if (score === 'Good') return 'default';
-    if (score === 'Fair') return 'warning';
-    if (score === 'Poor') return 'danger';
-    return 'default';
-  };
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-24">
+        <div className="flex flex-col items-center gap-3 text-gray-500">
+          <Loader2 className="w-7 h-7 animate-spin text-red-600" />
+          <p className="text-sm">Loading your sales overview…</p>
+        </div>
+      </div>
+    );
+  }
 
-  const mapKpiStatus = (status?: 'success' | 'warning' | 'danger' | 'default'): 'good' | 'warning' | 'danger' | 'neutral' => {
-    if (status === 'success') return 'good';
-    if (status === 'default') return 'neutral';
-    return status || 'neutral';
-  };
+  if (error || !bundle) {
+    return (
+      <Card>
+        <CardContent className="p-6 space-y-4">
+          <div className="flex items-center gap-2 text-red-700">
+            <AlertTriangle className="w-5 h-5" />
+            <h2 className="text-lg font-semibold">Could not load dashboard</h2>
+          </div>
+          <p className="text-sm text-gray-600">{error ?? 'No data available.'}</p>
+          <Button variant="primary" onClick={() => void load()}>Retry</Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const noProfile = !bundle.agentId;
+  const stats = bundle.stats;
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">My Agent Dashboard</h1>
+          <h1 className="text-2xl font-bold text-gray-900">
+            {greeting}, {bundle.agentName.split(' ')[0] || 'Agent'}
+          </h1>
           <p className="text-sm text-gray-500 mt-1">
-            Viewing data for: <span className="font-medium text-gray-700">{branch}</span>
+            {branchLabel} · {bundle.periodLabel}
+            {stats && bundle.branchRank != null && bundle.branchAgentCount > 1 && (
+              <span className="text-gray-400">
+                {' '}
+                · Rank #{bundle.branchRank} of {bundle.branchAgentCount} in branch
+              </span>
+            )}
           </p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={() => navigate('/customers')}>
-            <User className="w-4 h-4 mr-2" />
-            My Customers
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={() => void load(true)}
+            disabled={refreshing}
+            className="gap-2"
+          >
+            {refreshing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+            Refresh
           </Button>
-          <Button variant="primary" onClick={() => setShowCreateModal(true)}>
-            <ShoppingCart className="w-4 h-4 mr-2" />
-            Create Order
+          <DashHeaderLink to="/customers">
+            <Users className="w-4 h-4" /> My customers
+          </DashHeaderLink>
+          <Button variant="primary" className="gap-2" onClick={() => setShowCreateModal(true)}>
+            <ShoppingCart className="w-4 h-4" />
+            Create order
           </Button>
         </div>
       </div>
 
-      {/* TODAY'S WORK & QUICK ACTIONS */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        {/* Today's Tasks */}
-        <Card className="border-blue-200">
-          <CardHeader className="bg-gradient-to-r from-blue-50 to-white">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-base flex items-center gap-2">
-                <CheckCircle className="w-5 h-5 text-blue-600" />
-                Today's Tasks ({activities.length})
-              </CardTitle>
-              <Button variant="outline" size="sm" onClick={() => navigate('/tasks')}>
-                View All
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="p-4">
-            <div className="space-y-2">
-              {activities.slice(0, 4).map((task, index) => (
-                <div key={index} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
-                  <input 
-                    type="checkbox" 
-                    className="w-4 h-4 text-blue-600 rounded"
-                  />
-                  <div className="flex-1">
-                    <p className="text-sm font-medium text-gray-900">{task.description}</p>
-                    <p className="text-xs text-gray-500">{task.timestamp}</p>
-                  </div>
-                  <Badge 
-                    variant={
-                      task.type === 'Order Created' ? 'default' :
-                      task.type === 'Customer Visit' ? 'warning' :
-                      task.type === 'Payment Collected' ? 'success' :
-                      'default'
-                    } 
-                    size="sm"
-                  >
-                    {task.type}
-                  </Badge>
-                </div>
-              ))}
-              {activities.length === 0 && (
-                <div className="text-center py-8 text-gray-500">
-                  <CheckCircle className="w-12 h-12 mx-auto mb-2 text-gray-300" />
-                  <p className="text-sm">No tasks scheduled for today</p>
-                </div>
-              )}
-            </div>
+      {noProfile && (
+        <Card className="border-amber-200 bg-amber-50/40">
+          <CardContent className="p-3 flex items-center gap-3">
+            <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+            <p className="text-sm text-amber-900">
+              Sign in with an employee account linked to a sales agent to see live quota, commission, and order data.
+            </p>
           </CardContent>
         </Card>
+      )}
 
-        {/* Quick Actions */}
-        <Card className="border-green-200">
-          <CardHeader className="bg-gradient-to-r from-green-50 to-white">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Package className="w-5 h-5 text-green-600" />
-              Quick Actions
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="p-4">
-            <div className="grid grid-cols-2 gap-3">
-              <Button 
-                variant="outline" 
-                className="h-auto py-4 flex flex-col items-center gap-2 hover:bg-red-50 hover:border-red-300"
-                onClick={() => setShowCreateModal(true)}
-              >
-                <div className="p-2 bg-red-100 rounded-lg">
-                  <ShoppingCart className="w-6 h-6 text-red-600" />
-                </div>
-                <span className="text-sm font-medium">Create Order</span>
-              </Button>
+      <AgentPersonalKpiStrip kpis={bundle.kpis} />
 
-              <Button 
-                variant="outline" 
-                className="h-auto py-4 flex flex-col items-center gap-2 hover:bg-green-50 hover:border-green-300"
-                onClick={() => navigate('/finance')}
-              >
-                <div className="p-2 bg-green-100 rounded-lg">
-                  <DollarSign className="w-6 h-6 text-green-600" />
-                </div>
-                <span className="text-sm font-medium">Record Collection</span>
-              </Button>
+      {stats && stats.effectiveTarget > 0 && (
+        <QuotaProgressCard stats={stats} periodLabel={bundle.periodLabel} />
+      )}
 
-              <Button 
-                variant="outline" 
-                className="h-auto py-4 flex flex-col items-center gap-2 hover:bg-blue-50 hover:border-blue-300"
-                onClick={() => navigate('/customers')}
-              >
-                <div className="p-2 bg-blue-100 rounded-lg">
-                  <User className="w-6 h-6 text-blue-600" />
-                </div>
-                <span className="text-sm font-medium">My Customers</span>
-              </Button>
-
-              <Button 
-                variant="outline" 
-                className="h-auto py-4 flex flex-col items-center gap-2 hover:bg-purple-50 hover:border-purple-300"
-                onClick={() => navigate('/logistics')}
-              >
-                <div className="p-2 bg-purple-100 rounded-lg">
-                  <Package className="w-6 h-6 text-purple-600" />
-                </div>
-                <span className="text-sm font-medium">Track Deliveries</span>
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <OrdersCard
+          title="Orders"
+          icon={<ShoppingCart className="w-5 h-5 text-blue-600" />}
+          rows={bundle.myOrders}
+          emptyText="No orders yet."
+          viewAllHref="/orders"
+        />
+        <OrdersCard
+          title="Overdue orders"
+          icon={<AlertTriangle className="w-5 h-5 text-red-600" />}
+          rows={bundle.overdueOrders}
+          emptyText="No overdue orders — collections are current."
+          viewAllHref="/finance"
+          viewAllLabel="Collections"
+          badgeCount={bundle.overdueOrderCount}
+          badgeVariant="danger"
+        />
+        <CustomersAtRiskCard rows={bundle.customersAtRisk} />
+        <PendingCommissionsCard rows={bundle.pendingCommissions} />
       </div>
 
-      {/* KPI Strip - Performance Metrics */}
-      <div>
-        <h2 className="text-lg font-semibold text-gray-900 mb-3">📊 My Performance</h2>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {kpis.map((kpi) => (
-            <KpiTile
-              key={kpi.id}
-              label={kpi.label}
-              value={kpi.value}
-              subtitle={kpi.subtitle}
-              status={mapKpiStatus(kpi.status)}
-              onClick={() => console.log(`Navigating to ${kpi.label}`)}
-            />
-          ))}
-        </div>
-      </div>
+      {bundle.trend.some((p) => p.revenue > 0 || p.target > 0) && (
+        <TrendCard trend={bundle.trend} />
+      )}
 
-      {/* CUSTOMERS AT RISK */}
-      <Card className="border-yellow-200 bg-gradient-to-r from-yellow-50 to-white">
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-base flex items-center gap-2">
-              <AlertTriangle className="w-5 h-5 text-yellow-600" />
-              Customers At Risk ({customers.filter(c => c.healthScore === 'Fair' || c.healthScore === 'Poor').length})
-            </CardTitle>
-            <Button variant="outline" size="sm" onClick={() => navigate('/customers')}>
-              View All Customers
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent className="p-4">
-          <div className="space-y-3">
-            {customers.filter(c => c.healthScore === 'Fair' || c.healthScore === 'Poor').slice(0, 3).map((customer) => (
-              <div 
-                key={customer.id} 
-                className="flex items-center justify-between p-4 bg-white rounded-lg border border-yellow-200 hover:border-yellow-300 transition-colors cursor-pointer"
-                onClick={() => navigate(`/customers/${customer.id}`)}
-              >
-                <div className="flex items-center gap-4">
-                  <div className="p-2 bg-yellow-100 rounded-lg">
-                    <User className="w-5 h-5 text-yellow-600" />
-                  </div>
-                  <div>
-                    <p className="font-medium text-gray-900">{customer.customerName}</p>
-                    <div className="flex items-center gap-3 mt-1">
-                      <span className="text-sm text-gray-600">
-                        {customer.outstandingBalance > 0 && customer.paymentStatus !== 'Current'
-                          ? `₱${customer.outstandingBalance.toLocaleString()} overdue` 
-                          : 'No outstanding balance'}
-                      </span>
-                      {customer.daysOverdue && customer.daysOverdue > 0 && (
-                        <span className="text-xs text-gray-500">
-                          • {customer.daysOverdue} days overdue
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <Badge variant={customer.healthScore === 'Poor' ? 'destructive' : 'warning'} size="sm">
-                    {customer.healthScore}
-                  </Badge>
-                  <Button variant="outline" size="sm">
-                    <Phone className="w-3 h-3 mr-1" />
-                    Call
-                  </Button>
-                </div>
-              </div>
-            ))}
-            {customers.filter(c => c.healthScore === 'Fair' || c.healthScore === 'Poor').length === 0 && (
-              <div className="text-center py-8 text-gray-500">
-                <CheckCircle className="w-12 h-12 mx-auto mb-2 text-green-300" />
-                <p className="text-sm">All customers are in good health! 🎉</p>
-              </div>
-            )}
-          </div>
-        </CardContent>
-      </Card>
+      <p className="text-xs text-gray-400 text-right">
+        Generated {new Date(bundle.generatedAt).toLocaleString()}
+      </p>
 
-      {/* AGENT ANALYTICS CHARTS */}
-      <div>
-        <h2 className="text-lg font-semibold text-gray-900 mb-3">📈 Performance Analytics</h2>
-      </div>
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        {/* Sales Performance Trend */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <TrendingUp className="w-5 h-5 text-red-600" />
-              Monthly Performance Trend
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <ComposedChart
-                data={[
-                  { period: 'Jan', current: 850000, target: 1000000, percentage: 85 },
-                  { period: 'Feb', current: 920000, target: 1000000, percentage: 92 },
-                  { period: 'Mar', current: 780000, target: 1000000, percentage: 78 },
-                  { period: 'Apr', current: 1050000, target: 1000000, percentage: 105 },
-                  { period: 'May', current: 980000, target: 1000000, percentage: 98 },
-                  { period: 'Jun', current: 1120000, target: 1000000, percentage: 112 },
-                ]}
-              >
-                <defs>
-                  <linearGradient id="colorSales" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.3}/>
-                    <stop offset="95%" stopColor="#3B82F6" stopOpacity={0.05}/>
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
-                <XAxis dataKey="period" stroke="#9CA3AF" />
-                <YAxis yAxisId="left" stroke="#9CA3AF" />
-                <YAxis yAxisId="right" orientation="right" stroke="#9CA3AF" />
-                <Tooltip
-                  formatter={(value: number, name: string) => {
-                    if (name === 'Current Sales' || name === 'Target') return `₱${value.toLocaleString()}`;
-                    if (name === 'Achievement (%)') return `${value}%`;
-                    return value;
-                  }}
-                  contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.95)', borderRadius: '8px', border: '1px solid #E5E7EB' }}
-                />
-                <Legend />
-                <Area yAxisId="left" type="monotone" dataKey="current" stroke="#3B82F6" strokeWidth={3} fill="url(#colorSales)" name="Current Sales" />
-                <Area yAxisId="left" type="monotone" dataKey="target" stroke="#9CA3AF" strokeWidth={2} fill="none" strokeDasharray="5 5" name="Target" />
-                <Line yAxisId="right" type="monotone" dataKey="percentage" stroke="#10B981" strokeWidth={3} name="Achievement (%)" dot={{ r: 5 }} />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-
-        {/* Payment Collection Status */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FileText className="w-5 h-5 text-red-600" />
-              Payment Collection Status
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <PieChart>
-                <Pie
-                  data={[
-                    { name: 'Paid', value: payments.filter(p => p.paymentStatus === 'Paid').length },
-                    { name: 'Pending', value: payments.filter(p => p.paymentStatus === 'Pending').length },
-                    { name: 'Overdue', value: payments.filter(p => p.paymentStatus === 'Overdue').length },
-                    { name: 'Partial', value: payments.filter(p => p.paymentStatus === 'Partial').length },
-                  ].filter(item => item.value > 0)}
-                  cx="50%"
-                  cy="50%"
-                  labelLine={false}
-                  label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                  outerRadius={80}
-                  fill="#8884d8"
-                  dataKey="value"
-                >
-                  <Cell fill="#10B981" />
-                  <Cell fill="#3B82F6" />
-                  <Cell fill="#EF4444" />
-                  <Cell fill="#F59E0B" />
-                </Pie>
-                <Tooltip />
-              </PieChart>
-            </ResponsiveContainer>
-            <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-green-500"></div>
-                <span>Paid ({payments.filter(p => p.paymentStatus === 'Paid').length})</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-blue-500"></div>
-                <span>Pending ({payments.filter(p => p.paymentStatus === 'Pending').length})</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-red-500"></div>
-                <span>Overdue ({payments.filter(p => p.paymentStatus === 'Overdue').length})</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
-                <span>Partial ({payments.filter(p => p.paymentStatus === 'Partial').length})</span>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Alerts Panel */}
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <div>
-            <CardTitle className="flex items-center gap-2">
-              <AlertTriangle className="w-5 h-5 text-orange-500" />
-              My Alerts & Notifications
-            </CardTitle>
-            <p className="text-sm text-gray-500 mt-1">{alerts.length} active alerts</p>
-          </div>
-          <Button variant="outline" size="sm" onClick={() => navigate('/placeholder')}>
-            View All <ArrowRight className="w-4 h-4 ml-1" />
-          </Button>
-        </CardHeader>
-        <CardContent className="p-0">
-          <div className="divide-y divide-gray-100">
-            {alerts.map((alert) => (
-              <div key={alert.id} className="p-4 hover:bg-gray-50 flex items-start gap-3">
-                <div
-                  className={`p-2 rounded-lg ${
-                    alert.severity === 'Critical'
-                      ? 'bg-red-100'
-                      : alert.severity === 'High'
-                      ? 'bg-orange-100'
-                      : alert.severity === 'Medium'
-                      ? 'bg-yellow-100'
-                      : 'bg-blue-100'
-                  }`}
-                >
-                  <AlertTriangle
-                    className={`w-5 h-5 ${
-                      alert.severity === 'Critical'
-                        ? 'text-red-600'
-                        : alert.severity === 'High'
-                        ? 'text-orange-600'
-                        : alert.severity === 'Medium'
-                        ? 'text-yellow-600'
-                        : 'text-blue-600'
-                    }`}
-                  />
-                </div>
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <h4 className="font-medium text-gray-900">{alert.title}</h4>
-                    <Badge
-                      variant={
-                        alert.severity === 'Critical' || alert.severity === 'High'
-                          ? 'danger'
-                          : alert.severity === 'Medium'
-                          ? 'warning'
-                          : 'default'
-                      }
-                    >
-                      {alert.type}
-                    </Badge>
-                  </div>
-                  <p className="text-sm text-gray-600">{alert.message}</p>
-                  <p className="text-xs text-gray-400 mt-1">{alert.timestamp}</p>
-                </div>
-                {alert.actionRequired && (
-                  <Button variant="primary" size="sm">
-                    Take Action
-                  </Button>
-                )}
-              </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Performance & Commission Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Performance Metrics */}
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle className="flex items-center gap-2">
-              <TrendingUp className="w-5 h-5 text-green-500" />
-              My Performance
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="p-0">
-            <div className="divide-y divide-gray-100">
-              {performance.map((metric) => (
-                <div key={metric.id} className="p-4 hover:bg-gray-50">
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="text-sm font-medium text-gray-900">{metric.metric}</p>
-                    {metric.trend === 'up' ? (
-                      <TrendingUp className="w-4 h-4 text-green-500" />
-                    ) : metric.trend === 'down' ? (
-                      <TrendingDown className="w-4 h-4 text-red-500" />
-                    ) : (
-                      <div className="w-4 h-0.5 bg-gray-400" />
-                    )}
-                  </div>
-                  <div className="flex items-baseline gap-2 mb-2">
-                    <p className="text-2xl font-bold text-gray-900">
-                      {metric.unit === '₱' ? metric.unit : ''}
-                      {metric.current.toLocaleString()}
-                      {metric.unit !== '₱' && metric.unit !== '' ? metric.unit : ''}
-                    </p>
-                    <p className="text-sm text-gray-500">
-                      / {metric.unit === '₱' ? metric.unit : ''}
-                      {metric.target.toLocaleString()}
-                      {metric.unit !== '₱' && metric.unit !== '' ? metric.unit : ''}
-                    </p>
-                  </div>
-                  <div className="w-full bg-gray-200 rounded-full h-2 mb-2">
-                    <div
-                      className={`h-2 rounded-full ${
-                        metric.percentage >= 90
-                          ? 'bg-green-500'
-                          : metric.percentage >= 70
-                          ? 'bg-yellow-500'
-                          : 'bg-red-500'
-                      }`}
-                      style={{ width: `${Math.min(metric.percentage, 100)}%` }}
-                    />
-                  </div>
-                  <p className="text-xs text-gray-500">
-                    {metric.percentage}% achieved
-                    {metric.rank && metric.totalAgents && (
-                      <span className="ml-2">• Rank {metric.rank}/{metric.totalAgents}</span>
-                    )}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Commission Summary */}
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle className="flex items-center gap-2">
-              <DollarSign className="w-5 h-5 text-blue-500" />
-              Commission Earned
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="p-0">
-            <div className="divide-y divide-gray-100">
-              {commissions.map((comm) => (
-                <div key={comm.id} className="p-4 hover:bg-gray-50">
-                  <div className="flex items-center justify-between mb-2">
-                    <h4 className="font-medium text-gray-900">{comm.period}</h4>
-                    <Badge variant={comm.status === 'Paid' ? 'success' : comm.status === 'Approved' ? 'warning' : 'default'}>
-                      {comm.status}
-                    </Badge>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4 mb-3">
-                    <div>
-                      <p className="text-xs text-gray-500">Sales Amount</p>
-                      <p className="text-lg font-bold text-gray-900">
-                        ₱{comm.salesAmount.toLocaleString()}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500">Commission ({comm.commissionRate}%)</p>
-                      <p className="text-lg font-bold text-green-600">
-                        ₱{comm.commissionEarned.toLocaleString()}
-                      </p>
-                    </div>
-                  </div>
-                  {comm.paidDate && (
-                    <p className="text-xs text-gray-500">Paid on: {comm.paidDate}</p>
-                  )}
-                  {comm.breakdown.length > 0 && (
-                    <div className="mt-3 pt-3 border-t border-gray-100">
-                      <p className="text-xs text-gray-500 mb-2">Breakdown:</p>
-                      {comm.breakdown.slice(0, 2).map((item, idx) => (
-                        <div key={idx} className="flex justify-between text-xs text-gray-600 mb-1">
-                          <span>{item.orderNumber} - {item.customerName}</span>
-                          <span className="font-medium">₱{item.commission.toLocaleString()}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* My Customers */}
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <div>
-            <CardTitle className="flex items-center gap-2">
-              <User className="w-5 h-5 text-purple-500" />
-              My Customers
-            </CardTitle>
-            <p className="text-sm text-gray-500 mt-1">{customers.length} customers shown</p>
-          </div>
-          <Button variant="outline" size="sm" onClick={() => navigate('/placeholder')}>
-            View All Customers <ArrowRight className="w-4 h-4 ml-1" />
-          </Button>
-        </CardHeader>
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b">
-                <tr>
-                  <th className="px-4 py-3 text-left font-medium">Customer</th>
-                  <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Type</th>
-                  <th className="px-4 py-3 text-left font-medium">Outstanding</th>
-                  <th className="px-4 py-3 text-left font-medium hidden sm:table-cell">Status</th>
-                  <th className="px-4 py-3 text-left font-medium hidden xl:table-cell">Health</th>
-                  <th className="px-4 py-3 text-left font-medium hidden min-[450px]:table-cell">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200">
-                {customers.map((customer) => (
-                  <React.Fragment key={customer.id}>
-                    <tr className="hover:bg-gray-50">
-                      <td className="px-4 py-3">
-                        <div>
-                          <p className="font-medium text-gray-900">{customer.customerName}</p>
-                          <p className="text-xs text-gray-500 flex items-center gap-1">
-                            <MapPin className="w-3 h-3" />
-                            {customer.location}
-                          </p>
-                          <p className="text-xs text-gray-600 flex items-center gap-1 mt-1">
-                            <User className="w-3 h-3" />
-                            {customer.contactPerson}
-                          </p>
-                          <p className="text-xs text-gray-600 flex items-center gap-1">
-                            <Phone className="w-3 h-3" />
-                            {customer.phone}
-                          </p>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 hidden md:table-cell">
-                        <Badge variant="outline">{customer.accountType}</Badge>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div>
-                          <p className="font-medium text-gray-900">
-                            ₱{customer.outstandingBalance.toLocaleString()}
-                          </p>
-                          {customer.daysOverdue && customer.daysOverdue > 0 && (
-                            <p className="text-xs text-red-600">{customer.daysOverdue} days late</p>
-                          )}
-                          {customer.nextVisitScheduled ? (
-                            <p className="flex items-center gap-1 text-xs text-gray-600 mt-1">
-                              <Calendar className="w-3 h-3" />
-                              Next: {customer.nextVisitScheduled}
-                            </p>
-                          ) : (
-                            <p className="text-xs text-gray-400 mt-1">No visit scheduled</p>
-                          )}
-                          <div className="sm:hidden mt-1">
-                            <Badge variant={getPaymentStatusColor(customer.paymentStatus)}>
-                              {customer.paymentStatus}
-                            </Badge>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 hidden sm:table-cell">
-                        <Badge variant={getPaymentStatusColor(customer.paymentStatus)}>
-                          {customer.paymentStatus}
-                        </Badge>
-                      </td>
-                      <td className="px-4 py-3 hidden xl:table-cell">
-                        <Badge variant={getHealthScoreColor(customer.healthScore)}>
-                          {customer.healthScore}
-                        </Badge>
-                      </td>
-                      <td className="px-4 py-3 hidden min-[450px]:table-cell">
-                        <div className="flex flex-col sm:flex-row gap-1">
-                          <Button variant="outline" size="sm">
-                            Visit
-                          </Button>
-                          <Button variant="primary" size="sm">
-                            Create Order
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                    <tr className="min-[450px]:hidden hover:bg-gray-50">
-                      <td colSpan={2} className="px-4 py-3">
-                        <div className="flex gap-1">
-                          <Button variant="outline" size="sm" className="flex-1">
-                            Visit
-                          </Button>
-                          <Button variant="primary" size="sm" className="flex-1">
-                            Create Order
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  </React.Fragment>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Orders & PODs Row */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        {/* My Orders */}
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <div>
-              <CardTitle className="flex items-center gap-2">
-                <ShoppingCart className="w-5 h-5 text-blue-500" />
-                My Orders
-              </CardTitle>
-              <p className="text-sm text-gray-500 mt-1">{orders.length} recent orders</p>
-            </div>
-            <Button variant="outline" size="sm" onClick={() => navigate('/orders')}>
-              View All <ArrowRight className="w-4 h-4 ml-1" />
-            </Button>
-          </CardHeader>
-          <CardContent className="p-0">
-            <div className="divide-y divide-gray-100">
-              {orders.map((order) => (
-                <div key={order.id} className="p-3 hover:bg-gray-50">
-                  <div className="flex items-center justify-between mb-2">
-                    <div>
-                      <p className="font-medium text-sm text-gray-900">{order.orderNumber}</p>
-                      <p className="text-xs text-gray-600">{order.customerName}</p>
-                    </div>
-                    <Badge variant={getOrderStatusColor(order.status)}>{order.status}</Badge>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 text-xs text-gray-600 mb-2">
-                    <div>Amount: ₱{order.totalAmount.toLocaleString()}</div>
-                    <div>Discount: {order.discountApplied}%</div>
-                    <div>Date: {order.orderDate}</div>
-                    <div>Delivery: {order.requestedDeliveryDate}</div>
-                  </div>
-                  {order.rejectionReason && (
-                    <p className="text-xs text-red-600 bg-red-50 p-2 rounded mt-2">
-                      ❌ {order.rejectionReason}
-                    </p>
-                  )}
-                  {order.status === 'Draft' && (
-                    <Button variant="primary" size="sm" className="w-full mt-2">
-                      Submit for Approval
-                    </Button>
-                  )}
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* POD Collections */}
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <div>
-              <CardTitle className="flex items-center gap-2">
-                <FileText className="w-5 h-5 text-green-500" />
-                POD Collections
-              </CardTitle>
-              <p className="text-sm text-gray-500 mt-1">{pods.filter(p => !p.podCollected).length} pending</p>
-            </div>
-            <Button variant="outline" size="sm" onClick={() => navigate('/placeholder')}>
-              View All <ArrowRight className="w-4 h-4 ml-1" />
-            </Button>
-          </CardHeader>
-          <CardContent className="p-0">
-            <div className="divide-y divide-gray-100">
-              {pods.map((pod) => (
-                <div key={pod.id} className="p-3 hover:bg-gray-50">
-                  <div className="flex items-center justify-between mb-2">
-                    <div>
-                      <p className="font-medium text-sm text-gray-900">{pod.deliveryNumber}</p>
-                      <p className="text-xs text-gray-600">{pod.customerName}</p>
-                    </div>
-                    {pod.podCollected ? (
-                      <CheckCircle className="w-5 h-5 text-green-500" />
-                    ) : (
-                      <XCircle className="w-5 h-5 text-red-500" />
-                    )}
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 text-xs text-gray-600 mb-2">
-                    <div>Delivered: {pod.deliveredDate}</div>
-                    <div>Amount: ₱{pod.deliveryAmount.toLocaleString()}</div>
-                  </div>
-                  {pod.podCollected ? (
-                    <div className="text-xs text-green-600 bg-green-50 p-2 rounded">
-                      ✓ POD Collected - {pod.receivedBy}
-                      {pod.podNotes && <p className="mt-1">{pod.podNotes}</p>}
-                    </div>
-                  ) : (
-                    <>
-                      {pod.issues && pod.issues.length > 0 && (
-                        <div className="text-xs text-red-600 bg-red-50 p-2 rounded mb-2">
-                          {pod.issues.map((issue, idx) => (
-                            <p key={idx}>⚠️ {issue}</p>
-                          ))}
-                        </div>
-                      )}
-                      <Button variant="primary" size="sm" className="w-full">
-                        Collect POD
-                      </Button>
-                    </>
-                  )}
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Payments & Purchase Requests Row */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        {/* Payment Collections */}
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <div>
-              <CardTitle className="flex items-center gap-2">
-                <DollarSign className="w-5 h-5 text-yellow-500" />
-                Payment Collections
-              </CardTitle>
-              <p className="text-sm text-gray-500 mt-1">
-                {payments.filter(p => p.paymentStatus === 'Overdue' || p.paymentStatus === 'Critical').length} overdue
-              </p>
-            </div>
-            <Button variant="outline" size="sm" onClick={() => navigate('/placeholder')}>
-              View All <ArrowRight className="w-4 h-4 ml-1" />
-            </Button>
-          </CardHeader>
-          <CardContent className="p-0">
-            <div className="divide-y divide-gray-100">
-              {payments.map((payment) => (
-                <div key={payment.id} className="p-3 hover:bg-gray-50">
-                  <div className="flex items-center justify-between mb-2">
-                    <div>
-                      <p className="font-medium text-sm text-gray-900">{payment.invoiceNumber}</p>
-                      <p className="text-xs text-gray-600">{payment.customerName}</p>
-                    </div>
-                    <Badge variant={getPaymentStatusColor(payment.paymentStatus)}>
-                      {payment.paymentStatus}
-                    </Badge>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 text-xs text-gray-600 mb-2">
-                    <div>Total: ₱{payment.amount.toLocaleString()}</div>
-                    <div>Paid: ₱{payment.amountPaid.toLocaleString()}</div>
-                    <div>Due: ₱{payment.amountDue.toLocaleString()}</div>
-                    <div>
-                      {payment.daysOverdue && payment.daysOverdue > 0 ? (
-                        <span className="text-red-600 font-medium">{payment.daysOverdue} days overdue</span>
-                      ) : (
-                        <span>Due: {payment.dueDate}</span>
-                      )}
-                    </div>
-                  </div>
-                  {payment.collectionNotes && (
-                    <p className="text-xs text-gray-600 bg-gray-50 p-2 rounded mb-2">
-                      {payment.collectionNotes}
-                    </p>
-                  )}
-                  {payment.paymentStatus !== 'Paid' && (
-                    <Button variant="primary" size="sm" className="w-full">
-                      Collect Payment
-                    </Button>
-                  )}
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Purchase Requests */}
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <div>
-              <CardTitle className="flex items-center gap-2">
-                <Package className="w-5 h-5 text-orange-500" />
-                Purchase Requests
-              </CardTitle>
-              <p className="text-sm text-gray-500 mt-1">{purchaseRequests.length} requests</p>
-            </div>
-            <Button variant="outline" size="sm" onClick={() => navigate('/placeholder')}>
-              View All <ArrowRight className="w-4 h-4 ml-1" />
-            </Button>
-          </CardHeader>
-          <CardContent className="p-0">
-            <div className="divide-y divide-gray-100">
-              {purchaseRequests.map((pr) => (
-                <div key={pr.id} className="p-3 hover:bg-gray-50">
-                  <div className="flex items-center justify-between mb-2">
-                    <div>
-                      <p className="font-medium text-sm text-gray-900">{pr.requestNumber}</p>
-                      <p className="text-xs text-gray-600">{pr.itemName}</p>
-                    </div>
-                    <Badge variant={getPRStatusColor(pr.status)}>{pr.status}</Badge>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 text-xs text-gray-600 mb-2">
-                    <div>Qty: {pr.quantity} {pr.unit}</div>
-                    <div>Est. Cost: ₱{pr.estimatedCost.toLocaleString()}</div>
-                    <div>
-                      <Badge variant={pr.urgency === 'Critical' || pr.urgency === 'High' ? 'danger' : pr.urgency === 'Medium' ? 'warning' : 'default'} className="text-xs">
-                        {pr.urgency}
-                      </Badge>
-                    </div>
-                    {pr.supplier && <div>Supplier: {pr.supplier}</div>}
-                  </div>
-                  <p className="text-xs text-gray-600 mb-2">{pr.reason}</p>
-                  {pr.rejectionReason && (
-                    <p className="text-xs text-red-600 bg-red-50 p-2 rounded">
-                      ❌ {pr.rejectionReason}
-                    </p>
-                  )}
-                  {pr.expectedDelivery && pr.status === 'Approved' && (
-                    <p className="text-xs text-green-600">
-                      ✓ Expected: {pr.expectedDelivery}
-                    </p>
-                  )}
-                  {pr.status === 'Draft' && (
-                    <Button variant="primary" size="sm" className="w-full mt-2">
-                      Submit Request
-                    </Button>
-                  )}
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Recent Activities */}
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <div>
-            <CardTitle className="flex items-center gap-2">
-              <Clock className="w-5 h-5 text-gray-500" />
-              Recent Activities
-            </CardTitle>
-            <p className="text-sm text-gray-500 mt-1">Latest actions</p>
-          </div>
-        </CardHeader>
-        <CardContent className="p-0">
-          <div className="divide-y divide-gray-100">
-            {activities.map((activity) => (
-              <div key={activity.id} className="p-3 hover:bg-gray-50 flex items-start gap-3">
-                <div className={`p-2 rounded-lg ${
-                  activity.status === 'Success' ? 'bg-green-100' :
-                  activity.status === 'Pending' ? 'bg-yellow-100' :
-                  'bg-red-100'
-                }`}>
-                  {activity.type === 'Order Created' && <ShoppingCart className="w-4 h-4 text-blue-600" />}
-                  {activity.type === 'Customer Visit' && <User className="w-4 h-4 text-purple-600" />}
-                  {activity.type === 'POD Collected' && <FileText className="w-4 h-4 text-green-600" />}
-                  {activity.type === 'Payment Collected' && <DollarSign className="w-4 h-4 text-yellow-600" />}
-                  {activity.type === 'Purchase Request' && <Package className="w-4 h-4 text-orange-600" />}
-                </div>
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <h4 className="font-medium text-sm text-gray-900">{activity.title}</h4>
-                    {activity.status && (
-                      <Badge variant={activity.status === 'Success' ? 'success' : activity.status === 'Pending' ? 'warning' : 'danger'} className="text-xs">
-                        {activity.status}
-                      </Badge>
-                    )}
-                  </div>
-                  <p className="text-xs text-gray-600">{activity.description}</p>
-                  <p className="text-xs text-gray-400 mt-1">{activity.timestamp}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Create Order Modal */}
       {showCreateModal && (
         <CreateOrderModal
           onClose={() => setShowCreateModal(false)}
           onSuccess={() => {
             setShowCreateModal(false);
-            addAuditLog('Created Order', 'Order', 'Created new order from dashboard');
+            addAuditLog('Created Order', 'Order', 'Created new order from agent dashboard');
+            void load(true);
           }}
         />
       )}
     </div>
+  );
+}
+
+function QuotaProgressCard(props: {
+  stats: NonNullable<AgentDashboardBundle['stats']>;
+  periodLabel: string;
+}) {
+  const { stats } = props;
+  const pct = Math.min(100, stats.attainmentPct);
+  const barColor =
+    pct >= 100 ? 'bg-emerald-500' : pct >= 80 ? 'bg-amber-500' : 'bg-red-500';
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Target className="w-5 h-5 text-emerald-600" />
+          Quota progress · {props.periodLabel}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <p className="text-3xl font-bold text-gray-900">{formatPercent(stats.attainmentPct)}</p>
+            <p className="text-sm text-gray-500 mt-1">
+              {formatCurrencyShort(stats.revenue)} of {formatCurrencyShort(stats.effectiveTarget)} target
+            </p>
+          </div>
+          <div className="text-right text-sm text-gray-600">
+            <p>
+              Pacing:{' '}
+              <span className={stats.pacingPct >= 90 ? 'text-emerald-700 font-semibold' : 'text-amber-700 font-semibold'}>
+                {formatPercent(stats.pacingPct)}
+              </span>
+            </p>
+            {stats.revenueGap > 0 && (
+              <p className="text-xs text-gray-500 mt-0.5">
+                {formatCurrencyShort(stats.revenueGap)} to quota
+              </p>
+            )}
+            {stats.stretchGoal && (
+              <p className="text-xs text-gray-400 mt-1 max-w-xs">{stats.stretchGoal}</p>
+            )}
+          </div>
+        </div>
+        <div className="w-full bg-gray-200 rounded-full h-3">
+          <div className={`h-3 rounded-full transition-all ${barColor}`} style={{ width: `${pct}%` }} />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function OrdersCard(props: {
+  title: string;
+  icon: React.ReactNode;
+  rows: AgentDashboardOrderRow[];
+  emptyText: string;
+  viewAllHref: string;
+  viewAllLabel?: string;
+  badgeCount?: number;
+  badgeVariant?: 'warning' | 'danger' | 'default';
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            {props.icon}
+            {props.title}
+            {props.badgeCount != null && props.badgeCount > 0 && (
+              <Badge variant={props.badgeVariant ?? 'warning'}>{props.badgeCount}</Badge>
+            )}
+          </CardTitle>
+          <DashHeaderLink
+            to={props.viewAllHref}
+            className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm"
+          >
+            {props.viewAllLabel ?? 'Orders'} <ArrowRight className="w-4 h-4" />
+          </DashHeaderLink>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {props.rows.length === 0 ? (
+          <p className="text-sm text-gray-500 py-6 text-center">{props.emptyText}</p>
+        ) : (
+          <div className="divide-y divide-gray-100 -mx-1">
+            {props.rows.map((o) => (
+              <DashQueueLink
+                key={o.id}
+                to={`/orders/${o.id}`}
+                title={`${o.orderNumber} — right-click or Ctrl+click to open in new tab`}
+                className="group flex items-start gap-3 px-2 py-3 hover:bg-gray-50 rounded-md"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={`${DASH_LINK_MONO} group-hover:underline`}>{o.orderNumber}</span>
+                    <Badge variant={orderStatusVariant(o.status)} className="text-[10px]">
+                      {o.status}
+                    </Badge>
+                    <Badge variant={paymentStatusVariant(o.paymentStatus)} className="text-[10px]">
+                      {o.paymentStatus}
+                    </Badge>
+                  </div>
+                  <p className="text-sm text-gray-800 truncate mt-0.5">{o.customerName}</p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {formatCurrencyShort(o.totalAmount)}
+                    {o.balanceDue > 0 && (
+                      <span className="text-red-600"> · {formatCurrencyShort(o.balanceDue)} due</span>
+                    )}
+                    <span className="text-gray-400"> · Req {formatDateShort(o.requiredDate)}</span>
+                  </p>
+                </div>
+                <ChevronRight className="w-4 h-4 text-gray-400 shrink-0 mt-1" />
+              </DashQueueLink>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function CustomersAtRiskCard(props: { rows: AgentDashboardCustomerRow[] }) {
+  return (
+    <Card className={props.rows.length > 0 ? 'border-amber-200' : undefined}>
+      <CardHeader>
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <AlertTriangle className="w-5 h-5 text-amber-600" />
+            Customers at risk
+            {props.rows.length > 0 && <Badge variant="warning">{props.rows.length}</Badge>}
+          </CardTitle>
+          <DashHeaderLink
+            to="/finance"
+            className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm"
+          >
+            Collections <ArrowRight className="w-4 h-4" />
+          </DashHeaderLink>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {props.rows.length === 0 ? (
+          <p className="text-sm text-gray-500 py-6 text-center">All assigned customers are current on payments.</p>
+        ) : (
+          <div className="overflow-x-auto -mx-1 px-1">
+            <table className="w-full min-w-[280px] text-sm">
+              <thead>
+                <tr className="text-xs text-gray-500 uppercase tracking-wider border-b border-gray-200">
+                  <th className="py-2 px-2 text-left font-semibold">Customer</th>
+                  <th className="py-2 px-2 text-right font-semibold">Overdue</th>
+                  <th className="py-2 px-1 w-8" aria-hidden />
+                </tr>
+              </thead>
+              <tbody>
+                {props.rows.map((c) => (
+                  <DashTableRowLink
+                    key={c.id}
+                    to={`/customers/${c.id}`}
+                    title={`${c.name} — right-click or Ctrl+click to open in new tab`}
+                  >
+                    <td className="table-cell py-2 px-2 align-middle">
+                      <span className={`${DASH_LINK_CLASS} text-sm block truncate`}>{c.name}</span>
+                      {c.city && <span className="block text-xs text-gray-500">{c.city}</span>}
+                    </td>
+                    <td className="table-cell py-2 px-2 align-middle text-right font-semibold text-red-700">
+                      {formatCurrencyShort(c.overdueBalance)}
+                    </td>
+                    <td className="table-cell py-2 px-1 align-middle text-right">
+                      <ChevronRight className="w-4 h-4 text-gray-400 inline-block" />
+                    </td>
+                  </DashTableRowLink>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function PendingCommissionsCard(props: { rows: AgentDashboardPendingCommissionRow[] }) {
+  const total = props.rows.reduce((s, r) => s + r.commissionAmount, 0);
+
+  return (
+    <Card className={props.rows.length > 0 ? 'border-violet-200' : undefined}>
+      <CardHeader>
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Award className="w-5 h-5 text-violet-600" />
+            Pending commissions
+            {props.rows.length > 0 && <Badge variant="warning">{props.rows.length}</Badge>}
+          </CardTitle>
+          <DashHeaderLink
+            to="/finance?tab=commissions"
+            className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm"
+          >
+            Invoices &amp; payments <ArrowRight className="w-4 h-4" />
+          </DashHeaderLink>
+        </div>
+        {props.rows.length > 0 && (
+          <p className="text-xs text-gray-500 mt-1">
+            Cash payment proofs submitted — awaiting executive payout · {formatCurrencyShort(total)} total shown
+          </p>
+        )}
+      </CardHeader>
+      <CardContent>
+        {props.rows.length === 0 ? (
+          <p className="text-sm text-gray-500 py-6 text-center">
+            No payment proofs waiting for commission release.
+          </p>
+        ) : (
+          <div className="divide-y divide-gray-100 -mx-1">
+            {props.rows.map((r) => (
+              <DashQueueLink
+                key={r.proofId}
+                to={`/orders/${r.orderId}`}
+                title={`${r.orderNumber} — right-click or Ctrl+click to open in new tab`}
+                className="group flex items-start gap-3 px-2 py-3 hover:bg-gray-50 rounded-md"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={`${DASH_LINK_MONO} group-hover:underline`}>{r.orderNumber}</span>
+                    <Badge variant="warning" className="text-[10px]">
+                      Awaiting payout
+                    </Badge>
+                  </div>
+                  <p className="text-sm text-gray-800 truncate mt-0.5">{r.customerName}</p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    <span className="font-semibold text-violet-700">{formatCurrencyShort(r.commissionAmount)}</span>
+                    <span className="text-gray-400"> commission on </span>
+                    {formatCurrencyShort(r.cashAmount)} cash
+                    {r.uploadedAt && (
+                      <span className="text-gray-400">
+                        {' '}
+                        · Proof {formatDateShort(r.uploadedAt)}
+                      </span>
+                    )}
+                  </p>
+                </div>
+                <ChevronRight className="w-4 h-4 text-gray-400 shrink-0 mt-1" />
+              </DashQueueLink>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function TrendCard(props: { trend: AgentDashboardBundle['trend'] }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <TrendingUp className="w-5 h-5 text-blue-600" />
+          6-month sales trend
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="h-56">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={props.trend}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+              <XAxis dataKey="label" tick={{ fontSize: 12 }} />
+              <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => formatCurrencyShort(Number(v))} />
+              <Tooltip formatter={(v: number) => formatCurrencyShort(v)} />
+              <Legend />
+              <Bar dataKey="revenue" name="Collected" fill="#2563eb" radius={[4, 4, 0, 0]} />
+              {props.trend.some((p) => p.target > 0) && (
+                <ReferenceLine y={props.trend[0]?.target ?? 0} stroke="#10b981" strokeDasharray="4 4" label="Quota" />
+              )}
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </CardContent>
+    </Card>
   );
 }

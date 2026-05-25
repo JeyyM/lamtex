@@ -29,7 +29,7 @@ export interface PeriodRange {
   start: string;
   /** YYYY-MM-DD inclusive */
   end: string;
-  /** Period label used as the agent_targets.period key (e.g. '2026-03', '2026-Q1', 'yearly-2026'). */
+  /** Stable id for the window (e.g. '2026-03', '2026-Q1', 'rolling-12m-2026-05-22'). */
   periodLabel: string;
   /** Friendly label for UI (e.g. "March 2026"). */
   displayLabel: string;
@@ -260,6 +260,64 @@ export function branchChartColorAt(index: number): string {
   return BRANCH_CHART_COLORS[index % BRANCH_CHART_COLORS.length];
 }
 
+/** Agent identity colors — extended hand-picked set for small teams. */
+export const AGENT_CHART_COLORS = [
+  ...BRANCH_CHART_COLORS,
+  '#0891B2',
+  '#BE123C',
+  '#CA8A04',
+  '#15803D',
+  '#9333EA',
+  '#C026D3',
+  '#0369A1',
+  '#B45309',
+  '#047857',
+  '#6D28D9',
+  '#BE185D',
+  '#0E7490',
+  '#A16207',
+  '#166534',
+] as const;
+
+function stableAgentHash(agentId: string): number {
+  const id = agentId.trim();
+  if (!id) return 0;
+  let h = 5381;
+  for (let i = 0; i < id.length; i++) {
+    h = ((h << 5) + h) ^ id.charCodeAt(i);
+  }
+  return Math.abs(h);
+}
+
+/** Stable palette index from agent UUID (legacy — prefer `agentChartColor`). */
+export function agentChartColorIndex(agentId: string): number {
+  return stableAgentHash(agentId) % AGENT_CHART_COLORS.length;
+}
+
+export function agentChartColorAt(index: number): string {
+  return AGENT_CHART_COLORS[index % AGENT_CHART_COLORS.length];
+}
+
+/**
+ * Consistent, unique-ish color per agent across Reports, Analytics, and dashboards.
+ * Uses HSL hue from a stable hash so agents rarely collide (unlike `hash % 10`).
+ */
+export function agentChartColor(agentId: string): string {
+  const id = agentId.trim();
+  if (!id) return AGENT_CHART_COLORS[0];
+  const hue = stableAgentHash(id) % 360;
+  return `hsl(${hue} 58% 42%)`;
+}
+
+/** Lookup map for legends / tables when rendering many agents. */
+export function agentChartColorMap(agentIds: string[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const id of agentIds) {
+    if (id && !out.has(id)) out.set(id, agentChartColor(id));
+  }
+  return out;
+}
+
 /** `/employees/:employeeId` — prefers HR `employee_id`; falls back to UUID if missing. */
 export function employeeProfilePathFromAgent(employeePublicId: string, agentUuid: string): string {
   const code = employeePublicId.trim();
@@ -393,13 +451,13 @@ export function getPeriodRange(kind: PeriodKey, custom?: { start: string; end: s
     };
   }
   if (kind === 'year') {
-    const s = startOfYear(today);
-    const e = endOfYear(today);
+    const end = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const start = new Date(today.getFullYear(), today.getMonth() - 11, 1);
     return {
-      start: isoDate(s),
-      end: isoDate(e),
-      periodLabel: `yearly-${today.getFullYear()}`,
-      displayLabel: `Year ${today.getFullYear()}`,
+      start: isoDate(start),
+      end: isoDate(end),
+      periodLabel: `rolling-12m-${isoDate(end)}`,
+      displayLabel: 'Last 12 months',
       kind: 'year',
     };
   }
@@ -474,12 +532,15 @@ export function getPeriodRange(kind: PeriodKey, custom?: { start: string; end: s
 export function getPreviousPeriodRange(range: PeriodRange): PeriodRange {
   const start = new Date(range.start + 'T00:00:00');
   if (range.kind === 'year') {
-    const y = start.getFullYear() - 1;
+    const s = new Date(range.start + 'T00:00:00');
+    const e = new Date(range.end + 'T00:00:00');
+    const ps = new Date(s.getFullYear(), s.getMonth() - 12, s.getDate());
+    const pe = new Date(e.getFullYear(), e.getMonth() - 12, e.getDate());
     return {
-      start: `${y}-01-01`,
-      end: `${y}-12-31`,
-      periodLabel: `yearly-${y}`,
-      displayLabel: `Year ${y}`,
+      start: isoDate(ps),
+      end: isoDate(pe),
+      periodLabel: `rolling-12m-prev-${isoDate(pe)}`,
+      displayLabel: 'Prior 12 months',
       kind: 'year',
     };
   }

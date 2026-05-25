@@ -4,6 +4,7 @@ import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagination';
 import { TABLE_ROW_CELL_CONTENT, TABLE_ROW_LINK_CLASS, TableRowCellOverlay } from '@/src/components/ui/tableRowLink';
 import { supabase } from '@/src/lib/supabase';
@@ -672,12 +673,11 @@ export function InterBranchRequestsPage() {
         </CardContent>
       </Card>
 
-      {exportPeriodModalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40"
-          role="presentation"
-          onClick={() => setExportPeriodModalOpen(false)}
-        >
+      <PortalModalOverlay
+        open={exportPeriodModalOpen}
+        onClose={() => setExportPeriodModalOpen(false)}
+        mobileBottomSheet
+      >
           <div
             className="bg-white w-full sm:max-w-lg sm:rounded-xl shadow-xl max-h-[90vh] overflow-y-auto"
             role="dialog"
@@ -766,8 +766,7 @@ export function InterBranchRequestsPage() {
               )}
             </div>
           </div>
-        </div>
-      )}
+      </PortalModalOverlay>
     </div>
   );
 }

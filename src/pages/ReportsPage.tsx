@@ -1,9 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
+import { branchChartColorAt, employeeProfilePathFromAgent, agentChartColor, agentChartColorAt, type AgentLeaderboardRow, type BranchAnalyticsRow } from '@/src/lib/agentAnalytics';
+import { AgentColorSwatch } from '@/src/components/agentAnalytics/AgentColorSwatch';
+import { DashLink, DASH_LINK_CLASS } from '@/src/components/executive/executiveLinks';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
+import { StatKpiCard } from '@/src/components/ui/StatKpiCard';
+import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagination';
 import {
   BarChart3,
   TrendingUp,
@@ -20,14 +26,27 @@ import {
   Target,
   ArrowUpRight,
   ArrowDownRight,
+  ArrowUp,
+  ArrowDown,
+  ArrowUpDown,
   Minus,
   Wallet,
   Activity,
   CheckCircle,
   Factory,
+  CalendarRange,
+  X,
+  Building2,
+  Award,
+  Search,
+  Filter,
+  PieChart as PieChartIcon,
+  Medal,
+  Table2,
 } from 'lucide-react';
 import {
   ComposedChart,
+  LineChart,
   Line,
   Bar,
   BarChart,
@@ -41,29 +60,491 @@ import {
   PieChart,
   Pie,
   Cell,
+  ReferenceLine,
 } from 'recharts';
 import {
   fetchReportsBundle,
   exportReportsOutstanding,
   formatReportsPeso,
   formatReportsPesoFull,
+  formatReportsPesoExact,
   type ReportsBundle,
-  type ReportsTimeRange,
+  type ReportsBranchTrendCompare,
+  type ReportsProductRow,
+  type ReportsCategoryMarginRow,
+  type ReportsProductVariantRow,
+  type ReportsInventorySupplierRow,
 } from '@/src/lib/reportsData';
+import { finishedGoodProductHref, productCategoryHref } from '@/src/lib/productRoutes';
+import {
+  DATE_PERIOD_OPTIONS,
+  periodTriggerLabel,
+  resolveDatePeriodQuery,
+  todayIsoLocal,
+  type DatePeriodKind,
+} from '@/src/lib/datePeriodQuery';
 
 type ViewMode = 'overview' | 'sales' | 'agents' | 'products' | 'inventory' | 'operations';
+type RevenueTrendMode = 'scoped' | 'allBranches';
+type AgentCompareMode = 'scoped' | 'allBranches';
+type SortDir = 'asc' | 'desc';
+
+function compareReportSort(av: string | number, bv: string | number, dir: SortDir): number {
+  if (typeof av === 'number' && typeof bv === 'number') {
+    return dir === 'asc' ? av - bv : bv - av;
+  }
+  const as = String(av).toLowerCase();
+  const bs = String(bv).toLowerCase();
+  if (as < bs) return dir === 'asc' ? -1 : 1;
+  if (as > bs) return dir === 'asc' ? 1 : -1;
+  return 0;
+}
+
+function sortAgentPerformanceRows(
+  rows: AgentLeaderboardRow[],
+  sortKey: string,
+  sortDir: SortDir,
+): AgentLeaderboardRow[] {
+  return [...rows].sort((a, b) => {
+    let av: string | number;
+    let bv: string | number;
+    switch (sortKey) {
+      case 'agent':
+        av = a.agentName.toLowerCase();
+        bv = b.agentName.toLowerCase();
+        break;
+      case 'branch':
+        av = (a.branchName ?? '').toLowerCase();
+        bv = (b.branchName ?? '').toLowerCase();
+        break;
+      case 'revenue':
+        av = a.revenue;
+        bv = b.revenue;
+        break;
+      case 'effectiveTarget':
+        av = a.effectiveTarget;
+        bv = b.effectiveTarget;
+        break;
+      case 'attainmentPct':
+        av = a.attainmentPct;
+        bv = b.attainmentPct;
+        break;
+      case 'orderCount':
+        av = a.orderCount;
+        bv = b.orderCount;
+        break;
+      case 'distinctCustomers':
+        av = a.distinctCustomers;
+        bv = b.distinctCustomers;
+        break;
+      case 'avgDiscountPercent':
+        av = a.avgDiscountPercent;
+        bv = b.avgDiscountPercent;
+        break;
+      case 'commissionEarned':
+        av = a.commissionEarned;
+        bv = b.commissionEarned;
+        break;
+      default:
+        av = a.revenue;
+        bv = b.revenue;
+    }
+    return compareReportSort(av, bv, sortDir);
+  });
+}
+
+function sortBranchAnalyticsRows(
+  rows: BranchAnalyticsRow[],
+  sortKey: string,
+  sortDir: SortDir,
+): BranchAnalyticsRow[] {
+  return [...rows].sort((a, b) => {
+    let av: string | number;
+    let bv: string | number;
+    switch (sortKey) {
+      case 'branch':
+        av = a.branchName.toLowerCase();
+        bv = b.branchName.toLowerCase();
+        break;
+      case 'revenue':
+        av = a.revenue;
+        bv = b.revenue;
+        break;
+      case 'avgMarginPct':
+        av = a.avgMarginPct;
+        bv = b.avgMarginPct;
+        break;
+      case 'outstanding':
+        av = a.outstanding;
+        bv = b.outstanding;
+        break;
+      case 'rank':
+        av = a.rank;
+        bv = b.rank;
+        break;
+      default:
+        av = a.revenue;
+        bv = b.revenue;
+    }
+    return compareReportSort(av, bv, sortDir);
+  });
+}
+
+function sortProductRows(rows: ReportsProductRow[], sortKey: string, sortDir: SortDir): ReportsProductRow[] {
+  return [...rows].sort((a, b) => {
+    let av: string | number;
+    let bv: string | number;
+    switch (sortKey) {
+      case 'product':
+        av = a.productName.toLowerCase();
+        bv = b.productName.toLowerCase();
+        break;
+      case 'category':
+        av = a.categoryName.toLowerCase();
+        bv = b.categoryName.toLowerCase();
+        break;
+      case 'unitsSold':
+        av = a.unitsSold;
+        bv = b.unitsSold;
+        break;
+      case 'orderCount':
+        av = a.orderCount;
+        bv = b.orderCount;
+        break;
+      case 'revenue':
+        av = a.revenue;
+        bv = b.revenue;
+        break;
+      case 'profit':
+        av = a.profit;
+        bv = b.profit;
+        break;
+      case 'marginPct':
+        av = a.marginPct;
+        bv = b.marginPct;
+        break;
+      default:
+        av = a.revenue;
+        bv = b.revenue;
+    }
+    return compareReportSort(av, bv, sortDir);
+  });
+}
+
+type ProductCustomerAggRow = {
+  customerId: string;
+  customerCode: string | null;
+  customerName: string;
+  agentId: string | null;
+  agentName: string | null;
+  unitsSold: number;
+  revenue: number;
+  orderCount: number;
+};
+
+function sortProductCustomerRows(
+  rows: ProductCustomerAggRow[],
+  sortKey: string,
+  sortDir: SortDir,
+): ProductCustomerAggRow[] {
+  return [...rows].sort((a, b) => {
+    let av: string | number;
+    let bv: string | number;
+    switch (sortKey) {
+      case 'customer':
+        av = a.customerName.toLowerCase();
+        bv = b.customerName.toLowerCase();
+        break;
+      case 'agent':
+        av = (a.agentName ?? '').toLowerCase();
+        bv = (b.agentName ?? '').toLowerCase();
+        break;
+      case 'unitsSold':
+        av = a.unitsSold;
+        bv = b.unitsSold;
+        break;
+      case 'orderCount':
+        av = a.orderCount;
+        bv = b.orderCount;
+        break;
+      case 'revenue':
+      default:
+        av = a.revenue;
+        bv = b.revenue;
+    }
+    return compareReportSort(av, bv, sortDir);
+  });
+}
+
+type ProductVariantViewRow = ReportsProductVariantRow & { shareOfProductPct: number };
+
+type ProductVariantBreakdownView = 'chart' | 'table';
+type MaterialSpendChartMode = 'overall' | 'categories';
+
+function variantBreakdownChartLabel(row: ProductVariantViewRow, multiProduct: boolean): string {
+  if (multiProduct) {
+    const shortProduct =
+      row.productName.length > 16 ? `${row.productName.slice(0, 14).trim()}…` : row.productName;
+    return `${shortProduct} · ${row.size}`;
+  }
+  return row.size !== '—' ? row.size : row.sku;
+}
+
+function sortProductVariantRows(
+  rows: ProductVariantViewRow[],
+  sortKey: string,
+  sortDir: SortDir,
+): ProductVariantViewRow[] {
+  return [...rows].sort((a, b) => {
+    let av: string | number;
+    let bv: string | number;
+    switch (sortKey) {
+      case 'product':
+        av = a.productName.toLowerCase();
+        bv = b.productName.toLowerCase();
+        break;
+      case 'sku':
+        av = a.sku.toLowerCase();
+        bv = b.sku.toLowerCase();
+        break;
+      case 'size':
+        av = a.size.toLowerCase();
+        bv = b.size.toLowerCase();
+        break;
+      case 'unitsSold':
+        av = a.unitsSold;
+        bv = b.unitsSold;
+        break;
+      case 'orderCount':
+        av = a.orderCount;
+        bv = b.orderCount;
+        break;
+      case 'shareOfProductPct':
+        av = a.shareOfProductPct;
+        bv = b.shareOfProductPct;
+        break;
+      case 'profit':
+        av = a.profit;
+        bv = b.profit;
+        break;
+      case 'marginPct':
+        av = a.marginPct;
+        bv = b.marginPct;
+        break;
+      case 'revenue':
+      default:
+        av = a.revenue;
+        bv = b.revenue;
+    }
+    return compareReportSort(av, bv, sortDir);
+  });
+}
+
+function sortCategoryMarginRows(
+  rows: ReportsCategoryMarginRow[],
+  sortKey: string,
+  sortDir: SortDir,
+): ReportsCategoryMarginRow[] {
+  return [...rows].sort((a, b) => {
+    let av: string | number;
+    let bv: string | number;
+    switch (sortKey) {
+      case 'category':
+        av = a.categoryName.toLowerCase();
+        bv = b.categoryName.toLowerCase();
+        break;
+      case 'unitsSold':
+        av = a.unitsSold;
+        bv = b.unitsSold;
+        break;
+      case 'revenue':
+        av = a.revenue;
+        bv = b.revenue;
+        break;
+      case 'profit':
+        av = a.profit;
+        bv = b.profit;
+        break;
+      case 'marginPct':
+        av = a.marginPct;
+        bv = b.marginPct;
+        break;
+      default:
+        av = a.revenue;
+        bv = b.revenue;
+    }
+    return compareReportSort(av, bv, sortDir);
+  });
+}
+
+function sortInventorySupplierRows(
+  rows: ReportsInventorySupplierRow[],
+  sortKey: string,
+  sortDir: SortDir,
+): ReportsInventorySupplierRow[] {
+  return [...rows].sort((a, b) => {
+    let av: string | number;
+    let bv: string | number;
+    switch (sortKey) {
+      case 'supplier':
+        av = a.supplierName.toLowerCase();
+        bv = b.supplierName.toLowerCase();
+        break;
+      case 'poCount':
+        av = a.poCount;
+        bv = b.poCount;
+        break;
+      case 'spend':
+      default:
+        av = a.spend;
+        bv = b.spend;
+    }
+    return compareReportSort(av, bv, sortDir);
+  });
+}
+
+function reportsChartLegendProps(lineCount: number): { wrapperStyle: React.CSSProperties } {
+  if (lineCount <= 4) return { wrapperStyle: { fontSize: 11 } };
+  return {
+    wrapperStyle: {
+      fontSize: 11,
+      maxHeight: 72,
+      overflowY: 'auto',
+      width: '100%',
+    },
+  };
+}
+
+/** Fixed-height charts without ResponsiveContainer — avoids runaway page height in scroll layouts. */
+function ReportsChartFrame(props: {
+  height: number;
+  render: (size: { width: number; height: number }) => React.ReactElement;
+}) {
+  const ref = React.useRef<HTMLDivElement>(null);
+  const [width, setWidth] = React.useState(0);
+
+  React.useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const update = () => setWidth(Math.max(0, Math.floor(el.getBoundingClientRect().width)));
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  return (
+    <div ref={ref} className="w-full overflow-hidden" style={{ height: props.height }}>
+      {width > 0 ? props.render({ width, height: props.height }) : null}
+    </div>
+  );
+}
+
+function reportsSortIcon(col: string, sortKey: string, sortDir: SortDir): React.ReactNode {
+  if (sortKey !== col) return <ArrowUpDown className="w-3 h-3 ml-1 opacity-40" />;
+  return sortDir === 'asc'
+    ? <ArrowUp className="w-3 h-3 ml-1 text-red-600" />
+    : <ArrowDown className="w-3 h-3 ml-1 text-red-600" />;
+}
+
+function ReportsSortTh(props: {
+  col: string;
+  label: string;
+  sortKey: string;
+  sortDir: SortDir;
+  onSort: (col: string) => void;
+  align?: 'left' | 'right' | 'center';
+  className?: string;
+}) {
+  const alignClass =
+    props.align === 'right' ? 'text-right' : props.align === 'center' ? 'text-center' : 'text-left';
+  const flexClass =
+    props.align === 'right' ? 'justify-end' : props.align === 'center' ? 'justify-center' : '';
+  return (
+    <th
+      onClick={() => props.onSort(props.col)}
+      className={`py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900 ${alignClass} ${props.className ?? ''}`}
+    >
+      <span className={`flex items-center ${flexClass}`}>
+        {props.label}
+        {reportsSortIcon(props.col, props.sortKey, props.sortDir)}
+      </span>
+    </th>
+  );
+}
+
+function ReportsTableToolbar(props: {
+  search: string;
+  onSearchChange: (value: string) => void;
+  placeholder: string;
+  resultLabel: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-3 lg:flex-row lg:items-center mb-4">
+      <div className="relative flex-1 min-w-0">
+        <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+        <input
+          className="w-full pl-9 pr-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none"
+          placeholder={props.placeholder}
+          value={props.search}
+          onChange={(e) => props.onSearchChange(e.target.value)}
+        />
+      </div>
+      {props.children ? <div className="flex flex-wrap items-center gap-2">{props.children}</div> : null}
+      <p className="text-xs text-gray-500 shrink-0">{props.resultLabel}</p>
+    </div>
+  );
+}
+
+function ReportsFilterSelect(props: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: { value: string; label: string }[];
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <Filter className="w-4 h-4 text-gray-400 shrink-0" aria-hidden />
+      <label className="sr-only">{props.label}</label>
+      <select
+        value={props.value}
+        onChange={(e) => props.onChange(e.target.value)}
+        className="h-9 px-3 text-sm border border-gray-300 rounded-lg bg-white focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none"
+        aria-label={props.label}
+      >
+        {props.options.map((o) => (
+          <option key={o.value || '__all'} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function useReportTableSort(defaultKey: string, defaultDir: SortDir = 'desc') {
+  const [sortKey, setSortKey] = useState(defaultKey);
+  const [sortDir, setSortDir] = useState<SortDir>(defaultDir);
+  const onSort = useCallback((col: string) => {
+    if (sortKey === col) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else {
+      setSortKey(col);
+      setSortDir('asc');
+    }
+  }, [sortKey]);
+  return { sortKey, sortDir, onSort };
+}
 
 const COLORS = ['#EF4444', '#F59E0B', '#10B981', '#3B82F6', '#8B5CF6', '#EC4899'];
 
-const TIME_OPTIONS: { value: ReportsTimeRange; label: string }[] = [
-  { value: '7D', label: 'Last 7 days' },
-  { value: '1M', label: 'Last month' },
-  { value: '3M', label: 'Last 3 months' },
-  { value: '6M', label: 'Last 6 months' },
-  { value: '1Y', label: 'Last 12 months' },
-  { value: 'YTD', label: 'Year to date' },
-  { value: 'ALL', label: 'All time' },
-];
+interface MoverRow {
+  key: string;
+  name: string;
+  value: number;
+  sub?: string;
+  badge?: { label: string; variant: 'success' | 'warning' | 'danger' | 'default' };
+}
 
 function getGrowthIcon(growth: number) {
   if (growth > 0) return <ArrowUpRight className="w-4 h-4 text-green-600" />;
@@ -83,25 +564,145 @@ function quotaBadgeVariant(pct: number): 'success' | 'warning' | 'danger' {
   return 'danger';
 }
 
+function agentAttainmentBarColor(pct: number): string {
+  if (pct >= 100) return 'bg-emerald-500';
+  if (pct >= 85) return 'bg-amber-400';
+  return 'bg-red-500';
+}
+
+function paymentBehaviorBadge(
+  behavior: string | null | undefined,
+): MoverRow['badge'] | undefined {
+  if (!behavior) return undefined;
+  const b = behavior.toLowerCase();
+  if (b === 'good') return { label: 'Good', variant: 'success' };
+  if (b === 'watchlist') return { label: 'Watch', variant: 'warning' };
+  if (b === 'risk') return { label: 'Risk', variant: 'danger' };
+  return { label: behavior, variant: 'default' };
+}
+
 export function ReportsPage(): React.ReactElement {
   const { branch } = useAppContext();
   const navigate = useNavigate();
 
   const [viewMode, setViewMode] = useState<ViewMode>('overview');
-  const [timeRange, setTimeRange] = useState<ReportsTimeRange>('6M');
+  const [periodKind, setPeriodKind] = useState<DatePeriodKind>('sixMonths');
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
+  const [periodModalOpen, setPeriodModalOpen] = useState(false);
+  const [draftPeriodKind, setDraftPeriodKind] = useState<DatePeriodKind>('sixMonths');
+  const [draftCustomStart, setDraftCustomStart] = useState('');
+  const [draftCustomEnd, setDraftCustomEnd] = useState('');
   const [bundle, setBundle] = useState<ReportsBundle | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [revenueTrendMode, setRevenueTrendMode] = useState<RevenueTrendMode>('scoped');
+  const [agentCompareMode, setAgentCompareMode] = useState<AgentCompareMode>('scoped');
+
+  const [salesCustSearch, setSalesCustSearch] = useState('');
+  const [salesCustAgentFilter, setSalesCustAgentFilter] = useState('');
+  const [salesCustArFilter, setSalesCustArFilter] = useState('');
+  const [salesCustPage, setSalesCustPage] = useState(1);
+  const salesCustSort = useReportTableSort('revenue', 'desc');
+  const agentsPerfSort = useReportTableSort('revenue', 'desc');
+  const agentsBranchSort = useReportTableSort('revenue', 'desc');
+  const productsSort = useReportTableSort('revenue', 'desc');
+  const productCategorySort = useReportTableSort('revenue', 'desc');
+  const productCustomersSort = useReportTableSort('revenue', 'desc');
+  const productVariantsSort = useReportTableSort('revenue', 'desc');
+  const [agentsPerfPage, setAgentsPerfPage] = useState(1);
+  const [productsPage, setProductsPage] = useState(1);
+  const [productCustomersPage, setProductCustomersPage] = useState(1);
+  const [productVariantsPage, setProductVariantsPage] = useState(1);
+  const [productVariantView, setProductVariantView] = useState<ProductVariantBreakdownView>('chart');
+  const [productViewCategory, setProductViewCategory] = useState('');
+  const [visibleCategoryNames, setVisibleCategoryNames] = useState<string[]>([]);
+  const [productSearch, setProductSearch] = useState('');
+  const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
+  const inventorySuppliersSort = useReportTableSort('spend', 'desc');
+  const [materialSpendChartMode, setMaterialSpendChartMode] = useState<MaterialSpendChartMode>('overall');
+  const [visibleMaterialCategoryNames, setVisibleMaterialCategoryNames] = useState<string[]>([]);
+
+  const periodQuery = useMemo(
+    () => resolveDatePeriodQuery(periodKind, customStart, customEnd),
+    [periodKind, customStart, customEnd],
+  );
+
+  const maxCustomDate = useMemo(() => todayIsoLocal(), []);
+
+  const draftCustomInvalid = Boolean(
+    draftCustomStart && draftCustomEnd && draftCustomStart > draftCustomEnd,
+  );
+
+  const openPeriodModal = () => {
+    setDraftPeriodKind(periodKind);
+    setDraftCustomStart(customStart);
+    setDraftCustomEnd(customEnd);
+    setPeriodModalOpen(true);
+  };
+
+  const handlePeriodChange = (kind: DatePeriodKind) => {
+    setPeriodKind(kind);
+    if (kind === 'custom') {
+      const t = new Date();
+      const iso = todayIsoLocal();
+      const start = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-01`;
+      setCustomStart(start);
+      setCustomEnd(iso);
+    }
+  };
+
+  const handleModalPresetPick = (kind: DatePeriodKind) => {
+    if (kind !== 'custom') {
+      handlePeriodChange(kind);
+      setPeriodModalOpen(false);
+      return;
+    }
+    setDraftPeriodKind('custom');
+    const t = new Date();
+    const iso = todayIsoLocal();
+    const start = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-01`;
+    setDraftCustomStart((prev) => prev || customStart || start);
+    setDraftCustomEnd((prev) => prev || customEnd || iso);
+  };
+
+  const applyModalCustomRange = () => {
+    setPeriodKind('custom');
+    setCustomStart(draftCustomStart);
+    setCustomEnd(draftCustomEnd);
+    setPeriodModalOpen(false);
+  };
+
+  useEffect(() => {
+    if (!periodModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPeriodModalOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [periodModalOpen]);
 
   const load = useCallback(
     async (silent = false) => {
+      if (periodQuery.invalid) {
+        setError('Invalid date range selected.');
+        setBundle(null);
+        setLoading(false);
+        setRefreshing(false);
+        return;
+      }
       if (!silent) setLoading(true);
       setRefreshing(silent);
       setError(null);
       try {
-        const data = await fetchReportsBundle({ branchName: branch, timeRange });
+        const data = await fetchReportsBundle({
+          branchName: branch,
+          periodKind,
+          customStart,
+          customEnd,
+        });
         setBundle(data);
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Failed to load reports');
@@ -110,12 +711,17 @@ export function ReportsPage(): React.ReactElement {
         setRefreshing(false);
       }
     },
-    [branch, timeRange],
+    [branch, periodKind, customStart, customEnd, periodQuery.invalid],
   );
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    setRevenueTrendMode(branch?.trim() ? 'scoped' : 'allBranches');
+    setAgentCompareMode(branch?.trim() ? 'scoped' : 'allBranches');
+  }, [branch]);
 
   const branchLabel = useMemo(() => {
     if (bundle?.branchName) return bundle.branchName;
@@ -147,58 +753,792 @@ export function ReportsPage(): React.ReactElement {
     { id: 'operations', label: 'Operations', icon: <Truck className="w-4 h-4" /> },
   ];
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-24">
-        <div className="flex flex-col items-center gap-3 text-gray-500">
-          <Loader2 className="w-7 h-7 animate-spin text-red-600" />
-          <p className="text-sm">Loading reports…</p>
+  const periodLabel = bundle?.period.displayLabel ?? periodQuery.displayLabel;
+
+  const salesCustomersRaw = bundle?.enhancements.customersInPeriod ?? [];
+  const salesSeriesRaw = bundle?.salesSeries ?? [];
+
+  const branchRevenuePie = useMemo(() => {
+    return (bundle?.branchRevenueShare ?? []).map((b) => ({
+      name: b.branchName,
+      value: b.revenue,
+      branchId: b.branchId,
+    }));
+  }, [bundle?.branchRevenueShare]);
+
+  const aovTrendData = useMemo(
+    () =>
+      salesSeriesRaw.map((s) => ({
+        period: s.period,
+        avgOrderValue: s.avgOrderValue,
+      })),
+    [salesSeriesRaw],
+  );
+
+  const salesAgentOptions = useMemo(
+    () =>
+      [...new Set(salesCustomersRaw.map((c) => c.agentName).filter((n): n is string => Boolean(n)))].sort(
+        (a, b) => a.localeCompare(b),
+      ),
+    [salesCustomersRaw],
+  );
+
+  const filteredSalesCustomers = useMemo(() => {
+    const q = salesCustSearch.trim().toLowerCase();
+    return salesCustomersRaw.filter((c) => {
+      const matchesSearch =
+        !q ||
+        c.customerName.toLowerCase().includes(q) ||
+        (c.customerCode ?? '').toLowerCase().includes(q) ||
+        (c.agentName ?? '').toLowerCase().includes(q);
+      const matchesAgent = !salesCustAgentFilter || c.agentName === salesCustAgentFilter;
+      const matchesAr =
+        !salesCustArFilter ||
+        (salesCustArFilter === 'with_ar' && c.outstandingBalance > 0) ||
+        (salesCustArFilter === 'no_ar' && c.outstandingBalance <= 0) ||
+        (salesCustArFilter === 'overdue' && c.overdueBalance > 0) ||
+        (salesCustArFilter === 'not_overdue' && c.overdueBalance <= 0) ||
+        (salesCustArFilter === 'high_credit' &&
+          c.creditUtilizationPct != null &&
+          c.creditUtilizationPct >= 80);
+      return matchesSearch && matchesAgent && matchesAr;
+    });
+  }, [salesCustomersRaw, salesCustSearch, salesCustAgentFilter, salesCustArFilter]);
+
+  const sortedSalesCustomers = useMemo(() => {
+    return [...filteredSalesCustomers].sort((a, b) => {
+      let av: string | number;
+      let bv: string | number;
+      switch (salesCustSort.sortKey) {
+        case 'customer':
+          av = a.customerName.toLowerCase();
+          bv = b.customerName.toLowerCase();
+          break;
+        case 'agent':
+          av = (a.agentName ?? '').toLowerCase();
+          bv = (b.agentName ?? '').toLowerCase();
+          break;
+        case 'branch':
+          av = (a.branchName ?? '').toLowerCase();
+          bv = (b.branchName ?? '').toLowerCase();
+          break;
+        case 'orderCount':
+          av = a.orderCount;
+          bv = b.orderCount;
+          break;
+        case 'revenue':
+          av = a.revenue;
+          bv = b.revenue;
+          break;
+        case 'averageOrderValue':
+          av = a.averageOrderValue;
+          bv = b.averageOrderValue;
+          break;
+        case 'outstandingBalance':
+          av = a.outstandingBalance;
+          bv = b.outstandingBalance;
+          break;
+        case 'overdueBalance':
+          av = a.overdueBalance;
+          bv = b.overdueBalance;
+          break;
+        case 'maxDaysOverdue':
+          av = a.maxDaysOverdue;
+          bv = b.maxDaysOverdue;
+          break;
+        case 'overdueOrderCount':
+          av = a.overdueOrderCount;
+          bv = b.overdueOrderCount;
+          break;
+        case 'oldestDueDate':
+          av = a.oldestDueDate ?? '';
+          bv = b.oldestDueDate ?? '';
+          break;
+        case 'creditUtilizationPct':
+          av = a.creditUtilizationPct ?? -1;
+          bv = b.creditUtilizationPct ?? -1;
+          break;
+        default:
+          av = a.revenue;
+          bv = b.revenue;
+      }
+      return compareReportSort(av, bv, salesCustSort.sortDir);
+    });
+  }, [filteredSalesCustomers, salesCustSort.sortKey, salesCustSort.sortDir]);
+
+  const salesCustTotalPages = Math.max(1, Math.ceil(sortedSalesCustomers.length / TABLE_PAGE_SIZE) || 1);
+  const pagedSalesCustomers = useMemo(() => {
+    const p = Math.min(salesCustPage, salesCustTotalPages);
+    const start = (p - 1) * TABLE_PAGE_SIZE;
+    return sortedSalesCustomers.slice(start, start + TABLE_PAGE_SIZE);
+  }, [sortedSalesCustomers, salesCustPage, salesCustTotalPages]);
+
+  useEffect(() => {
+    setSalesCustPage(1);
+  }, [salesCustSearch, salesCustAgentFilter, salesCustArFilter, salesCustSort.sortKey, salesCustSort.sortDir]);
+
+  useEffect(() => {
+    setAgentsPerfPage(1);
+  }, [agentCompareMode, agentsPerfSort.sortKey, agentsPerfSort.sortDir]);
+
+  useEffect(() => {
+    setProductsPage(1);
+  }, [productViewCategory, productSearch, productsSort.sortKey, productsSort.sortDir]);
+
+  useEffect(() => {
+    setSelectedProductIds([]);
+  }, [productViewCategory, branch, periodKind, customStart, customEnd]);
+
+  useEffect(() => {
+    setProductVariantsPage(1);
+  }, [selectedProductIds, productVariantsSort.sortKey, productVariantsSort.sortDir]);
+
+  useEffect(() => {
+    setProductCustomersPage(1);
+  }, [
+    selectedProductIds,
+    productCustomersSort.sortKey,
+    productCustomersSort.sortDir,
+  ]);
+
+  useEffect(() => {
+    const margins = bundle?.enhancements?.categoryMargins;
+    if (!margins?.length) {
+      setVisibleCategoryNames([]);
+      setProductViewCategory('');
+      return;
+    }
+    const categoryNames = [...new Set(margins.map((c) => c.categoryName))].sort((a, b) =>
+      a.localeCompare(b),
+    );
+    setVisibleCategoryNames((prev) => {
+      const valid = prev.filter((n) => categoryNames.includes(n));
+      return valid.length > 0 ? valid : categoryNames;
+    });
+    const productCats = [
+      ...new Set((bundle?.productsInPeriod ?? []).map((p) => p.categoryName)),
+    ].sort((a, b) => a.localeCompare(b));
+    setProductViewCategory((prev) => {
+      if (prev && productCats.includes(prev)) return prev;
+      return productCats[0] ?? categoryNames[0] ?? '';
+    });
+  }, [bundle?.generatedAt, bundle?.enhancements?.categoryMargins, bundle?.productsInPeriod]);
+
+  useEffect(() => {
+    const lines = bundle?.inventoryReport?.materialCategoryMonthlySeries?.lines ?? [];
+    if (lines.length === 0) {
+      setVisibleMaterialCategoryNames([]);
+      return;
+    }
+    const names = lines.map((l) => l.categoryName);
+    setVisibleMaterialCategoryNames((prev) => {
+      const valid = prev.filter((n) => names.includes(n));
+      return valid.length > 0 ? valid : names;
+    });
+  }, [bundle?.generatedAt, bundle?.inventoryReport?.materialCategoryMonthlySeries]);
+
+  useEffect(() => {
+    if (salesCustPage > salesCustTotalPages) setSalesCustPage(salesCustTotalPages);
+  }, [salesCustPage, salesCustTotalPages]);
+
+  const periodModal = (
+    <PortalModalOverlay
+      open={periodModalOpen}
+      onClose={() => setPeriodModalOpen(false)}
+      zIndex={110}
+      mobileBottomSheet
+    >
+      <div
+        className="bg-white w-full sm:max-w-lg sm:rounded-xl shadow-xl max-h-[90vh] overflow-y-auto"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="reports-period-modal-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between p-4 border-b border-gray-200 sticky top-0 bg-white z-10">
+          <h2 id="reports-period-modal-title" className="text-lg font-semibold text-gray-900">
+            Date range
+          </h2>
+          <button
+            type="button"
+            className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+            aria-label="Close"
+            onClick={() => setPeriodModalOpen(false)}
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="p-4 space-y-4">
+          <p className="text-sm text-gray-600">
+            Choose a preset or set a custom date range. All report tabs and metrics use this period.
+          </p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            {DATE_PERIOD_OPTIONS.map(({ kind, label }) => (
+              <button
+                key={kind}
+                type="button"
+                onClick={() => handleModalPresetPick(kind)}
+                className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
+                  draftPeriodKind === kind
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-white text-gray-800 border-gray-300 hover:bg-gray-50'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {draftPeriodKind === 'custom' && (
+            <div className="space-y-2 pt-1 border-t border-gray-100">
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="text-xs font-medium text-gray-600 w-full sm:w-auto">From</label>
+                <input
+                  type="date"
+                  value={draftCustomStart}
+                  max={maxCustomDate}
+                  onChange={(e) => setDraftCustomStart(e.target.value)}
+                  className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                />
+                <label className="text-xs font-medium text-gray-600">To</label>
+                <input
+                  type="date"
+                  value={draftCustomEnd}
+                  min={draftCustomStart || undefined}
+                  max={maxCustomDate}
+                  onChange={(e) => setDraftCustomEnd(e.target.value)}
+                  className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                />
+              </div>
+              {draftCustomInvalid && (
+                <p className="text-xs text-red-600">Start must be on or before end.</p>
+              )}
+            </div>
+          )}
+        </div>
+        <div className="flex justify-end gap-2 p-4 border-t border-gray-200 bg-gray-50">
+          <Button
+            type="button"
+            variant="outline"
+            className="border-gray-300 bg-white"
+            onClick={() => setPeriodModalOpen(false)}
+          >
+            Cancel
+          </Button>
+          {draftPeriodKind === 'custom' && (
+            <Button
+              type="button"
+              variant="primary"
+              disabled={draftCustomInvalid}
+              onClick={applyModalCustomRange}
+            >
+              Apply range
+            </Button>
+          )}
         </div>
       </div>
+    </PortalModalOverlay>
+  );
+
+  if (loading) {
+    return (
+      <>
+        <div className="space-y-4 sm:space-y-6">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">Reports &amp; Analytics</h1>
+              <p className="text-sm text-gray-500 mt-1">
+                {branchLabel} · {periodLabel}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                className="gap-2 border-gray-300 bg-white max-w-[18rem]"
+                aria-haspopup="dialog"
+                aria-expanded={periodModalOpen}
+                aria-label="Choose date range"
+                onClick={openPeriodModal}
+              >
+                <CalendarRange className="w-4 h-4 shrink-0 text-gray-600" aria-hidden />
+                <span className="truncate text-left text-sm font-normal">
+                  {periodTriggerLabel(periodKind, customStart, customEnd)}
+                </span>
+              </Button>
+            </div>
+          </div>
+          <div className="flex items-center justify-center py-24">
+            <div className="flex flex-col items-center gap-3 text-gray-500">
+              <Loader2 className="w-7 h-7 animate-spin text-red-600" />
+              <p className="text-sm">Loading reports…</p>
+            </div>
+          </div>
+        </div>
+        {periodModal}
+      </>
     );
   }
 
   if (error || !bundle) {
     return (
-      <Card>
-        <CardContent className="p-6 space-y-4">
-          <div className="flex items-center gap-2 text-red-700">
-            <AlertTriangle className="w-5 h-5" />
-            <h2 className="text-lg font-semibold">Could not load reports</h2>
+      <>
+        <div className="space-y-4 sm:space-y-6">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">Reports &amp; Analytics</h1>
+              <p className="text-sm text-gray-500 mt-1">
+                {branchLabel} · {periodLabel}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                className="gap-2 border-gray-300 bg-white max-w-[18rem]"
+                aria-haspopup="dialog"
+                aria-expanded={periodModalOpen}
+                aria-label="Choose date range"
+                onClick={openPeriodModal}
+              >
+                <CalendarRange className="w-4 h-4 shrink-0 text-gray-600" aria-hidden />
+                <span className="truncate text-left text-sm font-normal">
+                  {periodTriggerLabel(periodKind, customStart, customEnd)}
+                </span>
+              </Button>
+              <Button variant="primary" onClick={() => void load()} disabled={periodQuery.invalid}>
+                Retry
+              </Button>
+            </div>
           </div>
-          <p className="text-sm text-gray-600">{error ?? 'No data available.'}</p>
-          <Button variant="primary" onClick={() => void load()}>Retry</Button>
-        </CardContent>
-      </Card>
+          <Card>
+            <CardContent className="p-6 space-y-4">
+              <div className="flex items-center gap-2 text-red-700">
+                <AlertTriangle className="w-5 h-5" />
+                <h2 className="text-lg font-semibold">Could not load reports</h2>
+              </div>
+              <p className="text-sm text-gray-600">{error ?? 'No data available.'}</p>
+            </CardContent>
+          </Card>
+        </div>
+        {periodModal}
+      </>
     );
   }
 
-  const { executive, agents, finance, salesSeries, enhancements: enh } = bundle;
+  const { executive, agents, agentsAllBranches, finance, salesSeries, enhancements: enh } = bundle;
   const summary = agents.summary;
+
+  const agentsDisplay =
+    agentCompareMode === 'allBranches' && agentsAllBranches ? agentsAllBranches : agents;
+  const agentsTabSummary = agentsDisplay.summary;
+  const canCompareAgents = Boolean(branch?.trim() && agentsAllBranches);
+  const agentsScopeLabel =
+    agentCompareMode === 'allBranches' && agentsAllBranches ? 'All branches' : branchLabel;
   const aov = summary.totalOrders > 0 ? summary.totalRevenue / summary.totalOrders : 0;
-  const pipelineMax = Math.max(1, ...enh.orderPipeline.map((s) => s.orderCount));
+
+  const topProductMovers: MoverRow[] = bundle.productsInPeriod.slice(0, 5).map((p) => ({
+    key: p.productId ?? p.productName,
+    name: p.productName,
+    value: p.revenue,
+    sub: `${p.unitsSold.toLocaleString()} units · ${p.orderCount} orders`,
+  }));
+
+  const topCustomerMovers: MoverRow[] = executive.topCustomers.slice(0, 5).map((c) => ({
+    key: c.customerId,
+    name: c.customerName,
+    value: c.totalPurchasesYTD,
+    sub: `${c.orderCount} orders · ${formatReportsPeso(c.outstandingBalance)} AR`,
+    badge: paymentBehaviorBadge(c.paymentBehavior),
+  }));
+
+  const topAgentMovers: MoverRow[] = agents.agents.slice(0, 5).map((a) => ({
+    key: a.agentId,
+    name: a.agentName,
+    value: a.revenue,
+    sub: `${a.orderCount} orders · ${a.attainmentPct.toFixed(0)}% quota`,
+    badge: {
+      label: `${a.attainmentPct.toFixed(0)}%`,
+      variant: quotaBadgeVariant(a.attainmentPct),
+    },
+  }));
+
+  const topAgentByRevenue =
+    agentsDisplay.agents.length === 0
+      ? null
+      : ([...agentsDisplay.agents].sort((a, b) => b.revenue - a.revenue)[0] ?? null);
+
+  const agentChartRows = [...agentsDisplay.agents]
+    .sort((a, b) => b.attainmentPct - a.attainmentPct)
+    .map((a) => ({
+      agentId: a.agentId,
+      name: a.agentName.length > 18 ? `${a.agentName.slice(0, 16)}…` : a.agentName,
+      attainment: Math.round(a.attainmentPct),
+      fill: agentChartColor(a.agentId),
+    }));
+
+  const agentSalesChartRows = [...agentsDisplay.agents]
+    .sort((a, b) => b.revenue - a.revenue)
+    .map((a) => ({
+      agentId: a.agentId,
+      name: a.agentName,
+      revenue: a.revenue,
+      fill: agentChartColor(a.agentId),
+    }));
+
+  const sortedAgentsForTable = sortAgentPerformanceRows(
+    agentsDisplay.agents,
+    agentsPerfSort.sortKey,
+    agentsPerfSort.sortDir,
+  );
+  const agentsPerfTotalPages = Math.max(1, Math.ceil(sortedAgentsForTable.length / TABLE_PAGE_SIZE) || 1);
+  const agentsPerfPageSafe = Math.min(agentsPerfPage, agentsPerfTotalPages);
+  const pagedAgentsForTable = sortedAgentsForTable.slice(
+    (agentsPerfPageSafe - 1) * TABLE_PAGE_SIZE,
+    agentsPerfPageSafe * TABLE_PAGE_SIZE,
+  );
+
+  const sortedBranchesForTable = sortBranchAnalyticsRows(
+    agentsDisplay.branches,
+    agentsBranchSort.sortKey,
+    agentsBranchSort.sortDir,
+  );
+
+  const showAgentBranchCol = agentCompareMode === 'allBranches' && Boolean(agentsAllBranches);
+
+  const productCategoryOptions = [...new Set(bundle.productsInPeriod.map((p) => p.categoryName))].sort(
+    (a, b) => a.localeCompare(b),
+  );
+
+  const filteredProducts = bundle.productsInPeriod.filter((p) => {
+    const q = productSearch.trim().toLowerCase();
+    if (productViewCategory && p.categoryName !== productViewCategory) return false;
+    if (q && !p.productName.toLowerCase().includes(q)) return false;
+    return true;
+  });
+
+  const sortedProducts = sortProductRows(filteredProducts, productsSort.sortKey, productsSort.sortDir);
+  const productsTotalPages = Math.max(1, Math.ceil(sortedProducts.length / TABLE_PAGE_SIZE) || 1);
+  const productsPageSafe = Math.min(productsPage, productsTotalPages);
+  const pagedProducts = sortedProducts.slice(
+    (productsPageSafe - 1) * TABLE_PAGE_SIZE,
+    productsPageSafe * TABLE_PAGE_SIZE,
+  );
+
+  const categoryMarginSource = enh.categoryMargins;
+
+  const categoryChartRows = categoryMarginSource.filter((c) =>
+    visibleCategoryNames.includes(c.categoryName),
+  );
+
+  const categoryRowsForSection = sortCategoryMarginRows(
+    categoryMarginSource,
+    productCategorySort.sortKey,
+    productCategorySort.sortDir,
+  );
+
+  const categoryPieData = (() => {
+    const sorted = [...categoryChartRows].sort((a, b) => b.revenue - a.revenue);
+    const top = sorted.slice(0, 8);
+    const rest = sorted.slice(8);
+    const rows = top.map((c) => ({ name: c.categoryName, value: c.revenue, key: c.categoryName }));
+    if (rest.length > 0) {
+      rows.push({
+        name: 'Other',
+        value: rest.reduce((s, c) => s + c.revenue, 0),
+        key: 'other',
+      });
+    }
+    return rows.filter((r) => r.value > 0);
+  })();
+
+  const categoryTrendLines = [...categoryChartRows].sort((a, b) => b.revenue - a.revenue);
+
+  const categoryTrendChartData = bundle.categoryMonthlySeries.labels.map((label, i) => {
+    const row: Record<string, string | number> = { label };
+    for (const c of categoryTrendLines) {
+      const line = bundle.categoryMonthlySeries.lines.find((l) => l.categoryName === c.categoryName);
+      row[c.categoryName] = line?.revenueByMonth[i] ?? 0;
+    }
+    return row;
+  });
+
+  const toggleCategoryVisible = (categoryName: string) => {
+    setVisibleCategoryNames((prev) => {
+      if (prev.includes(categoryName)) {
+        if (prev.length <= 1) return prev;
+        return prev.filter((n) => n !== categoryName);
+      }
+      return [...prev, categoryName];
+    });
+  };
+
+  const productsInViewCategory = bundle.productsInPeriod.filter(
+    (p) => !productViewCategory || p.categoryName === productViewCategory,
+  );
+
+  const productChartRows =
+    selectedProductIds.length > 0
+      ? productsInViewCategory.filter((p) => p.productId && selectedProductIds.includes(p.productId))
+      : productsInViewCategory;
+
+  const productPieData = (() => {
+    const sorted = [...productChartRows].sort((a, b) => b.revenue - a.revenue);
+    const top = sorted.slice(0, 8);
+    const rest = sorted.slice(8);
+    const rows = top.map((p) => ({
+      name: p.productName,
+      value: p.revenue,
+      key: p.productId ?? p.productName,
+    }));
+    if (rest.length > 0) {
+      rows.push({
+        name: 'Other',
+        value: rest.reduce((s, p) => s + p.revenue, 0),
+        key: 'other',
+      });
+    }
+    return rows.filter((r) => r.value > 0);
+  })();
+
+  const productTrendLines =
+    selectedProductIds.length > 0
+      ? [...productChartRows].sort((a, b) => b.revenue - a.revenue)
+      : [...productChartRows].sort((a, b) => b.revenue - a.revenue).slice(0, 6);
+
+  const productTrendChartData = bundle.productMonthlySeries.labels.map((label, i) => {
+    const row: Record<string, string | number> = { label };
+    for (const p of productTrendLines) {
+      if (!p.productId) continue;
+      const line = bundle.productMonthlySeries.lines.find((l) => l.productId === p.productId);
+      row[p.productName] = line?.revenueByMonth[i] ?? 0;
+    }
+    return row;
+  });
+
+  const topProductCustomersRaw = (() => {
+    if (selectedProductIds.length === 0) return [] as ProductCustomerAggRow[];
+    const selected = new Set(selectedProductIds);
+    type AgentRev = { agentId: string | null; agentName: string | null; revenue: number };
+    type Agg = Omit<ProductCustomerAggRow, 'agentId' | 'agentName' | 'orderCount'> & {
+      orders: Set<string>;
+      agentRevenue: Map<string, AgentRev>;
+    };
+    const map = new Map<string, Agg>();
+    for (const line of bundle.productCustomerLines) {
+      if (!selected.has(line.productId)) continue;
+      const cur =
+        map.get(line.customerId) ??
+        ({
+          customerId: line.customerId,
+          customerCode: line.customerCode,
+          customerName: line.customerName,
+          unitsSold: 0,
+          revenue: 0,
+          orders: new Set<string>(),
+          agentRevenue: new Map<string, AgentRev>(),
+        } satisfies Agg);
+      cur.unitsSold += line.unitsSold;
+      cur.revenue += line.revenue;
+      cur.orders.add(line.orderId);
+      if (!cur.customerCode && line.customerCode) cur.customerCode = line.customerCode;
+      const agentKey = line.agentId ?? line.agentName ?? 'unknown';
+      const agentCur = cur.agentRevenue.get(agentKey) ?? {
+        agentId: line.agentId,
+        agentName: line.agentName,
+        revenue: 0,
+      };
+      agentCur.revenue += line.revenue;
+      if (!agentCur.agentName && line.agentName) agentCur.agentName = line.agentName;
+      if (!agentCur.agentId && line.agentId) agentCur.agentId = line.agentId;
+      cur.agentRevenue.set(agentKey, agentCur);
+      map.set(line.customerId, cur);
+    }
+    return [...map.values()]
+      .map(({ orders, agentRevenue, ...rest }) => {
+        const topAgent = [...agentRevenue.values()].sort((a, b) => b.revenue - a.revenue)[0];
+        return {
+          ...rest,
+          orderCount: orders.size,
+          agentId: topAgent?.agentId ?? null,
+          agentName: topAgent?.agentName ?? null,
+        };
+      })
+      .sort((a, b) => b.revenue - a.revenue);
+  })();
+
+  const selectedProductVariantRows = (() => {
+    if (selectedProductIds.length === 0) return [] as ProductVariantViewRow[];
+    const selected = new Set(selectedProductIds);
+    const filtered = (bundle.productVariantSales ?? []).filter((v) => selected.has(v.productId));
+    const revenueByProduct = new Map<string, number>();
+    for (const row of filtered) {
+      revenueByProduct.set(row.productId, (revenueByProduct.get(row.productId) ?? 0) + row.revenue);
+    }
+    return filtered.map((row) => ({
+      ...row,
+      shareOfProductPct:
+        (revenueByProduct.get(row.productId) ?? 0) > 0
+          ? (row.revenue / (revenueByProduct.get(row.productId) ?? 1)) * 100
+          : 0,
+    }));
+  })();
+
+  const sortedProductVariants = sortProductVariantRows(
+    selectedProductVariantRows,
+    productVariantsSort.sortKey,
+    productVariantsSort.sortDir,
+  );
+  const productVariantsTotalPages = Math.max(
+    1,
+    Math.ceil(sortedProductVariants.length / TABLE_PAGE_SIZE) || 1,
+  );
+  const productVariantsPageSafe = Math.min(productVariantsPage, productVariantsTotalPages);
+  const pagedProductVariants = sortedProductVariants.slice(
+    (productVariantsPageSafe - 1) * TABLE_PAGE_SIZE,
+    productVariantsPageSafe * TABLE_PAGE_SIZE,
+  );
+
+  const multiProductVariantSelection = selectedProductIds.length > 1;
+  const variantSummary = {
+    count: selectedProductVariantRows.length,
+    units: selectedProductVariantRows.reduce((s, r) => s + r.unitsSold, 0),
+    revenue: selectedProductVariantRows.reduce((s, r) => s + r.revenue, 0),
+  };
+  const variantBarChartData = [...sortedProductVariants]
+    .sort((a, b) => b.revenue - a.revenue)
+    .slice(0, 12)
+    .map((v) => ({
+      key: v.variantId,
+      name: variantBreakdownChartLabel(v, multiProductVariantSelection),
+      detail: `${v.productName} · ${v.size} (${v.sku})`,
+      revenue: v.revenue,
+      units: v.unitsSold,
+      shareOfProductPct: v.shareOfProductPct,
+      fill: agentChartColor(v.variantId),
+    }));
+  const variantPieData = (() => {
+    const sorted = [...sortedProductVariants].sort((a, b) => b.revenue - a.revenue);
+    const top = sorted.slice(0, 8);
+    const rest = sorted.slice(8);
+    const rows = top.map((v) => ({
+      name: variantBreakdownChartLabel(v, multiProductVariantSelection),
+      value: v.revenue,
+      key: v.variantId,
+    }));
+    if (rest.length > 0) {
+      rows.push({
+        name: 'Other',
+        value: rest.reduce((s, v) => s + v.revenue, 0),
+        key: 'other',
+      });
+    }
+    return rows.filter((r) => r.value > 0);
+  })();
+
+  const sortedTopProductCustomers = sortProductCustomerRows(
+    topProductCustomersRaw,
+    productCustomersSort.sortKey,
+    productCustomersSort.sortDir,
+  );
+  const productCustomersTotalPages = Math.max(
+    1,
+    Math.ceil(sortedTopProductCustomers.length / TABLE_PAGE_SIZE) || 1,
+  );
+  const productCustomersPageSafe = Math.min(productCustomersPage, productCustomersTotalPages);
+  const pagedTopProductCustomers = sortedTopProductCustomers.slice(
+    (productCustomersPageSafe - 1) * TABLE_PAGE_SIZE,
+    productCustomersPageSafe * TABLE_PAGE_SIZE,
+  );
+
+  const inv = bundle.inventoryReport;
+  const invSummary = inv.summary;
+
+  const sortedInventorySuppliers = sortInventorySupplierRows(
+    inv.suppliers,
+    inventorySuppliersSort.sortKey,
+    inventorySuppliersSort.sortDir,
+  );
+
+  const materialCategoryLines = inv.materialCategoryMonthlySeries.lines;
+  const visibleMaterialCategoryLines = materialCategoryLines.filter((c) =>
+    visibleMaterialCategoryNames.includes(c.categoryName),
+  );
+  const materialCategorySpendByName = new Map(
+    inv.materialCategorySpend.map((c) => [c.categoryName, c]),
+  );
+  const materialSpendLineChartData = inv.materialSpendSeries.map((p, i) => {
+    const row: Record<string, string | number> = { label: p.label };
+    if (materialSpendChartMode === 'overall') {
+      row.Overall = p.materialSpend;
+    } else {
+      for (const c of visibleMaterialCategoryLines) {
+        row[c.categoryName] = c.spendByMonth[i] ?? 0;
+      }
+    }
+    return row;
+  });
+  const hasMaterialSpend = inv.materialSpendSeries.some((p) => p.materialSpend > 0);
+
+  const toggleMaterialCategoryVisible = (categoryName: string) => {
+    setVisibleMaterialCategoryNames((prev) => {
+      if (prev.includes(categoryName)) {
+        if (prev.length <= 1) return prev;
+        return prev.filter((n) => n !== categoryName);
+      }
+      return [...prev, categoryName];
+    });
+  };
+
+  const toggleProductCompare = (productId: string | null) => {
+    if (!productId) return;
+    setSelectedProductIds((prev) => {
+      if (prev.includes(productId)) return prev.filter((id) => id !== productId);
+      if (prev.length >= 6) return prev;
+      return [...prev, productId];
+    });
+  };
+
+  const categoryChartData = (() => {
+    const top = enh.categoryMargins.slice(0, 5);
+    const rest = enh.categoryMargins.slice(5);
+    const rows = top.map((c) => ({ name: c.categoryName, value: c.revenue, margin: c.marginPct }));
+    if (rest.length > 0) {
+      rows.push({
+        name: 'Other',
+        value: rest.reduce((s, c) => s + c.revenue, 0),
+        margin: 0,
+      });
+    }
+    return rows.filter((r) => r.value > 0);
+  })();
 
   return (
+    <>
     <div className="space-y-4 sm:space-y-6">
       {/* Header */}
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Reports &amp; Analytics</h1>
           <p className="text-sm text-gray-500 mt-1">
-            {branchLabel} · {bundle.period.displayLabel}
+            {branchLabel} · {periodLabel}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <select
-            value={timeRange}
-            onChange={(e) => setTimeRange(e.target.value as ReportsTimeRange)}
-            className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+          <Button
+            type="button"
+            variant="outline"
+            className="gap-2 border-gray-300 bg-white max-w-[18rem]"
+            aria-haspopup="dialog"
+            aria-expanded={periodModalOpen}
+            aria-label="Choose date range"
+            onClick={openPeriodModal}
           >
-            {TIME_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
-          <Button variant="outline" onClick={() => void load(true)} disabled={refreshing} className="gap-2">
+            <CalendarRange className="w-4 h-4 shrink-0 text-gray-600" aria-hidden />
+            <span className="truncate text-left text-sm font-normal">
+              {periodTriggerLabel(periodKind, customStart, customEnd)}
+            </span>
+          </Button>
+          <Button variant="outline" onClick={() => void load(true)} disabled={refreshing || periodQuery.invalid} className="gap-2">
             {refreshing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
             Refresh
           </Button>
@@ -210,28 +1550,28 @@ export function ReportsPage(): React.ReactElement {
       </div>
 
       {/* Tabs */}
-      <div className="border-b border-gray-200">
-        <div className="sm:hidden pb-3">
+      <div className="rounded-xl border border-gray-200 bg-gray-50/80 p-1">
+        <div className="sm:hidden">
           <select
             value={viewMode}
             onChange={(e) => setViewMode(e.target.value as ViewMode)}
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm"
+            className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm bg-white"
           >
             {reportTabs.map((tab) => (
               <option key={tab.id} value={tab.id}>{tab.label}</option>
             ))}
           </select>
         </div>
-        <nav className="hidden sm:flex gap-4 lg:gap-6 overflow-x-auto">
+        <nav className="hidden sm:flex flex-wrap gap-1">
           {reportTabs.map((tab) => (
             <button
               key={tab.id}
               type="button"
               onClick={() => setViewMode(tab.id)}
-              className={`flex items-center gap-2 py-3 px-1 border-b-2 font-medium text-sm whitespace-nowrap transition-colors ${
+              className={`flex items-center gap-2 py-2.5 px-4 rounded-lg font-medium text-sm whitespace-nowrap transition-all ${
                 viewMode === tab.id
-                  ? 'border-red-600 text-red-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
+                  ? 'bg-white text-red-700 shadow-sm ring-1 ring-red-100'
+                  : 'text-gray-600 hover:text-gray-900 hover:bg-white/60'
               }`}
             >
               {tab.icon}
@@ -244,141 +1584,160 @@ export function ReportsPage(): React.ReactElement {
       {/* OVERVIEW */}
       {viewMode === 'overview' && (
         <div className="space-y-6">
+          {/* Period KPIs — 2 rows × 4 */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <KpiCard
+            <StatKpiCard
               label="Revenue"
               value={formatReportsPeso(summary.totalRevenue)}
-              sub={
-                <span className={`flex items-center gap-1 ${getGrowthColor(summary.revenueDeltaPct)}`}>
-                  {getGrowthIcon(summary.revenueDeltaPct)}
-                  {summary.revenueDeltaPct.toFixed(1)}% vs prior · {summary.totalOrders} orders
-                </span>
-              }
-              icon={<DollarSign className="w-5 h-5 text-blue-600" />}
+              tone="blue"
+              icon={<DollarSign />}
+              sub={<TrendChip value={summary.revenueDeltaPct} suffix=" vs prior" />}
             />
-            <KpiCard
+            <StatKpiCard
               label="Gross profit"
               value={formatReportsPeso(summary.totalProfit)}
+              tone="emerald"
+              icon={<TrendingUp />}
               sub={
-                <span className={`flex items-center gap-1 ${getGrowthColor(summary.profitDeltaPct)}`}>
-                  {getGrowthIcon(summary.profitDeltaPct)}
-                  {summary.profitDeltaPct.toFixed(1)}% vs prior · {summary.profitMarginPct.toFixed(1)}% margin
+                <span className="text-gray-500">
+                  {summary.profitMarginPct.toFixed(1)}% margin ·{' '}
+                  <TrendChip value={summary.profitDeltaPct} inline />
                 </span>
               }
-              icon={<TrendingUp className="w-5 h-5 text-emerald-600" />}
             />
-            <KpiCard
+            <StatKpiCard
+              label="Orders"
+              value={summary.totalOrders.toLocaleString()}
+              tone="violet"
+              icon={<ShoppingCart />}
+              sub={<TrendChip value={enh.periodCounts.ordersDeltaPct} suffix=" vs prior" />}
+            />
+            <StatKpiCard
+              label="Avg order value"
+              value={formatReportsPesoFull(aov)}
+              tone="amber"
+              icon={<Target />}
+              sub={<span className="text-gray-500">Per order in period</span>}
+            />
+            <StatKpiCard
+              label="On-time collection rate"
+              value={`${enh.collectionCompare.collectionRateCurrent.toFixed(0)}%`}
+              tone="teal"
+              icon={<Wallet />}
+              sub={
+                <span className={getGrowthColor(enh.collectionCompare.collectionRateDeltaPts)}>
+                  {formatReportsPeso(enh.collectionCompare.collectedCurrent)} on time ·{' '}
+                  {formatReportsPeso(enh.collectionCompare.overdueBalanceCurrent)} overdue
+                  {enh.collectionCompare.overdueOrderCountCurrent > 0
+                    ? ` (${enh.collectionCompare.overdueOrderCountCurrent})`
+                    : ''}
+                </span>
+              }
+            />
+            <StatKpiCard
               label="Outstanding AR"
               value={formatReportsPeso(finance.totalOutstanding)}
-              sub={`${finance.overdueCount} overdue · ${formatReportsPeso(finance.totalOverdue)} past due`}
-              icon={<Wallet className="w-5 h-5 text-amber-600" />}
+              tone="rose"
+              icon={<Activity />}
+              sub={
+                <span className="text-gray-500">
+                  Live snapshot · {finance.overdueCount} overdue
+                </span>
+              }
             />
-            <KpiCard
+            <StatKpiCard
               label="On-time delivery"
               value={`${enh.periodCounts.onTimeMtd.toFixed(0)}%`}
+              tone="indigo"
+              icon={<Truck />}
               sub={
                 <span className={getGrowthColor(enh.periodCounts.onTimeDeltaPts)}>
                   {enh.periodCounts.onTimeDeltaPts >= 0 ? '+' : ''}
-                  {enh.periodCounts.onTimeDeltaPts.toFixed(1)} pts vs prior month · {executive.logistics.inTransitNow} in transit
+                  {enh.periodCounts.onTimeDeltaPts.toFixed(1)} pts vs last month ·{' '}
+                  {executive.logistics.inTransitNow} in transit
                 </span>
               }
-              icon={<Truck className="w-5 h-5 text-indigo-600" />}
+            />
+            <StatKpiCard
+              label="Commissions paid out"
+              value={formatReportsPeso(summary.commissionPaid)}
+              tone="orange"
+              icon={<Award />}
+              sub={
+                <span className="text-gray-500">
+                  Earned {formatReportsPeso(summary.commissionEarned)} · liability{' '}
+                  {formatReportsPeso(summary.commissionLiability)}
+                </span>
+              }
             />
           </div>
 
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <TrendingUp className="w-5 h-5 text-red-600" />
-                Revenue trend
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {executive.revenueTrend.length === 0 ? (
-                <p className="text-sm text-gray-500 py-8 text-center">No revenue data for this period.</p>
-              ) : (
-                <div className="h-72">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <ComposedChart data={executive.revenueTrend}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                      <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-                      <YAxis tickFormatter={(v) => formatReportsPeso(v as number)} tick={{ fontSize: 11 }} />
-                      <Tooltip formatter={(v: number) => formatReportsPesoFull(v)} />
-                      <Legend />
-                      <Area type="monotone" dataKey="revenue" name="Revenue" fill="#3B82F6" fillOpacity={0.2} stroke="#3B82F6" strokeWidth={2} />
-                      <Bar dataKey="orderCount" name="Orders" fill="#10B981" barSize={20} />
-                    </ComposedChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
-            </CardContent>
-          </Card>
+          {/* Revenue trend */}
+          <ReportsRevenueTrendCard
+            branchLabel={branchLabel}
+            scopedTrend={executive.revenueTrend}
+            branchCompare={bundle.branchTrendCompare}
+            mode={revenueTrendMode}
+            onModeChange={setRevenueTrendMode}
+            canCompare={bundle.branchTrendCompare.branches.length > 1}
+          />
 
+          {/* Top movers + category mix — 2×2 */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <Card>
-              <CardHeader><CardTitle>AR aging</CardTitle></CardHeader>
-              <CardContent>
-                {enh.arAging.every((b) => b.orderCount === 0) ? (
-                  <p className="text-sm text-gray-500">No outstanding receivables.</p>
+            <MoverPanel
+              title="Top products"
+              subtitle={periodLabel}
+              icon={<Package className="w-4 h-4 text-red-600" />}
+              rows={topProductMovers}
+              emptyMessage="No product sales in this period."
+              onViewAll={() => setViewMode('products')}
+            />
+            <MoverPanel
+              title="Top customers"
+              subtitle="By purchase volume"
+              icon={<Users className="w-4 h-4 text-blue-600" />}
+              rows={topCustomerMovers}
+              emptyMessage="No customer data."
+              onViewAll={() => navigate('/customers')}
+            />
+            <MoverPanel
+              title="Top agents"
+              subtitle={periodLabel}
+              icon={<Target className="w-4 h-4 text-emerald-600" />}
+              rows={topAgentMovers}
+              emptyMessage="No agent sales in this period."
+              onViewAll={() => setViewMode('agents')}
+            />
+            <Card className="flex flex-col">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">Revenue mix by category</CardTitle>
+                <p className="text-xs text-gray-500 mt-1">{periodLabel}</p>
+              </CardHeader>
+              <CardContent className="pt-0 flex-1 flex items-center justify-center">
+                {categoryChartData.length === 0 ? (
+                  <p className="text-sm text-gray-500 py-8 text-center">No category sales in period.</p>
                 ) : (
-                  <div className="space-y-3">
-                    <div className="h-48">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={enh.arAging} layout="vertical" margin={{ left: 8, right: 8 }}>
-                          <CartesianGrid strokeDasharray="3 3" horizontal={false} />
-                          <XAxis type="number" tickFormatter={(v) => formatReportsPeso(v as number)} tick={{ fontSize: 10 }} />
-                          <YAxis type="category" dataKey="label" width={72} tick={{ fontSize: 11 }} />
-                          <Tooltip formatter={(v: number) => formatReportsPesoFull(v)} />
-                          <Bar dataKey="balanceDue" name="Balance due" fill="#F59E0B" radius={[0, 4, 4, 0]} />
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </div>
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b text-left text-gray-500">
-                          <th className="pb-2 pr-3">Bucket</th>
-                          <th className="pb-2 pr-3">Orders</th>
-                          <th className="pb-2">Balance</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {enh.arAging.map((b) => (
-                          <tr key={b.label} className="border-b border-gray-100">
-                            <td className="py-1.5 pr-3">{b.label}</td>
-                            <td className="py-1.5 pr-3">{b.orderCount}</td>
-                            <td className="py-1.5">{formatReportsPesoFull(b.balanceDue)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader><CardTitle>Order pipeline</CardTitle></CardHeader>
-              <CardContent>
-                {enh.orderPipeline.length === 0 ? (
-                  <p className="text-sm text-gray-500">No active orders in pipeline.</p>
-                ) : (
-                  <div className="space-y-2">
-                    {enh.orderPipeline.map((stage) => (
-                      <div key={stage.status} className="space-y-1">
-                        <div className="flex items-center justify-between text-sm">
-                          <span className="font-medium">{stage.status}</span>
-                          <span className="text-gray-600">
-                            {stage.orderCount} · {formatReportsPeso(stage.totalValue)}
-                          </span>
-                        </div>
-                        <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-red-600 rounded-full"
-                            style={{ width: `${(stage.orderCount / pipelineMax) * 100}%` }}
-                          />
-                        </div>
-                      </div>
-                    ))}
+                  <div className="h-52 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={categoryChartData}
+                          dataKey="value"
+                          nameKey="name"
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={45}
+                          outerRadius={70}
+                          paddingAngle={2}
+                        >
+                          {categoryChartData.map((_, i) => (
+                            <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                          ))}
+                        </Pie>
+                        <Tooltip formatter={(v: number) => formatReportsPesoFull(v)} />
+                        <Legend wrapperStyle={{ fontSize: 11 }} />
+                      </PieChart>
+                    </ResponsiveContainer>
                   </div>
                 )}
               </CardContent>
@@ -387,33 +1746,59 @@ export function ReportsPage(): React.ReactElement {
 
           {enh.branchScorecard.length > 1 && (
             <Card>
-              <CardHeader><CardTitle>Branch scorecard</CardTitle></CardHeader>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Building2 className="w-5 h-5 text-slate-600" />
+                  Branch scorecard
+                </CardTitle>
+              </CardHeader>
               <CardContent>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
-                      <tr className="border-b text-left text-gray-500">
-                        <th className="pb-2 pr-3">Branch</th>
-                        <th className="pb-2 pr-3">Health</th>
-                        <th className="pb-2 pr-3">Revenue</th>
-                        <th className="pb-2 pr-3">Quota</th>
-                        <th className="pb-2 pr-3">Margin</th>
-                        <th className="pb-2 pr-3">On-time</th>
-                        <th className="pb-2">Outstanding</th>
+                      <tr className="border-b text-left text-gray-500 text-xs uppercase tracking-wide">
+                        <th className="pb-3 pr-3">Branch</th>
+                        <th className="pb-3 pr-3">Health</th>
+                        <th className="pb-3 pr-3">Revenue</th>
+                        <th className="pb-3 pr-3">Quota</th>
+                        <th className="pb-3 pr-3">Margin</th>
+                        <th className="pb-3 pr-3">On-time</th>
+                        <th className="pb-3">Outstanding</th>
                       </tr>
                     </thead>
                     <tbody>
                       {enh.branchScorecard.map((b) => (
-                        <tr key={b.branchId} className="border-b border-gray-100">
-                          <td className="py-2 pr-3 font-medium">{b.branchName}</td>
-                          <td className="py-2 pr-3">
-                            <Badge variant={quotaBadgeVariant(b.healthScore)}>{b.healthScore}</Badge>
+                        <tr key={b.branchId} className="border-b border-gray-50 hover:bg-gray-50/80">
+                          <td className="py-3 pr-3 font-medium">{b.branchName}</td>
+                          <td className="py-3 pr-3">
+                            <div className="flex items-center gap-2">
+                              <div
+                                className="h-2 w-12 rounded-full bg-gray-100 overflow-hidden"
+                                title={`Health ${b.healthScore}`}
+                              >
+                                <div
+                                  className={`h-full rounded-full ${
+                                    b.healthScore >= 75
+                                      ? 'bg-emerald-500'
+                                      : b.healthScore >= 50
+                                        ? 'bg-amber-500'
+                                        : 'bg-red-500'
+                                  }`}
+                                  style={{ width: `${Math.min(100, b.healthScore)}%` }}
+                                />
+                              </div>
+                              <span className="text-xs text-gray-500">{b.healthScore}</span>
+                            </div>
                           </td>
-                          <td className="py-2 pr-3">{formatReportsPesoFull(b.revenue)}</td>
-                          <td className="py-2 pr-3">{b.quotaAttainmentPct.toFixed(0)}%</td>
-                          <td className="py-2 pr-3">{b.profitMarginPct.toFixed(1)}%</td>
-                          <td className="py-2 pr-3">{b.onTimePct.toFixed(0)}%</td>
-                          <td className="py-2">{formatReportsPesoFull(b.outstanding)}</td>
+                          <td className="py-3 pr-3">{formatReportsPesoFull(b.revenue)}</td>
+                          <td className="py-3 pr-3">
+                            <Badge variant={quotaBadgeVariant(b.quotaAttainmentPct)}>
+                              {b.quotaAttainmentPct.toFixed(0)}%
+                            </Badge>
+                          </td>
+                          <td className="py-3 pr-3">{b.profitMarginPct.toFixed(1)}%</td>
+                          <td className="py-3 pr-3">{b.onTimePct.toFixed(0)}%</td>
+                          <td className="py-3">{formatReportsPesoFull(b.outstanding)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -422,42 +1807,6 @@ export function ReportsPage(): React.ReactElement {
               </CardContent>
             </Card>
           )}
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <Card>
-              <CardHeader><CardTitle>Branch performance (MTD)</CardTitle></CardHeader>
-              <CardContent>
-                {executive.branchBreakdown.length === 0 ? (
-                  <p className="text-sm text-gray-500">No branch data.</p>
-                ) : (
-                  <div className="space-y-2">
-                    {executive.branchBreakdown.slice(0, 6).map((b) => (
-                      <div key={b.branchName} className="flex items-center justify-between rounded-md border p-2.5">
-                        <div>
-                          <p className="font-medium text-sm">{b.branchName}</p>
-                          <p className="text-xs text-gray-500">{b.orderCountMTD} orders</p>
-                        </div>
-                        <p className="font-semibold text-sm">{formatReportsPeso(b.revenueMTD)}</p>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader><CardTitle>Finance snapshot</CardTitle></CardHeader>
-              <CardContent className="space-y-3">
-                <FinanceRow label="Collected this month" value={formatReportsPesoFull(finance.collectedThisMonth)} />
-                <FinanceRow label="Total overdue" value={formatReportsPesoFull(finance.totalOverdue)} danger={finance.totalOverdue > 0} />
-                <FinanceRow label="Pending proofs" value={String(finance.pendingProofs)} />
-                <FinanceRow label="Commission liability" value={formatReportsPesoFull(summary.commissionLiability)} />
-                <FinanceRow label="Commission paid (period)" value={formatReportsPesoFull(summary.commissionPaid)} />
-                <Button variant="outline" size="sm" className="mt-2" onClick={() => navigate('/finance')}>
-                  Open Finance
-                </Button>
-              </CardContent>
-            </Card>
-          </div>
         </div>
       )}
 
@@ -465,24 +1814,44 @@ export function ReportsPage(): React.ReactElement {
       {viewMode === 'sales' && (
         <div className="space-y-6">
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <KpiCard label="Period revenue" value={formatReportsPeso(summary.totalRevenue)} sub={
-              <span className={`flex items-center gap-1 ${getGrowthColor(summary.revenueDeltaPct)}`}>
-                {getGrowthIcon(summary.revenueDeltaPct)}
-                {summary.revenueDeltaPct.toFixed(1)}% vs prior
-              </span>
-            } icon={<DollarSign className="w-5 h-5 text-blue-600" />} />
-            <KpiCard label="Orders" value={summary.totalOrders.toLocaleString()} sub={
-              <span className={`flex items-center gap-1 ${getGrowthColor(enh.periodCounts.ordersDeltaPct)}`}>
-                {getGrowthIcon(enh.periodCounts.ordersDeltaPct)}
-                {enh.periodCounts.ordersDeltaPct.toFixed(1)}% vs prior
-              </span>
-            } icon={<ShoppingCart className="w-5 h-5 text-green-600" />} />
-            <KpiCard label="Avg order value" value={formatReportsPesoFull(aov)} icon={<Target className="w-5 h-5 text-purple-600" />} />
-            <KpiCard label="Profit" value={formatReportsPeso(summary.totalProfit)} sub={
-              <span className={getGrowthColor(summary.profitDeltaPct)}>
-                {summary.profitDeltaPct >= 0 ? '+' : ''}{summary.profitDeltaPct.toFixed(1)}% vs prior
-              </span>
-            } icon={<TrendingUp className="w-5 h-5 text-emerald-600" />} />
+            <StatKpiCard
+              label="Period revenue"
+              value={formatReportsPeso(summary.totalRevenue)}
+              tone="blue"
+              icon={<DollarSign />}
+              sub={<TrendChip value={summary.revenueDeltaPct} suffix=" vs prior" />}
+            />
+            <StatKpiCard
+              label="Active customers"
+              value={enh.customerSalesSnapshot.activeCustomers.toLocaleString()}
+              tone="emerald"
+              icon={<Users />}
+              sub={<span className="text-gray-500">With orders in {periodLabel}</span>}
+            />
+            <StatKpiCard
+              label="On-time collection"
+              value={`${enh.collectionCompare.collectionRateCurrent.toFixed(0)}%`}
+              tone="teal"
+              icon={<Wallet />}
+              sub={
+                <span className={getGrowthColor(enh.collectionCompare.collectionRateDeltaPts)}>
+                  {enh.collectionCompare.collectionRateDeltaPts >= 0 ? '+' : ''}
+                  {enh.collectionCompare.collectionRateDeltaPts.toFixed(1)} pts vs prior
+                </span>
+              }
+            />
+            <StatKpiCard
+              label="Overdue AR"
+              value={formatReportsPeso(enh.customerSalesSnapshot.totalOverdueBalance)}
+              tone="rose"
+              icon={<AlertTriangle />}
+              sub={
+                <span className="text-gray-500">
+                  {enh.customerSalesSnapshot.customersWithOverdue} customers ·{' '}
+                  {formatReportsPeso(enh.customerSalesSnapshot.totalOutstanding)} total AR
+                </span>
+              }
+            />
           </div>
 
           <Card>
@@ -514,117 +1883,361 @@ export function ReportsPage(): React.ReactElement {
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <Card>
-              <CardHeader><CardTitle>Collection vs revenue</CardTitle></CardHeader>
-              <CardContent className="space-y-3">
-                <FinanceRow
-                  label="Collected (period)"
-                  value={formatReportsPesoFull(enh.collectionCompare.collectedCurrent)}
-                />
-                <FinanceRow
-                  label="Prior period collected"
-                  value={formatReportsPesoFull(enh.collectionCompare.collectedPrev)}
-                />
-                <FinanceRow
-                  label="Collection rate"
-                  value={`${enh.collectionCompare.collectionRateCurrent.toFixed(1)}%`}
-                />
-                <FinanceRow
-                  label="Prior collection rate"
-                  value={`${enh.collectionCompare.collectionRatePrev.toFixed(1)}%`}
-                />
-                <p className={`text-xs flex items-center gap-1 ${getGrowthColor(enh.collectionCompare.collectedDeltaPct)}`}>
-                  {getGrowthIcon(enh.collectionCompare.collectedDeltaPct)}
-                  {enh.collectionCompare.collectedDeltaPct.toFixed(1)}% change in collections vs prior period
+              <CardHeader className="pb-2">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <PieChartIcon className="w-5 h-5 text-red-600" />
+                  Revenue distribution by branch
+                </CardTitle>
+                <p className="text-xs text-gray-500 font-normal mt-1">
+                  {periodLabel}
+                  {bundle?.branchId ? ' · all branches' : ''}
                 </p>
+              </CardHeader>
+              <CardContent>
+                {branchRevenuePie.length === 0 ? (
+                  <p className="text-sm text-gray-500 py-12 text-center">No branch revenue in this period.</p>
+                ) : (
+                  <div className="h-64">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={branchRevenuePie}
+                          dataKey="value"
+                          nameKey="name"
+                          cx="50%"
+                          cy="50%"
+                          outerRadius={88}
+                          label={({ name, percent }) =>
+                            `${name}: ${((percent ?? 0) * 100).toFixed(0)}%`
+                          }
+                          labelLine
+                        >
+                          {branchRevenuePie.map((entry, i) => (
+                            <Cell
+                              key={entry.branchId}
+                              fill={COLORS[i % COLORS.length]}
+                              stroke={entry.branchId === bundle?.branchId ? '#111827' : undefined}
+                              strokeWidth={entry.branchId === bundle?.branchId ? 2 : 0}
+                            />
+                          ))}
+                        </Pie>
+                        <Tooltip formatter={(v: number) => formatReportsPesoFull(v)} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
               </CardContent>
             </Card>
 
             <Card>
-              <CardHeader><CardTitle>Discount by branch</CardTitle></CardHeader>
+              <CardHeader className="pb-2">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Target className="w-5 h-5 text-red-600" />
+                  Average order value trend
+                </CardTitle>
+                <p className="text-xs text-gray-500 font-normal mt-1">{periodLabel}</p>
+              </CardHeader>
               <CardContent>
-                {enh.discountByBranch.length === 0 ? (
-                  <p className="text-sm text-gray-500">No discount data in period.</p>
+                {aovTrendData.length === 0 ? (
+                  <p className="text-sm text-gray-500 py-12 text-center">No order data in this period.</p>
                 ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b text-left text-gray-500">
-                          <th className="pb-2 pr-3">Branch</th>
-                          <th className="pb-2 pr-3">Orders</th>
-                          <th className="pb-2 pr-3">Avg disc.</th>
-                          <th className="pb-2">Revenue</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {enh.discountByBranch.slice(0, 8).map((r) => (
-                          <tr key={r.name} className="border-b border-gray-100">
-                            <td className="py-2 pr-3 font-medium">{r.name}</td>
-                            <td className="py-2 pr-3">{r.orderCount}</td>
-                            <td className="py-2 pr-3">{r.avgDiscountPct.toFixed(1)}%</td>
-                            <td className="py-2">{formatReportsPesoFull(r.revenue)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                  <div className="h-64">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ComposedChart data={aovTrendData}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                        <XAxis dataKey="period" tick={{ fontSize: 11 }} />
+                        <YAxis
+                          tickFormatter={(v) => formatReportsPeso(v as number)}
+                          tick={{ fontSize: 10 }}
+                          width={56}
+                        />
+                        <Tooltip
+                          formatter={(v: number) => formatReportsPesoFull(v)}
+                          labelFormatter={(label) => String(label)}
+                        />
+                        <Area
+                          type="monotone"
+                          dataKey="avgOrderValue"
+                          name="Avg order value"
+                          stroke="#8B5CF6"
+                          fill="#8B5CF6"
+                          fillOpacity={0.12}
+                          strokeWidth={2}
+                          dot={{ r: 3, fill: '#8B5CF6' }}
+                        />
+                      </ComposedChart>
+                    </ResponsiveContainer>
                   </div>
                 )}
               </CardContent>
             </Card>
           </div>
 
-          {executive.branchBreakdown.length > 1 && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <Card>
-              <CardHeader><CardTitle>Revenue by branch (MTD)</CardTitle></CardHeader>
-              <CardContent>
-                <div className="h-64">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={executive.branchBreakdown.map((b) => ({ name: b.branchName, value: b.revenueMTD }))}
-                        dataKey="value"
-                        nameKey="name"
-                        cx="50%"
-                        cy="50%"
-                        outerRadius={80}
-                        label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
-                      >
-                        {executive.branchBreakdown.map((_, i) => (
-                          <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip formatter={(v: number) => formatReportsPesoFull(v)} />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
+              <CardHeader className="pb-2">
+                <CardTitle>Detailed monthly sales data</CardTitle>
+                <p className="text-xs text-gray-500 font-normal mt-1">{periodLabel}</p>
+              </CardHeader>
+              <CardContent className="p-0">
+                {salesSeries.length === 0 ? (
+                  <p className="text-sm text-gray-500 py-8 text-center px-6">No sales in selected period.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50 text-xs text-gray-500 uppercase border-y border-gray-200">
+                        <tr>
+                          <th className="py-2.5 px-3 text-left font-semibold">Period</th>
+                          <th className="py-2.5 px-3 text-right font-semibold">Revenue</th>
+                          <th className="py-2.5 px-3 text-right font-semibold">Orders</th>
+                          <th className="py-2.5 px-3 text-right font-semibold">Avg order value</th>
+                          <th className="py-2.5 px-3 text-right font-semibold">Growth</th>
+                          <th className="py-2.5 px-3 text-center font-semibold w-14">Trend</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {[...salesSeries].reverse().map((row) => {
+                          const isCurrentMonth =
+                            row.monthKey ===
+                            `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+                          const rowPeriodLabel =
+                            isCurrentMonth && periodKind === 'ytd'
+                              ? `${row.period} (YTD)`
+                              : row.period;
+                          return (
+                            <tr key={row.monthKey} className="hover:bg-gray-50/80">
+                              <td className="py-2.5 px-3 font-medium text-gray-900 whitespace-nowrap">
+                                {rowPeriodLabel}
+                              </td>
+                              <td className="py-2.5 px-3 text-right tabular-nums text-blue-700 font-medium">
+                                {formatReportsPeso(row.revenue)}
+                              </td>
+                              <td className="py-2.5 px-3 text-right tabular-nums text-gray-900">
+                                {row.orders.toLocaleString()}
+                              </td>
+                              <td className="py-2.5 px-3 text-right tabular-nums text-gray-900">
+                                {formatReportsPesoFull(row.avgOrderValue)}
+                              </td>
+                              <td
+                                className={`py-2.5 px-3 text-right tabular-nums font-medium ${getGrowthColor(row.growth)}`}
+                              >
+                                {row.growth > 0 ? '+' : ''}
+                                {row.growth.toFixed(1)}%
+                              </td>
+                              <td className="py-2.5 px-3 text-center">
+                                {getGrowthIcon(row.growth)}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </CardContent>
             </Card>
-          )}
+
+            <Card>
+              <CardHeader><CardTitle>Collection performance</CardTitle></CardHeader>
+              <CardContent className="space-y-3">
+                <FinanceRow
+                  label="Collected on time"
+                  value={formatReportsPesoFull(enh.collectionCompare.collectedCurrent)}
+                />
+                <FinanceRow
+                  label="On-time collection rate"
+                  value={`${enh.collectionCompare.collectionRateCurrent.toFixed(1)}%`}
+                />
+                <FinanceRow
+                  label="Overdue balance"
+                  value={formatReportsPesoFull(enh.collectionCompare.overdueBalanceCurrent)}
+                  danger={enh.collectionCompare.overdueBalanceCurrent > 0}
+                />
+                <FinanceRow
+                  label="Matured order value"
+                  value={formatReportsPesoFull(enh.collectionCompare.maturedGrossCurrent)}
+                />
+                <FinanceRow
+                  label="Prior period on-time rate"
+                  value={`${enh.collectionCompare.collectionRatePrev.toFixed(1)}%`}
+                />
+              </CardContent>
+            </Card>
+          </div>
 
           <Card>
-            <CardHeader><CardTitle>Top customers (YTD)</CardTitle></CardHeader>
-            <CardContent>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b text-left text-gray-500">
-                      <th className="pb-2 pr-4">Customer</th>
-                      <th className="pb-2 pr-4">Orders</th>
-                      <th className="pb-2 pr-4">Purchases</th>
-                      <th className="pb-2">Outstanding</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {executive.topCustomers.slice(0, 10).map((c) => (
-                      <tr key={c.customerId} className="border-b border-gray-100">
-                        <td className="py-2 pr-4 font-medium">{c.customerName}</td>
-                        <td className="py-2 pr-4">{c.orderCount}</td>
-                        <td className="py-2 pr-4">{formatReportsPesoFull(c.totalPurchasesYTD)}</td>
-                        <td className="py-2">{formatReportsPesoFull(c.outstandingBalance)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            <CardHeader>
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <CardTitle>Customers ({periodLabel})</CardTitle>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Period sales with live receivables · sort by any column to find overdue or top AR
+                  </p>
+                </div>
+                <Button variant="outline" size="sm" onClick={() => navigate('/finance')}>
+                  Open finance
+                </Button>
               </div>
+            </CardHeader>
+            <CardContent className="p-0">
+              {salesCustomersRaw.length === 0 ? (
+                <p className="text-sm text-gray-500 py-6 text-center px-6">No customer orders in this period.</p>
+              ) : (
+                <>
+                  <div className="px-6 pt-2">
+                    <ReportsTableToolbar
+                      search={salesCustSearch}
+                      onSearchChange={setSalesCustSearch}
+                      placeholder="Search customer, code, or agent…"
+                      resultLabel={`${sortedSalesCustomers.length} of ${salesCustomersRaw.length} customers`}
+                    >
+                      <ReportsFilterSelect
+                        label="Filter by agent"
+                        value={salesCustAgentFilter}
+                        onChange={setSalesCustAgentFilter}
+                        options={[
+                          { value: '', label: 'All agents' },
+                          ...salesAgentOptions.map((a) => ({ value: a, label: a })),
+                        ]}
+                      />
+                      <ReportsFilterSelect
+                        label="Filter by receivables"
+                        value={salesCustArFilter}
+                        onChange={setSalesCustArFilter}
+                        options={[
+                          { value: '', label: 'All customers' },
+                          { value: 'with_ar', label: 'With outstanding' },
+                          { value: 'no_ar', label: 'No outstanding' },
+                          { value: 'overdue', label: 'Overdue only' },
+                          { value: 'not_overdue', label: 'Not overdue' },
+                          { value: 'high_credit', label: 'High credit use (80%+)' },
+                        ]}
+                      />
+                    </ReportsTableToolbar>
+                  </div>
+                  {sortedSalesCustomers.length === 0 ? (
+                    <p className="text-sm text-gray-500 py-6 text-center px-6">No customers match your search or filters.</p>
+                  ) : (
+                    <>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead className="bg-gray-50 text-xs text-gray-500 uppercase border-y border-gray-200">
+                            <tr>
+                              <ReportsSortTh col="customer" label="Customer" sortKey={salesCustSort.sortKey} sortDir={salesCustSort.sortDir} onSort={salesCustSort.onSort} />
+                              <ReportsSortTh col="agent" label="Agent" sortKey={salesCustSort.sortKey} sortDir={salesCustSort.sortDir} onSort={salesCustSort.onSort} className="hidden md:table-cell" />
+                              <ReportsSortTh col="branch" label="Branch" sortKey={salesCustSort.sortKey} sortDir={salesCustSort.sortDir} onSort={salesCustSort.onSort} className="hidden lg:table-cell" />
+                              <ReportsSortTh col="orderCount" label="Orders" sortKey={salesCustSort.sortKey} sortDir={salesCustSort.sortDir} onSort={salesCustSort.onSort} align="right" />
+                              <ReportsSortTh col="revenue" label="Revenue" sortKey={salesCustSort.sortKey} sortDir={salesCustSort.sortDir} onSort={salesCustSort.onSort} align="right" />
+                              <ReportsSortTh col="averageOrderValue" label="AOV" sortKey={salesCustSort.sortKey} sortDir={salesCustSort.sortDir} onSort={salesCustSort.onSort} align="right" className="hidden sm:table-cell" />
+                              <ReportsSortTh col="outstandingBalance" label="Outstanding" sortKey={salesCustSort.sortKey} sortDir={salesCustSort.sortDir} onSort={salesCustSort.onSort} align="right" />
+                              <ReportsSortTh col="creditUtilizationPct" label="Credit use" sortKey={salesCustSort.sortKey} sortDir={salesCustSort.sortDir} onSort={salesCustSort.onSort} align="right" className="hidden md:table-cell" />
+                              <ReportsSortTh col="overdueBalance" label="Overdue" sortKey={salesCustSort.sortKey} sortDir={salesCustSort.sortDir} onSort={salesCustSort.onSort} align="right" />
+                              <ReportsSortTh col="maxDaysOverdue" label="Days" sortKey={salesCustSort.sortKey} sortDir={salesCustSort.sortDir} onSort={salesCustSort.onSort} align="center" className="hidden sm:table-cell" />
+                              <ReportsSortTh col="overdueOrderCount" label="Late orders" sortKey={salesCustSort.sortKey} sortDir={salesCustSort.sortDir} onSort={salesCustSort.onSort} align="right" className="hidden lg:table-cell" />
+                              <ReportsSortTh col="oldestDueDate" label="Oldest due" sortKey={salesCustSort.sortKey} sortDir={salesCustSort.sortDir} onSort={salesCustSort.onSort} className="hidden xl:table-cell" />
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {pagedSalesCustomers.map((c) => (
+                              <tr key={c.customerId} className="hover:bg-gray-50/80">
+                                <td className="py-2.5 px-3">
+                                  <DashLink
+                                    to={`/customers/${c.customerId}`}
+                                    title={`Open customer ${c.customerName}`}
+                                  >
+                                    {c.customerName}
+                                  </DashLink>
+                                  {c.customerCode ? (
+                                    <DashLink
+                                      to={`/customers/${c.customerId}`}
+                                      className="block text-xs text-blue-600 hover:text-blue-800 hover:underline font-mono mt-0.5"
+                                      title={`Open customer ${c.customerCode}`}
+                                    >
+                                      {c.customerCode}
+                                    </DashLink>
+                                  ) : null}
+                                </td>
+                                <td className="py-2.5 px-3 hidden md:table-cell">
+                                  {c.agentName ? (
+                                    c.agentId ? (
+                                      <DashLink
+                                        to={`/employees/${encodeURIComponent(c.agentId)}`}
+                                        title={`Open agent ${c.agentName}`}
+                                      >
+                                        {c.agentName}
+                                      </DashLink>
+                                    ) : (
+                                      <span className="text-gray-600">{c.agentName}</span>
+                                    )
+                                  ) : (
+                                    <span className="text-gray-400">—</span>
+                                  )}
+                                </td>
+                                <td className="py-2.5 px-3 text-gray-600 hidden lg:table-cell">{c.branchName ?? '—'}</td>
+                                <td className="py-2.5 px-3 text-right tabular-nums">{c.orderCount}</td>
+                                <td className="py-2.5 px-3 text-right tabular-nums">{formatReportsPesoFull(c.revenue)}</td>
+                                <td className="py-2.5 px-3 text-right tabular-nums hidden sm:table-cell">
+                                  {formatReportsPesoFull(c.averageOrderValue)}
+                                </td>
+                                <td className="py-2.5 px-3 text-right tabular-nums">
+                                  {c.outstandingBalance > 0 ? (
+                                    <span className="font-medium">{formatReportsPesoFull(c.outstandingBalance)}</span>
+                                  ) : (
+                                    <span className="text-gray-400">—</span>
+                                  )}
+                                </td>
+                                <td className="py-2.5 px-3 text-right tabular-nums hidden md:table-cell">
+                                  {c.creditUtilizationPct != null ? (
+                                    <span
+                                      className={
+                                        c.creditUtilizationPct >= 90
+                                          ? 'text-red-700 font-medium'
+                                          : c.creditUtilizationPct >= 75
+                                            ? 'text-amber-700 font-medium'
+                                            : 'text-gray-900'
+                                      }
+                                      title={`${formatReportsPesoFull(c.creditUsed)} of ${formatReportsPesoFull(c.creditLimit)} limit`}
+                                    >
+                                      {c.creditUtilizationPct.toFixed(0)}%
+                                    </span>
+                                  ) : (
+                                    <span className="text-gray-400">—</span>
+                                  )}
+                                </td>
+                                <td className="py-2.5 px-3 text-right tabular-nums">
+                                  {c.overdueBalance > 0 ? (
+                                    <span className="text-red-700 font-medium">{formatReportsPesoFull(c.overdueBalance)}</span>
+                                  ) : (
+                                    <span className="text-gray-400">—</span>
+                                  )}
+                                </td>
+                                <td className="py-2.5 px-3 text-center hidden sm:table-cell">
+                                  {c.maxDaysOverdue > 0 ? (
+                                    <Badge variant={c.maxDaysOverdue > 60 ? 'danger' : c.maxDaysOverdue > 30 ? 'warning' : 'default'}>
+                                      {c.maxDaysOverdue}d
+                                    </Badge>
+                                  ) : (
+                                    <span className="text-gray-400">—</span>
+                                  )}
+                                </td>
+                                <td className="py-2.5 px-3 text-right text-gray-600 hidden lg:table-cell tabular-nums">
+                                  {c.overdueOrderCount > 0 ? c.overdueOrderCount : '—'}
+                                </td>
+                                <td className="py-2.5 px-3 text-gray-600 hidden xl:table-cell">{c.oldestDueDate ?? '—'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      <TablePagination
+                        page={salesCustPage}
+                        total={sortedSalesCustomers.length}
+                        onPageChange={setSalesCustPage}
+                      />
+                    </>
+                  )}
+                </>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -633,81 +2246,312 @@ export function ReportsPage(): React.ReactElement {
       {/* AGENTS */}
       {viewMode === 'agents' && (
         <div className="space-y-6">
+          {canCompareAgents && (
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-xl border border-gray-200 bg-gray-50/80 px-4 py-3">
+              <div>
+                <p className="text-sm font-medium text-gray-900">Agent comparison scope</p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {agentCompareMode === 'allBranches'
+                    ? 'Ranking all agents org-wide for the selected period.'
+                    : `Agents assigned to ${branchLabel} only.`}
+                </p>
+              </div>
+              <div
+                className="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-0.5 shrink-0"
+                role="tablist"
+                aria-label="Agent comparison scope"
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={agentCompareMode === 'scoped'}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                    agentCompareMode === 'scoped'
+                      ? 'bg-white text-gray-900 shadow-sm'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                  onClick={() => setAgentCompareMode('scoped')}
+                >
+                  This branch
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={agentCompareMode === 'allBranches'}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                    agentCompareMode === 'allBranches'
+                      ? 'bg-white text-gray-900 shadow-sm'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                  onClick={() => setAgentCompareMode('allBranches')}
+                >
+                  All branches
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <KpiCard label="Active agents" value={String(summary.totalAgents)} icon={<Users className="w-5 h-5 text-blue-600" />} />
-            <KpiCard label="Avg quota attainment" value={`${summary.attainmentAvgPct.toFixed(0)}%`} sub={`${summary.agentsAboveQuota} above quota`} icon={<Target className="w-5 h-5 text-emerald-600" />} />
-            <KpiCard label="Commission earned" value={formatReportsPeso(summary.commissionEarned)} icon={<DollarSign className="w-5 h-5 text-amber-600" />} />
-            <KpiCard label="Unassigned customers" value={String(summary.customersUnassigned)} icon={<AlertTriangle className="w-5 h-5 text-red-600" />} />
+            <StatKpiCard
+              label="Top performer"
+              value={topAgentByRevenue?.agentName ?? '—'}
+              tone="amber"
+              icon={<Medal />}
+              sub={
+                topAgentByRevenue ? (
+                  <span className="text-gray-500">
+                    {formatReportsPesoExact(topAgentByRevenue.revenue)} sales · {agentsScopeLabel}
+                  </span>
+                ) : (
+                  <span className="text-gray-500">No agent data</span>
+                )
+              }
+            />
+            <StatKpiCard
+              label="Total agents"
+              value={String(agentsTabSummary.totalAgents)}
+              tone="blue"
+              icon={<Users />}
+              sub={<span className="text-gray-500">{agentsScopeLabel}</span>}
+            />
+            <StatKpiCard
+              label="Avg achievement"
+              value={`${agentsTabSummary.attainmentAvgPct.toFixed(0)}%`}
+              tone="emerald"
+              icon={<Target />}
+              sub={
+                <span className="text-gray-500">
+                  {agentsTabSummary.attainmentAvgPct >= 100
+                    ? 'Above target'
+                    : `${agentsTabSummary.agentsAboveQuota} above quota`}
+                </span>
+              }
+            />
+            <StatKpiCard
+              label="Total commission"
+              value={formatReportsPesoExact(agentsTabSummary.commissionEarned)}
+              tone="violet"
+              icon={<Wallet />}
+              sub={<span className="text-gray-500">Earned this period · {agentsScopeLabel}</span>}
+            />
           </div>
+
+          {agentsDisplay.agents.length > 0 && (
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Agent performance vs target</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="h-72">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={agentChartRows} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                        <XAxis dataKey="name" tick={{ fontSize: 10 }} interval={0} angle={-25} textAnchor="end" height={56} />
+                        <YAxis
+                          domain={[0, 140]}
+                          tickFormatter={(v) => `${v}%`}
+                          tick={{ fontSize: 10 }}
+                          width={40}
+                        />
+                        <Tooltip formatter={(v: number) => [`${v}%`, 'Achievement']} />
+                        <ReferenceLine
+                          y={100}
+                          stroke="#ef4444"
+                          strokeDasharray="4 4"
+                          label={{ value: 'Target', position: 'insideTopRight', fill: '#ef4444', fontSize: 11 }}
+                        />
+                        <Bar dataKey="attainment" name="Achievement" radius={[4, 4, 0, 0]}>
+                          {agentChartRows.map((row) => (
+                            <Cell key={row.agentId} fill={row.fill} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Sales by agent</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="h-72">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={agentSalesChartRows}
+                        layout="vertical"
+                        margin={{ left: 4, right: 16, top: 4, bottom: 4 }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                        <XAxis
+                          type="number"
+                          tickFormatter={(v) => formatReportsPeso(v as number)}
+                          tick={{ fontSize: 10 }}
+                        />
+                        <YAxis
+                          type="category"
+                          dataKey="name"
+                          width={100}
+                          tick={{ fontSize: 11 }}
+                        />
+                        <Tooltip formatter={(v: number) => formatReportsPesoFull(v)} />
+                        <Bar dataKey="revenue" name="Sales" radius={[0, 4, 4, 0]}>
+                          {agentSalesChartRows.map((row) => (
+                            <Cell key={row.agentId} fill={row.fill} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          )}
 
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between gap-2">
-                <CardTitle>Agent leaderboard</CardTitle>
-                <Button variant="outline" size="sm" onClick={() => navigate('/agent-analytics')}>Full analytics</Button>
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <CardTitle>Detailed agent performance metrics</CardTitle>
+                  <p className="text-xs text-gray-500 mt-1">{agentsScopeLabel} · {periodLabel}</p>
+                </div>
+                <Button variant="outline" size="sm" onClick={() => navigate('/agents')}>
+                  Full analytics
+                </Button>
               </div>
             </CardHeader>
             <CardContent>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b text-left text-gray-500">
-                      <th className="pb-2 pr-3">Agent</th>
-                      <th className="pb-2 pr-3">Revenue</th>
-                      <th className="pb-2 pr-3">Orders</th>
-                      <th className="pb-2 pr-3">Quota %</th>
-                      <th className="pb-2 pr-3">Profit</th>
-                      <th className="pb-2 pr-3">Collection</th>
-                      <th className="pb-2 pr-3">Earned</th>
-                      <th className="pb-2 pr-3">Paid</th>
-                      <th className="pb-2">Accrued</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {agents.agents.slice(0, 15).map((a) => (
-                      <tr key={a.agentId} className="border-b border-gray-100">
-                        <td className="py-2 pr-3 font-medium">{a.agentName}</td>
-                        <td className="py-2 pr-3">{formatReportsPesoFull(a.revenue)}</td>
-                        <td className="py-2 pr-3">{a.orderCount}</td>
-                        <td className="py-2 pr-3">
-                          <Badge variant={quotaBadgeVariant(a.attainmentPct)}>{a.attainmentPct.toFixed(0)}%</Badge>
-                        </td>
-                        <td className="py-2 pr-3">{formatReportsPesoFull(a.profit)}</td>
-                        <td className="py-2 pr-3">{a.collectionRate.toFixed(0)}%</td>
-                        <td className="py-2 pr-3">{formatReportsPesoFull(a.commissionEarned)}</td>
-                        <td className="py-2 pr-3">{formatReportsPesoFull(a.commissionPaid)}</td>
-                        <td className="py-2">{formatReportsPesoFull(a.commissionAccrued)}</td>
+              {agentsDisplay.agents.length === 0 ? (
+                <p className="text-sm text-gray-500 py-6 text-center">No agent activity in this period.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 text-xs text-gray-500 uppercase border-y border-gray-200">
+                      <tr>
+                        <ReportsSortTh col="agent" label="Agent" sortKey={agentsPerfSort.sortKey} sortDir={agentsPerfSort.sortDir} onSort={agentsPerfSort.onSort} />
+                        {showAgentBranchCol ? (
+                          <ReportsSortTh col="branch" label="Branch" sortKey={agentsPerfSort.sortKey} sortDir={agentsPerfSort.sortDir} onSort={agentsPerfSort.onSort} className="hidden sm:table-cell" />
+                        ) : null}
+                        <ReportsSortTh col="revenue" label="Sales" sortKey={agentsPerfSort.sortKey} sortDir={agentsPerfSort.sortDir} onSort={agentsPerfSort.onSort} align="right" />
+                        <ReportsSortTh col="effectiveTarget" label="Target" sortKey={agentsPerfSort.sortKey} sortDir={agentsPerfSort.sortDir} onSort={agentsPerfSort.onSort} align="right" className="hidden sm:table-cell" />
+                        <ReportsSortTh col="attainmentPct" label="Achievement" sortKey={agentsPerfSort.sortKey} sortDir={agentsPerfSort.sortDir} onSort={agentsPerfSort.onSort} align="left" className="min-w-[140px]" />
+                        <ReportsSortTh col="orderCount" label="Orders" sortKey={agentsPerfSort.sortKey} sortDir={agentsPerfSort.sortDir} onSort={agentsPerfSort.onSort} align="right" />
+                        <ReportsSortTh col="distinctCustomers" label="Customers" sortKey={agentsPerfSort.sortKey} sortDir={agentsPerfSort.sortDir} onSort={agentsPerfSort.onSort} align="right" className="hidden md:table-cell" />
+                        <ReportsSortTh col="avgDiscountPercent" label="Avg discount" sortKey={agentsPerfSort.sortKey} sortDir={agentsPerfSort.sortDir} onSort={agentsPerfSort.onSort} align="right" className="hidden md:table-cell" />
+                        <ReportsSortTh col="commissionEarned" label="Commission" sortKey={agentsPerfSort.sortKey} sortDir={agentsPerfSort.sortDir} onSort={agentsPerfSort.onSort} align="right" className="hidden lg:table-cell" />
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {pagedAgentsForTable.map((a) => (
+                            <tr key={a.agentId} className="hover:bg-gray-50/80">
+                              <td className="py-2.5 px-3">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <AgentColorSwatch agentId={a.agentId} title={a.agentName} />
+                                  <DashLink
+                                    to={employeeProfilePathFromAgent(a.employeePublicId, a.agentId)}
+                                    title={`Open agent ${a.agentName}`}
+                                    className={`${DASH_LINK_CLASS} truncate block font-medium`}
+                                  >
+                                    {a.agentName}
+                                  </DashLink>
+                                </div>
+                              </td>
+                              {showAgentBranchCol ? (
+                                <td className="py-2.5 px-3 text-gray-600 hidden sm:table-cell">
+                                  {a.branchName ?? '—'}
+                                </td>
+                              ) : null}
+                              <td className="py-2.5 px-3 text-right tabular-nums font-semibold" style={{ color: agentChartColor(a.agentId) }}>
+                                {formatReportsPeso(a.revenue)}
+                              </td>
+                              <td className="py-2.5 px-3 text-right tabular-nums text-gray-700 hidden sm:table-cell">
+                                {a.effectiveTarget > 0 ? formatReportsPeso(a.effectiveTarget) : '—'}
+                              </td>
+                              <td className="py-2.5 px-3">
+                                <div className="flex items-center justify-between gap-2 mb-1">
+                                  <span
+                                    className={`text-xs font-semibold tabular-nums ${
+                                      a.attainmentPct >= 100
+                                        ? 'text-emerald-700'
+                                        : a.attainmentPct >= 85
+                                          ? 'text-amber-700'
+                                          : 'text-red-700'
+                                    }`}
+                                  >
+                                    {a.attainmentPct.toFixed(0)}%
+                                  </span>
+                                </div>
+                                <div className="w-full bg-gray-100 rounded-full h-1.5 overflow-hidden">
+                                  <div
+                                    className={`h-1.5 rounded-full ${agentAttainmentBarColor(a.attainmentPct)}`}
+                                    style={{ width: `${Math.min(100, Math.max(2, a.attainmentPct))}%` }}
+                                  />
+                                </div>
+                              </td>
+                              <td className="py-2.5 px-3 text-right tabular-nums text-gray-900">
+                                {a.orderCount}
+                              </td>
+                              <td className="py-2.5 px-3 text-right tabular-nums text-gray-900 hidden md:table-cell">
+                                {a.distinctCustomers}
+                              </td>
+                              <td className="py-2.5 px-3 text-right tabular-nums hidden md:table-cell">
+                                {a.avgDiscountPercent > 0 ? (
+                                  <span
+                                    className={
+                                      a.avgDiscountPercent >= 15
+                                        ? 'text-amber-700 font-medium'
+                                        : 'text-gray-900'
+                                    }
+                                    title="Average line discount % on orders in period"
+                                  >
+                                    {a.avgDiscountPercent.toFixed(1)}%
+                                  </span>
+                                ) : (
+                                  <span className="text-gray-400">—</span>
+                                )}
+                              </td>
+                              <td className="py-2.5 px-3 text-right tabular-nums font-medium text-emerald-600 hidden lg:table-cell">
+                                {formatReportsPesoExact(a.commissionEarned)}
+                              </td>
+                            </tr>
+                          ))}
+                    </tbody>
+                  </table>
+                  <TablePagination
+                    page={agentsPerfPageSafe}
+                    total={sortedAgentsForTable.length}
+                    onPageChange={setAgentsPerfPage}
+                  />
+                </div>
+              )}
             </CardContent>
           </Card>
 
-          {agents.branches.length > 0 && (
+          {agentsDisplay.branches.length > 0 && agentCompareMode === 'allBranches' && agentsAllBranches && (
             <Card>
               <CardHeader><CardTitle>Branch comparison</CardTitle></CardHeader>
               <CardContent>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b text-left text-gray-500">
-                        <th className="pb-2 pr-3">Branch</th>
-                        <th className="pb-2 pr-3">Revenue</th>
-                        <th className="pb-2 pr-3">Margin</th>
-                        <th className="pb-2 pr-3">Outstanding</th>
-                        <th className="pb-2">Rank</th>
+                    <thead className="bg-gray-50 text-xs text-gray-500 uppercase border-y border-gray-200">
+                      <tr>
+                        <ReportsSortTh col="branch" label="Branch" sortKey={agentsBranchSort.sortKey} sortDir={agentsBranchSort.sortDir} onSort={agentsBranchSort.onSort} />
+                        <ReportsSortTh col="revenue" label="Revenue" sortKey={agentsBranchSort.sortKey} sortDir={agentsBranchSort.sortDir} onSort={agentsBranchSort.onSort} align="right" />
+                        <ReportsSortTh col="avgMarginPct" label="Margin" sortKey={agentsBranchSort.sortKey} sortDir={agentsBranchSort.sortDir} onSort={agentsBranchSort.onSort} align="right" />
+                        <ReportsSortTh col="outstanding" label="Outstanding" sortKey={agentsBranchSort.sortKey} sortDir={agentsBranchSort.sortDir} onSort={agentsBranchSort.onSort} align="right" />
+                        <ReportsSortTh col="rank" label="Rank" sortKey={agentsBranchSort.sortKey} sortDir={agentsBranchSort.sortDir} onSort={agentsBranchSort.onSort} align="right" />
                       </tr>
                     </thead>
-                    <tbody>
-                      {agents.branches.map((b) => (
-                        <tr key={b.branchId} className="border-b border-gray-100">
-                          <td className="py-2 pr-3 font-medium">{b.branchName}</td>
-                          <td className="py-2 pr-3">{formatReportsPesoFull(b.revenue)}</td>
-                          <td className="py-2 pr-3">{b.avgMarginPct.toFixed(1)}%</td>
-                          <td className="py-2 pr-3">{formatReportsPesoFull(b.outstanding)}</td>
-                          <td className="py-2">#{b.rank}</td>
+                    <tbody className="divide-y divide-gray-100">
+                      {sortedBranchesForTable.map((b) => (
+                        <tr key={b.branchId} className="hover:bg-gray-50/80">
+                          <td className="py-2.5 px-3 font-medium text-gray-900">{b.branchName}</td>
+                          <td className="py-2.5 px-3 text-right tabular-nums">{formatReportsPesoFull(b.revenue)}</td>
+                          <td className="py-2.5 px-3 text-right tabular-nums">{b.avgMarginPct.toFixed(1)}%</td>
+                          <td className="py-2.5 px-3 text-right tabular-nums">{formatReportsPesoFull(b.outstanding)}</td>
+                          <td className="py-2.5 px-3 text-right tabular-nums">#{b.rank}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -723,93 +2567,835 @@ export function ReportsPage(): React.ReactElement {
       {viewMode === 'products' && (
         <div className="space-y-6">
           <Card>
-            <CardHeader><CardTitle>Top products ({bundle.period.displayLabel})</CardTitle></CardHeader>
+            <CardContent className="pt-6">
+              <ReportsTableToolbar
+                search={productSearch}
+                onSearchChange={setProductSearch}
+                placeholder="Search products in selected category…"
+                resultLabel={
+                  productViewCategory
+                    ? `${sortedProducts.length} product${sortedProducts.length === 1 ? '' : 's'} in ${productViewCategory}`
+                    : `${sortedProducts.length} products`
+                }
+              >
+                {selectedProductIds.length > 0 ? (
+                  <Button variant="outline" size="sm" onClick={() => setSelectedProductIds([])}>
+                    Clear chart selection ({selectedProductIds.length})
+                  </Button>
+                ) : null}
+              </ReportsTableToolbar>
+              <p className="text-xs text-gray-500 -mt-2">
+                Select products in the table to see variant breakdown, top customers, and focused charts (up to 6).
+              </p>
+            </CardContent>
+          </Card>
+
+          {categoryMarginSource.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Category performance</CardTitle>
+                <p className="text-xs text-gray-500 mt-1">
+                  {visibleCategoryNames.length} of {categoryMarginSource.length} categories in charts · {periodLabel} · {branchLabel}
+                </p>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                      <PieChartIcon className="w-4 h-4 text-violet-600" />
+                      Revenue share
+                    </h3>
+                    {categoryPieData.length === 0 ? (
+                      <p className="text-sm text-gray-500 py-8 text-center">No category revenue in this period.</p>
+                    ) : (
+                      <ReportsChartFrame
+                        height={256}
+                        render={({ width, height }) => (
+                          <PieChart width={width} height={height}>
+                            <Pie
+                              data={categoryPieData}
+                              dataKey="value"
+                              nameKey="name"
+                              cx="50%"
+                              cy="50%"
+                              innerRadius={48}
+                              outerRadius={78}
+                              paddingAngle={2}
+                            >
+                              {categoryPieData.map((entry) => (
+                                <Cell
+                                  key={entry.key}
+                                  fill={entry.key === 'other' ? '#9CA3AF' : agentChartColor(entry.key)}
+                                />
+                              ))}
+                            </Pie>
+                            <Tooltip formatter={(v: number) => formatReportsPesoFull(v)} />
+                            <Legend {...reportsChartLegendProps(categoryPieData.length)} />
+                          </PieChart>
+                        )}
+                      />
+                    )}
+                  </div>
+
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                      <TrendingUp className="w-4 h-4 text-blue-600" />
+                      Monthly revenue trend
+                      {categoryTrendLines.length < categoryMarginSource.length ? (
+                        <span className="text-xs font-normal text-gray-500">
+                          · {categoryTrendLines.length} selected
+                        </span>
+                      ) : null}
+                    </h3>
+                    {categoryTrendChartData.length === 0 ? (
+                      <p className="text-sm text-gray-500 py-8 text-center">No monthly trend data.</p>
+                    ) : (
+                      <ReportsChartFrame
+                        height={256}
+                        render={({ width, height }) => (
+                          <ComposedChart width={width} height={height} data={categoryTrendChartData}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                            <YAxis tickFormatter={(v) => formatReportsPeso(v as number)} tick={{ fontSize: 10 }} width={52} />
+                            <Tooltip formatter={(v: number) => formatReportsPesoFull(v)} />
+                            <Legend {...reportsChartLegendProps(categoryTrendLines.length)} />
+                            {categoryTrendLines.map((c) => (
+                              <Line
+                                key={c.categoryName}
+                                type="monotone"
+                                dataKey={c.categoryName}
+                                name={c.categoryName}
+                                stroke={agentChartColor(c.categoryName)}
+                                strokeWidth={2}
+                                dot={{ r: 3, fill: agentChartColor(c.categoryName) }}
+                              />
+                            ))}
+                          </ComposedChart>
+                        )}
+                      />
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
+                    <h3 className="text-sm font-semibold text-gray-800">Detailed metrics</h3>
+                    {visibleCategoryNames.length < categoryMarginSource.length ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                          setVisibleCategoryNames(
+                            categoryMarginSource.map((c) => c.categoryName),
+                          )
+                        }
+                      >
+                        Show all in charts
+                      </Button>
+                    ) : null}
+                  </div>
+                  <div className="overflow-x-auto rounded-lg border border-gray-200">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50 text-xs text-gray-500 uppercase border-b border-gray-200">
+                        <tr>
+                          <th className="py-2.5 px-2 w-10 text-center" aria-label="Show in charts">
+                            <span className="sr-only">Chart</span>
+                          </th>
+                          <ReportsSortTh col="category" label="Category" sortKey={productCategorySort.sortKey} sortDir={productCategorySort.sortDir} onSort={productCategorySort.onSort} />
+                          <ReportsSortTh col="unitsSold" label="Units" sortKey={productCategorySort.sortKey} sortDir={productCategorySort.sortDir} onSort={productCategorySort.onSort} align="right" />
+                          <ReportsSortTh col="revenue" label="Revenue" sortKey={productCategorySort.sortKey} sortDir={productCategorySort.sortDir} onSort={productCategorySort.onSort} align="right" />
+                          <ReportsSortTh col="profit" label="Profit" sortKey={productCategorySort.sortKey} sortDir={productCategorySort.sortDir} onSort={productCategorySort.onSort} align="right" className="hidden sm:table-cell" />
+                          <ReportsSortTh col="marginPct" label="Margin" sortKey={productCategorySort.sortKey} sortDir={productCategorySort.sortDir} onSort={productCategorySort.onSort} align="right" />
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {categoryRowsForSection.map((c) => {
+                          const chartVisible = visibleCategoryNames.includes(c.categoryName);
+                          const onlyOneVisible = visibleCategoryNames.length <= 1;
+                          return (
+                          <tr
+                            key={c.categoryName}
+                            className={chartVisible ? 'hover:bg-gray-50/80' : 'opacity-50 hover:bg-gray-50/60'}
+                          >
+                            <td className="py-2.5 px-2 text-center">
+                              <input
+                                type="checkbox"
+                                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 disabled:opacity-40"
+                                checked={chartVisible}
+                                disabled={chartVisible && onlyOneVisible}
+                                title={
+                                  chartVisible && onlyOneVisible
+                                    ? 'At least one category must stay visible'
+                                    : chartVisible
+                                      ? 'Hide from charts'
+                                      : 'Show in charts'
+                                }
+                                onChange={() => toggleCategoryVisible(c.categoryName)}
+                                aria-label={`${chartVisible ? 'Hide' : 'Show'} ${c.categoryName} in charts`}
+                              />
+                            </td>
+                            <td className="py-2.5 px-3">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span
+                                  className="inline-block w-2.5 h-2.5 rounded-full shrink-0"
+                                  style={{ backgroundColor: agentChartColor(c.categoryName) }}
+                                  aria-hidden
+                                />
+                                <DashLink
+                                  to={productCategoryHref(c.categorySlug, c.categoryName)}
+                                  className={`${DASH_LINK_CLASS} font-medium truncate`}
+                                >
+                                  {c.categoryName}
+                                </DashLink>
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-3 text-right tabular-nums">{c.unitsSold.toLocaleString()}</td>
+                            <td className="py-2.5 px-3 text-right tabular-nums font-semibold text-blue-600">
+                              {formatReportsPesoFull(c.revenue)}
+                            </td>
+                            <td className="py-2.5 px-3 text-right tabular-nums hidden sm:table-cell">
+                              {formatReportsPesoFull(c.profit)}
+                            </td>
+                            <td className="py-2.5 px-3 text-right tabular-nums">{c.marginPct.toFixed(1)}%</td>
+                          </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {productsInViewCategory.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Product revenue ({periodLabel})</CardTitle>
+                <p className="text-xs text-gray-500 mt-1">
+                  {branchLabel}
+                  {selectedProductIds.length > 0 ? (
+                    <span> · {selectedProductIds.length} product{selectedProductIds.length === 1 ? '' : 's'} selected</span>
+                  ) : productViewCategory ? (
+                    <span> · all products in {productViewCategory}</span>
+                  ) : null}
+                </p>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                      <PieChartIcon className="w-4 h-4 text-violet-600" />
+                      Revenue share
+                    </h3>
+                    {productPieData.length === 0 ? (
+                      <p className="text-sm text-gray-500 py-8 text-center">No product revenue in this view.</p>
+                    ) : (
+                      <ReportsChartFrame
+                        height={256}
+                        render={({ width, height }) => (
+                          <PieChart width={width} height={height}>
+                            <Pie
+                              data={productPieData}
+                              dataKey="value"
+                              nameKey="name"
+                              cx="50%"
+                              cy="50%"
+                              innerRadius={48}
+                              outerRadius={78}
+                              paddingAngle={2}
+                            >
+                              {productPieData.map((entry) => (
+                                <Cell
+                                  key={entry.key}
+                                  fill={entry.key === 'other' ? '#9CA3AF' : agentChartColor(entry.key)}
+                                />
+                              ))}
+                            </Pie>
+                            <Tooltip formatter={(v: number) => formatReportsPesoFull(v)} />
+                            <Legend {...reportsChartLegendProps(productPieData.length)} />
+                          </PieChart>
+                        )}
+                      />
+                    )}
+                  </div>
+
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                      <TrendingUp className="w-4 h-4 text-blue-600" />
+                      Monthly revenue trend
+                      {selectedProductIds.length === 0 && productTrendLines.length < productChartRows.length ? (
+                        <span className="text-xs font-normal text-gray-500">
+                          · top {productTrendLines.length} products
+                        </span>
+                      ) : null}
+                    </h3>
+                    {productTrendChartData.length === 0 ? (
+                      <p className="text-sm text-gray-500 py-8 text-center">No monthly trend data.</p>
+                    ) : (
+                      <ReportsChartFrame
+                        height={256}
+                        render={({ width, height }) => (
+                          <ComposedChart width={width} height={height} data={productTrendChartData}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                            <YAxis tickFormatter={(v) => formatReportsPeso(v as number)} tick={{ fontSize: 10 }} width={52} />
+                            <Tooltip formatter={(v: number) => formatReportsPesoFull(v)} />
+                            <Legend {...reportsChartLegendProps(productTrendLines.length)} />
+                            {productTrendLines.map((p) => {
+                              const colorKey = p.productId ?? p.productName;
+                              return (
+                                <Line
+                                  key={colorKey}
+                                  type="monotone"
+                                  dataKey={p.productName}
+                                  name={p.productName}
+                                  stroke={agentChartColor(colorKey)}
+                                  strokeWidth={2}
+                                  dot={{ r: 3, fill: agentChartColor(colorKey) }}
+                                />
+                              );
+                            })}
+                          </ComposedChart>
+                        )}
+                      />
+                    )}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          <Card>
+            <CardHeader>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <CardTitle>Product sales ({periodLabel})</CardTitle>
+                  <p className="text-xs text-gray-500 mt-1">{branchLabel}</p>
+                </div>
+                {productCategoryOptions.length > 0 ? (
+                  <ReportsFilterSelect
+                    label="Category"
+                    value={productViewCategory}
+                    onChange={setProductViewCategory}
+                    options={productCategoryOptions.map((name) => ({ value: name, label: name }))}
+                  />
+                ) : null}
+              </div>
+            </CardHeader>
             <CardContent>
               {bundle.productsInPeriod.length === 0 ? (
                 <p className="text-sm text-gray-500 py-6 text-center">No product sales in this period.</p>
+              ) : sortedProducts.length === 0 ? (
+                <p className="text-sm text-gray-500 py-6 text-center">No products match your filters.</p>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b text-left text-gray-500">
-                        <th className="pb-2 pr-4">Product</th>
-                        <th className="pb-2 pr-4">Units</th>
-                        <th className="pb-2 pr-4">Orders</th>
-                        <th className="pb-2">Revenue</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {bundle.productsInPeriod.map((p) => (
-                        <tr key={p.productName} className="border-b border-gray-100">
-                          <td className="py-2 pr-4 font-medium">{p.productName}</td>
-                          <td className="py-2 pr-4">{p.unitsSold.toLocaleString()}</td>
-                          <td className="py-2 pr-4">{p.orderCount}</td>
-                          <td className="py-2">{formatReportsPesoFull(p.revenue)}</td>
+                <>
+                  <div className="overflow-x-auto rounded-lg border border-gray-200">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50 text-xs text-gray-500 uppercase border-y border-gray-200">
+                        <tr>
+                          <th className="py-2.5 px-2 w-10 text-center" aria-label="Compare on chart">
+                            <span className="sr-only">Compare</span>
+                          </th>
+                          <ReportsSortTh col="product" label="Product" sortKey={productsSort.sortKey} sortDir={productsSort.sortDir} onSort={productsSort.onSort} />
+                          <ReportsSortTh col="category" label="Category" sortKey={productsSort.sortKey} sortDir={productsSort.sortDir} onSort={productsSort.onSort} className="hidden sm:table-cell" />
+                          <ReportsSortTh col="unitsSold" label="Units" sortKey={productsSort.sortKey} sortDir={productsSort.sortDir} onSort={productsSort.onSort} align="right" />
+                          <ReportsSortTh col="orderCount" label="Orders" sortKey={productsSort.sortKey} sortDir={productsSort.sortDir} onSort={productsSort.onSort} align="right" className="hidden md:table-cell" />
+                          <ReportsSortTh col="revenue" label="Revenue" sortKey={productsSort.sortKey} sortDir={productsSort.sortDir} onSort={productsSort.onSort} align="right" />
+                          <ReportsSortTh col="profit" label="Profit" sortKey={productsSort.sortKey} sortDir={productsSort.sortDir} onSort={productsSort.onSort} align="right" className="hidden lg:table-cell" />
+                          <ReportsSortTh col="marginPct" label="Margin" sortKey={productsSort.sortKey} sortDir={productsSort.sortDir} onSort={productsSort.onSort} align="right" className="hidden lg:table-cell" />
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {pagedProducts.map((p) => {
+                          const rowKey = p.productId ?? p.productName;
+                          const selected = p.productId ? selectedProductIds.includes(p.productId) : false;
+                          const atMax = selectedProductIds.length >= 6 && !selected;
+                          return (
+                            <tr key={rowKey} className={selected ? 'bg-blue-50/40 hover:bg-blue-50/60' : 'hover:bg-gray-50/80'}>
+                              <td className="py-2.5 px-2 text-center">
+                                <input
+                                  type="checkbox"
+                                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 disabled:opacity-40"
+                                  checked={selected}
+                                  disabled={!p.productId || atMax}
+                                  title={
+                                    !p.productId
+                                      ? 'No product link available'
+                                      : atMax
+                                        ? 'Maximum 6 products selected'
+                                        : 'Select for charts and top customers'
+                                  }
+                                  onChange={() => toggleProductCompare(p.productId)}
+                                  aria-label={`Select ${p.productName} for charts`}
+                                />
+                              </td>
+                              <td className="py-2.5 px-3">
+                                {p.productId ? (
+                                  <DashLink
+                                    to={finishedGoodProductHref(p.productId, p.categorySlug)}
+                                    title={`Open ${p.productName}`}
+                                    className={`${DASH_LINK_CLASS} font-medium`}
+                                  >
+                                    {p.productName}
+                                  </DashLink>
+                                ) : (
+                                  <span className="font-medium text-gray-900">{p.productName}</span>
+                                )}
+                              </td>
+                              <td className="py-2.5 px-3 hidden sm:table-cell">
+                                <DashLink
+                                  to={productCategoryHref(p.categorySlug, p.categoryName)}
+                                  className="text-blue-600 hover:text-blue-800 hover:underline text-sm"
+                                >
+                                  {p.categoryName}
+                                </DashLink>
+                              </td>
+                              <td className="py-2.5 px-3 text-right tabular-nums">{p.unitsSold.toLocaleString()}</td>
+                              <td className="py-2.5 px-3 text-right tabular-nums hidden md:table-cell">{p.orderCount}</td>
+                              <td className="py-2.5 px-3 text-right tabular-nums font-semibold text-blue-600">
+                                {formatReportsPesoFull(p.revenue)}
+                              </td>
+                              <td className="py-2.5 px-3 text-right tabular-nums hidden lg:table-cell">
+                                {formatReportsPesoFull(p.profit)}
+                              </td>
+                              <td className="py-2.5 px-3 text-right tabular-nums hidden lg:table-cell">
+                                {p.marginPct.toFixed(1)}%
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <TablePagination
+                    page={productsPageSafe}
+                    total={sortedProducts.length}
+                    onPageChange={setProductsPage}
+                  />
+                </>
               )}
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader><CardTitle>Top products (MTD — executive view)</CardTitle></CardHeader>
-            <CardContent>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b text-left text-gray-500">
-                      <th className="pb-2 pr-4">Product family</th>
-                      <th className="pb-2 pr-4">Units</th>
-                      <th className="pb-2 pr-4">Variants</th>
-                      <th className="pb-2">Revenue</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {executive.topProducts.map((p) => (
-                      <tr key={p.productName} className="border-b border-gray-100">
-                        <td className="py-2 pr-4 font-medium">{p.productName}</td>
-                        <td className="py-2 pr-4">{p.unitsSoldMTD.toLocaleString()}</td>
-                        <td className="py-2 pr-4">{p.variantCount}</td>
-                        <td className="py-2">{formatReportsPesoFull(p.revenueMTD)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </CardContent>
-          </Card>
-
-          {enh.categoryMargins.length > 0 && (
+          {selectedProductIds.length > 0 && (
             <Card>
-              <CardHeader><CardTitle>Margin by category ({bundle.period.displayLabel})</CardTitle></CardHeader>
-              <CardContent>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b text-left text-gray-500">
-                        <th className="pb-2 pr-4">Category</th>
-                        <th className="pb-2 pr-4">Units</th>
-                        <th className="pb-2 pr-4">Revenue</th>
-                        <th className="pb-2 pr-4">Profit</th>
-                        <th className="pb-2">Margin</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {enh.categoryMargins.slice(0, 15).map((c) => (
-                        <tr key={c.categoryName} className="border-b border-gray-100">
-                          <td className="py-2 pr-4 font-medium">{c.categoryName}</td>
-                          <td className="py-2 pr-4">{c.unitsSold.toLocaleString()}</td>
-                          <td className="py-2 pr-4">{formatReportsPesoFull(c.revenue)}</td>
-                          <td className="py-2 pr-4">{formatReportsPesoFull(c.profit)}</td>
-                          <td className="py-2">{c.marginPct.toFixed(1)}%</td>
-                        </tr>
+              <CardHeader>
+                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                  <div>
+                    <CardTitle>Variant breakdown</CardTitle>
+                    <p className="text-xs text-gray-500 mt-1">
+                      SKU-level sales for selected products · {periodLabel}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                    <p className="text-xs text-gray-500 tabular-nums mr-1">
+                      {sortedProductVariants.length} variant{sortedProductVariants.length === 1 ? '' : 's'}
+                    </p>
+                    <div
+                      className="inline-flex rounded-lg border border-gray-200 p-0.5 bg-gray-50"
+                      role="tablist"
+                      aria-label="Variant breakdown view"
+                    >
+                      {(['chart', 'table'] as const).map((mode) => (
+                        <button
+                          key={mode}
+                          type="button"
+                          role="tab"
+                          aria-selected={productVariantView === mode}
+                          onClick={() => setProductVariantView(mode)}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                            productVariantView === mode
+                              ? 'bg-white text-gray-900 shadow-sm'
+                              : 'text-gray-600 hover:text-gray-900'
+                          }`}
+                        >
+                          {mode === 'chart' ? (
+                            <BarChart3 className="w-3.5 h-3.5" aria-hidden />
+                          ) : (
+                            <Table2 className="w-3.5 h-3.5" aria-hidden />
+                          )}
+                          {mode === 'chart' ? 'Chart' : 'Table'}
+                        </button>
                       ))}
-                    </tbody>
-                  </table>
+                    </div>
+                  </div>
                 </div>
+              </CardHeader>
+              <CardContent>
+                  {sortedProductVariants.length === 0 ? (
+                    <p className="text-sm text-gray-500 py-6 text-center">
+                      No variant-level sales for the selected products in this period.
+                    </p>
+                  ) : productVariantView === 'chart' ? (
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        <div className="rounded-lg border border-gray-100 bg-gray-50/80 px-3 py-2.5">
+                          <p className="text-xs text-gray-500">Variants sold</p>
+                          <p className="text-lg font-bold tabular-nums text-gray-900">{variantSummary.count}</p>
+                        </div>
+                        <div className="rounded-lg border border-gray-100 bg-gray-50/80 px-3 py-2.5">
+                          <p className="text-xs text-gray-500">Total units</p>
+                          <p className="text-lg font-bold tabular-nums text-gray-900">
+                            {variantSummary.units.toLocaleString()}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-gray-100 bg-gray-50/80 px-3 py-2.5 col-span-2 sm:col-span-2">
+                          <p className="text-xs text-gray-500">Total revenue</p>
+                          <p className="text-lg font-bold tabular-nums text-blue-600">
+                            {formatReportsPesoFull(variantSummary.revenue)}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                        <div>
+                          <h4 className="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                            <PieChartIcon className="w-4 h-4 text-violet-600" />
+                            Revenue share
+                          </h4>
+                          <ReportsChartFrame
+                            height={256}
+                            render={({ width, height }) => (
+                              <PieChart width={width} height={height}>
+                                <Pie
+                                  data={variantPieData}
+                                  dataKey="value"
+                                  nameKey="name"
+                                  cx="50%"
+                                  cy="45%"
+                                  innerRadius={48}
+                                  outerRadius={72}
+                                  paddingAngle={2}
+                                >
+                                  {variantPieData.map((entry) => (
+                                    <Cell
+                                      key={entry.key}
+                                      fill={entry.key === 'other' ? '#9CA3AF' : agentChartColor(entry.key)}
+                                    />
+                                  ))}
+                                </Pie>
+                                <Tooltip formatter={(v: number) => formatReportsPesoFull(v)} />
+                                <Legend {...reportsChartLegendProps(variantPieData.length)} />
+                              </PieChart>
+                            )}
+                          />
+                        </div>
+
+                        <div className="min-w-0">
+                          <h4 className="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                            <BarChart3 className="w-4 h-4 text-blue-600" />
+                            Revenue by variant
+                            {sortedProductVariants.length > variantBarChartData.length ? (
+                              <span className="text-xs font-normal text-gray-500">
+                                · top {variantBarChartData.length}
+                              </span>
+                            ) : null}
+                          </h4>
+                          <ReportsChartFrame
+                            height={288}
+                            render={({ width, height }) => (
+                              <BarChart
+                                width={width}
+                                height={height}
+                                data={variantBarChartData}
+                                margin={{ top: 8, right: 12, left: 4, bottom: 56 }}
+                                barSize={18}
+                              >
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                                <XAxis
+                                  dataKey="name"
+                                  tick={{ fontSize: 10 }}
+                                  interval={0}
+                                  angle={multiProductVariantSelection ? -32 : -20}
+                                  textAnchor="end"
+                                  height={56}
+                                />
+                                <YAxis
+                                  tickFormatter={(v) => formatReportsPeso(v as number)}
+                                  tick={{ fontSize: 10 }}
+                                  width={52}
+                                />
+                                <Tooltip
+                                  formatter={(v: number, _name: string, item: { payload?: { units?: number; shareOfProductPct?: number; detail?: string } }) => {
+                                    const units = item.payload?.units;
+                                    const share = item.payload?.shareOfProductPct;
+                                    const parts = [formatReportsPesoFull(v)];
+                                    if (units != null) parts.push(`${units.toLocaleString()} units`);
+                                    if (share != null && multiProductVariantSelection) {
+                                      parts.push(`${share.toFixed(1)}% of product`);
+                                    }
+                                    return [parts.join(' · '), 'Revenue'];
+                                  }}
+                                  labelFormatter={(_label, payload) => {
+                                    const row = payload?.[0]?.payload as { detail?: string } | undefined;
+                                    return row?.detail ?? _label;
+                                  }}
+                                />
+                                <Bar dataKey="revenue" name="Revenue" radius={[4, 4, 0, 0]}>
+                                  {variantBarChartData.map((entry) => (
+                                    <Cell key={entry.key} fill={entry.fill} />
+                                  ))}
+                                </Bar>
+                              </BarChart>
+                            )}
+                          />
+                        </div>
+                      </div>
+
+                      <p className="text-xs text-gray-500">
+                        Switch to <button type="button" className="text-blue-600 hover:underline font-medium" onClick={() => setProductVariantView('table')}>Table</button> for full SKU metrics, sorting, and pagination.
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="overflow-x-auto rounded-lg border border-gray-200">
+                        <table className="w-full text-sm">
+                          <thead className="bg-gray-50 text-xs text-gray-500 uppercase border-b border-gray-200">
+                            <tr>
+                              <ReportsSortTh
+                                col="product"
+                                label="Product"
+                                sortKey={productVariantsSort.sortKey}
+                                sortDir={productVariantsSort.sortDir}
+                                onSort={productVariantsSort.onSort}
+                                className={selectedProductIds.length <= 1 ? 'hidden lg:table-cell' : undefined}
+                              />
+                              <ReportsSortTh
+                                col="sku"
+                                label="SKU"
+                                sortKey={productVariantsSort.sortKey}
+                                sortDir={productVariantsSort.sortDir}
+                                onSort={productVariantsSort.onSort}
+                              />
+                              <ReportsSortTh
+                                col="size"
+                                label="Size"
+                                sortKey={productVariantsSort.sortKey}
+                                sortDir={productVariantsSort.sortDir}
+                                onSort={productVariantsSort.onSort}
+                                className="hidden sm:table-cell"
+                              />
+                              <ReportsSortTh
+                                col="unitsSold"
+                                label="Units"
+                                sortKey={productVariantsSort.sortKey}
+                                sortDir={productVariantsSort.sortDir}
+                                onSort={productVariantsSort.onSort}
+                                align="right"
+                              />
+                              <ReportsSortTh
+                                col="orderCount"
+                                label="Orders"
+                                sortKey={productVariantsSort.sortKey}
+                                sortDir={productVariantsSort.sortDir}
+                                onSort={productVariantsSort.onSort}
+                                align="right"
+                                className="hidden md:table-cell"
+                              />
+                              <ReportsSortTh
+                                col="shareOfProductPct"
+                                label="Share"
+                                sortKey={productVariantsSort.sortKey}
+                                sortDir={productVariantsSort.sortDir}
+                                onSort={productVariantsSort.onSort}
+                                align="right"
+                                className="hidden lg:table-cell"
+                              />
+                              <ReportsSortTh
+                                col="revenue"
+                                label="Revenue"
+                                sortKey={productVariantsSort.sortKey}
+                                sortDir={productVariantsSort.sortDir}
+                                onSort={productVariantsSort.onSort}
+                                align="right"
+                              />
+                              <ReportsSortTh
+                                col="profit"
+                                label="Profit"
+                                sortKey={productVariantsSort.sortKey}
+                                sortDir={productVariantsSort.sortDir}
+                                onSort={productVariantsSort.onSort}
+                                align="right"
+                                className="hidden xl:table-cell"
+                              />
+                              <ReportsSortTh
+                                col="marginPct"
+                                label="Margin"
+                                sortKey={productVariantsSort.sortKey}
+                                sortDir={productVariantsSort.sortDir}
+                                onSort={productVariantsSort.onSort}
+                                align="right"
+                                className="hidden xl:table-cell"
+                              />
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {pagedProductVariants.map((v) => (
+                              <tr key={v.variantId} className="hover:bg-gray-50/80">
+                                <td
+                                  className={`py-2.5 px-3 ${selectedProductIds.length <= 1 ? 'hidden lg:table-cell' : ''}`}
+                                >
+                                  <DashLink
+                                    to={finishedGoodProductHref(v.productId, v.categorySlug)}
+                                    className={`${DASH_LINK_CLASS} font-medium truncate block max-w-[12rem]`}
+                                    title={v.productName}
+                                  >
+                                    {v.productName}
+                                  </DashLink>
+                                </td>
+                                <td className="py-2.5 px-3 font-mono text-xs text-gray-800">{v.sku}</td>
+                                <td className="py-2.5 px-3 text-gray-700 hidden sm:table-cell">{v.size}</td>
+                                <td className="py-2.5 px-3 text-right tabular-nums">{v.unitsSold.toLocaleString()}</td>
+                                <td className="py-2.5 px-3 text-right tabular-nums hidden md:table-cell">
+                                  {v.orderCount}
+                                </td>
+                                <td className="py-2.5 px-3 text-right tabular-nums hidden lg:table-cell">
+                                  {v.shareOfProductPct.toFixed(1)}%
+                                </td>
+                                <td className="py-2.5 px-3 text-right tabular-nums font-semibold text-blue-600">
+                                  {formatReportsPesoFull(v.revenue)}
+                                </td>
+                                <td className="py-2.5 px-3 text-right tabular-nums hidden xl:table-cell">
+                                  {formatReportsPesoFull(v.profit)}
+                                </td>
+                                <td className="py-2.5 px-3 text-right tabular-nums hidden xl:table-cell">
+                                  {v.marginPct.toFixed(1)}%
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      <TablePagination
+                        page={productVariantsPageSafe}
+                        total={sortedProductVariants.length}
+                        onPageChange={setProductVariantsPage}
+                      />
+                    </>
+                  )}
+              </CardContent>
+            </Card>
+          )}
+
+          {selectedProductIds.length > 0 && (
+            <Card>
+              <CardHeader>
+                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
+                  <div>
+                    <CardTitle>Top customers</CardTitle>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Revenue from selected products · {periodLabel}
+                    </p>
+                  </div>
+                  <p className="text-xs text-gray-500 tabular-nums">
+                    {sortedTopProductCustomers.length} customer{sortedTopProductCustomers.length === 1 ? '' : 's'}
+                  </p>
+                </div>
+              </CardHeader>
+              <CardContent>
+                  {sortedTopProductCustomers.length === 0 ? (
+                    <p className="text-sm text-gray-500 py-6 text-center">
+                      No customer purchases for the selected products in this period.
+                    </p>
+                  ) : (
+                    <>
+                      <div className="overflow-x-auto rounded-lg border border-gray-200">
+                        <table className="w-full text-sm">
+                          <thead className="bg-gray-50 text-xs text-gray-500 uppercase border-b border-gray-200">
+                            <tr>
+                              <ReportsSortTh
+                                col="customer"
+                                label="Customer"
+                                sortKey={productCustomersSort.sortKey}
+                                sortDir={productCustomersSort.sortDir}
+                                onSort={productCustomersSort.onSort}
+                              />
+                              <ReportsSortTh
+                                col="agent"
+                                label="Agent"
+                                sortKey={productCustomersSort.sortKey}
+                                sortDir={productCustomersSort.sortDir}
+                                onSort={productCustomersSort.onSort}
+                                className="hidden md:table-cell"
+                              />
+                              <ReportsSortTh
+                                col="unitsSold"
+                                label="Units"
+                                sortKey={productCustomersSort.sortKey}
+                                sortDir={productCustomersSort.sortDir}
+                                onSort={productCustomersSort.onSort}
+                                align="right"
+                              />
+                              <ReportsSortTh
+                                col="orderCount"
+                                label="Orders"
+                                sortKey={productCustomersSort.sortKey}
+                                sortDir={productCustomersSort.sortDir}
+                                onSort={productCustomersSort.onSort}
+                                align="right"
+                                className="hidden sm:table-cell"
+                              />
+                              <ReportsSortTh
+                                col="revenue"
+                                label="Revenue"
+                                sortKey={productCustomersSort.sortKey}
+                                sortDir={productCustomersSort.sortDir}
+                                onSort={productCustomersSort.onSort}
+                                align="right"
+                              />
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {pagedTopProductCustomers.map((c) => (
+                              <tr key={c.customerId} className="hover:bg-gray-50/80">
+                                <td className="py-2.5 px-3">
+                                  <DashLink
+                                    to={`/customers/${c.customerId}`}
+                                    className={`${DASH_LINK_CLASS} font-medium`}
+                                  >
+                                    {c.customerName}
+                                  </DashLink>
+                                  {c.customerCode ? (
+                                    <span className="block text-xs text-gray-500 mt-0.5">{c.customerCode}</span>
+                                  ) : null}
+                                </td>
+                                <td className="py-2.5 px-3 hidden md:table-cell">
+                                  {c.agentName ? (
+                                    c.agentId ? (
+                                      <DashLink
+                                        to={`/employees/${encodeURIComponent(c.agentId)}`}
+                                        title={`Open agent ${c.agentName}`}
+                                        className={`${DASH_LINK_CLASS} text-sm`}
+                                      >
+                                        {c.agentName}
+                                      </DashLink>
+                                    ) : (
+                                      <span className="text-gray-600">{c.agentName}</span>
+                                    )
+                                  ) : (
+                                    <span className="text-gray-400">—</span>
+                                  )}
+                                </td>
+                                <td className="py-2.5 px-3 text-right tabular-nums">{c.unitsSold.toLocaleString()}</td>
+                                <td className="py-2.5 px-3 text-right tabular-nums hidden sm:table-cell">
+                                  {c.orderCount}
+                                </td>
+                                <td className="py-2.5 px-3 text-right tabular-nums font-semibold text-blue-600">
+                                  {formatReportsPesoFull(c.revenue)}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      <TablePagination
+                        page={productCustomersPageSafe}
+                        total={sortedTopProductCustomers.length}
+                        onPageChange={setProductCustomersPage}
+                      />
+                    </>
+                  )}
               </CardContent>
             </Card>
           )}
@@ -819,48 +3405,402 @@ export function ReportsPage(): React.ReactElement {
       {/* INVENTORY */}
       {viewMode === 'inventory' && (
         <div className="space-y-6">
-          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-            <KpiCard label="Low-stock products" value={String(executive.inventory.lowStockProductCount)} icon={<Package className="w-5 h-5 text-amber-600" />} />
-            <KpiCard label="Low-stock materials" value={String(executive.inventory.lowStockMaterialCount)} icon={<Factory className="w-5 h-5 text-orange-600" />} />
-            <KpiCard label="Pending POs" value={String(executive.approvals.pendingPurchaseOrderCount)} sub={formatReportsPeso(executive.approvals.pendingPurchaseOrderValue)} icon={<PackageCheck className="w-5 h-5 text-blue-600" />} />
-            <KpiCard label="Pending PRs" value={String(executive.approvals.pendingProductionRequestCount)} icon={<Activity className="w-5 h-5 text-purple-600" />} />
-            <KpiCard label="Pending IBRs" value={String(executive.approvals.pendingInterBranchRequestCount)} icon={<Truck className="w-5 h-5 text-indigo-600" />} />
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <StatKpiCard
+              label="PO spend"
+              value={formatReportsPeso(invSummary.purchaseOrderSpend)}
+              tone="blue"
+              icon={<Wallet />}
+              sub={`${invSummary.purchaseOrderCount} orders · ${formatReportsPeso(invSummary.purchaseOrderPaid)} paid`}
+            />
+            <StatKpiCard
+              label="Production requests"
+              value={String(invSummary.productionRequestCount)}
+              tone="violet"
+              icon={<Activity />}
+              sub={`${invSummary.pendingProductionRequestCount} pending approval`}
+            />
+            <StatKpiCard
+              label="Inventory value"
+              value={formatReportsPeso(invSummary.inventoryValue)}
+              tone="emerald"
+              icon={<PackageCheck />}
+              sub={`${invSummary.rawMaterialCount} raw materials`}
+            />
+            <StatKpiCard
+              label="Low-stock materials"
+              value={String(invSummary.lowStockMaterialCount)}
+              tone="rose"
+              icon={<Factory />}
+            />
+            <StatKpiCard
+              label="Pending POs"
+              value={String(invSummary.pendingPurchaseOrderCount)}
+              tone="amber"
+              icon={<ShoppingCart />}
+              sub={formatReportsPeso(invSummary.pendingPurchaseOrderValue)}
+            />
+            <StatKpiCard
+              label="Suppliers (period)"
+              value={String(invSummary.activeSupplierCount)}
+              tone="teal"
+              icon={<Building2 />}
+              sub="With PO activity"
+            />
+            <StatKpiCard
+              label="PO outstanding"
+              value={formatReportsPeso(invSummary.purchaseOrderSpend - invSummary.purchaseOrderPaid)}
+              tone="indigo"
+              icon={<DollarSign />}
+              sub="Spend minus paid"
+            />
+            <StatKpiCard
+              label="Pending PRs"
+              value={String(invSummary.pendingProductionRequestCount)}
+              tone="cyan"
+              icon={<Target />}
+            />
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <Card>
-              <CardHeader><CardTitle>Low-stock products</CardTitle></CardHeader>
-              <CardContent className="space-y-2">
-                {executive.inventory.lowStockProducts.length === 0 ? (
-                  <p className="text-sm text-gray-500">No low-stock product alerts.</p>
-                ) : (
-                  executive.inventory.lowStockProducts.map((p) => (
-                    <div key={p.variantId} className="rounded-md border p-2.5 text-sm">
-                      <p className="font-medium">{p.productName}</p>
-                      <p className="text-xs text-gray-500">{p.sku} · {p.daysOfCover != null ? `${p.daysOfCover}d cover` : '—'}</p>
+          <Card>
+            <CardHeader>
+              <CardTitle>Purchase expenditure trend</CardTitle>
+              <p className="text-xs text-gray-500 mt-1">
+                {branchLabel} · {periodLabel} · PO spend by month (excludes draft, cancelled, rejected)
+              </p>
+            </CardHeader>
+            <CardContent>
+              {inv.expenditureSeries.length === 0 ? (
+                <p className="text-sm text-gray-500 py-8 text-center">No purchase orders in this period.</p>
+              ) : (
+                <ReportsChartFrame
+                  height={288}
+                  render={({ width, height }) => (
+                    <LineChart width={width} height={height} data={inv.expenditureSeries}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                      <YAxis
+                        yAxisId="left"
+                        tickFormatter={(v) => formatReportsPeso(v as number)}
+                        tick={{ fontSize: 10 }}
+                        width={52}
+                      />
+                      <YAxis yAxisId="right" orientation="right" allowDecimals={false} tick={{ fontSize: 10 }} width={32} />
+                      <Tooltip
+                        formatter={(v: number, name: string) =>
+                          name === 'PO count' ? v : formatReportsPesoFull(v)
+                        }
+                      />
+                      <Legend />
+                      <Line
+                        yAxisId="left"
+                        type="monotone"
+                        dataKey="poSpend"
+                        name="PO spend"
+                        stroke="#3B82F6"
+                        strokeWidth={2}
+                        dot={{ r: 3, fill: '#3B82F6' }}
+                      />
+                      <Line
+                        yAxisId="right"
+                        type="monotone"
+                        dataKey="poCount"
+                        name="PO count"
+                        stroke="#10B981"
+                        strokeWidth={2}
+                        dot={{ r: 3, fill: '#10B981' }}
+                      />
+                    </LineChart>
+                  )}
+                />
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <CardTitle>Material purchase spending</CardTitle>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {branchLabel} · {periodLabel} · raw material PO line items (qty × unit price)
+                  </p>
+                </div>
+                <div
+                  className="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-0.5 shrink-0"
+                  role="tablist"
+                  aria-label="Material spend chart mode"
+                >
+                  {(['overall', 'categories'] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      role="tab"
+                      aria-selected={materialSpendChartMode === mode}
+                      onClick={() => setMaterialSpendChartMode(mode)}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                        materialSpendChartMode === mode
+                          ? 'bg-white text-gray-900 shadow-sm'
+                          : 'text-gray-600 hover:text-gray-900'
+                      }`}
+                    >
+                      {mode === 'overall' ? 'Overall' : 'By category'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {!hasMaterialSpend ? (
+                <p className="text-sm text-gray-500 py-8 text-center">No material line-item spend in this period.</p>
+              ) : (
+                <div
+                  className={
+                    materialSpendChartMode === 'categories' && materialCategoryLines.length > 0
+                      ? 'grid grid-cols-1 lg:grid-cols-3 gap-6'
+                      : undefined
+                  }
+                >
+                  <div className={materialSpendChartMode === 'categories' && materialCategoryLines.length > 0 ? 'lg:col-span-2' : undefined}>
+                    <ReportsChartFrame
+                      height={288}
+                      render={({ width, height }) => (
+                        <LineChart width={width} height={height} data={materialSpendLineChartData}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                          <YAxis
+                            tickFormatter={(v) => formatReportsPeso(v as number)}
+                            tick={{ fontSize: 10 }}
+                            width={52}
+                          />
+                          <Tooltip formatter={(v: number) => formatReportsPesoFull(v)} />
+                          <Legend
+                            {...reportsChartLegendProps(
+                              materialSpendChartMode === 'overall' ? 1 : visibleMaterialCategoryLines.length,
+                            )}
+                          />
+                          {materialSpendChartMode === 'overall' ? (
+                            <Line
+                              type="monotone"
+                              dataKey="Overall"
+                              name="Overall"
+                              stroke="#8B5CF6"
+                              strokeWidth={2}
+                              dot={{ r: 3, fill: '#8B5CF6' }}
+                            />
+                          ) : (
+                            visibleMaterialCategoryLines.map((c) => {
+                              const colorIndex = materialCategoryLines.findIndex(
+                                (line) => line.categoryName === c.categoryName,
+                              );
+                              const stroke = agentChartColorAt(Math.max(0, colorIndex));
+                              return (
+                              <Line
+                                key={c.categoryName}
+                                type="monotone"
+                                dataKey={c.categoryName}
+                                name={c.categoryName}
+                                stroke={stroke}
+                                strokeWidth={2}
+                                dot={{ r: 3, fill: stroke }}
+                              />
+                              );
+                            })
+                          )}
+                        </LineChart>
+                      )}
+                    />
+                  </div>
+
+                  {materialSpendChartMode === 'categories' && materialCategoryLines.length > 0 ? (
+                    <div className="rounded-lg border border-gray-200 bg-gray-50/50 p-3">
+                      <div className="flex items-center justify-between gap-2 mb-3">
+                        <h3 className="text-sm font-semibold text-gray-800">Categories</h3>
+                        {visibleMaterialCategoryNames.length < materialCategoryLines.length ? (
+                          <button
+                            type="button"
+                            className="text-xs text-blue-600 hover:underline font-medium shrink-0"
+                            onClick={() =>
+                              setVisibleMaterialCategoryNames(
+                                materialCategoryLines.map((c) => c.categoryName),
+                              )
+                            }
+                          >
+                            Show all
+                          </button>
+                        ) : null}
+                      </div>
+                      <p className="text-xs text-gray-500 mb-3">
+                        {visibleMaterialCategoryNames.length} of {materialCategoryLines.length} shown
+                      </p>
+                      <ul className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                        {materialCategoryLines.map((c, i) => {
+                          const checked = visibleMaterialCategoryNames.includes(c.categoryName);
+                          const onlyOneVisible = visibleMaterialCategoryNames.length <= 1;
+                          const periodSpend =
+                            materialCategorySpendByName.get(c.categoryName)?.spend
+                            ?? c.spendByMonth.reduce((s, v) => s + v, 0);
+                          return (
+                            <li
+                              key={c.categoryName}
+                              className={`flex items-start gap-2 rounded-lg border px-2.5 py-2 text-sm ${
+                                checked ? 'border-violet-200 bg-white' : 'border-transparent opacity-60'
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                className="mt-0.5 rounded border-gray-300 text-violet-600 focus:ring-violet-500 disabled:opacity-40"
+                                checked={checked}
+                                disabled={checked && onlyOneVisible}
+                                title={
+                                  checked && onlyOneVisible
+                                    ? 'At least one category must stay visible'
+                                    : checked
+                                      ? 'Hide from chart'
+                                      : 'Show in chart'
+                                }
+                                onChange={() => toggleMaterialCategoryVisible(c.categoryName)}
+                                aria-label={`${checked ? 'Hide' : 'Show'} ${c.categoryName} in chart`}
+                              />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span
+                                    className="inline-block w-2.5 h-2.5 rounded-full shrink-0"
+                                    style={{ backgroundColor: agentChartColorAt(i) }}
+                                    aria-hidden
+                                  />
+                                  <span className="font-medium text-gray-900 truncate">{c.categoryName}</span>
+                                </div>
+                                <p className="text-xs text-gray-500 mt-0.5 tabular-nums">
+                                  {formatReportsPesoFull(periodSpend)} in period
+                                </p>
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ul>
                     </div>
-                  ))
+                  ) : null}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Spend by supplier type</CardTitle>
+                <p className="text-xs text-gray-500 mt-1">
+                  {branchLabel} · {periodLabel} · PO totals grouped by supplier type
+                </p>
+              </CardHeader>
+              <CardContent>
+                {inv.supplierTypeSpend.length === 0 ? (
+                  <p className="text-sm text-gray-500 py-8 text-center">No supplier spend in this period.</p>
+                ) : (
+                  <ReportsChartFrame
+                    height={288}
+                    render={({ width, height }) => {
+                      const pieRows = inv.supplierTypeSpend
+                        .filter((r) => r.spend > 0)
+                        .map((r) => ({
+                          name: r.supplierType,
+                          value: r.spend,
+                          key: r.supplierType,
+                        }));
+                      return (
+                        <PieChart width={width} height={height}>
+                          <Pie
+                            data={pieRows}
+                            dataKey="value"
+                            nameKey="name"
+                            cx="50%"
+                            cy="50%"
+                            innerRadius={52}
+                            outerRadius={88}
+                            paddingAngle={2}
+                            label={({ name, percent }) =>
+                              `${name}: ${(percent * 100).toFixed(0)}%`
+                            }
+                            labelLine={false}
+                          >
+                            {pieRows.map((entry, i) => (
+                              <Cell key={entry.key} fill={agentChartColorAt(i)} />
+                            ))}
+                          </Pie>
+                          <Tooltip formatter={(v: number) => formatReportsPesoFull(v)} />
+                          <Legend {...reportsChartLegendProps(pieRows.length)} />
+                        </PieChart>
+                      );
+                    }}
+                  />
                 )}
               </CardContent>
             </Card>
+
             <Card>
-              <CardHeader><CardTitle>Low-stock materials</CardTitle></CardHeader>
-              <CardContent className="space-y-2">
-                {executive.inventory.lowStockMaterials.length === 0 ? (
-                  <p className="text-sm text-gray-500">No low-stock material alerts.</p>
+              <CardHeader>
+                <CardTitle>Suppliers by spend ({periodLabel})</CardTitle>
+                <p className="text-xs text-gray-500 mt-1">{sortedInventorySuppliers.length} supplier{sortedInventorySuppliers.length === 1 ? '' : 's'} with PO activity</p>
+              </CardHeader>
+              <CardContent>
+                {sortedInventorySuppliers.length === 0 ? (
+                  <p className="text-sm text-gray-500 py-8 text-center">No supplier spend in this period.</p>
                 ) : (
-                  executive.inventory.lowStockMaterials.map((m) => (
-                    <div key={m.materialId} className="rounded-md border p-2.5 text-sm">
-                      <p className="font-medium">{m.name}</p>
-                      <p className="text-xs text-gray-500">
-                        {m.totalStock} {m.unit} · {m.daysOfCover != null ? `${m.daysOfCover}d cover` : '—'}
-                      </p>
-                    </div>
-                  ))
+                  <div className="overflow-x-auto -mx-1">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-gray-200 text-gray-600 text-left">
+                          <ReportsSortTh
+                            col="supplier"
+                            label="Supplier"
+                            sortKey={inventorySuppliersSort.sortKey}
+                            sortDir={inventorySuppliersSort.sortDir}
+                            onSort={inventorySuppliersSort.onSort}
+                          />
+                          <ReportsSortTh
+                            col="poCount"
+                            label="POs"
+                            sortKey={inventorySuppliersSort.sortKey}
+                            sortDir={inventorySuppliersSort.sortDir}
+                            onSort={inventorySuppliersSort.onSort}
+                            align="right"
+                          />
+                          <ReportsSortTh
+                            col="spend"
+                            label="Spend"
+                            sortKey={inventorySuppliersSort.sortKey}
+                            sortDir={inventorySuppliersSort.sortDir}
+                            onSort={inventorySuppliersSort.onSort}
+                            align="right"
+                          />
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {sortedInventorySuppliers.map((s) => (
+                          <tr key={s.supplierId} className="hover:bg-gray-50/80">
+                            <td className="py-2.5 px-3">
+                              <DashLink
+                                to={`/suppliers/${encodeURIComponent(s.supplierId)}`}
+                                className={`${DASH_LINK_CLASS} font-medium`}
+                              >
+                                {s.supplierName}
+                              </DashLink>
+                            </td>
+                            <td className="py-2.5 px-3 text-right tabular-nums">{s.poCount}</td>
+                            <td className="py-2.5 px-3 text-right tabular-nums font-semibold text-blue-600">
+                              {formatReportsPesoFull(s.spend)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 )}
               </CardContent>
             </Card>
           </div>
+
         </div>
       )}
 
@@ -868,10 +3808,10 @@ export function ReportsPage(): React.ReactElement {
       {viewMode === 'operations' && (
         <div className="space-y-6">
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <KpiCard label="Trips MTD" value={String(executive.logistics.totalTripsMTD)} icon={<Truck className="w-5 h-5 text-blue-600" />} />
-            <KpiCard label="On-time rate" value={`${executive.logistics.onTimeRate.toFixed(0)}%`} icon={<CheckCircle className="w-5 h-5 text-emerald-600" />} />
-            <KpiCard label="Delayed MTD" value={String(executive.logistics.delayedTripsMTD)} icon={<AlertTriangle className="w-5 h-5 text-amber-600" />} />
-            <KpiCard label="In transit now" value={String(executive.logistics.inTransitNow)} icon={<Activity className="w-5 h-5 text-indigo-600" />} />
+            <StatKpiCard label="Trips MTD" value={String(executive.logistics.totalTripsMTD)} tone="blue" icon={<Truck />} />
+            <StatKpiCard label="On-time rate" value={`${executive.logistics.onTimeRate.toFixed(0)}%`} tone="emerald" icon={<CheckCircle />} />
+            <StatKpiCard label="Delayed MTD" value={String(executive.logistics.delayedTripsMTD)} tone="amber" icon={<AlertTriangle />} />
+            <StatKpiCard label="In transit now" value={String(executive.logistics.inTransitNow)} tone="indigo" icon={<Activity />} />
           </div>
 
           <Card>
@@ -985,32 +3925,284 @@ export function ReportsPage(): React.ReactElement {
         Generated {new Date(bundle.generatedAt).toLocaleString()}
       </p>
     </div>
+    {periodModal}
+    </>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// UI components
 // ---------------------------------------------------------------------------
 
-function KpiCard(props: {
-  label: string;
-  value: string;
-  sub?: React.ReactNode;
-  icon: React.ReactNode;
+function ReportsRevenueTrendCard(props: {
+  branchLabel: string;
+  scopedTrend: ReportsBundle['executive']['revenueTrend'];
+  branchCompare: ReportsBranchTrendCompare;
+  mode: RevenueTrendMode;
+  onModeChange: (mode: RevenueTrendMode) => void;
+  canCompare: boolean;
 }) {
+  const compareChartData = useMemo(() => {
+    return props.branchCompare.labels.map((label, i) => {
+      const row: Record<string, string | number> = { label };
+      for (const b of props.branchCompare.branches) {
+        row[b.branchId] = b.revenueByMonth[i] ?? 0;
+      }
+      row.totalOrders = props.branchCompare.totalOrdersByMonth[i] ?? 0;
+      return row;
+    });
+  }, [props.branchCompare]);
+
+  const showCompare = props.mode === 'allBranches' && props.canCompare;
+  const scopedEmpty = props.scopedTrend.length === 0;
+  const compareEmpty = props.branchCompare.branches.length === 0;
+
   return (
     <Card>
-      <CardContent className="p-4">
-        <div className="flex items-start justify-between gap-2">
+      <CardHeader className="space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
           <div>
-            <p className="text-xs text-gray-500 uppercase tracking-wider">{props.label}</p>
-            <p className="text-xl font-bold text-gray-900 mt-1">{props.value}</p>
-            {props.sub && <div className="text-xs mt-1 text-gray-500">{props.sub}</div>}
+            <CardTitle className="flex items-center gap-2">
+              <TrendingUp className="w-5 h-5 text-red-600" />
+              Revenue &amp; order trend
+            </CardTitle>
+            <p className="text-xs text-gray-500 mt-1">
+              {showCompare
+                ? 'Revenue by branch — colors match Agent Analytics branch comparison.'
+                : `Last 6 months · ${props.branchLabel}`}
+            </p>
           </div>
-          <div className="p-2 bg-gray-100 rounded-lg shrink-0">{props.icon}</div>
+          {props.canCompare && (
+            <div
+              className="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-0.5 shrink-0"
+              role="tablist"
+              aria-label="Revenue trend view"
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={props.mode === 'scoped'}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                  props.mode === 'scoped'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+                onClick={() => props.onModeChange('scoped')}
+              >
+                {props.branchLabel === 'All branches' ? 'Combined' : 'This branch'}
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={props.mode === 'allBranches'}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                  props.mode === 'allBranches'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+                onClick={() => props.onModeChange('allBranches')}
+              >
+                All branches
+              </button>
+            </div>
+          )}
         </div>
+      </CardHeader>
+      <CardContent>
+        {!showCompare && scopedEmpty ? (
+          <p className="text-sm text-gray-500 py-8 text-center">No revenue data for this period.</p>
+        ) : showCompare && compareEmpty ? (
+          <p className="text-sm text-gray-500 py-8 text-center">No branch revenue data for the last 6 months.</p>
+        ) : (
+          <div className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              {showCompare ? (
+                <ComposedChart data={compareChartData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+                  <YAxis
+                    yAxisId="left"
+                    tickFormatter={(v) => formatReportsPeso(v as number)}
+                    tick={{ fontSize: 11 }}
+                  />
+                  <YAxis
+                    yAxisId="right"
+                    orientation="right"
+                    allowDecimals={false}
+                    tick={{ fontSize: 11 }}
+                  />
+                  <Tooltip
+                    formatter={(v: number, name: string) =>
+                      name === 'Total orders' ? v : formatReportsPesoFull(v)
+                    }
+                    contentStyle={{ borderRadius: '8px', border: '1px solid #E5E7EB' }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  {props.branchCompare.branches.map((b) => (
+                    <Line
+                      key={b.branchId}
+                      yAxisId="left"
+                      type="monotone"
+                      dataKey={b.branchId}
+                      name={b.branchName}
+                      stroke={branchChartColorAt(b.colorIndex)}
+                      strokeWidth={2}
+                      dot={{ r: 2, fill: branchChartColorAt(b.colorIndex) }}
+                      activeDot={{ r: 4 }}
+                    />
+                  ))}
+                  <Line
+                    yAxisId="right"
+                    type="monotone"
+                    dataKey="totalOrders"
+                    name="Total orders"
+                    stroke="#64748B"
+                    strokeWidth={2}
+                    strokeDasharray="5 5"
+                    dot={false}
+                  />
+                </ComposedChart>
+              ) : (
+                <ComposedChart data={props.scopedTrend}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+                  <YAxis
+                    yAxisId="left"
+                    tickFormatter={(v) => formatReportsPeso(v as number)}
+                    tick={{ fontSize: 11 }}
+                  />
+                  <YAxis
+                    yAxisId="right"
+                    orientation="right"
+                    allowDecimals={false}
+                    tick={{ fontSize: 11 }}
+                  />
+                  <Tooltip
+                    formatter={(v: number, name: string) =>
+                      name === 'Orders' ? v : formatReportsPesoFull(v)
+                    }
+                  />
+                  <Legend />
+                  <Area
+                    yAxisId="left"
+                    type="monotone"
+                    dataKey="revenue"
+                    name="Revenue"
+                    fill="#3B82F6"
+                    fillOpacity={0.15}
+                    stroke="#3B82F6"
+                    strokeWidth={2}
+                  />
+                  <Line
+                    yAxisId="right"
+                    type="monotone"
+                    dataKey="orderCount"
+                    name="Orders"
+                    stroke="#10B981"
+                    strokeWidth={2}
+                    dot={{ r: 3, fill: '#10B981' }}
+                    activeDot={{ r: 5 }}
+                  />
+                </ComposedChart>
+              )}
+            </ResponsiveContainer>
+          </div>
+        )}
       </CardContent>
     </Card>
+  );
+}
+
+function TrendChip(props: { value: number; suffix?: string; inline?: boolean }) {
+  const Tag = props.inline ? 'span' : 'div';
+  return (
+    <Tag className={`flex items-center gap-0.5 ${getGrowthColor(props.value)} ${props.inline ? '' : 'text-xs'}`}>
+      {getGrowthIcon(props.value)}
+      {props.value >= 0 ? '+' : ''}
+      {props.value.toFixed(1)}%{props.suffix ?? ''}
+    </Tag>
+  );
+}
+
+function MoverPanel(props: {
+  title: string;
+  subtitle: string;
+  icon: React.ReactNode;
+  rows: MoverRow[];
+  emptyMessage: string;
+  onViewAll: () => void;
+}) {
+  return (
+    <Card className="flex flex-col">
+      <CardHeader className="pb-2">
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-base">
+              {props.icon}
+              {props.title}
+            </CardTitle>
+            <p className="text-xs text-gray-500 mt-1">{props.subtitle}</p>
+          </div>
+          <Button variant="ghost" size="sm" className="text-xs shrink-0" onClick={props.onViewAll}>
+            View all
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="pt-0 flex-1">
+        {props.rows.length === 0 ? (
+          <p className="text-sm text-gray-500 py-6 text-center">{props.emptyMessage}</p>
+        ) : (
+          <MoverBarList rows={props.rows} />
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function MoverBarList(props: { rows: MoverRow[]; valueLabel?: string }) {
+  const max = Math.max(1, ...props.rows.map((r) => r.value));
+  return (
+    <div className="space-y-3">
+      {props.rows.map((row, i) => (
+        <div key={row.key} className="space-y-1">
+          <div className="flex items-center justify-between gap-2 text-sm">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-xs font-bold text-gray-400 w-4">{i + 1}</span>
+              <span className="font-medium truncate">{row.name}</span>
+              {row.badge && <Badge variant={row.badge.variant}>{row.badge.label}</Badge>}
+            </div>
+            <span className="font-semibold text-gray-900 shrink-0">{formatReportsPeso(row.value)}</span>
+          </div>
+          {row.sub && <p className="text-xs text-gray-500 pl-6">{row.sub}</p>}
+          <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden ml-6">
+            <div
+              className="h-full rounded-full bg-gradient-to-r from-red-500 to-red-400"
+              style={{ width: `${(row.value / max) * 100}%` }}
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ProcurementTile(props: {
+  label: string;
+  count: number;
+  value?: string;
+  href: string;
+  onNavigate: (path: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => props.onNavigate(props.href)}
+      className="rounded-xl border border-gray-200 p-4 text-left hover:border-red-200 hover:bg-red-50/30 transition-colors"
+    >
+      <p className="text-xs text-gray-500 uppercase tracking-wide">{props.label}</p>
+      <p className="text-2xl font-bold text-gray-900 mt-1">{props.count}</p>
+      {props.value && <p className="text-xs text-gray-600 mt-1">{props.value}</p>}
+    </button>
   );
 }
 

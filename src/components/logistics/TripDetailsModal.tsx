@@ -11,6 +11,10 @@ import { CancelOrderModal, type CancellationData } from '@/src/components/orders
 import { useAppContext } from '@/src/store/AppContext';
 import type { OrderLineItem as OrdersLineItem } from '@/src/types/orders';
 import { remainingToShipForLine } from '@/src/lib/orderShipmentQuantities';
+import { reportTripDelay } from '@/src/lib/orderTripDelay';
+import { resolveBranchIdByName } from '@/src/lib/branchCompanySettings';
+import { releaseOrderFromActiveTrips } from '@/src/lib/logisticsScheduling';
+import { insertOrderProofDocuments } from '@/src/lib/orderProofPayments';
 
 interface OrderLineItem {
   id: string;
@@ -272,12 +276,13 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
     [inTransitOrder, applyTripShipment],
   );
 
-  const handleFulfillOrder = useCallback(async (fulfillmentData: FulfillmentData[], _proofImageUrls: string[]) => {
+  const handleFulfillOrder = useCallback(async (fulfillmentData: FulfillmentData[], proofImageUrls: string[]) => {
     if (!proofTarget) return;
     const orderId = proofTarget.id;
     const target = ordersData.find((o) => o.order.id === orderId);
     const items = target?.order.items ?? [];
     const now = new Date().toISOString();
+    const actorLabel = employeeName || session?.user?.email || role;
 
     const newDeliveredFor = (itemId: string) => {
       const line = items.find((l) => l.id === itemId);
@@ -330,6 +335,45 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
 
     await supabase.from('orders').update(updatePayload).eq('id', orderId);
 
+    if (proofImageUrls.length > 0) {
+      const uploaderRole = role === 'Logistics' || role === 'Driver' ? 'Logistics' : 'Agent';
+      const rows = proofImageUrls.map((fileUrl) => {
+        const raw = fileUrl.split('/').pop()?.split('?')[0] ?? 'image';
+        let fileName = raw;
+        try {
+          fileName = decodeURIComponent(raw);
+        } catch {
+          fileName = raw;
+        }
+        return {
+          order_id: orderId,
+          type: 'delivery' as const,
+          file_name: fileName,
+          file_url: fileUrl,
+          file_size: 0,
+          uploaded_by: actorLabel,
+          uploaded_by_role: uploaderRole,
+          status: 'verified' as const,
+          title: `Delivery — ${fileName}`,
+          notes: 'Recorded with delivery (gallery)',
+          payment_cash_amount: 0,
+          payment_credit_amount: 0,
+          payment_adjustment: 0,
+        };
+      });
+      const { error: pErr } = await insertOrderProofDocuments(rows);
+      if (pErr) {
+        console.error(pErr);
+        window.alert('Delivery saved but proof files could not be stored: ' + pErr);
+      } else {
+        addAuditLog?.(
+          'Proof of Delivery',
+          'Order',
+          `Attached ${proofImageUrls.length} image(s) with delivery for order ${target?.order.orderNumber ?? orderId}`,
+        );
+      }
+    }
+
     addAuditLog?.(`Recorded delivery for order ${target?.order.orderNumber ?? orderId} (Trip ${trip.tripNumber}) → ${newStatus}`, 'order');
 
     setOrdersData((prev) => prev.map((o) => {
@@ -356,7 +400,7 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
 
     setShowProofModal(false);
     setProofTarget(null);
-  }, [proofTarget, ordersData, trip, addAuditLog, onOrderStatusChange, onTripStatusChange]);
+  }, [proofTarget, ordersData, trip, addAuditLog, onOrderStatusChange, onTripStatusChange, employeeName, session, role]);
 
   const handleCancelOrderInTrip = useCallback(async (data: CancellationData) => {
     if (!cancelTarget) return;
@@ -429,7 +473,12 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
     ));
     onOrderStatusChange?.(trip.id, orderId, 'Cancelled');
 
-    if (allTripOrdersAllowTruckReturn(trip.orders, mergedStatuses)) {
+    const release = await releaseOrderFromActiveTrips(orderId);
+    if (!release.ok) {
+      console.warn('[trip] release order from trip failed:', release.error);
+    }
+
+    if (release.tripsDeleted === 0 && allTripOrdersAllowTruckReturn(trip.orders, mergedStatuses)) {
       const ok = await persistTripCompletedInDb(trip.id);
       if (ok) onTripStatusChange?.(trip.id, 'Complete');
     }
@@ -450,17 +499,23 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
     }
     setDelaySaving(true);
     try {
-      const now = new Date().toISOString();
-      const { error } = await supabase
-        .from('trips')
-        .update({
-          status: 'Delayed',
-          delay_reason: text,
-          updated_at: now,
-        })
-        .eq('id', trip.id);
-      if (error) {
-        window.alert(error.message);
+      const branchId = branch?.trim() ? await resolveBranchIdByName(branch.trim()) : null;
+      const orderNumbers = ordersData.map((o) => o.order.orderNumber).filter(Boolean);
+      const customerNames = [
+        ...new Set(ordersData.map((o) => o.customer?.name ?? o.order.customer).filter(Boolean) as string[]),
+      ];
+      const result = await reportTripDelay({
+        tripId: trip.id,
+        tripNumber: trip.tripNumber,
+        branchId,
+        delayReason: text,
+        orderIds: trip.orders.filter(Boolean),
+        orderNumbers,
+        customerNames,
+        owner: employeeName || session?.user?.email || role,
+      });
+      if (!result.ok) {
+        window.alert(result.error ?? 'Could not report delay.');
         return;
       }
       const summary = text.length > 200 ? `${text.slice(0, 200)}…` : text;
@@ -470,7 +525,7 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
     } finally {
       setDelaySaving(false);
     }
-  }, [delayExplanation, trip.id, trip.tripNumber, addAuditLog, onTripStatusChange]);
+  }, [delayExplanation, trip.id, trip.tripNumber, trip.orders, branch, ordersData, employeeName, session, role, addAuditLog, onTripStatusChange]);
 
   // Fetch real orders whenever the modal opens or the trip changes
   useEffect(() => {
@@ -624,7 +679,7 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
                 onClick={() => setShowReportDelayModal(true)}
                 variant="outline"
                 size="sm"
-                className="inline-flex border-amber-300 text-amber-900 hover:bg-amber-50"
+                className="inline-flex border-red-300 text-red-900 hover:bg-red-50"
               >
                 <AlertTriangle className="w-4 h-4 mr-2" />
                 Report Delay
@@ -1160,7 +1215,7 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
           >
             <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-gray-200">
               <h3 id="report-delay-title" className="text-lg font-bold text-gray-900 flex items-center gap-2">
-                <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+                <AlertTriangle className="w-5 h-5 text-red-600 shrink-0" />
                 Report trip delay
               </h3>
               <button
@@ -1187,7 +1242,7 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
                 onChange={(e) => setDelayExplanation(e.target.value)}
                 disabled={delaySaving}
                 placeholder="e.g. Stuck in traffic on SLEX; dispatcher notified. New ETA 4:30 PM."
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 focus:outline-none resize-y min-h-[120px] disabled:opacity-60"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-red-500 focus:border-red-400 focus:outline-none resize-y min-h-[120px] disabled:opacity-60"
               />
             </div>
             <div className="flex flex-col-reverse sm:flex-row justify-end gap-2 px-5 py-4 border-t border-gray-200 bg-gray-50 rounded-b-xl">
@@ -1199,7 +1254,7 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
                 variant="primary"
                 onClick={() => void handleSubmitReportDelay()}
                 disabled={delaySaving}
-                className="bg-amber-600 hover:bg-amber-700 border-amber-600"
+                className="bg-red-600 hover:bg-red-700 border-red-600"
               >
                 {delaySaving ? (
                   <>

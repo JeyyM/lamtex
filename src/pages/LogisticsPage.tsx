@@ -4,6 +4,7 @@ import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagination';
 import {
   DATE_PERIOD_OPTIONS,
@@ -61,7 +62,8 @@ import {
   getOrdersReadyByBranch,
 } from '@/src/mock/logisticsDashboard';
 import {
-  fetchLogisticsPageData,
+  fetchLogisticsOrderQueue,
+  fetchTripsForBranch,
   createTripFromPlanning,
   createContainerShipmentFromPlanning,
   fetchDriversForBranch,
@@ -196,6 +198,7 @@ export function LogisticsPage() {
   const [truckFormEditId, setTruckFormEditId] = useState<string | null>(null);
   const [scheduleTrips, setScheduleTrips] = useState<Trip[]>([]);
   const [planningOrders, setPlanningOrders] = useState<OrderReadyForDispatch[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState(false);
   const [logisticsLoading, setLogisticsLoading] = useState(false);
   const [logisticsFromDb, setLogisticsFromDb] = useState(false);
   const [logisticsLoadError, setLogisticsLoadError] = useState<string | null>(null);
@@ -233,42 +236,54 @@ export function LogisticsPage() {
       setLogisticsFromDb(false);
       setLogisticsLoadError(null);
       setLogisticsLoading(false);
+      setOrdersLoading(false);
       return;
     }
 
     const gen = ++logisticsRefreshGenRef.current;
+    setOrdersLoading(true);
     setLogisticsLoading(true);
     setLogisticsLoadError(null);
     try {
       const vehicleKind = transportType === 'interisland' ? 'container' : 'truck';
-      const data = await withTimeout(
-        fetchLogisticsPageData(branch, vehicleKind),
+
+      // Available orders first — show the planning queue before trips finish loading.
+      const orderQueue = await withTimeout(
+        fetchLogisticsOrderQueue(branch, { vehicleKind }),
         30000,
-        'Logistics',
+        'Available orders',
       );
+      if (gen !== logisticsRefreshGenRef.current) return;
 
-      setPlanningOrders(data.orders);
-      setScheduleTrips(data.trips);
-
-      if (data.ordersError && data.tripsError) {
-        setLogisticsFromDb(false);
-        setLogisticsLoadError(data.ordersError);
+      setPlanningOrders(orderQueue.orders);
+      setLogisticsFromDb(!orderQueue.error);
+      if (orderQueue.error) {
+        setLogisticsLoadError(orderQueue.error);
+        setScheduleTrips([]);
         setTripLowestOrderStatus({});
         setTripOrderStatusMap({});
+        if (import.meta.env.DEV) {
+          console.warn('[logistics] order queue load issue:', orderQueue.error);
+        }
         return;
       }
+      setOrdersLoading(false);
 
-      setLogisticsFromDb(!data.ordersError);
-      setLogisticsLoadError(data.tripsError ?? data.ordersError ?? null);
+      const tripsResult = await withTimeout(
+        fetchTripsForBranch(branch, vehicleKind),
+        30000,
+        'Trips',
+      );
+      if (gen !== logisticsRefreshGenRef.current) return;
 
-      if (data.tripsError && import.meta.env.DEV) {
-        console.warn('[logistics] trips load issue (orders may still be available):', data.tripsError);
+      setScheduleTrips(tripsResult.trips);
+      setLogisticsLoadError(tripsResult.error ?? null);
+
+      if (tripsResult.error && import.meta.env.DEV) {
+        console.warn('[logistics] trips load issue (orders may still be available):', tripsResult.error);
       }
-      if (data.ordersError && import.meta.env.DEV) {
-        console.warn('[logistics] order queue load issue:', data.ordersError);
-      }
 
-      const allOrderIds = [...new Set(data.trips.flatMap((t) => t.orders))];
+      const allOrderIds = [...new Set(tripsResult.trips.flatMap((t) => t.orders))];
       if (allOrderIds.length) {
         const { data: orderRows, error: orderStatusErr } = await supabase
           .from('orders')
@@ -285,7 +300,7 @@ export function LogisticsPage() {
         const RANK: Record<string, number> = { Scheduled: 1, Loading: 2, Packed: 3, Ready: 4, 'In Transit': 5, Delivered: 6, Complete: 7, Delayed: 8, Cancelled: 9 };
         const lowest: Record<string, string> = {};
         const perTripMap: Record<string, Record<string, string>> = {};
-        for (const trip of data.trips) {
+        for (const trip of tripsResult.trips) {
           if (!trip.orders.length) continue;
           let lowestRank = Infinity;
           let lowestSt: string = trip.status;
@@ -319,6 +334,7 @@ export function LogisticsPage() {
     } finally {
       if (gen === logisticsRefreshGenRef.current) {
         setLogisticsLoading(false);
+        setOrdersLoading(false);
       }
     }
   }, [branch, transportType]);
@@ -447,7 +463,7 @@ export function LogisticsPage() {
   const trips = logisticsFromDb ? scheduleTrips : getTripsByBranch(branch ?? '');
   const vehicles = getVehiclesByBranch(branch ?? '');
   const deliveries = getDeliveriesByBranch(branch ?? '');
-  const ordersReady = logisticsFromDb ? planningOrders : getOrdersReadyByBranch(branch ?? '');
+  const ordersReady = liveDispatch ? planningOrders : getOrdersReadyByBranch(branch ?? '');
   const vehiclesForStats = fleetTrucks.length > 0 ? fleetTrucks : vehicles;
 
   const nextFourteenCalendarDays = useMemo(() => {
@@ -747,9 +763,10 @@ export function LogisticsPage() {
       {/* DISPATCH BOARD VIEW */}
       {viewMode === 'dispatch' && (
         <div className="space-y-6 w-full max-w-full">
-          {isInterIsland && liveDispatch && !logisticsLoading && (
+          {isInterIsland && liveDispatch && (
             <ContainerScheduleView
               ordersReady={planningOrders}
+              ordersLoading={ordersLoading}
               containers={fleetTrucks}
               existingTrips={scheduleTrips}
               initialSelectedOrderIds={routePlanningPrefill.orderIds}
@@ -1230,12 +1247,11 @@ export function LogisticsPage() {
         </div>
       )}
 
-      {dispatchPeriodModalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40"
-          role="presentation"
-          onClick={() => setDispatchPeriodModalOpen(false)}
-        >
+      <PortalModalOverlay
+        open={dispatchPeriodModalOpen}
+        onClose={() => setDispatchPeriodModalOpen(false)}
+        mobileBottomSheet
+      >
           <div
             className="bg-white w-full sm:max-w-lg sm:rounded-xl shadow-xl max-h-[90vh] overflow-y-auto"
             role="dialog"
@@ -1324,8 +1340,7 @@ export function LogisticsPage() {
               )}
             </div>
           </div>
-        </div>
-      )}
+      </PortalModalOverlay>
 
       {/* FLEET MANAGEMENT VIEW */}
       {viewMode === 'fleet' && (transportType === 'truck' || isInterIsland) && (
@@ -1571,6 +1586,7 @@ export function LogisticsPage() {
       {viewMode === 'routes' && transportType === 'truck' && (
         <RoutePlanningView
           ordersReady={ordersReady}
+          ordersLoading={ordersLoading}
           vehicles={fleetTrucks.length > 0 ? fleetTrucks : vehicles}
           existingTrips={trips}
           drivers={planningDrivers}
@@ -1579,7 +1595,7 @@ export function LogisticsPage() {
           originLat={branchHq?.lat}
           originLng={branchHq?.lng}
           originTitle={branch?.trim() ? `${branch} (depot)` : 'Depot / branch'}
-          onCreateTrip={async (selectedOrderIds, vehicleId, scheduledDate, driverId) => {
+          onCreateTrip={async (selectedOrderIds, vehicleId, scheduledDates, driverId) => {
             if (!branch?.trim()) {
               window.alert('Select a branch in the header.');
               return undefined;
@@ -1592,7 +1608,7 @@ export function LogisticsPage() {
               branchName: branch,
               vehicleUuid: vehicleId,
               orderUuids: selectedOrderIds,
-              scheduledDate,
+              scheduledDates,
               totalWeightKg: totalWeight,
               totalVolumeCbm: totalVolume,
               driverUuid: driverId ?? null,
@@ -1602,13 +1618,17 @@ export function LogisticsPage() {
               window.alert(res.error ?? 'Could not create trip');
               return undefined;
             }
-            await refreshLogistics();
-            loadFleet();
+            void refreshLogistics();
+            void loadFleet();
             const vehicleList = fleetTrucks.length > 0 ? fleetTrucks : vehicles;
             const v = vehicleList.find((x) => x.id === vehicleId);
+            const sorted = [...new Set(scheduledDates.map((d) => d.trim().slice(0, 10)).filter(Boolean))].sort();
+            const start = sorted[0] ?? '';
+            const end = sorted.length > 1 ? sorted[sorted.length - 1] : undefined;
             return {
               tripNumber: res.tripNumber ?? 'New trip',
-              scheduledDate: scheduledDate.trim().slice(0, 10),
+              scheduledDate: start,
+              scheduledEndDate: end !== start ? end : undefined,
               orderCount: selectedOrderIds.length,
               vehicleName: v?.vehicleName?.trim() ? v.vehicleName : 'Selected truck',
             };
