@@ -544,7 +544,7 @@ export function SupplierDetailPage() {
       ...prev,
       {
         branch_id: branchId,
-        is_primary: prev.length === 0,
+        is_primary: false,
         branches: { name: branchInfo.name, code: branchInfo.code },
       },
     ]);
@@ -720,9 +720,9 @@ export function SupplierDetailPage() {
                     {supplier.supplier_branches.map(sb => (
                       <span
                         key={sb.branch_id}
-                        className={`px-3 py-1 rounded-full text-xs font-medium border ${sb.is_primary ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-gray-50 text-gray-600 border-gray-200'}`}
+                        className="px-3 py-1 rounded-full text-xs font-medium border bg-gray-50 text-gray-600 border-gray-200"
                       >
-                        {sb.branches?.name ?? '?'}{sb.is_primary ? ' (Primary)' : ''}
+                        {sb.branches?.name ?? '?'}
                       </span>
                     ))}
                   </div>
@@ -1134,9 +1134,9 @@ export function SupplierDetailPage() {
                 <div className="space-y-2">
                   {editBranches.length === 0 && <p className="text-sm text-gray-400">No branches assigned.</p>}
                   {editBranches.map(sb => (
-                    <div key={sb.branch_id} className="flex items-center justify-between px-3 py-2 bg-blue-50 border border-blue-100 rounded-lg">
-                      <span className="text-sm font-medium text-blue-800">
-                        {sb.branches?.name ?? '?'}{sb.is_primary ? ' (Primary)' : ''}
+                    <div key={sb.branch_id} className="flex items-center justify-between px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
+                      <span className="text-sm font-medium text-gray-800">
+                        {sb.branches?.name ?? '?'}
                       </span>
                       <button type="button" onClick={() => handleRemoveBranch(sb.branch_id)} className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded">
                         <Trash2 className="w-3.5 h-3.5" />

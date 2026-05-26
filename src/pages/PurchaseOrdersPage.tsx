@@ -23,6 +23,10 @@ import {
   type PurchaseOrderHeaderExportRow,
 } from '@/src/lib/purchaseOrdersExport';
 import {
+  createDraftPurchaseOrder,
+  poLogRoleMap,
+} from '@/src/lib/createDraftPurchaseOrder';
+import {
   ShoppingCart,
   Search,
   Plus,
@@ -68,8 +72,24 @@ interface PORow {
   inter_branch_request_id: string | null;
   suppliers: { name: string } | null;
   branches:  { name: string } | null;
-  purchase_order_items: { id: string }[];
+  purchase_order_items: {
+    id: string;
+    raw_materials: { name: string; brand?: string | null } | null;
+  }[];
 }
+
+const materialDisplayLine = (mat: { name: string; brand?: string | null } | null | undefined): string => {
+  if (!mat?.name) return '';
+  const brand = mat.brand?.trim();
+  return brand ? `${mat.name} · ${brand}` : mat.name;
+};
+
+const poMaterialSummary = (po: PORow): string => {
+  const names = po.purchase_order_items
+    .map((it) => materialDisplayLine(it.raw_materials))
+    .filter(Boolean);
+  return names.length > 0 ? names.join(', ') : '—';
+};
 
 const fmt = (date: string | null) =>
   date ? new Date(date).toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' }) : '—';
@@ -106,17 +126,11 @@ const getStatusIcon = (status: POStatus) => {
   return <FileText className="w-3.5 h-3.5" />;
 };
 
-const poLogRoleMap: Record<string, string> = {
-  Executive:  'Admin',
-  Agent:      'Agent',
-  Warehouse:  'Warehouse Staff',
-  Logistics:  'Logistics',
-  Driver:     'Logistics',
-};
-
 export function PurchaseOrdersPage() {
   const { branch, employeeName, role, session, addAuditLog } = useAppContext();
   const navigate = useNavigate();
+  /** Branch-scoped users (assigned branch or executive branch filter) see material names instead of item counts. */
+  const showMaterialsColumn = Boolean(branch);
 
   const [orders, setOrders]                     = useState<PORow[]>([]);
   const [loading, setLoading]                   = useState(true);
@@ -150,7 +164,7 @@ export function PurchaseOrdersPage() {
           : Promise.resolve({ data: null }),
         supabase
           .from('purchase_orders')
-          .select('*, suppliers(name), branches:branches!branch_id(name), purchase_order_items(id)')
+          .select('*, suppliers(name), branches:branches!branch_id(name), purchase_order_items(id, raw_materials(name, brand))')
           .order('created_at', { ascending: false }),
       ]);
       if (ordersResult.error) throw ordersResult.error;
@@ -256,7 +270,8 @@ export function PurchaseOrdersPage() {
     const matchesSearch =
       po.po_number.toLowerCase().includes(q) ||
       (po.suppliers?.name ?? '').toLowerCase().includes(q) ||
-      (po.branches?.name ?? '').toLowerCase().includes(q);
+      (po.branches?.name ?? '').toLowerCase().includes(q) ||
+      poMaterialSummary(po).toLowerCase().includes(q);
     const matchesStatus = statusFilter === '' || po.status === statusFilter;
     return matchesSearch && matchesStatus;
   });
@@ -285,7 +300,10 @@ export function PurchaseOrdersPage() {
         case 'po_number': av = a.po_number; bv = b.po_number; break;
         case 'order_date': av = a.order_date; bv = b.order_date; break;
         case 'supplier': av = a.suppliers?.name ?? ''; bv = b.suppliers?.name ?? ''; break;
-        case 'items': av = a.purchase_order_items.length; bv = b.purchase_order_items.length; break;
+        case 'items':
+          av = showMaterialsColumn ? poMaterialSummary(a) : a.purchase_order_items.length;
+          bv = showMaterialsColumn ? poMaterialSummary(b) : b.purchase_order_items.length;
+          break;
         case 'amount': av = a.total_amount; bv = b.total_amount; break;
         case 'expected': av = a.expected_delivery_date ?? ''; bv = b.expected_delivery_date ?? ''; break;
         case 'status': av = a.status; bv = b.status; break;
@@ -302,7 +320,7 @@ export function PurchaseOrdersPage() {
       if (as > bs) return poSortDir === 'asc' ? 1 : -1;
       return 0;
     });
-  }, [filtered, poSortKey, poSortDir]);
+  }, [filtered, poSortKey, poSortDir, showMaterialsColumn]);
 
   const poTotalListPages = Math.max(1, Math.ceil(sortedPOs.length / TABLE_PAGE_SIZE) || 1);
   const pagedPOs = useMemo(() => {
@@ -321,11 +339,12 @@ export function PurchaseOrdersPage() {
 
   // ── KPIs ───────────────────────────────────────────────
   const totalPOs     = dateFilteredPurchaseOrders.length;
+  const draftPOs     = dateFilteredPurchaseOrders.filter((po) => po.status === 'Draft').length;
+  const awaitingPOs  = dateFilteredPurchaseOrders.filter((po) => po.status === 'Requested').length;
   const pendingPOs   = dateFilteredPurchaseOrders.filter(po =>
-    ['Requested', 'Accepted', 'Sent', 'Confirmed', 'Partially Received'].includes(po.status)
+    ['Accepted', 'Sent', 'Confirmed', 'Partially Received'].includes(po.status)
   ).length;
   const completedPOs = dateFilteredPurchaseOrders.filter(po => po.status === 'Completed').length;
-  const totalValue   = dateFilteredPurchaseOrders.reduce((s, po) => s + (po.total_amount ?? 0), 0);
 
   const isOverdue = (po: PORow) =>
     po.expected_delivery_date &&
@@ -333,7 +352,7 @@ export function PurchaseOrdersPage() {
     new Date(po.expected_delivery_date) < new Date() &&
     !['Completed', 'Cancelled', 'Requested', 'Rejected', 'Accepted', 'Draft'].includes(po.status);
 
-  // ── New PO: worker request (status Requested) ───────────
+  // ── New PO: empty shell as Draft (same pattern as customer orders / production requests) ──
   const handleNewPO = async () => {
     setCreating(true);
     try {
@@ -342,34 +361,12 @@ export function PurchaseOrdersPage() {
         const { data: bd } = await supabase.from('branches').select('id').eq('name', branch).single();
         branchId = bd?.id ?? null;
       }
-      const poNumber  = `PO-${Date.now()}`;
-      const actor     = employeeName || session?.user?.email || 'User';
-      const { data, error: err } = await supabase
-        .from('purchase_orders')
-        .insert({
-          po_number:   poNumber,
-          branch_id:  branchId,
-          status:     'Requested',
-          order_date: new Date().toISOString().split('T')[0],
-          total_amount: 0,
-          created_by:  actor,
-        })
-        .select('id')
-        .single();
-      if (err) throw err;
+      const actor = employeeName || session?.user?.email || 'User';
       const logRole = poLogRoleMap[role] ?? 'System';
-      const { error: logErr } = await supabase.from('purchase_order_logs').insert({
-        order_id:         data.id,
-        action:           'requested',
-        performed_by:     actor,
-        performed_by_role: logRole,
-        description:     'Purchase order requested',
-        metadata:         { po_number: poNumber },
-      });
-      if (logErr && import.meta.env.DEV) console.warn('[PO request log]', logErr.message);
-      navigate(`/purchase-orders/${data.id}`);
-    } catch (e: any) {
-      alert(e.message);
+      const { id } = await createDraftPurchaseOrder({ branchId, actor, logRole });
+      navigate(`/purchase-orders/${id}`);
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : 'Failed to create purchase order');
     } finally {
       setCreating(false);
     }
@@ -422,10 +419,16 @@ export function PurchaseOrdersPage() {
 
       {/* ── KPI Cards ── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatKpiCard label="Total POs" value={String(totalPOs)} tone="blue" icon={<ShoppingCart />} />
-        <StatKpiCard label="In Progress" value={String(pendingPOs)} tone="amber" icon={<Clock />} />
+        <StatKpiCard
+          label="Total POs"
+          value={String(totalPOs)}
+          tone="blue"
+          icon={<ShoppingCart />}
+          sub={draftPOs > 0 ? `Draft: ${draftPOs}` : undefined}
+        />
+        <StatKpiCard label="Pending approval" value={String(awaitingPOs)} tone="amber" icon={<ClipboardList />} />
+        <StatKpiCard label="In progress" value={String(pendingPOs)} tone="orange" icon={<Clock />} />
         <StatKpiCard label="Completed" value={String(completedPOs)} tone="emerald" icon={<CheckCircle />} />
-        <StatKpiCard label="Total Value" value={`₱${(totalValue / 1_000_000).toFixed(1)}M`} tone="violet" icon={<FileText />} />
       </div>
 
       {/* ── Filters ── */}
@@ -436,7 +439,7 @@ export function PurchaseOrdersPage() {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
               <input
                 type="text"
-                placeholder="Search by PO number or supplier…"
+                placeholder={showMaterialsColumn ? 'Search by PO number, supplier, or material…' : 'Search by PO number or supplier…'}
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
                 className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
@@ -569,7 +572,12 @@ export function PurchaseOrdersPage() {
                           {fmt(po.expected_delivery_date)}{isOverdue(po) ? ' ⚠' : ''}
                         </p>
                       </div>
-                      <div><p className="text-gray-500">Items</p><p className="font-medium">{po.purchase_order_items.length}</p></div>
+                      <div>
+                        <p className="text-gray-500">{showMaterialsColumn ? 'Materials' : 'Items'}</p>
+                        <p className={`font-medium ${showMaterialsColumn ? 'text-gray-900 line-clamp-2' : ''}`}>
+                          {showMaterialsColumn ? poMaterialSummary(po) : po.purchase_order_items.length}
+                        </p>
+                      </div>
                       <div><p className="text-gray-500">Amount</p><p className="font-medium">₱{po.total_amount.toLocaleString()}</p></div>
                     </div>
                   </Link>
@@ -590,8 +598,8 @@ export function PurchaseOrdersPage() {
                       <th onClick={() => handlePOSort('supplier')} className="px-6 py-3 text-left font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
                         <span className="inline-flex items-center">Supplier{poSortIcon('supplier')}</span>
                       </th>
-                      <th onClick={() => handlePOSort('items')} className="px-6 py-3 text-left font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
-                        <span className="inline-flex items-center">Items{poSortIcon('items')}</span>
+                      <th onClick={() => handlePOSort('items')} className="px-6 py-3 text-left font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900 min-w-[10rem]">
+                        <span className="inline-flex items-center">{showMaterialsColumn ? 'Materials' : 'Items'}{poSortIcon('items')}</span>
                       </th>
                       <th onClick={() => handlePOSort('amount')} className="px-6 py-3 text-left font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
                         <span className="inline-flex items-center">Amount{poSortIcon('amount')}</span>
@@ -641,8 +649,13 @@ export function PurchaseOrdersPage() {
                           <span className={TABLE_ROW_CELL_CONTENT}>{po.suppliers?.name ?? '—'}</span>
                           {rowOverlay({})}
                         </td>
-                        <td className="relative px-6 py-4 align-top text-gray-600 tabular-nums">
-                          <span className={TABLE_ROW_CELL_CONTENT}>{po.purchase_order_items.length}</span>
+                        <td className="relative px-6 py-4 align-top text-gray-600">
+                          <span
+                            className={`${TABLE_ROW_CELL_CONTENT} ${showMaterialsColumn ? 'text-gray-900 line-clamp-2' : 'tabular-nums'}`}
+                            title={showMaterialsColumn ? poMaterialSummary(po) : undefined}
+                          >
+                            {showMaterialsColumn ? poMaterialSummary(po) : po.purchase_order_items.length}
+                          </span>
                           {rowOverlay({})}
                         </td>
                         <td className="relative px-6 py-4 align-top font-medium text-gray-900">

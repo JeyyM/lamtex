@@ -59,7 +59,6 @@ import {
   CartesianGrid,
   Tooltip,
   Legend,
-  ResponsiveContainer,
   PieChart,
   Pie,
   Cell,
@@ -1820,9 +1819,10 @@ export function ReportsPage(): React.ReactElement {
                 {categoryChartData.length === 0 ? (
                   <p className="text-sm text-gray-500 py-8 text-center">No category sales in period.</p>
                 ) : (
-                  <div className="h-52 w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
+                  <ReportsChartFrame
+                    height={208}
+                    render={({ width, height }) => (
+                      <PieChart width={width} height={height}>
                         <Pie
                           data={categoryChartData}
                           dataKey="value"
@@ -1840,8 +1840,8 @@ export function ReportsPage(): React.ReactElement {
                         <Tooltip formatter={(v: number) => formatReportsPesoFull(v)} />
                         <Legend wrapperStyle={{ fontSize: 11 }} />
                       </PieChart>
-                    </ResponsiveContainer>
-                  </div>
+                    )}
+                  />
                 )}
               </CardContent>
             </Card>
@@ -1963,9 +1963,10 @@ export function ReportsPage(): React.ReactElement {
               {salesSeries.length === 0 ? (
                 <p className="text-sm text-gray-500 py-8 text-center">No sales in selected period.</p>
               ) : (
-                <div className="h-80">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <ComposedChart data={salesSeries}>
+                <ReportsChartFrame
+                  height={320}
+                  render={({ width, height }) => (
+                    <ComposedChart width={width} height={height} data={salesSeries}>
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis dataKey="period" tick={{ fontSize: 11 }} angle={-20} textAnchor="end" height={60} />
                       <YAxis yAxisId="left" tickFormatter={(v) => formatReportsPeso(v as number)} />
@@ -1978,8 +1979,8 @@ export function ReportsPage(): React.ReactElement {
                       <Line yAxisId="left" type="monotone" dataKey="orders" name="Orders" stroke="#3B82F6" />
                       <Bar yAxisId="right" dataKey="growth" name="Growth %" fill="#F59E0B" />
                     </ComposedChart>
-                  </ResponsiveContainer>
-                </div>
+                  )}
+                />
               )}
             </CardContent>
           </Card>
@@ -2000,9 +2001,10 @@ export function ReportsPage(): React.ReactElement {
                 {branchRevenuePie.length === 0 ? (
                   <p className="text-sm text-gray-500 py-12 text-center">No branch revenue in this period.</p>
                 ) : (
-                  <div className="h-64">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
+                  <ReportsChartFrame
+                    height={256}
+                    render={({ width, height }) => (
+                      <PieChart width={width} height={height}>
                         <Pie
                           data={branchRevenuePie}
                           dataKey="value"
@@ -2026,8 +2028,8 @@ export function ReportsPage(): React.ReactElement {
                         </Pie>
                         <Tooltip formatter={(v: number) => formatReportsPesoFull(v)} />
                       </PieChart>
-                    </ResponsiveContainer>
-                  </div>
+                    )}
+                  />
                 )}
               </CardContent>
             </Card>
@@ -2044,9 +2046,10 @@ export function ReportsPage(): React.ReactElement {
                 {aovTrendData.length === 0 ? (
                   <p className="text-sm text-gray-500 py-12 text-center">No order data in this period.</p>
                 ) : (
-                  <div className="h-64">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <ComposedChart data={aovTrendData}>
+                  <ReportsChartFrame
+                    height={256}
+                    render={({ width, height }) => (
+                      <ComposedChart width={width} height={height} data={aovTrendData}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                         <XAxis dataKey="period" tick={{ fontSize: 11 }} />
                         <YAxis
@@ -2069,8 +2072,8 @@ export function ReportsPage(): React.ReactElement {
                           dot={{ r: 3, fill: '#8B5CF6' }}
                         />
                       </ComposedChart>
-                    </ResponsiveContainer>
-                  </div>
+                    )}
+                  />
                 )}
               </CardContent>
             </Card>
@@ -2446,9 +2449,10 @@ export function ReportsPage(): React.ReactElement {
                   <CardTitle>Agent performance vs target</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="h-72">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={agentChartRows} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                  <ReportsChartFrame
+                    height={288}
+                    render={({ width, height }) => (
+                      <BarChart width={width} height={height} data={agentChartRows} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                         <CartesianGrid strokeDasharray="3 3" vertical={false} />
                         <XAxis dataKey="name" tick={{ fontSize: 10 }} interval={0} angle={-25} textAnchor="end" height={56} />
                         <YAxis
@@ -2470,8 +2474,8 @@ export function ReportsPage(): React.ReactElement {
                           ))}
                         </Bar>
                       </BarChart>
-                    </ResponsiveContainer>
-                  </div>
+                    )}
+                  />
                 </CardContent>
               </Card>
 
@@ -2480,9 +2484,12 @@ export function ReportsPage(): React.ReactElement {
                   <CardTitle>Sales by agent</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="h-72">
-                    <ResponsiveContainer width="100%" height="100%">
+                  <ReportsChartFrame
+                    height={288}
+                    render={({ width, height }) => (
                       <BarChart
+                        width={width}
+                        height={height}
                         data={agentSalesChartRows}
                         layout="vertical"
                         margin={{ left: 4, right: 16, top: 4, bottom: 4 }}
@@ -2506,8 +2513,8 @@ export function ReportsPage(): React.ReactElement {
                           ))}
                         </Bar>
                       </BarChart>
-                    </ResponsiveContainer>
-                  </div>
+                    )}
+                  />
                 </CardContent>
               </Card>
             </div>
@@ -4080,9 +4087,10 @@ export function ReportsPage(): React.ReactElement {
                 {tripStatusChart.length === 0 ? (
                   <p className="text-sm text-gray-500 py-8 text-center">No trips in this period.</p>
                 ) : (
-                  <div className="h-64">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
+                  <ReportsChartFrame
+                    height={256}
+                    render={({ width, height }) => (
+                      <PieChart width={width} height={height}>
                         <Pie
                           data={tripStatusChart}
                           dataKey="value"
@@ -4100,8 +4108,8 @@ export function ReportsPage(): React.ReactElement {
                         <Tooltip />
                         <Legend wrapperStyle={{ fontSize: 11 }} />
                       </PieChart>
-                    </ResponsiveContainer>
-                  </div>
+                    )}
+                  />
                 )}
               </CardContent>
             </Card>
@@ -4368,10 +4376,11 @@ function ReportsRevenueTrendCard(props: {
         ) : showCompare && compareEmpty ? (
           <p className="text-sm text-gray-500 py-8 text-center">No branch revenue data for the last 6 months.</p>
         ) : (
-          <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              {showCompare ? (
-                <ComposedChart data={compareChartData}>
+          <ReportsChartFrame
+            height={288}
+            render={({ width, height }) =>
+              showCompare ? (
+                <ComposedChart width={width} height={height} data={compareChartData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                   <XAxis dataKey="label" tick={{ fontSize: 11 }} />
                   <YAxis
@@ -4417,7 +4426,7 @@ function ReportsRevenueTrendCard(props: {
                   />
                 </ComposedChart>
               ) : (
-                <ComposedChart data={props.scopedTrend}>
+                <ComposedChart width={width} height={height} data={props.scopedTrend}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                   <XAxis dataKey="label" tick={{ fontSize: 11 }} />
                   <YAxis
@@ -4458,9 +4467,9 @@ function ReportsRevenueTrendCard(props: {
                     activeDot={{ r: 5 }}
                   />
                 </ComposedChart>
-              )}
-            </ResponsiveContainer>
-          </div>
+              )
+            }
+          />
         )}
       </CardContent>
     </Card>

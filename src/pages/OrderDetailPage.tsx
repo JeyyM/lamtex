@@ -4,12 +4,36 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Ca
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { supabase } from '@/src/lib/supabase';
+import {
+  buildOrderCancelledNotifyPayload,
+  buildOrderCustomerApprovedNotifyPayload,
+  buildOrderDecisionNotifyPayload,
+  buildOrderLogisticsReadyNotifyPayload,
+  buildOrderNotifyPayload,
+  buildOrderRevisedNotifyPayload,
+  notifyAgentOrderApproved,
+  notifyAgentOrderRejected,
+  notifyCustomerOrderApproved,
+  notifyExecutivesOrderRevised,
+  notifyExecutivesOrderSubmittedForApproval,
+  notifyLogisticsOrderReadyForSchedule,
+  notifyLogisticsOrderLoading,
+  notifyOrderPacked,
+  notifyOrderInTransit,
+  notifyOrderDeliveryRecorded,
+  notifyOrderCancelled,
+  attachOrderDeliveryProofsAndNotify,
+  notifyAgentOrderProofUploaded,
+  notifyOrderPaymentProofRecorded,
+} from '@/src/lib/notifications/notificationsData';
+import { deductVariantBranchStock } from '@/src/lib/productVariantStock';
 import { useAppContext } from '@/src/store/AppContext';
 import { orderCatalogBranch } from '@/src/lib/inventoryAccess';
 import { branchHasShippingContainers } from '@/src/lib/fleetContainers';
 import {
   releaseOrderFromActiveTrips,
   shouldReleaseOrderFromTrips,
+  tryCompleteTripsForDeliveredOrder,
 } from '@/src/lib/logisticsScheduling';
 import { OrderDetail, OrderStatus, OrderLineItem, OrderLog, ProofDocument, OrderUrgency, DeliveryType } from '@/src/types/orders';
 import { PaymentLink } from '@/src/types/payments';
@@ -18,6 +42,7 @@ import { OrderCustomerPortalCard } from '@/src/components/orders/OrderCustomerPo
 import {
   FulfillOrderModal,
   FulfillmentData,
+  DeliveryProofDetails,
   fulfillmentRemaining,
 } from '@/src/components/orders/FulfillOrderModal';
 import { MarkInTransitModal } from '@/src/components/orders/MarkInTransitModal';
@@ -54,6 +79,7 @@ import {
   Download,
   Upload,
   Image,
+  Check,
   CheckCircle2,
   XCircle,
   Link as LinkIcon,
@@ -63,7 +89,14 @@ import {
   PackageCheck,
   Receipt,
   Route,
+  Wallet,
 } from 'lucide-react';
+import { proofRequiresCommissionPayout } from '@/src/lib/orderCommissionCompletion';
+import {
+  markProofCommissionPaid,
+  markAllProofCommissionsPaidForOrder,
+} from '@/src/lib/financeMutations';
+import { computeProofCommissionForClientType } from '@/src/lib/financeData';
 import {
   ORDER_PROOF_GALLERY_FOLDER,
   proofRowToDocument,
@@ -79,6 +112,7 @@ import {
   uploadOrderProofBinary,
   tryExtractStoragePathFromPublicUrl,
 } from '@/src/lib/orderProofPayments';
+import { orderStatusBadgeVariant, paymentStatusBadgeVariant } from '@/src/lib/orderStatusBadges';
 import { deriveOrderDueDateForPersistence, parseProofNotes } from '@/src/lib/financeData';
 import { cumulativeShippedForLine, remainingToShipForLine } from '@/src/lib/orderShipmentQuantities';
 
@@ -112,7 +146,7 @@ function isPersistedOrderLineId(id: string): boolean {
 export function OrderDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { branch, addAuditLog, role, session, employeeName, setHideBranchSelector, setBranch } = useAppContext();
+  const { branch, addAuditLog, role, session, employeeName, employeeId, isExecutiveUser, setHideBranchSelector, setBranch } = useAppContext();
   const [isEditing, setIsEditing] = useState(false);
   const [editedOrder, setEditedOrder] = useState<OrderDetail | null>(null);
 
@@ -124,6 +158,7 @@ export function OrderDetailPage() {
   const [selectedCategory, setSelectedCategory] = useState<DBCategoryDet | null>(null);
   const [categoryProducts, setCategoryProducts] = useState<DBProductDet[]>([]);
   const [productsLoading, setProductsLoading] = useState(false);
+  const [productsLoadError, setProductsLoadError] = useState<string | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<DBProductDet | null>(null);
   const [selectedVariant, setSelectedVariant] = useState<DBVariantDet | null>(null);
   /** String fields so quantity/price/% can be cleared while editing; validated on Add/Update. */
@@ -171,6 +206,9 @@ export function OrderDetailPage() {
   const [showPaymentLinkModal, setShowPaymentLinkModal] = useState(false);
   const [paymentLinks, setPaymentLinks] = useState<PaymentLink[]>([]);
   const [customerEmail, setCustomerEmail] = useState<string | null>(null);
+  const [customerClientType, setCustomerClientType] = useState<string>('Office');
+  const [releasingCommissionProofId, setReleasingCommissionProofId] = useState<string | null>(null);
+  const [markingAllCommissions, setMarkingAllCommissions] = useState(false);
 
   // Approve / Reject modal state
   const [showApproveModal, setShowApproveModal] = useState(false);
@@ -185,23 +223,30 @@ export function OrderDetailPage() {
   /** Inline delivery input drafts keyed by line item id. */
   const [deliveredDrafts, setDeliveredDrafts] = useState<Record<string, string>>({});
 
+  const patchLineItemDelivered = (itemId: string, quantityDelivered: number) => {
+    const apply = (items: OrderLineItem[]) =>
+      items.map((i) => (i.id === itemId ? { ...i, quantityDelivered } : i));
+    setOrder((prev) => (prev ? { ...prev, items: apply(prev.items) } : prev));
+    setEditedOrder((prev) => (prev ? { ...prev, items: apply(prev.items) } : prev));
+    setDeliveredDrafts((prev) => {
+      const next = { ...prev };
+      delete next[itemId];
+      return next;
+    });
+  };
+
   const saveDelivered = async (itemId: string, raw: string, max: number) => {
     const val = Math.max(0, Math.min(Math.round(Number(raw) || 0), max));
     const { error } = await supabase
       .from('order_line_items')
       .update({ quantity_delivered: val, updated_at: new Date().toISOString() })
       .eq('id', itemId);
-    if (error) { console.error(error); return; }
-    setOrder((prev) =>
-      prev
-        ? {
-            ...prev,
-            items: prev.items.map((i) =>
-              i.id === itemId ? { ...i, quantityDelivered: val } : i,
-            ),
-          }
-        : prev,
-    );
+    if (error) {
+      console.error(error);
+      alert('Could not save delivered quantity: ' + error.message);
+      return;
+    }
+    patchLineItemDelivered(itemId, val);
   };
 
   const [showInTransitModal, setShowInTransitModal] = useState(false);
@@ -218,9 +263,12 @@ export function OrderDetailPage() {
   >([]);
   const [loading, setLoading] = useState(true);
   const [customerList, setCustomerList] = useState<
-    { id: string; name: string; email: string | null; contact_person: string | null }[]
+    { id: string; name: string; contact_person: string | null }[]
   >([]);
+  const [customersLoading, setCustomersLoading] = useState(false);
   const [customerSearchQuery, setCustomerSearchQuery] = useState('');
+  const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
+  const customerSearchRef = useRef<HTMLDivElement>(null);
   const [agentList, setAgentList] = useState<
     { id: string; employee_name: string; employee_id: string; branch_name?: string }[]
   >([]);
@@ -244,10 +292,12 @@ export function OrderDetailPage() {
 
   useEffect(() => {
     if (!isEditing) return;
+    if (showProductModal) return;
     setCategories([]);
     setSelectedCategory(null);
     setCategoryProducts([]);
-  }, [catalogBranch, isEditing]);
+    setProductsLoadError(null);
+  }, [catalogBranch, isEditing, showProductModal]);
 
   const patchEditedOrder = (patch: Partial<OrderDetail> | ((prev: OrderDetail) => Partial<OrderDetail>)) => {
     setEditedOrder((prev) => {
@@ -335,12 +385,14 @@ export function OrderDetailPage() {
       if (customerId) {
         const { data: custRow } = await supabase
           .from('customers')
-          .select('email')
+          .select('email, client_type')
           .eq('id', customerId)
           .maybeSingle();
         setCustomerEmail((custRow as { email?: string | null } | null)?.email ?? null);
+        setCustomerClientType(String((custRow as { client_type?: string | null } | null)?.client_type ?? 'Office'));
       } else {
         setCustomerEmail(null);
+        setCustomerClientType('Office');
       }
 
       // Fetch line items
@@ -526,11 +578,14 @@ export function OrderDetailPage() {
   useEffect(() => {
     if (!isEditing) {
       setCustomerSearchQuery('');
+      setShowCustomerDropdown(false);
       setCustomerList([]);
+      setCustomersLoading(false);
       return;
     }
 
     let cancelled = false;
+    setCustomersLoading(true);
     void (async () => {
       let branchUuid: string | null =
         typeof editedOrder?.branchId === 'string' && editedOrder.branchId.trim() !== ''
@@ -546,12 +601,15 @@ export function OrderDetailPage() {
         }
       }
       if (!branchUuid) {
-        if (!cancelled) setCustomerList([]);
+        if (!cancelled) {
+          setCustomerList([]);
+          setCustomersLoading(false);
+        }
         return;
       }
       const { data, error } = await supabase
         .from('customers')
-        .select('id, name, email, contact_person')
+        .select('id, name, contact_person')
         .eq('status', 'Active')
         .eq('branch_id', branchUuid)
         .order('name')
@@ -559,16 +617,16 @@ export function OrderDetailPage() {
       if (!cancelled) {
         setCustomerList(
           !error && data
-            ? (data as { id: string; name: string; email?: string | null; contact_person?: string | null }[]).map(
+            ? (data as { id: string; name: string; contact_person?: string | null }[]).map(
                 (r) => ({
                   id: r.id,
                   name: String(r.name ?? ''),
-                  email: r.email ?? null,
                   contact_person: r.contact_person ?? null,
                 }),
               )
             : [],
         );
+        setCustomersLoading(false);
       }
     })();
 
@@ -633,6 +691,12 @@ export function OrderDetailPage() {
       setAgentList(agents);
     })();
   }, [isEditing, branchIdForAgents, agentIdForAgentList]);
+
+  useEffect(() => {
+    if (!isEditing || !editedOrder || isExecutiveUser || !employeeId) return;
+    if (editedOrder.agentId?.trim()) return;
+    patchEditedOrder({ agentId: employeeId, agent: employeeName || editedOrder.agent });
+  }, [isEditing, editedOrder, isExecutiveUser, employeeId, employeeName]);
 
   useEffect(() => {
     if (!isEditing || !order) return;
@@ -758,22 +822,36 @@ export function OrderDetailPage() {
 
   const filteredCustomersForSelect = useMemo(() => {
     const q = customerSearchQuery.trim().toLowerCase();
-    let rows = customerList;
-    if (q) {
-      rows = customerList.filter(
-        (c) =>
-          c.name.toLowerCase().includes(q) ||
-          (c.email ?? '').toLowerCase().includes(q) ||
-          (c.contact_person ?? '').toLowerCase().includes(q),
-      );
-    }
-    const selId = editedOrder?.customerId?.trim();
-    if (selId && !rows.some((c) => c.id === selId)) {
-      const sel = customerList.find((c) => c.id === selId);
-      if (sel) rows = [sel, ...rows];
-    }
-    return rows;
-  }, [customerList, customerSearchQuery, editedOrder?.customerId]);
+    const rows = !q
+      ? customerList
+      : customerList.filter(
+          (c) =>
+            c.name.toLowerCase().includes(q) ||
+            (c.contact_person ?? '').toLowerCase().includes(q),
+        );
+    return rows.slice(0, 50);
+  }, [customerList, customerSearchQuery]);
+
+  useEffect(() => {
+    if (!showCustomerDropdown) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (customerSearchRef.current && !customerSearchRef.current.contains(e.target as Node)) {
+        setShowCustomerDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [showCustomerDropdown]);
+
+  const handleSelectCustomerForOrder = (c: {
+    id: string;
+    name: string;
+    contact_person: string | null;
+  }) => {
+    patchEditedOrder({ customerId: c.id, customer: c.name });
+    setCustomerSearchQuery('');
+    setShowCustomerDropdown(false);
+  };
 
   // ── Order log helper ──────────────────────────────────────────────────────
   // Maps UserRole → order_log_role enum
@@ -951,6 +1029,11 @@ export function OrderDetailPage() {
         if (logisticsDueDate) n.dueDate = logisticsDueDate;
         return n;
       });
+      if (next === 'Loading') {
+        void notifyLogisticsOrderLoading(id, { markedBy: employeeName?.trim() || null }).catch((notifyErr) => {
+          console.warn('[OrderDetailPage] logistics loading notification failed', notifyErr);
+        });
+      }
       return true;
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : 'Update failed');
@@ -1031,26 +1114,18 @@ export function OrderDetailPage() {
           if (!pvs) {
             throw new Error(`No inventory row for “${l.productName}” at this branch.`);
           }
-          const newBranch = Math.max(0, Number(pvs.quantity) - ship);
-          const { error: u1 } = await supabase
-            .from('product_variant_stock')
-            .update({ quantity: newBranch, updated_at: new Date().toISOString() })
-            .eq('id', pvs.id);
-          if (u1) throw u1;
+
+          await deductVariantBranchStock({
+            variantId: l.variantId,
+            branchId,
+            quantity: ship,
+          });
 
           const { data: vrow } = await supabase
             .from('product_variants')
-            .select('total_stock, sku')
+            .select('sku')
             .eq('id', l.variantId)
             .single();
-          if (vrow) {
-            const newTotal = Math.max(0, Number(vrow.total_stock ?? 0) - ship);
-            const { error: u2 } = await supabase
-              .from('product_variants')
-              .update({ total_stock: newTotal, updated_at: new Date().toISOString() })
-              .eq('id', l.variantId);
-            if (u2) throw u2;
-          }
 
           const { error: mErr } = await supabase.from('product_stock_movements').insert({
             variant_id: l.variantId,
@@ -1130,6 +1205,15 @@ export function OrderDetailPage() {
         'Order',
         `Order ${order.id} — ${nextOrderStatus} with stock move`,
       );
+      if (nextOrderStatus === 'Packed') {
+        void notifyOrderPacked(id, { markedBy: employeeName?.trim() || null }).catch((notifyErr) => {
+          console.warn('[OrderDetailPage] order packed notification failed', notifyErr);
+        });
+      } else if (nextOrderStatus === 'In Transit') {
+        void notifyOrderInTransit(id, { markedBy: employeeName?.trim() || null }).catch((notifyErr) => {
+          console.warn('[OrderDetailPage] order in transit notification failed', notifyErr);
+        });
+      }
     } catch (e: unknown) {
       const msg =
         e && typeof e === 'object' && 'message' in e && typeof (e as { message: unknown }).message === 'string'
@@ -1250,21 +1334,9 @@ export function OrderDetailPage() {
     );
   }
 
-  const getStatusBadgeVariant = (status: OrderStatus): 'success' | 'warning' | 'danger' | 'info' | 'neutral' => {
-    if (['Delivered', 'Approved'].includes(status)) return 'success';
-    if (['Pending', 'Scheduled', 'Loading', 'Packed', 'Ready'].includes(status)) return 'warning';
-    if (['Rejected', 'Cancelled'].includes(status)) return 'danger';
-    if (['In Transit', 'Partially Fulfilled'].includes(status)) return 'info';
-    return 'neutral';
-  };
+  const getStatusBadgeVariant = (status: OrderStatus) => orderStatusBadgeVariant(status);
 
-  const getPaymentBadgeVariant = (status: string): 'success' | 'warning' | 'danger' | 'neutral' => {
-    if (status === 'Paid') return 'success';
-    if (status === 'On Credit') return 'success';
-    if (status === 'Overdue') return 'danger';
-    if (['Partially Paid', 'Invoiced'].includes(status)) return 'warning';
-    return 'neutral';
-  };
+  const getPaymentBadgeVariant = (status: string) => paymentStatusBadgeVariant(status);
 
   const getUrgencyBadgeVariant = (
     u: OrderUrgency | undefined,
@@ -1285,7 +1357,17 @@ export function OrderDetailPage() {
   const handleEdit = () => {
     setSaveSuccessVisible(false);
     setIsEditing(true);
-    setEditedOrder({ ...order, items: [...order.items] });
+    let next: OrderDetail = {
+      ...order,
+      items: order.items.map((item) => ({ ...item })),
+    };
+    if (!isExecutiveUser && employeeId) {
+      if (!next.agentId?.trim()) {
+        next = { ...next, agentId: employeeId, agent: employeeName || next.agent };
+      }
+    }
+    setEditedOrder(next);
+    setDeliveredDrafts({});
     addAuditLog('Started Edit Order', 'Order', `Started editing order ${order.id}`);
   };
 
@@ -1293,16 +1375,69 @@ export function OrderDetailPage() {
     if (saveSubmitting) return;
     setIsEditing(false);
     setEditedOrder(null);
+    setDeliveredDrafts({});
   };
 
-  const handleResubmit = () => {
-    if (order.status === 'Rejected') {
-      alert(`Resubmitting order ${order.id} for approval`);
-      addAuditLog('Resubmitted Order', 'Order', `Resubmitted order ${order.id} after revision`);
+  const handleResubmit = async () => {
+    if (!order || !id || order.status !== 'Rejected') return;
+    const hasCustomer =
+      (order.customerId && order.customerId.length > 0) ||
+      (order.customer && order.customer.trim().length > 0);
+    if (!hasCustomer) {
+      alert('Choose a customer before resubmitting (Edit order → save, then Resubmit).');
+      return;
+    }
+    if (order.items.length === 0) {
+      alert('Add at least one product line before resubmitting.');
+      return;
+    }
+    setApprovalLoading(true);
+    const previousRejectionReason = order.rejectionReason ?? null;
+    try {
+      const { error } = await supabase
+        .from('orders')
+        .update({
+          status: 'Pending',
+          approved_by: null,
+          approved_date: null,
+          rejected_by: null,
+          rejection_reason: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', id);
+      if (error) throw error;
+      await insertOrderLog(
+        'status_changed',
+        'Revised and resubmitted: Rejected → Pending',
+        { status: 'Rejected', rejection_reason: previousRejectionReason },
+        { status: 'Pending' },
+      );
+      setOrder({
+        ...order,
+        status: 'Pending',
+        approvedBy: undefined,
+        approvedDate: undefined,
+        rejectedBy: undefined,
+        rejectionReason: undefined,
+      });
+      addAuditLog('Resubmitted Order', 'Order', `Revised and resubmitted order ${order.id} after rejection`);
+      void notifyExecutivesOrderRevised(
+        buildOrderRevisedNotifyPayload({ ...order, status: 'Pending' }, id, { previousRejectionReason }),
+      ).catch((notifyErr) => {
+        console.warn('[OrderDetailPage] revised order notification failed', notifyErr);
+      });
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : 'Failed to resubmit');
+    } finally {
+      setApprovalLoading(false);
     }
   };
 
-  const handleFulfillOrder = async (fulfillmentData: FulfillmentData[], proofImageUrls: string[] = []) => {
+  const handleFulfillOrder = async (
+    fulfillmentData: FulfillmentData[],
+    proofImageUrls: string[] = [],
+    proofDetails?: DeliveryProofDetails,
+  ) => {
     if (!order || !id) return;
 
     if (fulfillmentData.some((f) => !isPersistedOrderLineId(f.itemId))) {
@@ -1385,50 +1520,31 @@ export function OrderDetailPage() {
     if (proofImageUrls.length > 0) {
       const uploaderRole: ProofDocument['uploadedByRole'] =
         role === 'Logistics' || role === 'Driver' ? 'Logistics' : 'Agent';
-      const rows = proofImageUrls.map((fileUrl) => {
-        const raw = fileUrl.split('/').pop()?.split('?')[0] ?? 'image';
-        let fileName = raw;
-        try {
-          fileName = decodeURIComponent(raw);
-        } catch {
-          fileName = raw;
-        }
-        return {
-          order_id: id,
-          type: 'delivery' as const,
-          file_name: fileName,
-          file_url: fileUrl,
-          file_size: 0,
-          uploaded_by: actorLabel,
-          uploaded_by_role: uploaderRole,
-          status: 'verified' as const,
-          title: `Delivery — ${fileName}`,
-          notes: 'Recorded with delivery (gallery)',
-          payment_cash_amount: 0,
-          payment_credit_amount: 0,
-          payment_adjustment: 0,
-        };
+      const proofResult = await attachOrderDeliveryProofsAndNotify(id, proofImageUrls, {
+        uploadedBy: actorLabel,
+        uploadedByRole: uploaderRole,
+        title: proofDetails?.title ?? null,
+        notes: proofDetails?.notes ?? null,
+        uploaderEmployeeId: employeeId,
       });
-      const { error: pErr } = await insertOrderProofDocuments(rows);
-      if (pErr) {
-        console.error(pErr);
-        alert('Delivery saved but proof files could not be stored: ' + pErr);
-      } else {
-        const names = rows.map((r) => r.file_name).join(', ');
-        await insertOrderLog(
-          'proof_uploaded',
-          `Proof of delivery: ${proofImageUrls.length} image(s) — ${names}`,
-          null,
-          null,
-          { count: proofImageUrls.length, fileNames: names, source: 'image_gallery' },
-        );
-        addAuditLog(
-          'Proof of Delivery',
-          'Order',
-          `Attached ${proofImageUrls.length} image(s) with delivery for order ${order.id}`,
-        );
-        await reloadProofsFromDb(order.id);
+      if (!proofResult.ok) {
+        throw new Error(`Delivery saved but proof files could not be stored: ${proofResult.error ?? 'Unknown error'}`);
       }
+      const names = proofImageUrls.map((url) => url.split('/').pop()?.split('?')[0] ?? 'image').join(', ');
+      await insertOrderLog(
+        'proof_uploaded',
+        `Proof of delivery: ${proofImageUrls.length} image(s) — ${names}`,
+        null,
+        null,
+        { count: proofImageUrls.length, fileNames: names, source: 'delivery_record' },
+      );
+      addAuditLog(
+        'Proof of Delivery',
+        'Order',
+        `Attached ${proofImageUrls.length} image(s) with delivery for order ${order.id}`,
+      );
+      await reloadProofsFromDb(order.id);
+      setDocumentsProofTab('delivery');
     }
 
     setOrder({
@@ -1441,7 +1557,32 @@ export function OrderDetailPage() {
       }),
       ...(isOrderDeliveryComplete ? { actualDelivery: now } : {}),
     });
+    setEditedOrder((prev) =>
+      prev
+        ? {
+            ...prev,
+            status: newStatus,
+            items: prev.items.map((l) => {
+              const fd = fulfillmentData.find((f) => f.itemId === l.id);
+              if (!fd) return l;
+              return { ...l, quantityDelivered: (l.quantityDelivered ?? 0) + fd.deliveredQuantity };
+            }),
+            ...(isOrderDeliveryComplete ? { actualDelivery: now } : {}),
+          }
+        : prev,
+    );
+    setDeliveredDrafts({});
     setShowFulfillModal(false);
+
+    void notifyOrderDeliveryRecorded(id, {
+      recordedBy: actorLabel?.trim() || null,
+    }).catch((notifyErr) => {
+      console.warn('[OrderDetailPage] delivery recorded notification failed', notifyErr);
+    });
+
+    void tryCompleteTripsForDeliveredOrder(id).catch((err) => {
+      if (import.meta.env.DEV) console.warn('[OrderDetailPage] trip auto-complete failed', err);
+    });
   };
 
   const handleApprove = async () => {
@@ -1461,6 +1602,37 @@ export function OrderDetailPage() {
       { status: 'Approved', approved_by: employeeName || session?.user?.email || role },
     );
     addAuditLog('Approved Order', 'Order', `Approved order ${order.id}`);
+    void buildOrderDecisionNotifyPayload(
+      { ...order, status: 'Approved' },
+      id,
+      { decision: 'approved', decidedBy: employeeName || session?.user?.email || role || null },
+    )
+      .then(notifyAgentOrderApproved)
+      .catch((notifyErr) => {
+        console.warn('[OrderDetailPage] agent approval notification failed', notifyErr);
+      });
+    void buildOrderLogisticsReadyNotifyPayload(
+      { ...order, status: 'Approved' },
+      id,
+      { approvedBy: employeeName || session?.user?.email || role || null },
+    )
+      .then((payload) => {
+        if (payload) return notifyLogisticsOrderReadyForSchedule(payload);
+      })
+      .catch((notifyErr) => {
+        console.warn('[OrderDetailPage] logistics approval notification failed', notifyErr);
+      });
+    void buildOrderCustomerApprovedNotifyPayload(
+      { ...order, status: 'Approved' },
+      id,
+      { approvedBy: employeeName || session?.user?.email || role || null },
+    )
+      .then((payload) => {
+        if (payload) return notifyCustomerOrderApproved(payload);
+      })
+      .catch((notifyErr) => {
+        console.warn('[OrderDetailPage] customer approval notification failed', notifyErr);
+      });
     setApprovalLoading(false);
     setShowApproveModal(false);
   };
@@ -1489,6 +1661,19 @@ export function OrderDetailPage() {
       rejectionReason ? { reason: rejectionReason } : null,
     );
     addAuditLog('Rejected Order', 'Order', `Rejected order ${order.id}${rejectionReason ? ': ' + rejectionReason : ''}`);
+    void buildOrderDecisionNotifyPayload(
+      { ...order, status: 'Rejected' },
+      id,
+      {
+        decision: 'rejected',
+        decidedBy: employeeName || session?.user?.email || role || null,
+        rejectionReason: rejectionReason || null,
+      },
+    )
+      .then(notifyAgentOrderRejected)
+      .catch((notifyErr) => {
+        console.warn('[OrderDetailPage] agent rejection notification failed', notifyErr);
+      });
     setApprovalLoading(false);
     setShowRejectModal(false);
     setRejectionReason('');
@@ -1582,6 +1767,22 @@ export function OrderDetailPage() {
       data.additionalNotes ? { notes: data.additionalNotes } : null,
     );
     addAuditLog('Cancelled Order', 'Order', `Cancelled order ${order.id}: ${data.reason}`);
+
+    const cancelledByRole: 'agent' | 'executive' = role === 'Agent' ? 'agent' : 'executive';
+    void buildOrderCancelledNotifyPayload(
+      { ...order, status: 'Cancelled', cancellationReason: data.reason },
+      id,
+      {
+        cancelledBy: actorName || null,
+        cancelledByRole,
+        cancellationReason: data.reason,
+        additionalNotes: data.additionalNotes ?? null,
+      },
+    )
+      .then(notifyOrderCancelled)
+      .catch((notifyErr) => {
+        console.warn('[OrderDetailPage] cancellation notification failed', notifyErr);
+      });
 
     setOrder({ ...order, status: 'Cancelled', cancelledAt: now, cancellationReason: data.reason });
     setShowCancelModal(false);
@@ -1952,6 +2153,11 @@ export function OrderDetailPage() {
       );
       setOrder({ ...order, status: 'Pending' });
       addAuditLog('Order submitted for approval', 'Order', `${order.id}: Draft → Pending`);
+      void notifyExecutivesOrderSubmittedForApproval(
+        buildOrderNotifyPayload({ ...order, status: 'Pending' }, id),
+      ).catch((notifyErr) => {
+        console.warn('[OrderDetailPage] notification failed', notifyErr);
+      });
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : 'Failed to submit');
     } finally {
@@ -1981,81 +2187,191 @@ export function OrderDetailPage() {
   };
 
   const handleAddProduct = () => {
-    // Load categories when opening the modal
-    if (categories.length === 0) {
-      setCategoriesLoading(true);
-      let cq = supabase
-        .from('product_categories')
-        .select('id, name, image_url')
-        .eq('is_active', true);
-      const b = catalogBranch ?? '';
-      if (b) {
-        cq = cq.or(`branch.eq.${b},branch.is.null`);
-      }
-      cq.order('sort_order')
-        .then(({ data }) => {
-          setCategories(data ?? []);
-          setCategoriesLoading(false);
-        });
-    }
+    setProductsLoadError(null);
     setShowProductModal(true);
+    setCategoriesLoading(true);
+    let cq = supabase
+      .from('product_categories')
+      .select('id, name, image_url')
+      .eq('is_active', true);
+    const b = catalogBranch ?? '';
+    if (b) {
+      cq = cq.or(`branch.eq.${b},branch.is.null`);
+    }
+    void cq.order('sort_order').then(({ data, error }) => {
+      if (error) {
+        console.error('[OrderDetailPage] categories load failed', error);
+        setCategories([]);
+      } else {
+        setCategories(data ?? []);
+      }
+      setCategoriesLoading(false);
+    });
   };
 
   const handleSelectCategory = async (cat: DBCategoryDet) => {
     setSelectedCategory(cat);
     setProductsLoading(true);
+    setProductsLoadError(null);
     setCategoryProducts([]);
-    const branchNameForStock = catalogBranch ?? branch ?? '';
-    const { data: branchRow } = branchNameForStock
-      ? await supabase.from('branches').select('id').eq('name', branchNameForStock).maybeSingle()
-      : { data: null };
-    let pQuery = supabase
-      .from('products')
-      .select('id, name, image_url, product_variants(id, size, description, unit_price, total_stock, is_hidden, product_bulk_discounts(min_qty, max_qty, discount_percent, is_active))')
-      .eq('category_id', cat.id)
-      .eq('status', 'Active');
-    const b = catalogBranch ?? '';
-    if (b) {
-      pQuery = pQuery.or(`branch.eq.${b},branch.is.null`);
+
+    try {
+      const stockBranchId =
+        (isEditing && editedOrder?.branchId?.trim()) ||
+        order?.branchId?.trim() ||
+        null;
+      let branchRow: { id: string } | null = null;
+      if (stockBranchId) {
+        branchRow = { id: stockBranchId };
+      } else {
+        const branchNameForStock = catalogBranch ?? branch ?? '';
+        if (branchNameForStock) {
+          const { data: bd } = await supabase
+            .from('branches')
+            .select('id')
+            .eq('name', branchNameForStock)
+            .maybeSingle();
+          branchRow = bd ?? null;
+        }
+      }
+
+      let pQuery = supabase
+        .from('products')
+        .select(
+          'id, name, image_url, is_hidden, product_variants(id, size, description, unit_price, total_stock, is_hidden, product_bulk_discounts(min_qty, max_qty, discount_percent, is_active))',
+        )
+        .eq('category_id', cat.id)
+        .order('name');
+      if (catalogBranch) {
+        pQuery = pQuery.eq('branch', catalogBranch);
+      }
+
+      let { data: productsData, error } = await pQuery;
+
+      // Fallback: some legacy rows use branch.is.null while category is branch-scoped
+      if (!error && (!productsData || productsData.length === 0) && catalogBranch) {
+        const fallback = await supabase
+          .from('products')
+          .select(
+            'id, name, image_url, is_hidden, product_variants(id, size, description, unit_price, total_stock, is_hidden, product_bulk_discounts(min_qty, max_qty, discount_percent, is_active))',
+          )
+          .eq('category_id', cat.id)
+          .or(`branch.eq.${catalogBranch},branch.is.null`)
+          .order('name');
+        productsData = fallback.data;
+        error = fallback.error;
+      }
+
+      if (error) {
+        console.error('[OrderDetailPage] products load failed', error);
+        setProductsLoadError(error.message || 'Failed to load products');
+        return;
+      }
+
+      if (!productsData?.length) {
+        setCategoryProducts([]);
+        return;
+      }
+
+      // If nested variants didn't embed, fetch them directly (RLS / embed edge cases)
+      const needsVariants = productsData.filter(
+        (p: { id: string; product_variants?: unknown[] | null }) =>
+          !(p.product_variants?.length),
+      );
+      if (needsVariants.length > 0) {
+        const { data: variantRows } = await supabase
+          .from('product_variants')
+          .select(
+            'id, product_id, size, description, unit_price, total_stock, is_hidden, product_bulk_discounts(min_qty, max_qty, discount_percent, is_active)',
+          )
+          .in(
+            'product_id',
+            needsVariants.map((p: { id: string }) => p.id),
+          );
+        const byProduct = new Map<string, NonNullable<(typeof productsData)[0]['product_variants']>>();
+        for (const v of variantRows ?? []) {
+          const pid = (v as { product_id: string }).product_id;
+          const list = byProduct.get(pid) ?? [];
+          list.push(v as NonNullable<(typeof productsData)[0]['product_variants']>[0]);
+          byProduct.set(pid, list);
+        }
+        productsData = productsData.map((p: { id: string; product_variants?: unknown[] | null }) =>
+          p.product_variants?.length ? p : { ...p, product_variants: byProduct.get(p.id) ?? [] },
+        );
+      }
+
+      const allVariantIds = productsData.flatMap(
+        (p: { product_variants?: { id: string }[] | null }) =>
+          p.product_variants?.map((v) => v.id) ?? [],
+      );
+      const stockMap: Record<string, number> = {};
+      if (allVariantIds.length > 0 && branchRow) {
+        const { data: stockData } = await supabase
+          .from('product_variant_stock')
+          .select('variant_id, quantity')
+          .eq('branch_id', branchRow.id)
+          .in('variant_id', allVariantIds);
+        (stockData ?? []).forEach((s: { variant_id: string; quantity: number }) => {
+          stockMap[s.variant_id] = s.quantity;
+        });
+      }
+
+      const mapped: DBProductDet[] = productsData
+        .filter((p: { is_hidden?: boolean | null }) => p.is_hidden !== true)
+        .map((p: {
+          id: string;
+          name: string;
+          image_url?: string | null;
+          product_variants?: Array<{
+            id: string;
+            size: string;
+            description?: string | null;
+            unit_price?: number | null;
+            total_stock?: number | null;
+            is_hidden?: boolean | null;
+            product_bulk_discounts?: Array<{
+              min_qty: number;
+              max_qty: number | null;
+              discount_percent: number;
+              is_active?: boolean | null;
+            }> | null;
+          }> | null;
+        }) => ({
+          id: p.id,
+          name: p.name,
+          image_url: p.image_url ?? null,
+          variants: (p.product_variants ?? [])
+            .filter((v) => v.is_hidden !== true)
+            .map((v) => ({
+              id: v.id,
+              size: v.size,
+              description: v.description ?? null,
+              unit_price: Number(v.unit_price ?? 0),
+              stock: stockMap[v.id] ?? v.total_stock ?? 0,
+              bulk_discounts: (v.product_bulk_discounts ?? [])
+                .filter((d) => d.is_active)
+                .map((d) => ({
+                  min_qty: d.min_qty,
+                  max_qty: d.max_qty,
+                  discount_percent: Number(d.discount_percent),
+                })),
+            })),
+        }));
+
+      setCategoryProducts(mapped);
+      setProductCache((prev) => {
+        const next = { ...prev };
+        mapped.forEach((p) => {
+          next[p.id] = p;
+        });
+        return next;
+      });
+    } catch (e: unknown) {
+      console.error('[OrderDetailPage] products load failed', e);
+      setProductsLoadError(e instanceof Error ? e.message : 'Failed to load products');
+    } finally {
+      setProductsLoading(false);
     }
-    const { data: productsData } = await pQuery.order('name');
-    if (!productsData) { setProductsLoading(false); return; }
-    const allVariantIds = productsData.flatMap((p: any) => p.product_variants?.map((v: any) => v.id) ?? []);
-    const stockMap: Record<string, number> = {};
-    if (allVariantIds.length > 0 && branchRow) {
-      const { data: stockData } = await supabase
-        .from('product_variant_stock')
-        .select('variant_id, quantity')
-        .eq('branch_id', branchRow.id)
-        .in('variant_id', allVariantIds);
-      (stockData ?? []).forEach((s: any) => { stockMap[s.variant_id] = s.quantity; });
-    }
-    const mapped: DBProductDet[] = productsData
-      .map((p: any) => ({
-        id: p.id,
-        name: p.name,
-        image_url: p.image_url ?? null,
-        variants: (p.product_variants ?? [])
-          .filter((v: any) => v.is_hidden !== true)
-          .map((v: any) => ({
-        id: v.id,
-        size: v.size,
-        description: v.description ?? null,
-        unit_price: Number(v.unit_price ?? 0),
-        stock: stockMap[v.id] ?? v.total_stock ?? 0,
-        bulk_discounts: (v.product_bulk_discounts ?? [])
-          .filter((d: any) => d.is_active)
-          .map((d: any) => ({ min_qty: d.min_qty, max_qty: d.max_qty, discount_percent: Number(d.discount_percent) })),
-      })),
-    }))
-      .filter((p) => p.variants.length > 0);
-    setCategoryProducts(mapped);
-    setProductCache(prev => {
-      const next = { ...prev };
-      mapped.forEach(p => { next[p.id] = p; });
-      return next;
-    });
-    setProductsLoading(false);
   };
 
   const qtyForPreview = () => {
@@ -2097,6 +2413,7 @@ export function OrderDetailPage() {
     setProductSearch('');
     setSelectedCategory(null);
     setCategoryProducts([]);
+    setProductsLoadError(null);
     setEditingItemId(null);
   };
 
@@ -2610,6 +2927,110 @@ export function OrderDetailPage() {
     await reloadProofsFromDb(order.id);
   };
 
+  const proofNeedsCommissionRelease = (proof: ProofDocument) =>
+    proof.type === 'payment' &&
+    proofRequiresCommissionPayout({
+      id: proof.id,
+      type: proof.type,
+      payment_cash_amount: proof.paymentCashAmount,
+      payment_credit_amount: proof.paymentCreditAmount,
+      payment_adjustment: proof.paymentAdjustment,
+      notes: proof.notes ?? null,
+      commission_paid_at: proof.commissionPaidAt,
+    });
+
+  const refreshOrderSnapshotAfterFinance = async () => {
+    if (!id || !order) return;
+    const { data } = await supabase
+      .from('orders')
+      .select('status, payment_status, amount_paid, balance_due')
+      .eq('id', id)
+      .maybeSingle();
+    if (!data) return;
+    setOrder((o) => {
+      if (!o) return o;
+      const derived = deriveOrderPaymentFields(
+        o.totalAmount,
+        Number(data.amount_paid ?? 0),
+        Number(data.balance_due ?? 0),
+      );
+      return {
+        ...o,
+        status: data.status as OrderDetail['status'],
+        paymentStatus: data.payment_status as OrderDetail['paymentStatus'],
+        amountPaid: derived.amountPaid,
+        balanceDue: derived.balanceDue,
+      };
+    });
+  };
+
+  const handleReleaseProofCommission = async (proof: ProofDocument) => {
+    if (!isExecutiveUser || !id || !order) return;
+    const cash = proof.paymentCashAmount ?? 0;
+    if (
+      !window.confirm(
+        `Mark commission as paid for this cash payment (₱${cash.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })})?`,
+      )
+    ) {
+      return;
+    }
+    const paidBy = employeeName || session?.user?.email || role || 'Executive';
+    setReleasingCommissionProofId(proof.id);
+    try {
+      const { orderCompleted } = await markProofCommissionPaid(proof.id, { paidBy });
+      await reloadProofsFromDb(order.id);
+      await refreshOrderSnapshotAfterFinance();
+      addAuditLog(
+        'Commission released',
+        'Order',
+        `${order.id} · proof ${proof.title || proof.fileName} · ₱${cash.toLocaleString()} cash`,
+      );
+      if (orderCompleted) {
+        window.alert('Commission released. Order is now marked Completed.');
+      }
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : 'Failed to release commission');
+    } finally {
+      setReleasingCommissionProofId(null);
+    }
+  };
+
+  const handleReleaseAllPendingCommissions = async () => {
+    if (!isExecutiveUser || !id || !order) return;
+    const pending = proofs.filter((p) => proofNeedsCommissionRelease(p) && !p.commissionPaidAt);
+    if (pending.length === 0) return;
+    const pendingTotal = pending.reduce(
+      (sum, p) => sum + computeProofCommissionForClientType(p.paymentCashAmount ?? 0, customerClientType),
+      0,
+    );
+    if (
+      !window.confirm(
+        `Mark all ${pending.length} pending commission(s) as paid out (₱${pendingTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })})?`,
+      )
+    ) {
+      return;
+    }
+    const paidBy = employeeName || session?.user?.email || role || 'Executive';
+    setMarkingAllCommissions(true);
+    try {
+      const { orderCompleted, releasedCount } = await markAllProofCommissionsPaidForOrder(id, { paidBy });
+      await reloadProofsFromDb(order.id);
+      await refreshOrderSnapshotAfterFinance();
+      addAuditLog(
+        'Bulk commission release',
+        'Order',
+        `${order.id} · ${releasedCount} proof(s) · ₱${pendingTotal.toLocaleString()} commission`,
+      );
+      if (orderCompleted) {
+        window.alert(`Marked ${releasedCount} commission(s) as paid. Order is now Completed.`);
+      }
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : 'Failed to mark all commissions as paid');
+    } finally {
+      setMarkingAllCommissions(false);
+    }
+  };
+
   const handleUploadProof = async () => {
     if (!order || !id) return;
     const nGallery = selectedProofGalleryUrls.length;
@@ -2834,6 +3255,34 @@ export function OrderDetailPage() {
         { count: rows.length, fileNames: names, source: 'order_proof_modal', type: proofType },
       );
       addAuditLog(typeLabel, 'Order', `Attached ${rows.length} file(s) to order ${order.id}`);
+
+      if (proofType === 'delivery' || proofType === 'other') {
+        void notifyAgentOrderProofUploaded(id, {
+          proofType,
+          uploadedBy: uploadedBy,
+          uploaderEmployeeId: employeeId,
+          proofCount: rows.length,
+          proofTitle: titleBase || null,
+          proofNotes: notesTrim,
+        }).catch((notifyErr) => {
+          console.warn('[OrderDetailPage] agent proof notify failed', notifyErr);
+        });
+      }
+
+      if (proofType === 'payment') {
+        void notifyOrderPaymentProofRecorded(id, {
+          uploadedBy,
+          uploaderEmployeeId: employeeId,
+          proofCount: rows.length,
+          proofTitle: titleBase || null,
+          proofNotes: notesTrim,
+          paymentCash,
+          paymentCredit,
+        }).catch((notifyErr) => {
+          console.warn('[OrderDetailPage] payment proof notify failed', notifyErr);
+        });
+      }
+
       alert(`${typeLabel} added.\n\n${rows.length} file(s): ${names}`);
 
       setSelectedProofGalleryUrls([]);
@@ -2866,6 +3315,7 @@ export function OrderDetailPage() {
     : null;
 
   const documentProofsFiltered = order ? proofs.filter((p) => p.type === documentsProofTab) : [];
+  const pendingCommissionProofs = proofs.filter((p) => proofNeedsCommissionRelease(p) && !p.commissionPaidAt);
 
   // Compute effective discount % for a line item (fall back to amount-based calculation)
   const effectiveDiscountPct = (item: OrderLineItem) => {
@@ -3188,8 +3638,8 @@ export function OrderDetailPage() {
                 </Button>
               )}
               {order.status === 'Rejected' && (
-                <Button variant="primary" onClick={handleResubmit} className="gap-2">
-                  <Send className="w-4 h-4" />
+                <Button variant="primary" onClick={() => void handleResubmit()} className="gap-2" disabled={approvalLoading}>
+                  {approvalLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                   Resubmit
                 </Button>
               )}
@@ -3420,45 +3870,100 @@ export function OrderDetailPage() {
           </CardHeader>
           <CardContent>
             {isEditing && editedOrder ? (
-              <div className="space-y-2">
-                <label className="text-xs text-gray-500" htmlFor="order-customer-search">
-                  Search customers
-                </label>
-                <input
-                  id="order-customer-search"
-                  type="search"
-                  placeholder="Search by name, email, or contact…"
-                  value={customerSearchQuery}
-                  onChange={(e) => setCustomerSearchQuery(e.target.value)}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none bg-white"
-                  autoComplete="off"
-                />
-                <label className="text-xs text-gray-500 pt-1 block" htmlFor="order-customer-select">
-                  Customer
-                </label>
-                <select
-                  id="order-customer-select"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
-                  value={editedOrder.customerId || ''}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    const c = customerList.find((x) => x.id === v);
-                    patchEditedOrder({ customerId: v, customer: c?.name ?? '' });
-                  }}
-                >
-                  <option value="">— Select customer —</option>
-                  {filteredCustomersForSelect.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-                {customerList.length === 0 && (
+              <div className="space-y-3">
+                <div className="relative" ref={customerSearchRef}>
+                  <label className="text-xs text-gray-500" htmlFor="order-customer-search">
+                    Search customers
+                  </label>
+                  <div className="relative mt-1">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                    <input
+                      id="order-customer-search"
+                      type="search"
+                      placeholder={customersLoading ? 'Loading customers…' : 'Search by name or contact…'}
+                      value={customerSearchQuery}
+                      onChange={(e) => {
+                        setCustomerSearchQuery(e.target.value);
+                        setShowCustomerDropdown(true);
+                      }}
+                      onFocus={() => setShowCustomerDropdown(true)}
+                      disabled={customersLoading}
+                      className="w-full pl-9 pr-9 py-2 border border-gray-300 rounded-lg text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none bg-white disabled:bg-gray-50 disabled:text-gray-500"
+                      autoComplete="off"
+                    />
+                    {customersLoading && (
+                      <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 animate-spin" />
+                    )}
+                  </div>
+
+                  {showCustomerDropdown && (
+                    <div className="absolute z-20 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-64 overflow-y-auto">
+                      {customersLoading ? (
+                        <div className="flex items-center justify-center gap-2 px-3 py-8 text-sm text-gray-500">
+                          <Loader2 className="w-4 h-4 animate-spin text-red-600" />
+                          Loading customers…
+                        </div>
+                      ) : filteredCustomersForSelect.length > 0 ? (
+                        filteredCustomersForSelect.map((c) => (
+                          <button
+                            key={c.id}
+                            type="button"
+                            onClick={() => handleSelectCustomerForOrder(c)}
+                            className="w-full text-left px-3 py-2.5 hover:bg-gray-50 border-b border-gray-100 last:border-b-0 transition-colors"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0 flex-1">
+                                <div className="font-medium text-sm text-gray-900 truncate">{c.name}</div>
+                                {c.contact_person && (
+                                  <div className="text-xs text-gray-500 mt-0.5 truncate">{c.contact_person}</div>
+                                )}
+                              </div>
+                              {editedOrder.customerId === c.id && (
+                                <Check className="w-4 h-4 text-green-600 shrink-0 mt-0.5" />
+                              )}
+                            </div>
+                          </button>
+                        ))
+                      ) : (
+                        <div className="px-3 py-6 text-center text-sm text-gray-500">
+                          {customerList.length === 0 ? 'No active customers for this branch' : 'No customers match your search'}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {editedOrder.customerId && editedOrder.customer && (
+                  <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 bg-green-100 rounded-full flex items-center justify-center shrink-0">
+                        <User className="w-4 h-4 text-green-600" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="font-semibold text-sm text-gray-900 truncate">{editedOrder.customer}</div>
+                        <div className="text-xs text-gray-600">Customer selected</div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          patchEditedOrder({ customerId: '', customer: '' });
+                          setCustomerSearchQuery('');
+                          setShowCustomerDropdown(true);
+                        }}
+                        className="text-xs text-red-600 hover:text-red-700 font-medium shrink-0"
+                      >
+                        Change
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {!customersLoading && customerList.length === 0 && (
                   <p className="text-xs text-amber-700">
                     No active customers for this branch. Set branch in Agent &amp; Branch or add customers for this branch in Customers.
                   </p>
                 )}
-                <div className="pt-2">
+                <div className="pt-1">
                   <p className="text-xs text-gray-500">
                     Planned departure is set in{' '}
                     <span className="font-medium text-gray-700">
@@ -3626,55 +4131,74 @@ export function OrderDetailPage() {
           <CardContent>
             {isEditing && editedOrder ? (
               <div className="space-y-3 text-sm">
-                <div className="space-y-1">
-                  <label className="text-xs text-gray-500">Branch</label>
-                  <select
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none bg-white"
-                    value={editedOrder.branchId || ''}
-                    onChange={(e) => {
-                      const bid = e.target.value;
-                      const b = branchList.find((x) => x.id === bid);
-                      patchEditedOrder({
-                        branchId: bid || undefined,
-                        branch: b?.name ?? '',
-                        agentId: '',
-                        agent: '',
-                        customerId: '',
-                        customer: '',
-                      });
-                    }}
-                  >
-                    <option value="">— Select branch —</option>
-                    {branchList.map((b) => (
-                      <option key={b.id} value={b.id}>
-                        {b.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs text-gray-500">Agent</label>
-                  <select
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none bg-white"
-                    value={editedOrder.agentId || ''}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      const a = agentList.find((x) => x.id === v);
-                      patchEditedOrder({
-                        agentId: v,
-                        agent: a?.employee_name ?? '',
-                      });
-                    }}
-                  >
-                    <option value="">— No agent assigned —</option>
-                    {agentList.map((a) => (
-                      <option key={a.id} value={a.id}>
-                        {a.branch_name ? `${a.branch_name} — ` : ''}
-                        {a.employee_name} ({a.employee_id})
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                {isExecutiveUser ? (
+                  <>
+                    <div className="space-y-1">
+                      <label className="text-xs text-gray-500">Branch</label>
+                      <select
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none bg-white"
+                        value={editedOrder.branchId || ''}
+                        onChange={(e) => {
+                          const bid = e.target.value;
+                          const b = branchList.find((x) => x.id === bid);
+                          patchEditedOrder({
+                            branchId: bid || undefined,
+                            branch: b?.name ?? '',
+                            agentId: '',
+                            agent: '',
+                            customerId: '',
+                            customer: '',
+                          });
+                        }}
+                      >
+                        <option value="">— Select branch —</option>
+                        {branchList.map((b) => (
+                          <option key={b.id} value={b.id}>
+                            {b.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs text-gray-500">Agent</label>
+                      <select
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none bg-white"
+                        value={editedOrder.agentId || ''}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          const a = agentList.find((x) => x.id === v);
+                          patchEditedOrder({
+                            agentId: v,
+                            agent: a?.employee_name ?? '',
+                          });
+                        }}
+                      >
+                        <option value="">— No agent assigned —</option>
+                        {agentList.map((a) => (
+                          <option key={a.id} value={a.id}>
+                            {a.branch_name ? `${a.branch_name} — ` : ''}
+                            {a.employee_name} ({a.employee_id})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="space-y-1">
+                      <label className="text-xs text-gray-500">Branch</label>
+                      <div className="w-full px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-sm font-medium text-gray-900">
+                        {editedOrder.branch || branch || '—'}
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs text-gray-500">Assigned agent</label>
+                      <div className="w-full px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-sm font-medium text-gray-900">
+                        {editedOrder.agent || employeeName || '—'}
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             ) : (
               <div className="space-y-3 text-sm">
@@ -4076,12 +4600,18 @@ export function OrderDetailPage() {
 
       {/* Invoice & Proof Management */}
       <Card>
-        <CardHeader>
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <CardTitle className="flex items-center gap-2">
+        <CardContent className="pt-6">
+          {id && (
+            <div className="mb-6">
+              <OrderCustomerPortalCard orderUuid={id} customerEmail={customerEmail} />
+            </div>
+          )}
+
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
+            <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
               <FileText className="w-5 h-5" />
               Documents & Proofs
-            </CardTitle>
+            </h3>
             <div className="flex gap-2 flex-wrap">
               <Button variant="outline" size="sm" onClick={openProofDocumentModal} className="gap-2 flex-1 sm:flex-none">
                 <Upload className="w-4 h-4" />
@@ -4090,13 +4620,6 @@ export function OrderDetailPage() {
               </Button>
             </div>
           </div>
-        </CardHeader>
-        <CardContent>
-          {id && (
-            <div className="mb-6">
-              <OrderCustomerPortalCard orderUuid={id} customerEmail={customerEmail} />
-            </div>
-          )}
 
           {/* Payment Links Status */}
           {paymentLinks.length > 0 && (
@@ -4191,7 +4714,27 @@ export function OrderDetailPage() {
           {/* Proofs List */}
           {documentProofsFiltered.length > 0 ? (
             <div className="space-y-3">
-              <h4 className="text-sm font-semibold text-gray-700 mb-3">Uploaded — {documentsProofTab === 'delivery' ? 'Delivery' : documentsProofTab === 'payment' ? 'Payment' : 'Other'}</h4>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+                <h4 className="text-sm font-semibold text-gray-700">
+                  Uploaded — {documentsProofTab === 'delivery' ? 'Delivery' : documentsProofTab === 'payment' ? 'Payment' : 'Other'}
+                </h4>
+                {documentsProofTab === 'payment' && isExecutiveUser && pendingCommissionProofs.length > 0 ? (
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    className="gap-1.5"
+                    disabled={markingAllCommissions}
+                    onClick={() => void handleReleaseAllPendingCommissions()}
+                  >
+                    {markingAllCommissions ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Wallet className="w-3.5 h-3.5" />
+                    )}
+                    Release all pending ({pendingCommissionProofs.length})
+                  </Button>
+                ) : null}
+              </div>
               {documentProofsFiltered.map((proof) => (
                 <div key={proof.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
                   <div className="flex items-center gap-3 min-w-0 flex-1">
@@ -4215,6 +4758,27 @@ export function OrderDetailPage() {
                         <Badge className="text-xs flex-shrink-0">
                           {proof.type === 'delivery' ? 'Delivery' : proof.type === 'payment' ? 'Payment' : 'Other'}
                         </Badge>
+                        {proof.type === 'payment' &&
+                          proofRequiresCommissionPayout({
+                            id: proof.id,
+                            type: proof.type,
+                            payment_cash_amount: proof.paymentCashAmount,
+                            payment_credit_amount: proof.paymentCreditAmount,
+                            payment_adjustment: proof.paymentAdjustment,
+                            notes: proof.notes ?? null,
+                            commission_paid_at: proof.commissionPaidAt,
+                          }) &&
+                          (proof.commissionPaidAt ? (
+                            <Badge variant="success" className="text-xs flex-shrink-0 inline-flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3" />
+                              Commission paid
+                            </Badge>
+                          ) : (
+                            <Badge variant="warning" className="text-xs flex-shrink-0 inline-flex items-center gap-1">
+                              <Clock className="w-3 h-3" />
+                              Commission pending
+                            </Badge>
+                          ))}
                         <span className="text-xs text-gray-500">
                           {new Date(proof.uploadedAt).toLocaleString('en-US', {
                             month: 'short',
@@ -4238,6 +4802,35 @@ export function OrderDetailPage() {
                             : ''}
                         </p>
                       ) : null}
+                      {proof.type === 'payment' && proofNeedsCommissionRelease(proof) ? (
+                        <p className="text-xs text-blue-700 mt-1.5">
+                          Cash ₱{(proof.paymentCashAmount ?? 0).toLocaleString()} · Commission ₱
+                          {computeProofCommissionForClientType(
+                            proof.paymentCashAmount ?? 0,
+                            customerClientType,
+                          ).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </p>
+                      ) : null}
+                      {proof.type === 'payment' && proof.commissionPaidAt ? (
+                        <p className="text-xs text-green-700 mt-1.5 flex items-center gap-1">
+                          <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" />
+                          Commission paid{' '}
+                          {new Date(proof.commissionPaidAt).toLocaleString('en-US', {
+                            month: 'short',
+                            day: 'numeric',
+                            year: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                          {proof.commissionPaidBy ? ` · ${proof.commissionPaidBy}` : ''}
+                        </p>
+                      ) : null}
+                      {proof.type === 'payment' &&
+                      proofNeedsCommissionRelease(proof) &&
+                      !proof.commissionPaidAt &&
+                      !isExecutiveUser ? (
+                        <p className="text-xs text-amber-700 mt-1.5">Commission pending executive release</p>
+                      ) : null}
                       {proof.notes && (
                         <p className="text-xs text-gray-600 mt-2 pr-1 whitespace-pre-wrap border-t border-gray-200/80 pt-2">
                           {proof.notes}
@@ -4246,6 +4839,25 @@ export function OrderDetailPage() {
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2 sm:gap-3 justify-end sm:justify-start flex-shrink-0">
+                    {proof.type === 'payment' &&
+                    isExecutiveUser &&
+                    proofNeedsCommissionRelease(proof) &&
+                    !proof.commissionPaidAt ? (
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        className="gap-1"
+                        disabled={releasingCommissionProofId === proof.id || markingAllCommissions}
+                        onClick={() => void handleReleaseProofCommission(proof)}
+                      >
+                        {releasingCommissionProofId === proof.id ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Wallet className="w-3.5 h-3.5" />
+                        )}
+                        Release commission
+                      </Button>
+                    ) : null}
                     <Button variant="outline" size="sm" onClick={() => openProofEditModal(proof)}>
                       <Edit className="w-3.5 h-3.5 mr-1" />
                       Edit
@@ -4490,20 +5102,59 @@ export function OrderDetailPage() {
                   </div>
                   {productsLoading ? (
                     <div className="flex items-center justify-center h-32 text-gray-400 text-sm gap-2"><Loader2 className="w-4 h-4 animate-spin" />Loading…</div>
+                  ) : productsLoadError ? (
+                    <div className="flex flex-col items-center justify-center h-32 text-center px-4 gap-2">
+                      <AlertTriangle className="w-5 h-5 text-red-600" />
+                      <p className="text-sm text-red-700">{productsLoadError}</p>
+                      <button
+                        type="button"
+                        onClick={() => void handleSelectCategory(selectedCategory)}
+                        className="text-xs text-red-600 hover:text-red-700 font-medium"
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  ) : categoryProducts.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-32 text-center px-4 text-sm text-gray-500 gap-1">
+                      <Package className="w-8 h-8 text-gray-300" />
+                      <p>No product families in this category{catalogBranch ? ` for ${catalogBranch}` : ''}.</p>
+                    </div>
                   ) : (
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-80 overflow-y-auto p-1">
-                      {categoryProducts.map(product => (
-                        <button key={product.id} type="button"
-                          onClick={() => { if (!product.variants.length) return; setSelectedProduct(product); setSelectedVariant(product.variants[0]); setVariantQtyInput('1'); setVariantPriceInput(String(product.variants[0].unit_price)); setVariantDiscounts([]); }}
-                          className="flex flex-col items-center p-3 border border-gray-200 rounded-lg hover:border-red-500 hover:bg-red-50 transition-all group">
+                      {categoryProducts.map((product) => {
+                        const hasVariants = product.variants.length > 0;
+                        return (
+                        <button
+                          key={product.id}
+                          type="button"
+                          disabled={!hasVariants}
+                          onClick={() => {
+                            if (!hasVariants) return;
+                            setSelectedProduct(product);
+                            setSelectedVariant(product.variants[0]);
+                            setVariantQtyInput('1');
+                            setVariantPriceInput(String(product.variants[0].unit_price));
+                            setVariantDiscounts([]);
+                          }}
+                          className={`flex flex-col items-center p-3 border rounded-lg transition-all group ${
+                            hasVariants
+                              ? 'border-gray-200 hover:border-red-500 hover:bg-red-50'
+                              : 'border-gray-200 bg-gray-50 opacity-70 cursor-not-allowed'
+                          }`}
+                        >
                           {product.image_url
                             ? <img src={product.image_url} alt={product.name} className="w-12 h-12 object-cover rounded-lg mb-2" />
                             : <div className="w-12 h-12 bg-gray-100 rounded-lg flex items-center justify-center mb-2 group-hover:bg-red-100"><Package className="w-6 h-6 text-gray-600 group-hover:text-red-600" /></div>
                           }
                           <div className="text-xs font-medium text-gray-900 text-center line-clamp-2">{product.name}</div>
-                          <div className="text-xs text-gray-400 mt-1">{product.variants.length} variant{product.variants.length !== 1 ? 's' : ''}</div>
+                          <div className={`text-xs mt-1 ${hasVariants ? 'text-gray-400' : 'text-amber-700'}`}>
+                            {hasVariants
+                              ? `${product.variants.length} variant${product.variants.length !== 1 ? 's' : ''}`
+                              : 'No variants — add in Products'}
+                          </div>
                         </button>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -5065,14 +5716,6 @@ export function OrderDetailPage() {
                         {order.totalAmount.toLocaleString()}
                       </p>
                     </div>
-                    <p className="text-xs text-gray-600 -mt-1">
-                      Paid so far / order total · Remaining ₱
-                      {proofModalBalanceDue.toLocaleString(undefined, {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2,
-                      })}
-                      . Attachments are optional — enter cash or credit only if you have no receipt.
-                    </p>
                     <div>
                       <label className="block text-xs font-medium text-gray-700 mb-1">
                         Money payment (cash / transfer / cheque)

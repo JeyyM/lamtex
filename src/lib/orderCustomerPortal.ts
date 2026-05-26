@@ -8,6 +8,7 @@ import type {
   PublicOrderDiscountAmountLine,
   PublicOrderDiscountLine,
   PublicOrderSummary,
+  PublicOrderTrip,
 } from '@/src/types/orderCustomerPortal';
 
 function generatePortalToken(): string {
@@ -123,6 +124,22 @@ function mapAssignedDriver(raw: unknown): PublicOrderAssignedDriver | null {
   };
 }
 
+function driverFromTrips(trips: PublicOrderTrip[]): PublicOrderAssignedDriver | null {
+  for (const trip of trips) {
+    const name = trip.driverName?.trim();
+    if (!name) continue;
+    return {
+      name,
+      phone: trip.driverPhone ?? null,
+      email: trip.driverEmail ?? null,
+      vehicleName: trip.vehicleName?.trim() || null,
+      tripNumber: trip.tripNumber?.trim() || null,
+      status: trip.status?.trim() || null,
+    };
+  }
+  return null;
+}
+
 function mapPublicSummary(raw: Record<string, unknown>): PublicOrderSummary {
   const customer = (raw.customer as Record<string, unknown>) ?? {};
   const company = (raw.company as Record<string, unknown>) ?? {};
@@ -130,12 +147,25 @@ function mapPublicSummary(raw: Record<string, unknown>): PublicOrderSummary {
     (raw.agent as Record<string, unknown>) ?? undefined,
     raw.agentName != null ? String(raw.agentName) : '',
   );
+  const trips: PublicOrderTrip[] = Array.isArray(raw.trips)
+    ? (raw.trips as Record<string, unknown>[]).map((t) => ({
+        tripNumber: String(t.tripNumber ?? ''),
+        driverName: String(t.driverName ?? ''),
+        driverPhone: t.driverPhone != null && String(t.driverPhone).trim() !== '' ? String(t.driverPhone) : null,
+        driverEmail: t.driverEmail != null && String(t.driverEmail).trim() !== '' ? String(t.driverEmail) : null,
+        vehicleName: String(t.vehicleName ?? ''),
+        status: String(t.status ?? ''),
+        scheduledDate: t.scheduledDate != null ? String(t.scheduledDate) : null,
+        delayReason: t.delayReason != null ? String(t.delayReason) : null,
+      }))
+    : [];
   return {
     ok: Boolean(raw.ok),
     error: raw.error ? String(raw.error) : undefined,
     orderNumber: String(raw.orderNumber ?? ''),
     orderDate: String(raw.orderDate ?? ''),
     requiredDate: raw.requiredDate != null ? String(raw.requiredDate) : null,
+    actualDelivery: raw.actualDelivery != null ? String(raw.actualDelivery) : null,
     status: String(raw.status ?? ''),
     paymentStatus: String(raw.paymentStatus ?? ''),
     paymentTerms: raw.paymentTerms != null ? String(raw.paymentTerms) : null,
@@ -155,7 +185,7 @@ function mapPublicSummary(raw: Record<string, unknown>): PublicOrderSummary {
     invoiceNotes: raw.invoiceNotes != null ? String(raw.invoiceNotes) : null,
     agentName: agent.name || (raw.agentName != null ? String(raw.agentName) : null),
     agent,
-    assignedDriver: mapAssignedDriver(raw.assignedDriver),
+    assignedDriver: mapAssignedDriver(raw.assignedDriver) ?? driverFromTrips(trips),
     branchName: raw.branchName != null ? String(raw.branchName) : null,
     customer: {
       name: String(customer.name ?? ''),
@@ -195,18 +225,7 @@ function mapPublicSummary(raw: Record<string, unknown>): PublicOrderSummary {
           };
         })
       : [],
-    trips: Array.isArray(raw.trips)
-      ? (raw.trips as Record<string, unknown>[]).map((t) => ({
-          tripNumber: String(t.tripNumber ?? ''),
-          driverName: String(t.driverName ?? ''),
-          driverPhone: t.driverPhone != null && String(t.driverPhone).trim() !== '' ? String(t.driverPhone) : null,
-          driverEmail: t.driverEmail != null && String(t.driverEmail).trim() !== '' ? String(t.driverEmail) : null,
-          vehicleName: String(t.vehicleName ?? ''),
-          status: String(t.status ?? ''),
-          scheduledDate: t.scheduledDate != null ? String(t.scheduledDate) : null,
-          delayReason: t.delayReason != null ? String(t.delayReason) : null,
-        }))
-      : [],
+    trips,
     activities: mapPublicActivities(raw.activities ?? raw.payments),
   };
 }
@@ -396,7 +415,7 @@ export async function fetchPublicOrderSummary(token: string): Promise<PublicOrde
   return mergeDiscountBreakdownIntoSummary(summary, discountRows);
 }
 
-/** Marks email as sent. Wire Resend/SendGrid in an Edge Function when ready. */
+/** Marks email as sent after the notification server delivers the portal link email. */
 export async function recordOrderPortalEmailSent(portalId: string, email: string): Promise<{ ok: boolean; error?: string }> {
   const { error } = await supabase
     .from('order_customer_portals')

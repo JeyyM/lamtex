@@ -6,8 +6,8 @@ import {
   buildOrderCustomerPortalUrl,
   customerPortalStaffErrorMessage,
   ensureOrderCustomerPortal,
-  recordOrderPortalEmailSent,
 } from '@/src/lib/orderCustomerPortal';
+import { sendOrderCustomerPortalShareEmail } from '@/src/lib/notifications/notificationsData';
 import type { OrderCustomerPortalRow } from '@/src/types/orderCustomerPortal';
 import { Copy, Check, Mail, ExternalLink, QrCode, Loader2 } from 'lucide-react';
 
@@ -23,6 +23,8 @@ export function OrderCustomerPortalCard({ orderUuid, customerEmail }: Props) {
   const [copied, setCopied] = useState(false);
   const [emailInput, setEmailInput] = useState(customerEmail ?? '');
   const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [sendSuccess, setSendSuccess] = useState<string | null>(null);
 
   useEffect(() => {
     setEmailInput(customerEmail ?? '');
@@ -75,16 +77,18 @@ export function OrderCustomerPortalCard({ orderUuid, customerEmail }: Props) {
     const email = emailInput.trim();
     if (!email) return;
     setSending(true);
-    const result = await recordOrderPortalEmailSent(portal.id, email);
+    setSendError(null);
+    setSendSuccess(null);
+    const result = await sendOrderCustomerPortalShareEmail(orderUuid, email, {
+      id: portal.id,
+      token: portal.token,
+    });
     setSending(false);
     if (result.ok) {
       setPortal({ ...portal, sentViaEmail: true, lastEmailSent: new Date().toISOString(), customerEmail: email });
-      alert(
-        `Email queued for ${email}.\n\n` +
-          'Automated delivery needs a Supabase Edge Function (e.g. Resend). For now, copy the link or use your mail client.',
-      );
+      setSendSuccess(`Email sent to ${email}`);
     } else {
-      alert('Could not send the email right now. Please try again or copy the link manually.');
+      setSendError(result.error ?? 'Could not send the email right now. Please try again or copy the link manually.');
     }
   };
 
@@ -132,7 +136,11 @@ export function OrderCustomerPortalCard({ orderUuid, customerEmail }: Props) {
             <input
               type="email"
               value={emailInput}
-              onChange={(e) => setEmailInput(e.target.value)}
+              onChange={(e) => {
+                setEmailInput(e.target.value);
+                setSendError(null);
+                setSendSuccess(null);
+              }}
               placeholder="customer@email.com"
               className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg"
             />
@@ -147,6 +155,8 @@ export function OrderCustomerPortalCard({ orderUuid, customerEmail }: Props) {
               {sending ? 'Sending…' : 'Send email'}
             </Button>
           </div>
+          {sendError && <p className="text-sm text-red-600">{sendError}</p>}
+          {sendSuccess && <p className="text-sm text-green-700">{sendSuccess}</p>}
         </div>
       </div>
     </div>

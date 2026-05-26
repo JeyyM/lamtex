@@ -1,20 +1,22 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { X, MapPin, Truck, User, Calendar, Clock, Package, AlertTriangle, Edit, CheckCircle, Phone, Mail, Building, FileText, Navigation, ExternalLink, Loader2, Camera, CheckCircle2, Ban } from 'lucide-react';
+import { notifyOrderPacked, notifyOrderInTransit, notifyOrderDeliveryRecorded } from '@/src/lib/notifications/notificationsData';
+import { deductVariantBranchStock } from '@/src/lib/productVariantStock';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { Trip } from '@/src/types/logistics';
 import { supabase } from '@/src/lib/supabase';
 import { deriveOrderDueDateForPersistence } from '@/src/lib/financeData';
 import { MarkInTransitModal } from '@/src/components/orders/MarkInTransitModal';
-import { FulfillOrderModal, type FulfillmentData } from '@/src/components/orders/FulfillOrderModal';
+import { FulfillOrderModal, type FulfillmentData, type DeliveryProofDetails } from '@/src/components/orders/FulfillOrderModal';
 import { CancelOrderModal, type CancellationData } from '@/src/components/orders/CancelOrderModal';
 import { useAppContext } from '@/src/store/AppContext';
 import type { OrderLineItem as OrdersLineItem } from '@/src/types/orders';
 import { remainingToShipForLine } from '@/src/lib/orderShipmentQuantities';
 import { reportTripDelay } from '@/src/lib/orderTripDelay';
 import { resolveBranchIdByName } from '@/src/lib/branchCompanySettings';
-import { releaseOrderFromActiveTrips } from '@/src/lib/logisticsScheduling';
-import { insertOrderProofDocuments } from '@/src/lib/orderProofPayments';
+import { releaseOrderFromActiveTrips, tryCompleteTripIfAllOrdersDelivered, tryCompleteTripsForDeliveredOrder } from '@/src/lib/logisticsScheduling';
+import { attachOrderDeliveryProofsAndNotify } from '@/src/lib/notifications/notificationsData';
 
 interface OrderLineItem {
   id: string;
@@ -71,32 +73,8 @@ interface TripDetailsModalProps {
   onTripStatusChange?: (tripId: string, newStatus: string, extra?: { delayReason?: string }) => void;
 }
 
-/** Trip is done (truck can return) once every assigned order is delivered, partially fulfilled, or cancelled. */
-const TRUCK_RETURN_ORDER_STATUSES = new Set<string>(['Delivered', 'Partially Fulfilled', 'Cancelled']);
-
-function allTripOrdersAllowTruckReturn(orderIds: string[], statuses: Record<string, string>): boolean {
-  if (orderIds.length === 0) return false;
-  return orderIds.every((id) => {
-    const st = statuses[id];
-    return st != null && TRUCK_RETURN_ORDER_STATUSES.has(st);
-  });
-}
-
-async function persistTripCompletedInDb(tripId: string): Promise<boolean> {
-  const now = new Date().toISOString();
-  const { error } = await supabase
-    .from('trips')
-    .update({ status: 'Completed', actual_arrival: now, updated_at: now })
-    .eq('id', tripId);
-  if (error) {
-    console.error('persistTripCompletedInDb', error);
-    return false;
-  }
-  return true;
-}
-
 export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusChange, onTripStatusChange }: TripDetailsModalProps) {
-  const { addAuditLog, session, employeeName, role, branch } = useAppContext();
+  const { addAuditLog, session, employeeName, employeeId, role, branch } = useAppContext();
   const [ordersData, setOrdersData] = useState<TripOrder[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
   // Per-order dispatch status (Scheduled → Loading → Packed, then in transit with qty modal)
@@ -199,10 +177,13 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
             .eq('branch_id', branchId)
             .maybeSingle();
 
-          if (stockRow) {
-            const newQty = Math.max(0, Number(stockRow.quantity) - row.shippedQuantity);
-            await supabase.from('product_variant_stock').update({ quantity: newQty }).eq('id', stockRow.id);
-          }
+          if (!stockRow) continue;
+
+          await deductVariantBranchStock({
+            variantId: item.variantId,
+            branchId,
+            quantity: row.shippedQuantity,
+          });
 
           await supabase.from('product_stock_movements').insert({
             variant_id: item.variantId,
@@ -256,13 +237,27 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
           ),
         );
         onOrderStatusChange?.(trip.id, orderId, nextOrderStatus);
+        if (nextOrderStatus === 'Packed') {
+          void notifyOrderPacked(orderId, { markedBy: employeeName?.trim() || null }).catch((notifyErr) => {
+            console.warn('[TripDetailsModal] order packed notification failed', notifyErr);
+          });
+        } else if (nextOrderStatus === 'In Transit') {
+          void notifyOrderInTransit(orderId, {
+            markedBy: employeeName?.trim() || null,
+            tripNumber: trip.tripNumber,
+            vehicleName: trip.vehicleName ?? null,
+            driverName: trip.driverName ?? null,
+          }).catch((notifyErr) => {
+            console.warn('[TripDetailsModal] order in transit notification failed', notifyErr);
+          });
+        }
       } catch (err) {
         console.error('applyTripShipment error', err);
       } finally {
         setInTransitSubmitting(false);
       }
     },
-    [branch, session, trip, addAuditLog, onOrderStatusChange],
+    [branch, session, trip, addAuditLog, onOrderStatusChange, employeeName],
   );
 
   const handleConfirmPackShipment = useCallback(
@@ -276,7 +271,11 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
     [inTransitOrder, applyTripShipment],
   );
 
-  const handleFulfillOrder = useCallback(async (fulfillmentData: FulfillmentData[], proofImageUrls: string[]) => {
+  const handleFulfillOrder = useCallback(async (
+    fulfillmentData: FulfillmentData[],
+    proofImageUrls: string[],
+    proofDetails?: DeliveryProofDetails,
+  ) => {
     if (!proofTarget) return;
     const orderId = proofTarget.id;
     const target = ordersData.find((o) => o.order.id === orderId);
@@ -337,41 +336,21 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
 
     if (proofImageUrls.length > 0) {
       const uploaderRole = role === 'Logistics' || role === 'Driver' ? 'Logistics' : 'Agent';
-      const rows = proofImageUrls.map((fileUrl) => {
-        const raw = fileUrl.split('/').pop()?.split('?')[0] ?? 'image';
-        let fileName = raw;
-        try {
-          fileName = decodeURIComponent(raw);
-        } catch {
-          fileName = raw;
-        }
-        return {
-          order_id: orderId,
-          type: 'delivery' as const,
-          file_name: fileName,
-          file_url: fileUrl,
-          file_size: 0,
-          uploaded_by: actorLabel,
-          uploaded_by_role: uploaderRole,
-          status: 'verified' as const,
-          title: `Delivery — ${fileName}`,
-          notes: 'Recorded with delivery (gallery)',
-          payment_cash_amount: 0,
-          payment_credit_amount: 0,
-          payment_adjustment: 0,
-        };
+      const proofResult = await attachOrderDeliveryProofsAndNotify(orderId, proofImageUrls, {
+        uploadedBy: actorLabel,
+        uploadedByRole: uploaderRole,
+        title: proofDetails?.title ?? null,
+        notes: proofDetails?.notes ?? null,
+        uploaderEmployeeId: employeeId,
       });
-      const { error: pErr } = await insertOrderProofDocuments(rows);
-      if (pErr) {
-        console.error(pErr);
-        window.alert('Delivery saved but proof files could not be stored: ' + pErr);
-      } else {
-        addAuditLog?.(
-          'Proof of Delivery',
-          'Order',
-          `Attached ${proofImageUrls.length} image(s) with delivery for order ${target?.order.orderNumber ?? orderId}`,
-        );
+      if (!proofResult.ok) {
+        throw new Error(`Delivery saved but proof files could not be stored: ${proofResult.error ?? 'Unknown error'}`);
       }
+      addAuditLog?.(
+        'Proof of Delivery',
+        'Order',
+        `Attached ${proofImageUrls.length} image(s) with delivery for order ${target?.order.orderNumber ?? orderId}`,
+      );
     }
 
     addAuditLog?.(`Recorded delivery for order ${target?.order.orderNumber ?? orderId} (Trip ${trip.tripNumber}) → ${newStatus}`, 'order');
@@ -384,18 +363,19 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
       });
       return { ...o, order: { ...o.order, status: newStatus, items: updatedItems } };
     }));
+    setOrderStatuses((prev) => ({ ...prev, [orderId]: newStatus }));
     onOrderStatusChange?.(trip.id, orderId, newStatus);
 
-    // Auto-complete trip when every order is delivered, partially fulfilled, or cancelled (truck can return).
-    setOrderStatuses((latestStatuses) => {
-      const allStatuses = { ...latestStatuses, [orderId]: newStatus };
-      if (allTripOrdersAllowTruckReturn(trip.orders, allStatuses)) {
-        void (async () => {
-          const ok = await persistTripCompletedInDb(trip.id);
-          if (ok) onTripStatusChange?.(trip.id, 'Complete');
-        })();
-      }
-      return allStatuses;
+    void notifyOrderDeliveryRecorded(orderId, {
+      recordedBy: actorLabel?.trim() || null,
+      tripNumber: trip.tripNumber,
+    }).catch((notifyErr) => {
+      console.warn('[TripDetailsModal] delivery recorded notification failed', notifyErr);
+    });
+
+    // Auto-complete trip when every order on the trip is delivered (or cancelled).
+    void tryCompleteTripsForDeliveredOrder(orderId).then((completedIds) => {
+      if (completedIds.includes(trip.id)) onTripStatusChange?.(trip.id, 'Complete');
     });
 
     setShowProofModal(false);
@@ -478,8 +458,8 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
       console.warn('[trip] release order from trip failed:', release.error);
     }
 
-    if (release.tripsDeleted === 0 && allTripOrdersAllowTruckReturn(trip.orders, mergedStatuses)) {
-      const ok = await persistTripCompletedInDb(trip.id);
+    if (release.tripsDeleted === 0) {
+      const ok = await tryCompleteTripIfAllOrdersDelivered(trip.id);
       if (ok) onTripStatusChange?.(trip.id, 'Complete');
     }
 

@@ -1,15 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Badge } from '@/src/components/ui/Badge';
-import { Loader2, Printer, Truck, User, Package, History, Phone, Mail } from 'lucide-react';
+import { Loader2, Printer, Truck, User, Package, Phone, Mail } from 'lucide-react';
 import type { PublicOrderContact, PublicOrderLineItem } from '@/src/types/orderCustomerPortal';
-import { formatPublicOrderActivity } from '@/src/lib/publicOrderActivity';
 import { buildPublicOrderTotalsBreakdown, getItemDiscountLines } from '@/src/lib/publicOrderTotals';
 import lamtexLogo from '../assets/Lamtex Logo.png';
 import {
   fetchPublicOrderSummary,
   publicOrderErrorMessage,
 } from '@/src/lib/orderCustomerPortal';
+import { orderStatusBadgeVariant, paymentStatusBadgeVariant } from '@/src/lib/orderStatusBadges';
 import type { PublicOrderSummary } from '@/src/types/orderCustomerPortal';
 
 function formatDate(value?: string | null): string {
@@ -19,28 +19,8 @@ function formatDate(value?: string | null): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-function formatDateTime(value?: string | null): string {
-  if (!value) return '\u2014';
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return value;
-  return d.toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-}
-
 function formatMoney(n: number): string {
   return `\u20B1${n.toLocaleString('en-PH', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
-}
-
-function paymentStatusVariant(status: string): 'success' | 'warning' | 'default' {
-  const s = status.toLowerCase();
-  if (s === 'paid' || s === 'completed') return 'success';
-  if (s.includes('partial') || s.includes('overdue') || s.includes('credit')) return 'warning';
-  return 'default';
 }
 
 function DetailRow({ label, value }: { label: string; value: string }) {
@@ -181,8 +161,8 @@ export function OrderCustomerViewPage() {
                 )}
                 <p className="text-sm text-gray-600">Order #{s.orderNumber}</p>
                 <div className="mt-2 flex flex-wrap gap-2 sm:justify-end">
-                  <Badge variant={paymentStatusVariant(s.paymentStatus)}>{s.paymentStatus}</Badge>
-                  <Badge variant="default">{s.status}</Badge>
+                  <Badge variant={paymentStatusBadgeVariant(s.paymentStatus)}>{s.paymentStatus}</Badge>
+                  <Badge variant={orderStatusBadgeVariant(s.status)}>{s.status}</Badge>
                 </div>
               </div>
             </div>
@@ -203,7 +183,7 @@ export function OrderCustomerViewPage() {
               <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Order details</h2>
               <dl className="space-y-1.5 text-sm">
                 <DetailRow label="Order date" value={formatDate(s.orderDate)} />
-                {s.requiredDate && <DetailRow label="Required by" value={formatDate(s.requiredDate)} />}
+                <DetailRow label="Delivered" value={formatDate(s.actualDelivery)} />
                 {s.issueDate && <DetailRow label="Invoice date" value={formatDate(s.issueDate)} />}
                 {s.dueDate && <DetailRow label="Due date" value={formatDate(s.dueDate)} />}
                 {s.paymentTerms && <DetailRow label="Payment terms" value={s.paymentTerms} />}
@@ -219,7 +199,11 @@ export function OrderCustomerViewPage() {
                 <ContactCard title="Sales agent" icon={User} person={s.agent} />
               )}
               {s.assignedDriver && (
-                <ContactCard title="Assigned driver" icon={Truck} person={s.assignedDriver} />
+                <ContactCard
+                  title="Assigned driver"
+                  icon={Truck}
+                  person={s.assignedDriver}
+                />
               )}
             </section>
           )}
@@ -329,37 +313,6 @@ export function OrderCustomerViewPage() {
               </div>
             </div>
           </div>
-
-          {(() => {
-            const activityLines = s.activities
-              .map((a) => ({ at: a.at, message: formatPublicOrderActivity(a) }))
-              .filter((row) => row.message.trim().length > 0);
-            if (activityLines.length === 0) return null;
-            return (
-              <section className="mb-8 border-t border-gray-200 pt-6">
-                <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3 flex items-center gap-1">
-                  <History className="w-4 h-4" />
-                  Order updates
-                </h2>
-                <ul className="space-y-2">
-                  {activityLines.map((row, i) => (
-                    <li
-                      key={`${row.at}-${i}`}
-                      className="flex flex-col sm:flex-row sm:justify-between gap-1 text-sm p-3 bg-slate-50 border border-slate-200 rounded-lg"
-                    >
-                      <span className="text-gray-900">{row.message}</span>
-                      <span className="text-gray-500 text-xs sm:text-sm shrink-0">
-                        {formatDateTime(row.at)}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-                <p className="text-xs text-gray-500 mt-3">
-                  Updates to items, pricing, delivery status, and other changes on your order.
-                </p>
-              </section>
-            );
-          })()}
 
           {(s.orderNotes || s.invoiceNotes) && (
             <section className="mb-8 p-4 bg-amber-50 border border-amber-100 rounded-lg">

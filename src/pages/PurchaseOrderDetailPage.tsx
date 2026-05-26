@@ -2,14 +2,33 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom';
 import RawMaterialPickerModal from '@/src/components/products/RawMaterialPickerModal';
 import ImageGalleryModal from '@/src/components/ImageGalleryModal';
+import PurchaseOrderDocumentsProofs, {
+  attachPoDeliveryProofDocuments,
+  type PoProofUploadTrigger,
+} from '@/src/components/purchaseOrders/PurchaseOrderDocumentsProofs';
+import { PO_PROOF_GALLERY_FOLDER } from '@/src/lib/purchaseOrderProofPayments';
+import {
+  effectivePurchaseOrderTotal,
+  formatPoMoney,
+  sumPurchaseOrderLineItemsTotal,
+} from '@/src/lib/purchaseOrderTotals';
 import { poLogCardHeadline, PoActivityLogHumanDetails } from '@/src/components/purchaseOrders/PoActivityLogHuman';
 import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
+import { ModalPortal } from '@/src/components/ui/ModalPortal';
 import { supabase } from '@/src/lib/supabase';
 import { insertRawMaterialLog } from '@/src/lib/domainActivityLog';
 import { addRawMaterialInboundAggregateOnly, addRawMaterialInboundAtBranch } from '@/src/lib/rawMaterialInbound';
+import {
+  notifyExecutivesAndWarehousePurchaseOrderConfirmed,
+  notifyExecutivesAndWarehousePurchaseOrderReceived,
+  notifyExecutivesPurchaseOrderSubmittedForApproval,
+  notifyPurchaseOrderSubmitterAccepted,
+  notifyPurchaseOrderSubmitterCancelled,
+  notifyPurchaseOrderSubmitterRejected,
+} from '@/src/lib/notifications/notificationsData';
 import {
   ArrowLeft,
   ShoppingCart,
@@ -34,9 +53,7 @@ import {
   PackageCheck,
   ImageIcon,
   Upload,
-  ZoomIn,
   CreditCard,
-  Banknote,
   ClipboardList,
   XCircle,
   ShieldCheck,
@@ -46,24 +63,12 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 
-const IMAGES_BUCKET = 'images';
-const PO_RECEIPTS_FOLDER = 'po-receipts';
 
 // ── Types ──────────────────────────────────────────────────
 type POStatus = 'Draft' | 'Requested' | 'Rejected' | 'Accepted' | 'Sent' | 'Confirmed' | 'Partially Received' | 'Completed' | 'Cancelled';
 type PaymentStatus   = 'Unpaid' | 'Partially Paid' | 'Paid' | 'Overdue';
 const PAYMENT_METHODS = ['Cash', 'Bank Transfer', 'Check', 'Online Transfer', 'Credit Card'] as const;
 
-interface ReceiptRow {
-  id: string;
-  order_id: string;
-  file_url: string;
-  file_name: string;
-  file_size: number | null;
-  note: string | null;
-  uploaded_by: string | null;
-  created_at: string;
-}
 
 interface POLogRow {
   id: string;
@@ -110,6 +115,8 @@ interface PORow {
   currency: string;
   notes: string | null;
   created_by: string | null;
+  submitted_by: string | null;
+  submitted_at: string | null;
   accepted_by: string | null;
   accepted_at: string | null;
   rejected_by: string | null;
@@ -186,7 +193,7 @@ const logRoleMap: Record<string, string> = {
 export function PurchaseOrderDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { branch, role, session, employeeName, addAuditLog } = useAppContext();
+  const { branch, role, session, employeeName, employeeId, addAuditLog } = useAppContext();
 
   const [po, setPO]               = useState<PORow | null>(null);
   const [items, setItems]         = useState<POItemRow[]>([]);
@@ -210,8 +217,15 @@ export function PurchaseOrderDetailPage() {
     setStagedItems(updater);
   };
   const [editForm, setEditForm]         = useState<Partial<PORow>>({});
-  // Supplier list for the dropdown
-  const [supplierList, setSupplierList] = useState<{ id: string; name: string; payment_terms: string | null; preferred_supplier: boolean }[]>([]);
+  // Supplier list for the dropdown — branch-linked, preferred first, then alphabetical
+  type SupplierOption = {
+    id: string;
+    name: string;
+    payment_terms: string | null;
+    preferred_supplier: boolean;
+    supplier_branches: { branch_id: string }[];
+  };
+  const [supplierList, setSupplierList] = useState<SupplierOption[]>([]);
   const [eligibleSupplierIds, setEligibleSupplierIds]   = useState<Set<string> | null>(null);
   const [eligibleSuppliersLoading, setEligibleSuppliersLoading] = useState(false);
   // Staged items — all changes live here during editing; committed on Save
@@ -228,20 +242,11 @@ export function PurchaseOrderDetailPage() {
   // IDs of items whose material price should be updated when quantity_received > 0
   const [priceUpdateItems, setPriceUpdateItems]       = useState<Set<string>>(new Set());
 
-  // ── Receipts (proofs of receiving) ───────────────────────
-  const [receipts, setReceipts]               = useState<ReceiptRow[]>([]);
+  // ── Activity log ───────────────────────────────────────
   const [poLogs, setPoLogs]                    = useState<POLogRow[]>([]);
-  const [lightboxUrl, setLightboxUrl]         = useState<string | null>(null);
-  // Gallery modal for edit mode (add more images directly to PO)
-  const [showReceiptGallery, setShowReceiptGallery] = useState(false);
 
-  // ── Payment modal ────────────────────────────────────────
-  const [showPayment, setShowPayment]         = useState(false);
-  const [paymentSaving, setPaymentSaving]     = useState(false);
-  const [paymentAmount, setPaymentAmount]     = useState('');
-  const [paymentMethod, setPaymentMethod]     = useState('Bank Transfer');
-  const [paymentDate, setPaymentDate]         = useState('');
-  const [paymentNoteInput, setPaymentNoteInput] = useState('');
+  // ── Proof upload trigger (Record Payment opens payment proof modal) ──
+  const [proofUploadTrigger, setProofUploadTrigger] = useState<PoProofUploadTrigger>(null);
 
   // ── Receive mode ─────────────────────────────────────────
   const [isReceiving, setIsReceiving]                 = useState(false);
@@ -319,16 +324,6 @@ export function PurchaseOrderDetailPage() {
     }
   }, [id]);
 
-  const fetchReceipts = useCallback(async () => {
-    if (!id) return;
-    const { data } = await supabase
-      .from('purchase_order_receipts')
-      .select('*')
-      .eq('order_id', id)
-      .order('created_at');
-    setReceipts((data ?? []) as ReceiptRow[]);
-  }, [id]);
-
   const insertPoLog = useCallback(
     async (
       action: string,
@@ -358,18 +353,29 @@ export function PurchaseOrderDetailPage() {
     [id, role, session, employeeName, fetchPoLogs],
   );
 
-  useEffect(() => { fetchPO(); fetchReceipts(); }, [fetchPO, fetchReceipts]);
+  useEffect(() => { fetchPO(); }, [fetchPO]);
 
-  // Fetch all suppliers for the dropdown — preferred first, then alphabetical
+  // Fetch active suppliers with branch assignments
   useEffect(() => {
     supabase
       .from('suppliers')
-      .select('id, name, payment_terms, preferred_supplier')
+      .select('id, name, payment_terms, preferred_supplier, supplier_branches(branch_id)')
       .eq('status', 'Active')
       .order('preferred_supplier', { ascending: false })
       .order('name')
-      .then(({ data }) => setSupplierList(data ?? []));
+      .then(({ data }) => setSupplierList((data ?? []) as SupplierOption[]));
   }, []);
+
+  const poBranchId = po?.branch_id ?? null;
+
+  const branchLinkedSuppliers = useMemo(() => {
+    if (!poBranchId) return supplierList;
+    const keepId = po?.supplier_id ?? null;
+    return supplierList.filter((s) =>
+      s.supplier_branches.some((sb) => sb.branch_id === poBranchId) ||
+      (keepId != null && s.id === keepId),
+    );
+  }, [supplierList, poBranchId, po?.supplier_id]);
 
   // Suppliers that list every material on this PO (e.g. BOM from product) — required materials ⊆ supplier’s catalogue
   const materialIdsOnPO = useMemo(() => {
@@ -422,11 +428,14 @@ export function PurchaseOrderDetailPage() {
 
   const selectedSupplierIdForFilter = (editForm.supplier_id ?? po?.supplier_id) ?? null;
   const suppliersForSelect = useMemo(() => {
-    if (eligibleSupplierIds === null) return supplierList;
-    return supplierList.filter(
-      s => eligibleSupplierIds.has(s.id) || s.id === selectedSupplierIdForFilter,
-    );
-  }, [supplierList, eligibleSupplierIds, selectedSupplierIdForFilter]);
+    let list = branchLinkedSuppliers;
+    if (eligibleSupplierIds !== null) {
+      list = list.filter(
+        (s) => eligibleSupplierIds.has(s.id) || s.id === selectedSupplierIdForFilter,
+      );
+    }
+    return list;
+  }, [branchLinkedSuppliers, eligibleSupplierIds, selectedSupplierIdForFilter]);
 
   // ── Helpers for receipt file staging ─────────────────────
   // ── Handlers ─────────────────────────────────────────────
@@ -453,7 +462,9 @@ export function PurchaseOrderDetailPage() {
     if (!po) return;
     setSaving(true);
     try {
-      // 1. Save PO header
+      // 1. Save PO header (+ line-item total when DB total is stale)
+      const saveLineTotal = sumPurchaseOrderLineItemsTotal(stagedItems);
+      const savePoTotal = effectivePurchaseOrderTotal(po.total_amount, saveLineTotal);
       const { error: poErr } = await supabase.from('purchase_orders').update({
         supplier_id:            editForm.supplier_id ?? po.supplier_id,
         status:                 editForm.status,
@@ -463,6 +474,7 @@ export function PurchaseOrderDetailPage() {
         payment_due_date:       (editForm.payment_due_date ?? '') || null,
         payment_method:         (editForm.payment_method  ?? '') || null,
         payment_notes:          (editForm.payment_notes   ?? '') || null,
+        total_amount:           savePoTotal,
       }).eq('id', po.id);
       if (poErr) throw poErr;
 
@@ -745,6 +757,11 @@ export function PurchaseOrderDetailPage() {
       const anyReceived  = updatedItems.some(i => i.quantity_received > 0);
       const newStatus = allFulfilled ? 'Completed' : anyReceived ? 'Partially Received' : po.status;
 
+      const totalReceived = items.reduce(
+        (s, it) => s + (parseFloat(receiveQtys[it.id] ?? '0') || 0),
+        0,
+      );
+
       if (newStatus !== po.status) {
         const { error: statusErr } = await supabase
           .from('purchase_orders')
@@ -756,18 +773,6 @@ export function PurchaseOrderDetailPage() {
         if (statusErr) throw statusErr;
       }
 
-      // 3. Insert DB records for receipt images selected via gallery (already uploaded/optimized)
-      for (const { url, name } of stagedReceiptUrls) {
-        const { error: insertErr } = await supabase
-          .from('purchase_order_receipts')
-          .insert({ order_id: po.id, file_url: url, file_name: name });
-        if (insertErr) throw insertErr;
-      }
-
-      const totalReceived = items.reduce(
-        (s, it) => s + (parseFloat(receiveQtys[it.id] ?? '0') || 0),
-        0,
-      );
       const receipt_lines = items
         .map((it) => {
           const addQty = parseFloat(receiveQtys[it.id] ?? '0') || 0;
@@ -791,8 +796,41 @@ export function PurchaseOrderDetailPage() {
         },
       );
 
+      if (totalReceived > 0) {
+        const actorForNotify =
+          employeeName && role ? `${employeeName} (${role})` : actorNameRecv;
+        try {
+          await notifyExecutivesAndWarehousePurchaseOrderReceived(po.id, {
+            receivedBy: actorForNotify,
+            quantityReceived: totalReceived,
+            isFullReceive: allFulfilled,
+          });
+        } catch (notifyErr) {
+          console.warn('[PurchaseOrderDetailPage] receive notification failed', notifyErr);
+        }
+      }
+
+      // Delivery proof images (optional — receive + notify already committed above)
+      const uploaderRole = role === 'Executive' ? 'Executive' : 'Warehouse';
+      if (stagedReceiptUrls.length > 0) {
+        const attach = await attachPoDeliveryProofDocuments(
+          po.id,
+          stagedReceiptUrls.map((r) => r.url),
+          { uploadedBy: actorNameRecv, uploadedByRole: uploaderRole, title: 'Delivery receipt' },
+        );
+        if (!attach.ok) {
+          console.warn('[PurchaseOrderDetailPage] delivery proof save failed', attach.error);
+          alert(
+            attach.error
+              ? `Receipt saved, but delivery proof could not be saved: ${attach.error}`
+              : 'Receipt saved, but delivery proof could not be saved.',
+          );
+        } else if (attach.count > 0) {
+          window.dispatchEvent(new Event('lamtex:notifications-refresh'));
+        }
+      }
+
       await fetchPO();
-      await fetchReceipts();
       setIsReceiving(false);
       setReceiveQtys({});
       setReceivePriceUpdate(new Set());
@@ -804,47 +842,6 @@ export function PurchaseOrderDetailPage() {
     }
   };
 
-  // ── Receipt image management (edit mode) ─────────────────
-  const handleAddReceiptImages = () => setShowReceiptGallery(true);
-
-  const handleReceiptGallerySelect = async (urls: string[]) => {
-    if (!po || !urls.length) return;
-    try {
-      for (const url of urls) {
-        const name = url.split('/').pop() ?? 'receipt';
-        const { error } = await supabase
-          .from('purchase_order_receipts')
-          .insert({ order_id: po.id, file_url: url, file_name: name });
-        if (error) throw error;
-      }
-      await insertPoLog(
-        'proof_uploaded',
-        `Added ${urls.length} proof of receiving image${urls.length === 1 ? '' : 's'}.`,
-        null,
-        null,
-        { count: urls.length, po_number: po.po_number },
-      );
-      await fetchReceipts();
-    } catch (err: any) {
-      alert(err.message);
-    }
-    setShowReceiptGallery(false);
-  };
-
-  const handleDeleteReceipt = async (receipt: ReceiptRow) => {
-    if (!confirm(`Remove "${receipt.file_name}"?`)) return;
-    // Extract storage path from public URL (everything after /images/)
-    const match = receipt.file_url.match(/\/images\/(.+)$/);
-    if (match) {
-      await supabase.storage.from(IMAGES_BUCKET).remove([match[1]]);
-    }
-    await supabase.from('purchase_order_receipts').delete().eq('id', receipt.id);
-    if (id) {
-      await insertPoLog('proof_removed', `Removed proof of receiving image: ${receipt.file_name}.`, { file_name: receipt.file_name }, null, { po_number: po?.po_number });
-    }
-    setReceipts(prev => prev.filter(r => r.id !== receipt.id));
-  };
-
   // ── Payment helpers ──────────────────────────────────────
   const getPaymentVariant = (s: PaymentStatus): 'success' | 'warning' | 'danger' | 'neutral' => {
     if (s === 'Paid')           return 'success';
@@ -853,51 +850,8 @@ export function PurchaseOrderDetailPage() {
     return 'neutral';
   };
 
-  const derivePaymentStatus = (paid: number, total: number, dueDate: string | null): PaymentStatus => {
-    if (paid >= total && total > 0)  return 'Paid';
-    if (paid > 0)                    return 'Partially Paid';
-    if (dueDate && new Date(dueDate) < new Date()) return 'Overdue';
-    return 'Unpaid';
-  };
-
   const handleOpenPayment = () => {
-    if (!po) return;
-    const remaining = Math.max(0, po.total_amount - (po.amount_paid ?? 0));
-    setPaymentAmount(remaining > 0 ? String(remaining) : '');
-    setPaymentMethod(po.payment_method ?? 'Bank Transfer');
-    setPaymentDate(new Date().toISOString().split('T')[0]);
-    setPaymentNoteInput('');
-    setShowPayment(true);
-  };
-
-  const handleRecordPayment = async () => {
-    if (!po) return;
-    setPaymentSaving(true);
-    try {
-      const adding     = parseFloat(paymentAmount) || 0;
-      const newPaid    = Math.min(po.total_amount, (po.amount_paid ?? 0) + adding);
-      const newStatus  = derivePaymentStatus(newPaid, po.total_amount, po.payment_due_date);
-      const { error } = await supabase.from('purchase_orders').update({
-        amount_paid:    newPaid,
-        payment_status: newStatus,
-        payment_method: paymentMethod,
-        payment_notes:  paymentNoteInput || po.payment_notes,
-      }).eq('id', po.id);
-      if (error) throw error;
-      await insertPoLog(
-        'payment_recorded',
-        `Recorded company payment: ₱${adding.toLocaleString()}. New payment status: ${newStatus}.`,
-        { amount_paid: po.amount_paid, payment_status: po.payment_status },
-        { amount_paid: newPaid, payment_status: newStatus, payment_method: paymentMethod },
-        { po_number: po.po_number, notes: paymentNoteInput || null },
-      );
-      await fetchPO();
-      setShowPayment(false);
-    } catch (e: any) {
-      alert(e.message);
-    } finally {
-      setPaymentSaving(false);
-    }
+    setProofUploadTrigger({ ts: Date.now(), type: 'payment' });
   };
 
   const isOverdue =
@@ -908,6 +862,10 @@ export function PurchaseOrderDetailPage() {
 
   // Receive / pay only when the order is in a fulfillment-capable state (not while awaiting approval or confirm)
   const canReceiveOrRecordPayment = po && !['Completed', 'Cancelled', 'Draft', 'Requested', 'Rejected', 'Accepted'].includes(po.status);
+
+  // Proof uploads — broader than receive; still block draft / approval / cancelled
+  const canUploadPoProofs =
+    !!po && !['Draft', 'Requested', 'Rejected', 'Cancelled'].includes(po.status);
 
   // Payment summary card only after Confirm Order (Confirmed) or receiving / done
   const showPaymentSummary =
@@ -928,11 +886,26 @@ export function PurchaseOrderDetailPage() {
     setApprovalLoading(true);
     const actor = employeeName || session?.user?.email || role;
     const now = new Date().toISOString();
+    const debug = {
+      currentAuthUserId: session?.user?.id ?? null,
+      trigger: 'PurchaseOrderDetailPage.handleSubmitForApproval',
+    };
+    console.log('[PurchaseOrderDetailPage] submit for approval start', {
+      poId: po.id,
+      poNumber: po.po_number,
+      actor,
+      employeeId,
+      ...debug,
+    });
     try {
       const { error } = await supabase
         .from('purchase_orders')
         .update({
           status: 'Requested',
+          submitted_by: actor,
+          submitted_at: now,
+          submitted_by_auth_user_id: session?.user?.id ?? null,
+          submitted_by_employee_id: employeeId ?? null,
           updated_at: now,
         })
         .eq('id', po.id);
@@ -941,10 +914,17 @@ export function PurchaseOrderDetailPage() {
         'submitted',
         `Submitted for approval by ${actor}. Pending manager or executive review.`,
         { status: 'Draft' },
-        { status: 'Requested' },
+        { status: 'Requested', submitted_by: actor, submitted_at: now },
       );
-      await fetchPO();
       setShowSubmitModal(false);
+      console.log('[PurchaseOrderDetailPage] PO updated to Requested — calling notify RPC (same pattern as orders)');
+      try {
+        const count = await notifyExecutivesPurchaseOrderSubmittedForApproval(po.id, debug);
+        console.log('[PurchaseOrderDetailPage] submit notification complete', { insertedCount: count });
+      } catch (notifyErr) {
+        console.warn('[PurchaseOrderDetailPage] submit notification failed', notifyErr);
+      }
+      await fetchPO();
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : 'Failed to submit for approval');
     } finally {
@@ -957,6 +937,18 @@ export function PurchaseOrderDetailPage() {
     setApprovalLoading(true);
     const actor = employeeName || session?.user?.email || role;
     const now   = new Date().toISOString();
+    const debug = {
+      currentAuthUserId: session?.user?.id ?? null,
+      trigger: 'PurchaseOrderDetailPage.handleAcceptRequest',
+    };
+    const acceptedByForNotify =
+      employeeName && role ? `${employeeName} (${role})` : actor;
+    console.log('[PurchaseOrderDetailPage] accept PO start', {
+      poId: po.id,
+      actor,
+      acceptedByForNotify,
+      ...debug,
+    });
     try {
       const { error } = await supabase.from('purchase_orders').update({
         status: 'Accepted',
@@ -972,8 +964,19 @@ export function PurchaseOrderDetailPage() {
         { status: po.status },
         { status: 'Accepted', accepted_by: actor, accepted_at: now },
       );
-      await fetchPO();
       setShowAcceptModal(false);
+      console.log('[PurchaseOrderDetailPage] PO updated to Accepted — calling notify RPC');
+      try {
+        const count = await notifyPurchaseOrderSubmitterAccepted(
+          po.id,
+          acceptedByForNotify,
+          debug,
+        );
+        console.log('[PurchaseOrderDetailPage] accept notification complete', { insertedCount: count });
+      } catch (notifyErr) {
+        console.warn('[PurchaseOrderDetailPage] accept notification failed', notifyErr);
+      }
+      await fetchPO();
     } catch (e: any) {
       alert(e.message ?? 'Failed to accept');
     } finally {
@@ -986,6 +989,19 @@ export function PurchaseOrderDetailPage() {
     setApprovalLoading(true);
     const actor = employeeName || session?.user?.email || role;
     const reason = rejectionReason.trim();
+    const debug = {
+      currentAuthUserId: session?.user?.id ?? null,
+      trigger: 'PurchaseOrderDetailPage.handleRejectRequest',
+    };
+    const rejectedByForNotify =
+      employeeName && role ? `${employeeName} (${role})` : actor;
+    console.log('[PurchaseOrderDetailPage] reject PO start', {
+      poId: po.id,
+      actor,
+      rejectedByForNotify,
+      reason,
+      ...debug,
+    });
     try {
       const { error } = await supabase.from('purchase_orders').update({
         status: 'Rejected',
@@ -1005,9 +1021,21 @@ export function PurchaseOrderDetailPage() {
         { status: 'Rejected', rejected_by: actor, rejection_reason: reason || null },
         reason ? { reason } : null,
       );
-      await fetchPO();
       setShowRejectModal(false);
       setRejectionReason('');
+      console.log('[PurchaseOrderDetailPage] PO updated to Rejected — calling notify RPC');
+      try {
+        const count = await notifyPurchaseOrderSubmitterRejected(
+          po.id,
+          rejectedByForNotify,
+          reason || null,
+          debug,
+        );
+        console.log('[PurchaseOrderDetailPage] reject notification complete', { insertedCount: count });
+      } catch (notifyErr) {
+        console.warn('[PurchaseOrderDetailPage] reject notification failed', notifyErr);
+      }
+      await fetchPO();
     } catch (e: any) {
       alert(e.message ?? 'Failed to reject');
     } finally {
@@ -1021,6 +1049,29 @@ export function PurchaseOrderDetailPage() {
     const actor = employeeName || session?.user?.email || role;
     const now = new Date().toISOString();
     const note = cancelPoNote.trim();
+    const debug = {
+      currentAuthUserId: session?.user?.id ?? null,
+      trigger: 'PurchaseOrderDetailPage.handleCancelPurchaseOrder',
+    };
+    const submitterRef = (po.submitted_by ?? po.created_by ?? '').trim();
+    const isWarehouseSelfCancel =
+      role === 'Warehouse' &&
+      !!submitterRef &&
+      (submitterRef === actor ||
+        (!!employeeName && submitterRef === employeeName) ||
+        (!!session?.user?.email && submitterRef === session.user.email));
+    const cancelledByForNotify =
+      employeeName && role ? `${employeeName} (${role})` : actor;
+
+    console.log('[PurchaseOrderDetailPage] cancel PO start', {
+      poId: po.id,
+      actor,
+      cancelledByForNotify,
+      submitterRef,
+      isWarehouseSelfCancel,
+      note,
+      ...debug,
+    });
     try {
       const { error } = await supabase.from('purchase_orders').update({
         status: 'Cancelled',
@@ -1039,9 +1090,25 @@ export function PurchaseOrderDetailPage() {
         note ? { note } : null,
       );
       addAuditLog('Cancelled PO', 'Purchase', note ? `${po.po_number}: ${note}` : po.po_number);
-      await fetchPO();
       setShowCancelPoModal(false);
       setCancelPoNote('');
+      if (isWarehouseSelfCancel) {
+        console.log('[PurchaseOrderDetailPage] skip cancel notify — warehouse user cancelled their own PO');
+      } else {
+        console.log('[PurchaseOrderDetailPage] PO updated to Cancelled — calling notify RPC');
+        try {
+          const count = await notifyPurchaseOrderSubmitterCancelled(
+            po.id,
+            cancelledByForNotify,
+            note || null,
+            debug,
+          );
+          console.log('[PurchaseOrderDetailPage] cancel notification complete', { insertedCount: count });
+        } catch (notifyErr) {
+          console.warn('[PurchaseOrderDetailPage] cancel notification failed', notifyErr);
+        }
+      }
+      await fetchPO();
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : 'Failed to cancel');
     } finally {
@@ -1053,15 +1120,39 @@ export function PurchaseOrderDetailPage() {
   const handleConfirmOrder = async () => {
     if (!po) return;
     setWorkflowSaving(true);
+    const actor = employeeName || session?.user?.email || role;
+    const debug = {
+      currentAuthUserId: session?.user?.id ?? null,
+      trigger: 'PurchaseOrderDetailPage.handleConfirmOrder',
+    };
+    const confirmedByForNotify =
+      employeeName && role ? `${employeeName} (${role})` : actor;
+    console.log('[PurchaseOrderDetailPage] confirm PO start', {
+      poId: po.id,
+      actor,
+      confirmedByForNotify,
+      ...debug,
+    });
     try {
       const { error } = await supabase.from('purchase_orders').update({ status: 'Confirmed' }).eq('id', po.id);
       if (error) throw error;
       await insertPoLog(
         'order_confirmed',
-        'Order confirmed with supplier (incoming). Receiving and payment can proceed.',
+        `Order confirmed with supplier by ${actor}. Receiving and payment can proceed.`,
         { status: 'Accepted' },
-        { status: 'Confirmed' },
+        { status: 'Confirmed', confirmed_by: actor },
       );
+      console.log('[PurchaseOrderDetailPage] PO updated to Confirmed — calling notify RPC');
+      try {
+        const count = await notifyExecutivesAndWarehousePurchaseOrderConfirmed(
+          po.id,
+          confirmedByForNotify,
+          debug,
+        );
+        console.log('[PurchaseOrderDetailPage] confirm notification complete', { insertedCount: count });
+      } catch (notifyErr) {
+        console.warn('[PurchaseOrderDetailPage] confirm notification failed', notifyErr);
+      }
       await fetchPO();
     } catch (e: any) {
       alert(e.message);
@@ -1072,7 +1163,8 @@ export function PurchaseOrderDetailPage() {
 
   // View mode uses real items; edit mode uses the working copy
   const displayItems = isEditing ? stagedItems : items;
-  const totalItemValue = displayItems.reduce((s, i) => s + i.unit_price * i.quantity_ordered, 0);
+  const totalItemValue = sumPurchaseOrderLineItemsTotal(displayItems);
+  const poTotalAmount = po ? effectivePurchaseOrderTotal(po.total_amount, totalItemValue) : 0;
 
   // ── Loading / Error ───────────────────────────────────────
   if (loading) {
@@ -1237,7 +1329,7 @@ export function PurchaseOrderDetailPage() {
           <CardContent className="p-4">
             <p className="text-xs text-gray-500 mb-1">Total Amount</p>
             <p className="text-lg font-bold text-gray-900">
-              {po.currency === 'USD' ? '$' : '₱'}{po.total_amount.toLocaleString()}
+              {formatPoMoney(poTotalAmount, po.currency)}
             </p>
           </CardContent>
         </Card>
@@ -1276,14 +1368,14 @@ export function PurchaseOrderDetailPage() {
                   <div className="hidden sm:block">
                     <p className="text-xs text-gray-500">Paid</p>
                     <p className="text-sm font-bold text-gray-900">
-                      {po.currency === 'USD' ? '$' : '₱'}{(po.amount_paid ?? 0).toLocaleString()}
-                      <span className="text-xs font-normal text-gray-400"> / {po.currency === 'USD' ? '$' : '₱'}{po.total_amount.toLocaleString()}</span>
+                      {formatPoMoney(po.amount_paid ?? 0, po.currency)}
+                      <span className="text-xs font-normal text-gray-400"> / {formatPoMoney(poTotalAmount, po.currency)}</span>
                     </p>
                   </div>
                   <div className="hidden sm:block">
                     <p className="text-xs text-gray-500">Remaining</p>
                     <p className="text-sm font-bold text-blue-700">
-                      {po.currency === 'USD' ? '$' : '₱'}{Math.max(0, po.total_amount - (po.amount_paid ?? 0)).toLocaleString()}
+                      {formatPoMoney(Math.max(0, poTotalAmount - (po.amount_paid ?? 0)), po.currency)}
                     </p>
                   </div>
                   {po.payment_due_date && (
@@ -1303,12 +1395,12 @@ export function PurchaseOrderDetailPage() {
                 </div>
                 <div className="w-full sm:w-40">
                   <div className="flex justify-between text-xs text-gray-400 mb-1">
-                    <span>{Math.round(((po.amount_paid ?? 0) / (po.total_amount || 1)) * 100)}% paid</span>
+                    <span>{Math.round(((po.amount_paid ?? 0) / (poTotalAmount || 1)) * 100)}% paid</span>
                   </div>
                   <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
                     <div
                       className="h-2 rounded-full bg-blue-500 transition-all"
-                      style={{ width: `${Math.min(100, ((po.amount_paid ?? 0) / (po.total_amount || 1)) * 100)}%` }}
+                      style={{ width: `${Math.min(100, ((po.amount_paid ?? 0) / (poTotalAmount || 1)) * 100)}%` }}
                     />
                   </div>
                 </div>
@@ -1426,6 +1518,11 @@ export function PurchaseOrderDetailPage() {
                         </span>
                       )}
                     </div>
+                    {poBranchId && (
+                      <p className="text-xs text-gray-500 mb-2">
+                        Only suppliers assigned to <span className="font-medium">{po.branches?.name ?? branch ?? 'this branch'}</span> are listed.
+                      </p>
+                    )}
                     {eligibleSupplierIds !== null && materialIdsOnPO.length > 0 && !eligibleSuppliersLoading && (
                       <p className="text-xs text-amber-800/90 bg-amber-50 border border-amber-100 rounded-lg px-2.5 py-1.5 mb-2">
                         Only suppliers that stock <span className="font-semibold">all {materialIdsOnPO.length} material{materialIdsOnPO.length !== 1 ? 's' : ''}</span> on this order are shown.
@@ -1755,86 +1852,27 @@ export function PurchaseOrderDetailPage() {
 
       </div>
 
-      {/* ── Proofs of Receiving ─────────────────────────────── */}
-      <Card>
-        <CardContent className="p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
-              <ImageIcon className="w-4 h-4" /> Proofs of Receiving
-              {receipts.length > 0 && (
-                <span className="text-xs font-normal text-gray-400">({receipts.length} image{receipts.length !== 1 ? 's' : ''})</span>
-              )}
-            </h2>
-            {isEditing && (
-              <button
-                onClick={handleAddReceiptImages}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-              >
-                <Upload className="w-3.5 h-3.5" /> Add Images
-              </button>
-            )}
-          </div>
-
-          {receipts.length === 0 ? (
-            <div
-              className={`flex flex-col items-center justify-center py-10 text-center rounded-xl border-2 border-dashed transition-colors ${isEditing ? 'border-gray-300 cursor-pointer hover:border-indigo-400 hover:bg-indigo-50' : 'border-gray-100'}`}
-              onClick={isEditing ? handleAddReceiptImages : undefined}
-            >
-              <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center mb-3">
-                <ImageIcon className="w-6 h-6 text-gray-300" />
-              </div>
-              <p className="text-sm text-gray-400">{isEditing ? 'Click to upload images' : 'No proofs uploaded yet'}</p>
-              <p className="text-xs text-gray-300 mt-1">{isEditing ? 'Or attach them when confirming a receipt' : 'Upload images when confirming a receipt'}</p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-              {receipts.map(receipt => (
-                <div key={receipt.id} className="group relative rounded-xl overflow-hidden border border-gray-200 bg-gray-50 aspect-square cursor-pointer"
-                  onClick={() => !isEditing && setLightboxUrl(receipt.file_url)}
-                >
-                  <img
-                    src={receipt.file_url}
-                    alt={receipt.file_name}
-                    className="w-full h-full object-cover transition-transform group-hover:scale-105"
-                    onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                  />
-                  {/* View overlay (view mode) */}
-                  {!isEditing && (
-                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center">
-                      <ZoomIn className="w-6 h-6 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
-                    </div>
-                  )}
-                  {/* Delete button (edit mode) */}
-                  {isEditing && (
-                    <button
-                      onClick={e => { e.stopPropagation(); handleDeleteReceipt(receipt); }}
-                      className="absolute top-1.5 right-1.5 w-6 h-6 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                  <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent px-2 py-1.5">
-                    <p className="text-white text-[10px] truncate">{receipt.file_name}</p>
-                    <p className="text-white/70 text-[9px]">
-                      {new Date(receipt.created_at).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}
-                    </p>
-                  </div>
-                </div>
-              ))}
-              {/* Inline add tile (edit mode) */}
-              {isEditing && (
-                <div
-                  onClick={handleAddReceiptImages}
-                  className="group relative rounded-xl overflow-hidden border-2 border-dashed border-gray-300 bg-gray-50 aspect-square cursor-pointer hover:border-indigo-400 hover:bg-indigo-50 flex flex-col items-center justify-center gap-1 transition-colors"
-                >
-                  <Upload className="w-5 h-5 text-gray-400 group-hover:text-indigo-500" />
-                  <span className="text-xs text-gray-400 group-hover:text-indigo-500">Add more</span>
-                </div>
-              )}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      {/* ── Documents & Proofs (same pattern as customer orders) ── */}
+      {po && (
+        <PurchaseOrderDocumentsProofs
+          po={{
+            id: po.id,
+            po_number: po.po_number,
+            total_amount: poTotalAmount,
+            amount_paid: po.amount_paid,
+            payment_status: po.payment_status,
+            payment_due_date: po.payment_due_date,
+            currency: po.currency,
+          }}
+          canUpload={canUploadPoProofs}
+          role={role}
+          employeeName={employeeName}
+          sessionEmail={session?.user?.email ?? null}
+          uploadModalTrigger={proofUploadTrigger}
+          onPoRefresh={() => void fetchPO()}
+          onInsertLog={insertPoLog}
+        />
+      )}
 
       {/* Activity log (same account / role pattern as customer orders) */}
       <Card>
@@ -1964,32 +2002,11 @@ export function PurchaseOrderDetailPage() {
         </CardContent>
       </Card>
 
-      {/* Lightbox */}
-      {lightboxUrl && (
-        <div
-          className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4"
-          onClick={() => setLightboxUrl(null)}
-        >
-          <button
-            className="absolute top-4 right-4 text-white hover:text-gray-300"
-            onClick={() => setLightboxUrl(null)}
-          >
-            <X className="w-7 h-7" />
-          </button>
-          <img
-            src={lightboxUrl}
-            alt="Receipt proof"
-            className="max-h-[90vh] max-w-[90vw] rounded-xl shadow-2xl object-contain"
-            onClick={e => e.stopPropagation()}
-          />
-        </div>
-      )}
-
       {/* Material picker modal */}
       <RawMaterialPickerModal
         isOpen={showPicker}
         onClose={() => setShowPicker(false)}
-        branch={branch}
+        branch={po?.branches?.name ?? branch ?? ''}
         alreadyAdded={stagedItems.map(i => i.material_id ?? '')}
         onSelect={handlePickerSelect}
         supplierId={editForm.supplier_id ?? po?.supplier_id ?? null}
@@ -2000,20 +2017,11 @@ export function PurchaseOrderDetailPage() {
         }
       />
 
-      {/* Receipt gallery — edit mode (inserts DB record immediately on select) */}
-      <ImageGalleryModal
-        isOpen={showReceiptGallery}
-        onClose={() => setShowReceiptGallery(false)}
-        folder={`${PO_RECEIPTS_FOLDER}/${po?.id ?? 'unknown'}`}
-        maxImages={20}
-        onSelectImages={handleReceiptGallerySelect}
-      />
-
       {/* Receipt gallery — receive modal (stages URLs, inserted on confirm) */}
       <ImageGalleryModal
         isOpen={showReceiveGallery}
         onClose={() => setShowReceiveGallery(false)}
-        folder={`${PO_RECEIPTS_FOLDER}/${po?.id ?? 'unknown'}`}
+        folder={`${PO_PROOF_GALLERY_FOLDER}/${po?.id ?? 'unknown'}/delivery`}
         maxImages={20}
         currentImages={stagedReceiptUrls.map(r => r.url)}
         onSelectImages={urls => {
@@ -2027,8 +2035,7 @@ export function PurchaseOrderDetailPage() {
       />
 
       {/* ── Receive Delivery Modal ── */}
-      {isReceiving && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 overflow-y-auto">
+      <ModalPortal open={isReceiving} backdropClassName="bg-black/60" onBackdropClick={handleCancelReceive}>
           <div
             className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col"
             onClick={e => e.stopPropagation()}
@@ -2226,148 +2233,14 @@ export function PurchaseOrderDetailPage() {
               </div>
             </div>
           </div>
-        </div>
-      )}
-
-      {/* ── Record Payment Modal ── */}
-      {showPayment && po && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-          <div
-            className="bg-white rounded-xl shadow-xl w-full max-w-md flex flex-col"
-            onClick={e => e.stopPropagation()}
-          >
-            {/* Header */}
-            <div className="border-b border-gray-200 px-6 py-4 flex items-center justify-between rounded-t-xl">
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-lg bg-blue-100 flex items-center justify-center">
-                  <CreditCard className="w-5 h-5 text-blue-600" />
-                </div>
-                <div>
-                  <h2 className="text-base font-bold text-gray-900">Record Payment</h2>
-                  <p className="text-xs text-gray-500">{po.po_number} · {po.suppliers?.name ?? '—'}</p>
-                </div>
-              </div>
-              <button onClick={() => setShowPayment(false)} className="text-gray-400 hover:text-gray-600">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Body */}
-            <div className="px-6 py-5 space-y-4">
-              {/* Summary row */}
-              <div className="bg-gray-50 rounded-xl p-3 grid grid-cols-3 text-center divide-x divide-gray-200">
-                <div>
-                  <p className="text-xs text-gray-500">Total</p>
-                  <p className="text-sm font-bold text-gray-900">₱{po.total_amount.toLocaleString()}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500">Already Paid</p>
-                  <p className="text-sm font-bold text-green-600">₱{(po.amount_paid ?? 0).toLocaleString()}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500">Remaining</p>
-                  <p className="text-sm font-bold text-blue-700">₱{Math.max(0, po.total_amount - (po.amount_paid ?? 0)).toLocaleString()}</p>
-                </div>
-              </div>
-
-              {/* Amount input */}
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Amount Paying Now <span className="text-red-400">*</span></label>
-                <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">₱</span>
-                  <input
-                    type="number"
-                    min="0"
-                    max={Math.max(0, po.total_amount - (po.amount_paid ?? 0))}
-                    step="0.01"
-                    value={paymentAmount}
-                    onChange={e => setPaymentAmount(e.target.value)}
-                    className="w-full pl-7 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
-                    placeholder="0.00"
-                  />
-                </div>
-                {parseFloat(paymentAmount) > 0 && (
-                  <p className="text-xs text-gray-400 mt-1">
-                    New total paid: ₱{Math.min(po.total_amount, (po.amount_paid ?? 0) + (parseFloat(paymentAmount) || 0)).toLocaleString()}
-                    {' '}·{' '}
-                    <span className={
-                      derivePaymentStatus(Math.min(po.total_amount, (po.amount_paid ?? 0) + (parseFloat(paymentAmount) || 0)), po.total_amount, po.payment_due_date) === 'Paid'
-                        ? 'text-green-600 font-semibold'
-                        : 'text-amber-600 font-semibold'
-                    }>
-                      {derivePaymentStatus(Math.min(po.total_amount, (po.amount_paid ?? 0) + (parseFloat(paymentAmount) || 0)), po.total_amount, po.payment_due_date)}
-                    </span>
-                  </p>
-                )}
-              </div>
-
-              {/* Payment method */}
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Payment Method</label>
-                <select
-                  value={paymentMethod}
-                  onChange={e => setPaymentMethod(e.target.value)}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
-                >
-                  {PAYMENT_METHODS.map(m => (
-                    <option key={m} value={m}>{m}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Payment date */}
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Payment Date</label>
-                <input
-                  type="date"
-                  value={paymentDate}
-                  onChange={e => setPaymentDate(e.target.value)}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-
-              {/* Notes */}
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Notes <span className="text-gray-400 font-normal">(optional)</span></label>
-                <textarea
-                  rows={2}
-                  value={paymentNoteInput}
-                  onChange={e => setPaymentNoteInput(e.target.value)}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 resize-none"
-                  placeholder="e.g. Invoice #1234, partial deposit..."
-                />
-              </div>
-            </div>
-
-            {/* Footer */}
-            <div className="border-t border-gray-200 px-6 py-4 flex items-center justify-end gap-3 bg-gray-50 rounded-b-xl">
-              <button
-                onClick={() => setShowPayment(false)}
-                className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-100"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleRecordPayment}
-                disabled={paymentSaving || !parseFloat(paymentAmount)}
-                className="flex items-center gap-2 px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition-colors"
-              >
-                {paymentSaving
-                  ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</>
-                  : <><Banknote className="w-4 h-4" /> Confirm Payment</>
-                }
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      </ModalPortal>
 
       {/* ── Submit for approval (Draft → Requested) ── */}
-      {showSubmitModal && po && (
-        <div
-          className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
-          onClick={() => !approvalLoading && setShowSubmitModal(false)}
-        >
+      <ModalPortal
+        open={showSubmitModal && !!po}
+        backdropClassName="bg-black/60"
+        onBackdropClick={() => !approvalLoading && setShowSubmitModal(false)}
+      >
           <div
             className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden"
             onClick={e => e.stopPropagation()}
@@ -2406,15 +2279,14 @@ export function PurchaseOrderDetailPage() {
               </button>
             </div>
           </div>
-        </div>
-      )}
+      </ModalPortal>
 
       {/* ── Accept request modal ── */}
-      {showAcceptModal && po && (
-        <div
-          className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
-          onClick={() => !approvalLoading && setShowAcceptModal(false)}
-        >
+      <ModalPortal
+        open={showAcceptModal && !!po}
+        backdropClassName="bg-black/60"
+        onBackdropClick={() => !approvalLoading && setShowAcceptModal(false)}
+      >
           <div
             className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden"
             onClick={e => e.stopPropagation()}
@@ -2454,15 +2326,19 @@ export function PurchaseOrderDetailPage() {
               </button>
             </div>
           </div>
-        </div>
-      )}
+      </ModalPortal>
 
       {/* ── Reject request modal ── */}
-      {showRejectModal && po && (
-        <div
-          className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
-          onClick={() => { if (!approvalLoading) { setShowRejectModal(false); setRejectionReason(''); } }}
-        >
+      <ModalPortal
+        open={showRejectModal && !!po}
+        backdropClassName="bg-black/60"
+        onBackdropClick={() => {
+          if (!approvalLoading) {
+            setShowRejectModal(false);
+            setRejectionReason('');
+          }
+        }}
+      >
           <div
             className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden"
             onClick={e => e.stopPropagation()}
@@ -2514,19 +2390,18 @@ export function PurchaseOrderDetailPage() {
               </button>
             </div>
           </div>
-        </div>
-      )}
+      </ModalPortal>
 
-      {showCancelPoModal && po && (
-        <div
-          className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
-          onClick={() => {
-            if (!cancelPoLoading) {
-              setShowCancelPoModal(false);
-              setCancelPoNote('');
-            }
-          }}
-        >
+      <ModalPortal
+        open={showCancelPoModal && !!po}
+        backdropClassName="bg-black/60"
+        onBackdropClick={() => {
+          if (!cancelPoLoading) {
+            setShowCancelPoModal(false);
+            setCancelPoNote('');
+          }
+        }}
+      >
           <div
             className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden"
             onClick={(e) => e.stopPropagation()}
@@ -2580,8 +2455,7 @@ export function PurchaseOrderDetailPage() {
               </button>
             </div>
           </div>
-        </div>
-      )}
+      </ModalPortal>
 
     </div>
   );

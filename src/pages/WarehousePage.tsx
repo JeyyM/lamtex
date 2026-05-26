@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Package, FileText, Truck, Calendar, History, Search, AlertTriangle, CheckCircle, X, Factory, ShoppingCart, Clock, TrendingUp, Activity, RefreshCw, GitBranch, Loader2, ArrowUp, ArrowDown, ArrowUpDown, ChevronLeft, ChevronRight, Camera, CheckCircle2, Box, DollarSign, CalendarRange } from 'lucide-react';
-import { FulfillOrderModal, type FulfillmentData } from '@/src/components/orders/FulfillOrderModal';
+import { FulfillOrderModal, type FulfillmentData, type DeliveryProofDetails } from '@/src/components/orders/FulfillOrderModal';
 import { MarkInTransitModal } from '@/src/components/orders/MarkInTransitModal';
 import type { OrderLineItem } from '@/src/types/orders';
 import { Button } from '@/src/components/ui/Button';
@@ -23,16 +23,20 @@ import {
   updateTrip,
   fetchLogisticsOrderQueue,
   fetchDriversForBranch,
+  tryCompleteTripsForDeliveredOrder,
 } from '@/src/lib/logisticsScheduling';
 import { fetchFleetTrucksForBranch } from '@/src/lib/fleetTrucks';
 import { supabase } from '@/src/lib/supabase';
 import { deriveOrderDueDateForPersistence } from '@/src/lib/financeData';
+import { attachOrderDeliveryProofsAndNotify } from '@/src/lib/notifications/notificationsData';
+import { deductVariantBranchStock } from '@/src/lib/productVariantStock';
 import { useAppContext } from '@/src/store/AppContext';
 import { scopedMaterialIdList, scopedProductIdList } from '@/src/lib/warehouseScope';
 import { effectiveInventoryBranch } from '@/src/lib/inventoryAccess';
 import { computeStockStatus } from '@/src/lib/stockStatus';
 import { reportTripDelay } from '@/src/lib/orderTripDelay';
 import { resolveBranchIdByName } from '@/src/lib/branchCompanySettings';
+import { notifyLogisticsOrderLoading, notifyOrderPacked, notifyOrderInTransit, notifyOrderDeliveryRecorded } from '@/src/lib/notifications/notificationsData';
 import { finishedGoodProductHref, materialCategoryHref, productCategoryHref } from '@/src/lib/productRoutes';
 import {
   OrderProductSelectionModal,
@@ -737,7 +741,7 @@ function stockComputeToUi(computed: string): StockStatus {
 
 export default function WarehousePage() {
   const navigate = useNavigate();
-  const { branch, addAuditLog, session, employeeName, role, warehouseScope } = useAppContext();
+  const { branch, addAuditLog, session, employeeName, employeeId, role, warehouseScope } = useAppContext();
   const scopedProductIds = scopedProductIdList(warehouseScope);
   const scopedMaterialIds = scopedMaterialIdList(warehouseScope);
   const [activeTab, setActiveTab] = useState<TabType>('inventory');
@@ -2043,26 +2047,17 @@ export default function WarehousePage() {
               .eq('branch_id', branchId)
               .single();
             if (!pvs) throw new Error(`No inventory row for "${l.productName}" at this branch.`);
-            const newBranch = Math.max(0, Number((pvs as { quantity?: unknown }).quantity) - ship);
-            const { error: u1 } = await supabase
-              .from('product_variant_stock')
-              .update({ quantity: newBranch, updated_at: new Date().toISOString() })
-              .eq('id', (pvs as { id: string }).id);
-            if (u1) throw u1;
+            await deductVariantBranchStock({
+              variantId: l.variantId,
+              branchId,
+              quantity: ship,
+            });
 
             const { data: vrow } = await supabase
               .from('product_variants')
-              .select('total_stock, sku')
+              .select('sku')
               .eq('id', l.variantId)
               .single();
-            if (vrow) {
-              const newTotal = Math.max(0, Number((vrow as { total_stock?: unknown }).total_stock ?? 0) - ship);
-              const { error: u2 } = await supabase
-                .from('product_variants')
-                .update({ total_stock: newTotal, updated_at: new Date().toISOString() })
-                .eq('id', l.variantId);
-              if (u2) throw u2;
-            }
 
             const { error: mErr } = await supabase.from('product_stock_movements').insert({
               variant_id: l.variantId,
@@ -2114,6 +2109,19 @@ export default function WarehousePage() {
           'Order',
           `Order ${order.orderNumber} → ${nextOrderStatus} from Warehouse`,
         );
+        if (nextOrderStatus === 'Packed') {
+          void notifyOrderPacked(order.id, { markedBy: employeeName?.trim() || null }).catch(
+            (notifyErr) => {
+              console.warn('[WarehousePage] order packed notification failed', notifyErr);
+            },
+          );
+        } else if (nextOrderStatus === 'In Transit') {
+          void notifyOrderInTransit(order.id, { markedBy: employeeName?.trim() || null }).catch(
+            (notifyErr) => {
+              console.warn('[WarehousePage] order in transit notification failed', notifyErr);
+            },
+          );
+        }
         void fetchWarehouseOrders({ silent: true });
         return true;
       } catch (e: unknown) {
@@ -2157,6 +2165,13 @@ export default function WarehousePage() {
         'Order',
         `${order.orderNumber} → ${nextStatus} (warehouse loading)`,
       );
+      if (nextStatus === 'Loading') {
+        void notifyLogisticsOrderLoading(order.id, { markedBy: employeeName?.trim() || null }).catch(
+          (notifyErr) => {
+            console.warn('[WarehousePage] logistics loading notification failed', notifyErr);
+          },
+        );
+      }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Could not update order status';
       alert(msg);
@@ -2241,10 +2256,15 @@ export default function WarehousePage() {
     ],
   );
 
-  const handleFulfillOrder = useCallback(async (fulfillmentData: FulfillmentData[], _proofImageUrls: string[]) => {
+  const handleFulfillOrder = useCallback(async (
+    fulfillmentData: FulfillmentData[],
+    proofImageUrls: string[],
+    proofDetails?: DeliveryProofDetails,
+  ) => {
     if (!proofOrder) return;
     const orderId = proofOrder.id;
     const items = proofOrder.items;
+    const actorLabel = employeeName || session?.user?.email || role;
 
     const newDeliveredFor = (itemId: string) => {
       const line = items.find((l) => l.id === itemId);
@@ -2304,6 +2324,25 @@ export default function WarehousePage() {
     const { error: ordErr } = await supabase.from('orders').update(updatePayload).eq('id', orderId);
     if (ordErr) { alert('Failed to record delivery: ' + ordErr.message); return; }
 
+    if (proofImageUrls.length > 0) {
+      const uploaderRole = role === 'Logistics' || role === 'Driver' ? 'Logistics' : 'Agent';
+      const proofResult = await attachOrderDeliveryProofsAndNotify(orderId, proofImageUrls, {
+        uploadedBy: actorLabel,
+        uploadedByRole: uploaderRole,
+        title: proofDetails?.title ?? null,
+        notes: proofDetails?.notes ?? null,
+        uploaderEmployeeId: employeeId,
+      });
+      if (!proofResult.ok) {
+        throw new Error(`Delivery saved but proof files could not be stored: ${proofResult.error ?? 'Unknown error'}`);
+      }
+      addAuditLog(
+        'Proof of Delivery',
+        'Order',
+        `Attached ${proofImageUrls.length} image(s) with delivery for order ${proofOrder.orderNumber}`,
+      );
+    }
+
     addAuditLog('Recorded Delivery', 'Order', `Order ${proofOrder.orderNumber} marked ${newStatus} from Warehouse`);
 
     // Update local state
@@ -2322,7 +2361,17 @@ export default function WarehousePage() {
 
     setShowProofModal(false);
     setProofOrder(null);
-  }, [proofOrder, addAuditLog]);
+
+    void notifyOrderDeliveryRecorded(orderId, {
+      recordedBy: employeeName?.trim() || null,
+    }).catch((notifyErr) => {
+      console.warn('[WarehousePage] delivery recorded notification failed', notifyErr);
+    });
+
+    void tryCompleteTripsForDeliveredOrder(orderId).catch((err) => {
+      if (import.meta.env.DEV) console.warn('[WarehousePage] trip auto-complete failed', err);
+    });
+  }, [proofOrder, addAuditLog, employeeName, session, role, employeeId]);
   // ─────────────────────────────────────────────────────────────────────────
 
   const finishedGoodsCategories = ['all', ...Array.from(new Set(finishedGoodsRows.map((item) => item.category)))];
@@ -4240,7 +4289,11 @@ export default function WarehousePage() {
                       availableOrders={warehousePlanningOrders}
                       onSave={async (params) => {
                         const tid = warehouseEditTrip.id;
-                        const result = await updateTrip({ tripId: tid, ...params });
+                        const result = await updateTrip({
+                          tripId: tid,
+                          ...params,
+                          scheduledBy: employeeName?.trim() || null,
+                        });
                         if (!result.ok) throw new Error(result.error ?? 'Failed to save trip');
                         setShowWarehouseEditTrip(false);
                         setWarehouseEditTrip(null);

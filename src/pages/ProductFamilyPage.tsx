@@ -24,7 +24,12 @@ import {
 } from 'recharts';
 import { supabase } from '../lib/supabase';
 import { rawMaterialDetailHref } from '../lib/productRoutes';
-import { computePersistedStockStatus } from '../lib/stockStatus';
+import { computePersistedStockStatus, computeStockStatus } from '../lib/stockStatus';
+import {
+  notifyProductStockThresholdCrossed,
+  setVariantBranchQuantity,
+  setVariantTotalStockDirect,
+} from '../lib/productVariantStock';
 import { createDraftProductionRequestWithInitialLine } from '../lib/productionRequestDraft';
 import { insertProductLog, mapAppRoleToLogRole } from '../lib/domainActivityLog';
 import type { EntityActivityLogRow } from '../components/domain/EntityActivityLogCard';
@@ -194,7 +199,10 @@ function toDisplayVariant(v: VariantRow, selectedBranch: string): DisplayVariant
   const branchStock = resolveBranchStockQuantity(stockRows, selectedBranch);
   const cost         = v.cost_price ?? v.unit_price * 0.7;
   const monthlyUsage = Math.max(0, Math.round((v.units_sold_ytd || 0) / 12));
-  const status       = v.status === 'Active' ? 'In Stock' : v.status;
+  // Compute status from the branch quantity the user is actually looking at,
+  // not the cross-branch aggregate stored on product_variants.status.
+  const branchComputedStatus = computeStockStatus(branchStock, v.reorder_point);
+  const status = branchComputedStatus === 'Active' ? 'In Stock' : branchComputedStatus;
   const discounts    = (v.product_bulk_discounts ?? []).map(d => ({
     minQty: d.min_qty,
     discount: d.discount_percent,
@@ -678,16 +686,34 @@ export default function ProductFamilyPage() {
     setSaving(true);
     const isNew = editedVariant.id.startsWith('NEW-');
     const prevSnap = !isNew ? variants.find(v => v.id === editedVariant.id) : null;
-    const payload = {
+
+    // The "stock" textbox shown to the user is branch-scoped when a branch is
+    // selected; otherwise it's the cross-branch aggregate. We must route the
+    // stock write through the right table (`product_variant_stock` per branch
+    // vs `product_variants.total_stock`) — writing only `total_stock` directly
+    // for a branch-scoped edit leaves the per-branch row stale and the UI
+    // snaps back when it re-reads from the branch row.
+    const branchNameForStock = branchKeyForStockRef.current?.trim() ?? '';
+    let resolvedBranchId: string | null = null;
+    if (branchNameForStock) {
+      const { data: br } = await supabase
+        .from('branches')
+        .select('id')
+        .eq('name', branchNameForStock)
+        .maybeSingle();
+      resolvedBranchId = br?.id ?? null;
+    }
+
+    // Non-stock fields go in the direct update. `total_stock` / `status` are
+    // managed by the centralized stock helper below so we don't fight it.
+    const payload: Record<string, unknown> = {
       product_id: familyId,
       sku: editedVariant.sku,
       size: editedVariant.size,
       unit_price: editedVariant.price,
       cost_price: editedVariant.cost,
-      total_stock: editedVariant.stock,
       reorder_point: editedVariant.reorderPoint,
       is_hidden: editedVariant.isHidden,
-      status: computePersistedStockStatus(editedVariant.stock, editedVariant.reorderPoint),
       units_sold_ytd: editedVariant.unitsSold,
       weight_kg: parseFloat(editedVariant.weight) || null,
       length_m: parseFloat(editedVariant.length) || null,
@@ -697,6 +723,11 @@ export default function ProductFamilyPage() {
       min_order_qty: editedVariant.minOrderQty || null,
       specs: editedVariant.specs,
     };
+    if (isNew) {
+      // For a fresh variant we still need a starting total_stock row.
+      payload.total_stock = resolvedBranchId ? 0 : editedVariant.stock;
+      payload.status = computePersistedStockStatus(editedVariant.stock, editedVariant.reorderPoint);
+    }
     try {
       let variantId: string;
       if (isNew) {
@@ -708,10 +739,65 @@ export default function ProductFamilyPage() {
         if (insErr) throw insErr;
         if (!inserted?.id) throw new Error('Variant insert did not return an id');
         variantId = inserted.id;
+
+        // Seed the branch row when a branch is selected so the same number the
+        // user typed shows up next render.
+        if (resolvedBranchId && editedVariant.stock > 0) {
+          await setVariantBranchQuantity({
+            variantId,
+            productId: familyId,
+            branchId: resolvedBranchId,
+            quantity: editedVariant.stock,
+            reorderPoint: editedVariant.reorderPoint,
+          }).catch((err) => console.warn('[stock-notify] new variant seed failed', err));
+        }
       } else {
         const { error: upErr } = await supabase.from('product_variants').update(payload).eq('id', editedVariant.id);
         if (upErr) throw upErr;
         variantId = editedVariant.id;
+
+        const stockChanged = prevSnap ? prevSnap.stock !== editedVariant.stock : false;
+        const rpChanged = prevSnap ? prevSnap.reorderPoint !== editedVariant.reorderPoint : false;
+
+        if (stockChanged) {
+          if (resolvedBranchId) {
+            // Branch-scoped edit → update per-branch row and recompute aggregate.
+            await setVariantBranchQuantity({
+              variantId,
+              productId: familyId,
+              branchId: resolvedBranchId,
+              quantity: editedVariant.stock,
+              reorderPoint: editedVariant.reorderPoint,
+            });
+          } else {
+            // Org-wide edit (no branch selected) → write the aggregate directly.
+            await setVariantTotalStockDirect({
+              variantId,
+              productId: familyId,
+              totalStock: editedVariant.stock,
+              previousTotalStock: prevSnap?.stock ?? 0,
+              reorderPoint: editedVariant.reorderPoint,
+              previousReorderPoint: prevSnap?.reorderPoint ?? editedVariant.reorderPoint,
+            });
+          }
+        } else if (rpChanged && prevSnap) {
+          // Reorder point alone changed — still update the persisted status
+          // and fire the notification so a "now below" cross is caught.
+          const newStatus = computePersistedStockStatus(prevSnap.stock, editedVariant.reorderPoint);
+          await supabase
+            .from('product_variants')
+            .update({ status: newStatus, updated_at: new Date().toISOString() })
+            .eq('id', variantId);
+          void notifyProductStockThresholdCrossed({
+            variantId,
+            oldStock: prevSnap.stock,
+            newStock: prevSnap.stock,
+            oldReorderPoint: prevSnap.reorderPoint,
+            newReorderPoint: editedVariant.reorderPoint,
+            branchId: resolvedBranchId,
+            triggeredBy: `Reorder point updated by ${actorName}`,
+          }).catch((err) => console.warn('[stock-notify] variant reorder notify failed', err));
+        }
       }
 
       const { error: delBomErr } = await supabase.from('product_variant_raw_materials').delete().eq('variant_id', variantId);

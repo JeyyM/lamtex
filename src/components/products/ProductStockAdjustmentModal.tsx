@@ -1,10 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { X, Plus, Minus, Package, AlertCircle, CheckCircle, User, Factory } from 'lucide-react';
 import { supabase } from '@/src/lib/supabase';
-import { computePersistedStockStatus } from '@/src/lib/stockStatus';
 import { applyBomConsumptionDeductions, validateBomConsumption } from '@/src/lib/bomConsumption';
 import { refreshParentProductStatus } from '@/src/lib/productAggregateStatus';
 import { insertProductLog } from '@/src/lib/domainActivityLog';
+import {
+  applyVariantBranchStockDelta,
+  setVariantBranchQuantity,
+  setVariantTotalStockDirect,
+} from '@/src/lib/productVariantStock';
 
 type AdjustmentType = 'add' | 'subtract';
 
@@ -117,49 +121,40 @@ export default function ProductStockAdjustmentModal({
           throw new Error(`Cannot subtract more than branch stock (${prevBranchQty} units).`);
         }
 
-        newDisplayedStock =
-          adjustmentType === 'add' ? prevBranchQty + qty : Math.max(0, prevBranchQty - qty);
-        newDisplayedStock = Math.max(0, Math.round(newDisplayedStock));
-
-        const { error: upsertErr } = await supabase.from('product_variant_stock').upsert(
-          {
-            variant_id: variant.id,
-            branch_id: branchId,
-            quantity: newDisplayedStock,
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: 'variant_id,branch_id' },
-        );
-        if (upsertErr) throw upsertErr;
-
-        const { data: sumRows, error: sumErr } = await supabase
-          .from('product_variant_stock')
-          .select('quantity')
-          .eq('variant_id', variant.id);
-        if (sumErr) throw sumErr;
-        const sumTotal = (sumRows ?? []).reduce((s, r) => s + (Number(r.quantity) || 0), 0);
-        const newStatus = computePersistedStockStatus(sumTotal, variant.reorderPoint);
-
-        const varPayload: Record<string, unknown> = { total_stock: sumTotal, status: newStatus };
         if (adjustmentType === 'add') {
-          varPayload.last_restocked = new Date().toISOString();
+          const result = await applyVariantBranchStockDelta({
+            variantId: variant.id,
+            productId,
+            branchId,
+            delta: qty,
+            reorderPoint: variant.reorderPoint,
+            updateLastRestocked: true,
+          });
+          newDisplayedStock = result.newBranchQty;
+        } else {
+          const result = await setVariantBranchQuantity({
+            variantId: variant.id,
+            productId,
+            branchId,
+            quantity: Math.max(0, prevBranchQty - qty),
+            reorderPoint: variant.reorderPoint,
+          });
+          newDisplayedStock = result.newBranchQty;
         }
-        const { error: varErr } = await supabase.from('product_variants').update(varPayload).eq('id', variant.id);
-        if (varErr) throw varErr;
 
         if (adjustmentType === 'add' && consumeRawMaterials) {
           await applyBomConsumptionDeductions(variant.id, branchId, qty);
         }
       } else {
-        const newTotal = Math.max(0, Math.round(newStock));
-        const st = computePersistedStockStatus(newTotal, variant.reorderPoint);
-        const varPayloadGlobal: Record<string, unknown> = { total_stock: newTotal, status: st };
-        if (adjustmentType === 'add') {
-          varPayloadGlobal.last_restocked = new Date().toISOString();
-        }
-        const { error: varErr } = await supabase.from('product_variants').update(varPayloadGlobal).eq('id', variant.id);
-        if (varErr) throw varErr;
-        newDisplayedStock = newTotal;
+        await setVariantTotalStockDirect({
+          variantId: variant.id,
+          productId,
+          totalStock: Math.max(0, Math.round(newStock)),
+          previousTotalStock: variant.currentStock,
+          reorderPoint: variant.reorderPoint,
+          updateLastRestocked: adjustmentType === 'add',
+        });
+        newDisplayedStock = Math.max(0, Math.round(newStock));
       }
 
       await insertProductLog(supabase, {
@@ -180,7 +175,9 @@ export default function ProductStockAdjustmentModal({
         },
       });
 
-      await refreshParentProductStatus(productId, { performedBy, performedByRole });
+      if (!branchName) {
+        await refreshParentProductStatus(productId, { performedBy, performedByRole });
+      }
 
       setSavedDisplayStock(newDisplayedStock);
       onSuccess?.({ variantId: variant.id, newDisplayedStock });

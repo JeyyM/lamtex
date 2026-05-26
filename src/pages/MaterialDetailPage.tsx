@@ -17,6 +17,11 @@ import {
 } from '@/src/lib/warehouseMovementsData';
 import { computePersistedStockStatus } from '@/src/lib/stockStatus';
 import {
+  notifyMaterialReorderPointChange,
+  setMaterialBranchQuantity,
+  setMaterialTotalStockDirect,
+} from '@/src/lib/rawMaterialStock';
+import {
   Package,
   ArrowLeft,
   Edit,
@@ -74,13 +79,7 @@ import {
   downloadMaterialDetailWorkbook,
 } from '@/src/lib/rawMaterialDetailExport';
 
-const poLogRoleMap: Record<string, string> = {
-  Executive:  'Admin',
-  Agent:      'Agent',
-  Warehouse:  'Warehouse Staff',
-  Logistics:  'Logistics',
-  Driver:     'Logistics',
-};
+import { createDraftPurchaseOrderWithInitialLine } from '@/src/lib/createDraftPurchaseOrder';
 
 interface POHistoryRow {
   id: string;
@@ -709,43 +708,21 @@ export function MaterialDetailPage() {
         const { data: bd } = await supabase.from('branches').select('id').eq('name', selectedBranch).single();
         branchId = bd?.id ?? null;
       }
-      const poNumber = `PO-${Date.now()}`;
-      const actor    = employeeName || session?.user?.email || 'User';
-      const { data: poData, error: poErr } = await supabase
-        .from('purchase_orders')
-        .insert({
-          po_number:    poNumber,
-          branch_id:    branchId,
-          status:       'Requested',
-          order_date:   new Date().toISOString().split('T')[0],
-          total_amount: material.cost_per_unit,
-          created_by:   actor,
-        })
-        .select('id')
-        .single();
-      if (poErr) throw poErr;
-      const { error: itemErr } = await supabase.from('purchase_order_items').insert({
-        order_id:          poData.id,
-        material_id:       material.id,
-        quantity_ordered:  1,
-        quantity_received: 0,
-        unit_price:        material.cost_per_unit,
-        unit_of_measure:   material.unit_of_measure,
+      const actor = employeeName || session?.user?.email || 'User';
+      const { id } = await createDraftPurchaseOrderWithInitialLine({
+        branchId,
+        actor,
+        roleKey: role,
+        materialId: material.id,
+        materialName: material.name,
+        materialSku: material.sku,
+        quantity: 1,
+        unitPrice: material.cost_per_unit,
+        unitOfMeasure: material.unit_of_measure,
       });
-      if (itemErr) throw itemErr;
-      const logRole = poLogRoleMap[role] ?? 'System';
-      const { error: logErr } = await supabase.from('purchase_order_logs').insert({
-        order_id:         poData.id,
-        action:           'requested',
-        performed_by:     actor,
-        performed_by_role: logRole,
-        description:     `Purchase order requested from material screen (${material.name})`,
-        metadata:         { po_number: poNumber, material_id: material.id, material_sku: material.sku },
-      });
-      if (logErr && import.meta.env.DEV) console.warn('[PO request log]', logErr.message);
-      navigate(`/purchase-orders/${poData.id}`);
-    } catch (e: any) {
-      alert(e.message);
+      navigate(`/purchase-orders/${id}`);
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : 'Failed to create purchase order');
     } finally {
       setCreatingPO(false);
     }
@@ -819,7 +796,7 @@ export function MaterialDetailPage() {
       id: material.id,
       name: material.name,
       sku: material.sku,
-      currentStock: material.total_stock,
+      currentStock,
       unit: material.unit_of_measure,
       reorderPoint: material.reorder_point,
       status: material.status,
@@ -831,56 +808,46 @@ export function MaterialDetailPage() {
     if (!material) return;
     const actorName = employeeName || session?.user?.email || 'User';
     const actorRole = mapAppRoleToLogRole(role);
-    const prevTotal = Number(material.total_stock);
-    const newTotal = adjustment.type === 'add'
-      ? prevTotal + adjustment.quantity
-      : Math.max(0, prevTotal - adjustment.quantity);
+    const prevStock = currentStock;
+    const newStock = adjustment.type === 'add'
+      ? prevStock + adjustment.quantity
+      : Math.max(0, prevStock - adjustment.quantity);
+    const triggeredBy = `Manual stock adjustment by ${actorName}${selectedBranch ? ` (branch ${selectedBranch})` : ''}`;
 
     try {
-      // 1. Update aggregate total_stock + auto-computed status
-      const newStatus = computePersistedStockStatus(newTotal, material.reorder_point);
-      const { error: matErr } = await supabase
-        .from('raw_materials')
-        .update({
-          total_stock: newTotal,
-          status: newStatus,
-          updated_at: new Date().toISOString(),
-          ...(adjustment.type === 'add'
-            ? { last_restock_date: new Date().toISOString().split('T')[0] }
-            : {}),
-        })
-        .eq('id', material.id);
-      if (matErr) throw matErr;
-
-      // 2. Update branch-specific stock row if it exists
-      if (selectedBranch) {
+      let resolvedBranchId: string | null = null;
+      if (selectedBranch?.trim()) {
         const { data: branchRow } = await supabase
           .from('branches')
           .select('id')
-          .eq('name', selectedBranch)
-          .single();
-
-        if (branchRow) {
-          const { data: stockRow } = await supabase
-            .from('material_stock')
-            .select('quantity')
-            .eq('material_id', material.id)
-            .eq('branch_id', branchRow.id)
-            .single();
-
-          if (stockRow) {
-            const branchNewQty = adjustment.type === 'add'
-              ? Number(stockRow.quantity) + adjustment.quantity
-              : Math.max(0, Number(stockRow.quantity) - adjustment.quantity);
-            await supabase
-              .from('material_stock')
-              .update({ quantity: branchNewQty })
-              .eq('material_id', material.id)
-              .eq('branch_id', branchRow.id);
-          }
-        }
+          .eq('name', selectedBranch.trim())
+          .maybeSingle();
+        resolvedBranchId = branchRow?.id ?? null;
       }
 
+      let persistedTotal = newStock;
+      if (resolvedBranchId) {
+        const result = await setMaterialBranchQuantity({
+          materialId: material.id,
+          branchId: resolvedBranchId,
+          quantity: newStock,
+          reorderPoint: material.reorder_point,
+          updateLastRestocked: adjustment.type === 'add',
+          triggeredBy,
+        });
+        persistedTotal = result.totalStock;
+      } else {
+        await setMaterialTotalStockDirect({
+          materialId: material.id,
+          totalStock: newStock,
+          previousTotalStock: prevStock,
+          reorderPoint: material.reorder_point,
+          updateLastRestocked: adjustment.type === 'add',
+          triggeredBy,
+        });
+      }
+
+      const newStatus = computePersistedStockStatus(persistedTotal, material.reorder_point);
       void insertRawMaterialLog(supabase, {
         rawMaterialId: material.id,
         action: 'stock_adjusted',
@@ -889,15 +856,21 @@ export function MaterialDetailPage() {
         }${adjustment.notes.trim() ? `. ${adjustment.notes.trim()}` : ''}`,
         performedBy: actorName,
         performedByRole: actorRole,
-        oldValue: { total_stock: prevTotal },
-        newValue: { total_stock: newTotal, status: newStatus },
-        metadata: { branch_context: selectedBranch ?? null },
+        oldValue: { total_stock: prevStock, branch: selectedBranch ?? null },
+        newValue: { total_stock: newStock, status: newStatus, branch: selectedBranch ?? null },
+        metadata: { branch_context: selectedBranch ?? null, aggregate_total: persistedTotal },
       });
 
       void fetchMaterial();
       void fetchMaterialLogs();
     } catch (err: unknown) {
-      throw err instanceof Error ? err : new Error('Failed to adjust stock');
+      const msg =
+        err instanceof Error
+          ? err.message
+          : typeof err === 'object' && err !== null && 'message' in err
+            ? String((err as { message: unknown }).message)
+            : 'Failed to adjust stock';
+      throw new Error(msg);
     }
   };
 
@@ -906,8 +879,10 @@ export function MaterialDetailPage() {
     setSavingEdit(true);
     const actorName = employeeName || session?.user?.email || 'User';
     const actorRole = mapAppRoleToLogRole(role);
+    const prevReorderPoint = material.reorder_point;
     try {
-      const updatedStatus = computePersistedStockStatus(material.total_stock, formData.reorderPoint);
+      const stockForStatus = currentStock;
+      const updatedStatus = computePersistedStockStatus(stockForStatus, formData.reorderPoint);
       const { error } = await supabase
         .from('raw_materials')
         .update({
@@ -925,6 +900,30 @@ export function MaterialDetailPage() {
         })
         .eq('id', material.id);
       if (error) throw error;
+
+      // A reorder-point change can flip stock from "above" to "below" the
+      // threshold without moving the quantity, so notify in that case too.
+      if (prevReorderPoint !== formData.reorderPoint) {
+        let branchId: string | null = null;
+        if (selectedBranch?.trim()) {
+          const { data: branchRow } = await supabase
+            .from('branches')
+            .select('id')
+            .eq('name', selectedBranch.trim())
+            .maybeSingle();
+          branchId = branchRow?.id ?? null;
+        }
+        void notifyMaterialReorderPointChange({
+          materialId: material.id,
+          stock: currentStock,
+          oldReorderPoint: prevReorderPoint,
+          newReorderPoint: formData.reorderPoint,
+          branchId,
+          triggeredBy: `Reorder point updated by ${actorName}`,
+        }).catch((err) =>
+          console.warn('[material-stock-notify] reorder point notify failed', err),
+        );
+      }
       await insertRawMaterialLog(supabase, {
         rawMaterialId: material.id,
         action: 'material_updated',
@@ -1022,14 +1021,14 @@ export function MaterialDetailPage() {
         <div className="lg:col-span-3">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <StatKpiCard
-              label="Total Stock"
-              value={`${material.total_stock.toLocaleString()} ${material.unit_of_measure}`}
+              label={selectedBranch ? `Stock (${selectedBranch})` : 'Total Stock'}
+              value={`${currentStock.toLocaleString()} ${material.unit_of_measure}`}
               tone="blue"
               icon={<Box />}
             />
             <StatKpiCard
               label="Inventory Value"
-              value={`₱${((material.total_stock * material.cost_per_unit) / 1000).toFixed(0)}K`}
+              value={`₱${((currentStock * material.cost_per_unit) / 1000).toFixed(0)}K`}
               tone="emerald"
               icon={<DollarSign />}
             />
@@ -1046,7 +1045,7 @@ export function MaterialDetailPage() {
             <StatKpiCard
               label="Reorder Point"
               value={material.reorder_point.toLocaleString()}
-              tone={material.total_stock <= material.reorder_point ? 'amber' : 'teal'}
+              tone={currentStock <= material.reorder_point ? 'amber' : 'teal'}
               icon={<AlertTriangle />}
             />
           </div>

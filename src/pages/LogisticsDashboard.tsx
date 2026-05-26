@@ -125,7 +125,12 @@ function TripVehicleCell(props: { trip: LogisticsTripRow }) {
   const label = [trip.vehicleName, trip.plateNumber].filter(Boolean).join(' · ') || '—';
   if (!trip.vehicleUuid) return <span className="text-gray-600">{label}</span>;
   return (
-    <DashLink to={vehicleHref(trip.vehicleUuid)} className={`${DASH_LINK_CLASS} text-sm block truncate`} title={label}>
+    <DashLink
+      to={vehicleHref(trip.vehicleUuid)}
+      stopPropagation
+      className={`${DASH_LINK_CLASS} text-sm block truncate`}
+      title={label}
+    >
       {label}
     </DashLink>
   );
@@ -136,7 +141,12 @@ function TripDriverCell(props: { trip: LogisticsTripRow }) {
   const label = trip.driverName?.trim() || 'Unassigned';
   if (!trip.driverUuid) return <span className="text-gray-500">{label}</span>;
   return (
-    <DashLink to={employeeHref(trip.driverUuid)} className={`${DASH_LINK_CLASS} text-sm block truncate`} title={label}>
+    <DashLink
+      to={employeeHref(trip.driverUuid)}
+      stopPropagation
+      className={`${DASH_LINK_CLASS} text-sm block truncate`}
+      title={label}
+    >
       {label}
     </DashLink>
   );
@@ -355,9 +365,9 @@ function TripQueueList(props: {
           className="group block px-2 py-3 hover:bg-gray-50 rounded-md"
         >
           <div className="mb-2 flex items-start justify-between gap-2">
-            <DashLink to={tripHref(t.id)} className={`${DASH_LINK_MONO} truncate`} title={t.tripNumber}>
+            <span className={`${DASH_LINK_MONO} truncate group-hover:underline`} title={t.tripNumber}>
               {t.tripNumber}
-            </DashLink>
+            </span>
             <Badge variant={tripStatusVariant(t.status)} className="shrink-0 text-[10px]">
               {t.status}
             </Badge>
@@ -433,18 +443,18 @@ function OrdersToDispatchCard(props: { rows: LogisticsOrderToDispatchRow[]; coun
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-x-4 gap-y-1 text-sm">
                 <div className="min-w-0">
                   <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Order</p>
-                  <DashLink
-                    to={orderHref(o.id)}
-                    className={`${DASH_LINK_MONO} block truncate`}
+                  <span
+                    className={`${DASH_LINK_MONO} block truncate group-hover:underline`}
                     title={o.orderNumber}
                   >
                     {o.orderNumber}
-                  </DashLink>
+                  </span>
                 </div>
                 <div className="min-w-0">
                   <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Customer</p>
                   <DashLink
                     to={customerHref(o.customerId, o.id)}
+                    stopPropagation
                     className={`${DASH_LINK_CLASS} block truncate`}
                     title={o.customerName}
                   >

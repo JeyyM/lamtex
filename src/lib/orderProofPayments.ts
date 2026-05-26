@@ -47,6 +47,8 @@ type ProofRow = {
   payment_cash_amount?: number | string | null;
   payment_credit_amount?: number | string | null;
   payment_adjustment?: number | string | null;
+  commission_paid_at?: string | null;
+  commission_paid_by?: string | null;
 };
 
 export function proofRowToDocument(row: ProofRow, orderNumber: string): ProofDocument {
@@ -74,6 +76,8 @@ export function proofRowToDocument(row: ProofRow, orderNumber: string): ProofDoc
     paymentCashAmount: roundMoney(num(row.payment_cash_amount)),
     paymentCreditAmount: roundMoney(num(row.payment_credit_amount)),
     paymentAdjustment: roundMoney(num(row.payment_adjustment)),
+    commissionPaidAt: row.commission_paid_at ?? null,
+    commissionPaidBy: row.commission_paid_by?.trim() || null,
   };
 }
 
@@ -438,6 +442,69 @@ export async function syncOrderPaymentsFromProofs(
 }
 
 export const ORDER_PROOF_GALLERY_FOLDER = 'order-proofs';
+
+export function deliveryProofGalleryFolder(orderUuid: string): string {
+  return `${ORDER_PROOF_GALLERY_FOLDER}/${orderUuid}/delivery`;
+}
+
+export function fileNameFromPublicUrl(fileUrl: string): string {
+  const raw = fileUrl.split('/').pop()?.split('?')[0] ?? 'image';
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
+export function buildDeliveryProofDocumentRows(
+  orderUuid: string,
+  proofImageUrls: string[],
+  opts: {
+    uploadedBy: string;
+    uploadedByRole: string;
+    title?: string | null;
+    notes?: string | null;
+  },
+): OrderProofInsertInput[] {
+  const titleBase = opts.title?.trim() || null;
+  const notes = opts.notes?.trim() || null;
+  return proofImageUrls.map((fileUrl) => {
+    const fileName = fileNameFromPublicUrl(fileUrl);
+    return {
+      order_id: orderUuid,
+      type: 'delivery',
+      file_name: fileName,
+      file_url: fileUrl,
+      file_size: 0,
+      uploaded_by: opts.uploadedBy,
+      uploaded_by_role: opts.uploadedByRole,
+      status: 'verified',
+      title: titleBase || fileName,
+      notes,
+      payment_cash_amount: 0,
+      payment_credit_amount: 0,
+      payment_adjustment: 0,
+    };
+  });
+}
+
+/** Persists delivery proof images on an order (Documents & Proofs → Delivery tab). */
+export async function attachDeliveryProofDocuments(
+  orderUuid: string,
+  proofImageUrls: string[],
+  opts: {
+    uploadedBy: string;
+    uploadedByRole: string;
+    title?: string | null;
+    notes?: string | null;
+  },
+): Promise<{ ok: boolean; error?: string; count: number }> {
+  if (proofImageUrls.length === 0) return { ok: true, count: 0 };
+  const rows = buildDeliveryProofDocumentRows(orderUuid, proofImageUrls, opts);
+  const { error } = await insertOrderProofDocuments(rows);
+  if (error) return { ok: false, error, count: 0 };
+  return { ok: true, count: rows.length };
+}
 
 export async function uploadOrderProofBinary(orderUuid: string, folderType: string, file: File) {
   const path = `${ORDER_PROOF_GALLERY_FOLDER}/${orderUuid}/${folderType}/${Date.now()}-${Math.random().toString(36).slice(2, 9)}_${safeFileName(file.name)}`;

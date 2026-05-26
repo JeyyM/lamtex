@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/src/lib/supabase';
 import { LogIn, Loader2, Eye, EyeOff } from 'lucide-react';
 import lamtexLogo from '@/src/assets/Lamtex Logo.png';
+import { setSelectedBranch } from '@/src/lib/selectedBranchStorage';
 import {
   LAMTEX_BRANCH_CALABARZON,
   LAMTEX_BRANCH_NCR,
@@ -104,6 +105,10 @@ export default function LoginPage() {
     setError(null);
     const { error: authError } = await supabase.auth.signInWithPassword({ email, password });
     if (authError) { setError(authError.message); setLoading(false); return; }
+    const account = ACCOUNTS.find((a) => a.email.toLowerCase() === email.trim().toLowerCase());
+    if (account && account.branch !== 'Executive') {
+      setSelectedBranch(account.branch);
+    }
     navigate('/', { replace: true });
   };
 

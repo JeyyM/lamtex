@@ -1,5 +1,5 @@
 import React from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 
 /** Inline entity link — matches Finance / customer list styling. */
 export const DASH_LINK_CLASS =
@@ -16,12 +16,15 @@ export function DashLink(props: {
   children: React.ReactNode;
   className?: string;
   title?: string;
+  /** Use inside DashQueueLink so nested links do not trigger the row navigation. */
+  stopPropagation?: boolean;
 }): React.ReactElement {
   return (
     <Link
       to={props.to}
       title={props.title ?? 'Right-click or Ctrl+click to open in new tab'}
       className={props.className ?? DASH_LINK_CLASS}
+      onClick={props.stopPropagation ? (e) => e.stopPropagation() : undefined}
     >
       {props.children}
     </Link>
@@ -35,14 +38,35 @@ export function DashQueueLink(props: {
   children: React.ReactNode;
   title?: string;
 }): React.ReactElement {
+  const navigate = useNavigate();
+
+  const openDestination = (e: React.MouseEvent | React.KeyboardEvent) => {
+    if ('metaKey' in e && (e.metaKey || e.ctrlKey)) {
+      window.open(props.to, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    navigate(props.to);
+  };
+
   return (
-    <Link
-      to={props.to}
+    <div
+      role="link"
+      tabIndex={0}
       title={props.title ?? 'Right-click or Ctrl+click to open in new tab'}
       className={`block w-full text-left no-underline text-inherit transition-colors cursor-pointer ${props.className ?? ''}`}
+      onClick={(e) => {
+        if (e.metaKey || e.ctrlKey) {
+          window.open(props.to, '_blank', 'noopener,noreferrer');
+          return;
+        }
+        navigate(props.to);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') openDestination(e);
+      }}
     >
       {props.children}
-    </Link>
+    </div>
   );
 }
 

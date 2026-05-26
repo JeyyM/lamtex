@@ -1,5 +1,7 @@
 import { SupabaseClient } from '@supabase/supabase-js';
 import type { InterBranchItemRow } from './interBranchRequest';
+import { applyVariantBranchStockDelta } from '@/src/lib/productVariantStock';
+import { deductMaterialBranchStock } from '@/src/lib/rawMaterialStock';
 
 async function branchCode(supabase: SupabaseClient, branchId: string): Promise<string> {
   const { data } = await supabase.from('branches').select('code').eq('id', branchId).maybeSingle();
@@ -48,13 +50,15 @@ async function deductMaterialFromBranch(
       `Insufficient material at sending branch for IBR ${ibrNumber}: need ${q}, on hand ${onHand}.`,
     );
   }
-  const newQ = onHand - q;
-  const { error: u1 } = await supabase
-    .from('material_stock')
-    .update({ quantity: newQ, updated_at: new Date().toISOString() })
-    .eq('id', (pvs as { id: string }).id);
-  if (u1) throw u1;
-  await recalcMaterialTotal(supabase, materialId);
+  await deductMaterialBranchStock(
+    {
+      materialId,
+      branchId: fulfillingBranchId,
+      quantity: q,
+      triggeredBy: `Inter-branch request ${ibrNumber}`,
+    },
+    supabase,
+  );
 }
 
 async function deductProductFromBranch(
@@ -69,6 +73,16 @@ async function deductProductFromBranch(
   },
 ) {
   const { fulfillingBranchId, ibrNumber, variantId, q, performedBy, fromCode } = params;
+  const { data: variant, error: vErr } = await supabase
+    .from('product_variants')
+    .select('product_id, reorder_point, sku')
+    .eq('id', variantId)
+    .maybeSingle();
+  if (vErr) throw vErr;
+  if (!variant?.product_id) {
+    throw new Error(`Product variant not found for IBR ${ibrNumber}.`);
+  }
+
   const { data: pvs, error: pErr } = await supabase
     .from('product_variant_stock')
     .select('id, quantity')
@@ -85,15 +99,19 @@ async function deductProductFromBranch(
       `Insufficient product stock at sending branch for IBR ${ibrNumber}: need ${q}, on hand ${onHand}.`,
     );
   }
-  const newBranch = Math.max(0, onHand - q);
-  const { error: u1 } = await supabase
-    .from('product_variant_stock')
-    .update({ quantity: newBranch, updated_at: new Date().toISOString() })
-    .eq('id', (pvs as { id: string }).id);
-  if (u1) throw u1;
-  await recalcVariantTotal(supabase, variantId);
 
-  const { data: vrow } = await supabase.from('product_variants').select('sku').eq('id', variantId).single();
+  await applyVariantBranchStockDelta(
+    {
+      variantId,
+      productId: String(variant.product_id),
+      branchId: fulfillingBranchId,
+      delta: -Math.floor(q),
+      reorderPoint: Number(variant.reorder_point) || 0,
+    },
+    supabase,
+  );
+
+  const vrow = variant;
 
   const { error: mErr } = await supabase.from('product_stock_movements').insert({
     variant_id: variantId,

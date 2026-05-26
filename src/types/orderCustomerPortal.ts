@@ -71,6 +71,7 @@ export type PublicOrderSummary = {
   orderNumber: string;
   orderDate: string;
   requiredDate?: string | null;
+  actualDelivery?: string | null;
   status: string;
   paymentStatus: string;
   paymentTerms?: string | null;

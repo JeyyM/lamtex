@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
-import { CreateOrderModal } from '@/src/components/orders/CreateOrderModal';
+import { createDraftOrder } from '@/src/lib/createDraftOrder';
 import { AgentPersonalKpiStrip } from '@/src/components/agent/AgentPersonalKpiStrip';
 import {
   DashQueueLink,
@@ -70,12 +71,13 @@ const DASH_LINK_MONO =
   'font-mono text-xs text-blue-600 hover:text-blue-800 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 rounded-sm';
 
 export function AgentDashboard(): React.ReactElement {
-  const { branch, employeeId, employeeName, addAuditLog } = useAppContext();
+  const navigate = useNavigate();
+  const { branch, employeeId, employeeName, role, session, addAuditLog } = useAppContext();
   const [bundle, setBundle] = useState<AgentDashboardBundle | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [creating, setCreating] = useState(false);
 
   const load = useCallback(
     async (silent = false) => {
@@ -115,6 +117,27 @@ export function AgentDashboard(): React.ReactElement {
     if (branch?.trim()) return branch;
     return 'All branches';
   }, [bundle?.branchName, branch]);
+
+  const handleNewOrder = async () => {
+    setCreating(true);
+    try {
+      const { id, orderNumber } = await createDraftOrder({
+        branchName: branch,
+        role,
+        actorName: employeeName,
+        actorEmail: session?.user?.email,
+        ...(role === 'Agent' && employeeId
+          ? { agentId: employeeId, agentName: employeeName }
+          : {}),
+      });
+      addAuditLog('Created Order (draft)', 'Order', `${orderNumber} from agent dashboard`);
+      navigate(`/orders/${id}`);
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : 'Failed to create order');
+    } finally {
+      setCreating(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -175,8 +198,13 @@ export function AgentDashboard(): React.ReactElement {
           <DashHeaderLink to="/customers">
             <Users className="w-4 h-4" /> My customers
           </DashHeaderLink>
-          <Button variant="primary" className="gap-2" onClick={() => setShowCreateModal(true)}>
-            <ShoppingCart className="w-4 h-4" />
+          <Button
+            variant="primary"
+            className="gap-2"
+            onClick={() => void handleNewOrder()}
+            disabled={creating}
+          >
+            {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShoppingCart className="w-4 h-4" />}
             Create order
           </Button>
         </div>
@@ -228,17 +256,6 @@ export function AgentDashboard(): React.ReactElement {
       <p className="text-xs text-gray-400 text-right">
         Generated {new Date(bundle.generatedAt).toLocaleString()}
       </p>
-
-      {showCreateModal && (
-        <CreateOrderModal
-          onClose={() => setShowCreateModal(false)}
-          onSuccess={() => {
-            setShowCreateModal(false);
-            addAuditLog('Created Order', 'Order', 'Created new order from agent dashboard');
-            void load(true);
-          }}
-        />
-      )}
     </div>
   );
 }

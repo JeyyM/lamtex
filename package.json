@@ -4,7 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --port=3000 --host=0.0.0.0",
+    "dev": "concurrently -n app,notify -c cyan,magenta \"npm run dev:app\" \"npm run dev:notify\"",
+    "dev:app": "vite --port=3000 --host=0.0.0.0",
+    "dev:notify": "tsx watch server/index.ts",
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
@@ -26,6 +28,7 @@
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.13.1",
     "recharts": "^3.7.0",
+    "resend": "^4.5.1",
     "tailwind-merge": "^3.5.0",
     "vite": "^6.2.0",
     "xlsx": "^0.18.5"
@@ -35,6 +38,7 @@
     "@types/google.maps": "^3.64.0",
     "@types/node": "^22.14.0",
     "autoprefixer": "^10.4.21",
+    "concurrently": "^9.2.1",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",

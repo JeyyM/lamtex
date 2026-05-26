@@ -31,6 +31,7 @@ interface MaterialCategory {
   name: string;
   description: string | null;
   image_url: string | null;
+  branch_id?: string | null;
 }
 
 interface Props {
@@ -58,6 +59,9 @@ interface Props {
   /** Optional banner below the header (e.g. reports scope hint). */
   contextNote?: string | null;
 }
+
+/** Fallback category when supplier materials exist but no matching category rows are found. */
+const SUPPLIER_CATALOGUE_CATEGORY_ID = '__supplier_catalogue__';
 
 function CategoryImage({ url, name }: { url: string | null; name: string }) {
   const [errored, setErrored] = useState(false);
@@ -293,60 +297,136 @@ export default function RawMaterialPickerModal({
     })();
   }, [isOpen, useDualBranchFilter, interBranchRequestingBranchId, interBranchFulfillingBranchId]);
 
-  // Fetch categories on open
+  // Fetch categories on open (waits for supplier catalogue when a supplier is selected)
   useEffect(() => {
     if (!isOpen) return;
     setView('categories');
     setSelectedCategory(null);
     setSearch('');
-    (async () => {
+
+    if (supplierId && loadingSupplier) {
       setLoadingCats(true);
-      let q = supabase
-        .from('material_categories')
-        .select('id, name, description, image_url')
-        .eq('is_active', true);
+      return;
+    }
 
-      if (
-        useDualBranchFilter &&
-        interBranchRequestingBranchId &&
-        interBranchFulfillingBranchId
-      ) {
-        const bid = [interBranchRequestingBranchId, interBranchFulfillingBranchId].filter(
-          (id, i, a) => id && a.indexOf(id) === i,
-        );
-        q = q.in('branch_id', bid) as typeof q;
-      } else {
-        let branchId: string | null = null;
-        if (effectiveBranch) {
-          const { data: branchRow } = await supabase
-            .from('branches')
-            .select('id')
-            .eq('name', effectiveBranch)
-            .single();
-          branchId = branchRow?.id ?? null;
+    void (async () => {
+      setLoadingCats(true);
+      try {
+        // Supplier selected: categories come from that supplier's linked materials, not branch-only browse
+        if (supplierId && supplierCategoryIds !== null) {
+          if (supplierCategoryIds.size === 0) {
+            if (supplierMatIds && supplierMatIds.size > 0) {
+              setCategories([{
+                id: SUPPLIER_CATALOGUE_CATEGORY_ID,
+                name: 'Supplier catalogue',
+                description: 'All materials linked to this supplier',
+                image_url: null,
+                branch_id: null,
+              }]);
+              return;
+            }
+            setCategories([]);
+            return;
+          }
+          const { data, error: catErr } = await supabase
+            .from('material_categories')
+            .select('id, name, description, image_url, branch_id')
+            .eq('is_active', true)
+            .in('id', [...supplierCategoryIds])
+            .order('sort_order');
+          if (catErr) {
+            ibrPickerLog('supplier material_categories query error', catErr);
+            console.error('[RawMaterialPickerModal] supplier categories failed', catErr);
+          }
+          let list = (data as MaterialCategory[]) ?? [];
+
+          if (effectiveBranch && !useDualBranchFilter && list.length > 0) {
+            const { data: branchRow } = await supabase
+              .from('branches')
+              .select('id')
+              .eq('name', effectiveBranch)
+              .single();
+            const branchId = branchRow?.id ?? null;
+            if (branchId) {
+              const forBranch = list.filter(
+                (c) => c.branch_id === branchId || c.branch_id == null,
+              );
+              if (forBranch.length > 0) list = forBranch;
+            }
+          }
+
+          if (list.length === 0 && supplierMatIds && supplierMatIds.size > 0) {
+            list = [{
+              id: SUPPLIER_CATALOGUE_CATEGORY_ID,
+              name: 'Supplier catalogue',
+              description: 'All materials linked to this supplier',
+              image_url: null,
+              branch_id: null,
+            }];
+          }
+
+          setCategories(list);
+          return;
         }
-        if (branchId) q = q.eq('branch_id', branchId) as typeof q;
-      }
 
-      const { data, error: catErr } = await q.order('sort_order');
-      if (catErr) {
-        ibrPickerLog('material_categories query error', catErr);
-        console.error('[IBR RawPicker] material_categories failed', catErr);
-      }
-      const list = (data as MaterialCategory[]) ?? [];
-      ibrPickerLog('material_categories loaded', {
-        count: list.length,
-        dualMode: Boolean(
+        let q = supabase
+          .from('material_categories')
+          .select('id, name, description, image_url, branch_id')
+          .eq('is_active', true);
+
+        if (
           useDualBranchFilter &&
-            interBranchRequestingBranchId &&
-            interBranchFulfillingBranchId,
-        ),
-        names: list.slice(0, 15).map((c) => c.name),
-      });
-      setCategories(list);
-      setLoadingCats(false);
+          interBranchRequestingBranchId &&
+          interBranchFulfillingBranchId
+        ) {
+          const bid = [interBranchRequestingBranchId, interBranchFulfillingBranchId].filter(
+            (id, i, a) => id && a.indexOf(id) === i,
+          );
+          q = q.in('branch_id', bid) as typeof q;
+        } else {
+          let branchId: string | null = null;
+          if (effectiveBranch) {
+            const { data: branchRow } = await supabase
+              .from('branches')
+              .select('id')
+              .eq('name', effectiveBranch)
+              .single();
+            branchId = branchRow?.id ?? null;
+          }
+          if (branchId) q = q.eq('branch_id', branchId) as typeof q;
+        }
+
+        const { data, error: catErr } = await q.order('sort_order');
+        if (catErr) {
+          ibrPickerLog('material_categories query error', catErr);
+          console.error('[IBR RawPicker] material_categories failed', catErr);
+        }
+        const list = (data as MaterialCategory[]) ?? [];
+        ibrPickerLog('material_categories loaded', {
+          count: list.length,
+          dualMode: Boolean(
+            useDualBranchFilter &&
+              interBranchRequestingBranchId &&
+              interBranchFulfillingBranchId,
+          ),
+          names: list.slice(0, 15).map((c) => c.name),
+        });
+        setCategories(list);
+      } finally {
+        setLoadingCats(false);
+      }
     })();
-  }, [isOpen, effectiveBranch, useDualBranchFilter, interBranchRequestingBranchId, interBranchFulfillingBranchId]);
+  }, [
+    isOpen,
+    effectiveBranch,
+    supplierId,
+    supplierCategoryIds,
+    supplierMatIds,
+    loadingSupplier,
+    useDualBranchFilter,
+    interBranchRequestingBranchId,
+    interBranchFulfillingBranchId,
+  ]);
 
   const handleCategoryClick = async (cat: MaterialCategory) => {
     setSelectedCategory(cat);
@@ -361,8 +441,10 @@ export default function RawMaterialPickerModal({
     }
     let q = supabase
       .from('raw_materials')
-      .select('id, name, sku, unit_of_measure, cost_per_unit, total_stock, status, category_id, image_url, brand')
-      .eq('category_id', cat.id);
+      .select('id, name, sku, unit_of_measure, cost_per_unit, total_stock, status, category_id, image_url, brand');
+    if (cat.id !== SUPPLIER_CATALOGUE_CATEGORY_ID) {
+      q = q.eq('category_id', cat.id) as typeof q;
+    }
     // If supplier filter is active, only fetch materials this supplier carries
     if (supplierMatIds && supplierMatIds.size > 0) {
       q = q.in('id', [...supplierMatIds]) as typeof q;

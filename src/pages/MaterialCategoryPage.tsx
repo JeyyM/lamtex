@@ -23,6 +23,11 @@ import AddMaterialModal, { MaterialFormData } from '../components/materials/AddM
 import StockAdjustmentModal from '../components/warehouse/StockAdjustmentModal';
 import { supabase } from '../lib/supabase';
 import { computeStockStatus, computePersistedStockStatus } from '../lib/stockStatus';
+import {
+  notifyMaterialReorderPointChange,
+  setMaterialBranchQuantity,
+  setMaterialTotalStockDirect,
+} from '../lib/rawMaterialStock';
 import { insertRawMaterialLog, mapAppRoleToLogRole } from '../lib/domainActivityLog';
 import { scopedMaterialIdList } from '../lib/warehouseScope';
 import {
@@ -52,6 +57,12 @@ interface RawMaterialRow {
   status: string;
   specifications: { label: string; value: string }[] | null;
   material_stock: MaterialStockRow[];
+}
+
+function getMaterialStockForBranch(m: RawMaterialRow, branchLabel: string): number {
+  if (!branchLabel.trim()) return m.total_stock;
+  const row = m.material_stock.find(s => s.branches?.name === branchLabel);
+  return row?.quantity ?? 0;
 }
 
 export default function MaterialCategoryPage() {
@@ -174,6 +185,33 @@ export default function MaterialCategoryPage() {
           })
           .eq('id', editingMaterialId);
         if (error) throw error;
+
+        // Re-fire alerts if the reorder point moved — stock may now be below it.
+        if (oldRow && Number(oldRow.reorder_point) !== Number(formData.reorderPoint)) {
+          const stockForAlert = selectedBranch
+            ? getMaterialStockForBranch(oldRow, selectedBranch)
+            : Number(oldRow.total_stock) || 0;
+          let branchId: string | null = null;
+          if (selectedBranch?.trim()) {
+            const { data: branchRow } = await supabase
+              .from('branches')
+              .select('id')
+              .eq('name', selectedBranch.trim())
+              .maybeSingle();
+            branchId = branchRow?.id ?? null;
+          }
+          void notifyMaterialReorderPointChange({
+            materialId: editingMaterialId,
+            stock: stockForAlert,
+            oldReorderPoint: Number(oldRow.reorder_point) || 0,
+            newReorderPoint: Number(formData.reorderPoint) || 0,
+            branchId,
+            triggeredBy: `Reorder point updated by ${actorName}`,
+          }).catch((err) =>
+            console.warn('[material-stock-notify] category reorder notify failed', err),
+          );
+        }
+
         await insertRawMaterialLog(supabase, {
           rawMaterialId: editingMaterialId,
           action: 'material_updated',
@@ -290,11 +328,12 @@ export default function MaterialCategoryPage() {
 
   const handleOpenAdjustment = (m: RawMaterialRow, e: MouseEvent) => {
     e.stopPropagation();
+    const branchStock = getMaterialStockForBranch(m, selectedBranch);
     setSelectedItemForAdjustment({
       id: m.id,
       name: m.name,
       sku: m.sku,
-      currentStock: m.total_stock,
+      currentStock: branchStock,
       unit: m.unit_of_measure,
       reorderPoint: m.reorder_point,
       status: m.status,
@@ -306,17 +345,47 @@ export default function MaterialCategoryPage() {
     if (!selectedItemForAdjustment) return;
     const actorName = employeeName || session?.user?.email || 'User';
     const actorRole = mapAppRoleToLogRole(role);
-    const delta = adjustment.type === 'add' ? adjustment.quantity : -adjustment.quantity;
-    const prevTotal = selectedItemForAdjustment.currentStock;
-    const newTotal = Math.max(0, prevTotal + delta);
-    const newStatus = computePersistedStockStatus(newTotal, selectedItemForAdjustment.reorderPoint ?? 0);
+    const prevStock = selectedItemForAdjustment.currentStock;
+    const newStock = adjustment.type === 'add'
+      ? prevStock + adjustment.quantity
+      : Math.max(0, prevStock - adjustment.quantity);
+    const reorderPoint = selectedItemForAdjustment.reorderPoint ?? 0;
+    const triggeredBy = `Manual stock adjustment by ${actorName}${selectedBranch ? ` (branch ${selectedBranch})` : ''}`;
 
     try {
-      const { error } = await supabase
-        .from('raw_materials')
-        .update({ total_stock: newTotal, status: newStatus })
-        .eq('id', selectedItemForAdjustment.id);
-      if (error) throw error;
+      let resolvedBranchId: string | null = null;
+      if (selectedBranch?.trim()) {
+        const { data: branchRow } = await supabase
+          .from('branches')
+          .select('id')
+          .eq('name', selectedBranch.trim())
+          .maybeSingle();
+        resolvedBranchId = branchRow?.id ?? null;
+      }
+
+      let persistedTotal = newStock;
+      if (resolvedBranchId) {
+        const result = await setMaterialBranchQuantity({
+          materialId: selectedItemForAdjustment.id,
+          branchId: resolvedBranchId,
+          quantity: newStock,
+          reorderPoint,
+          updateLastRestocked: adjustment.type === 'add',
+          triggeredBy,
+        });
+        persistedTotal = result.totalStock;
+      } else {
+        await setMaterialTotalStockDirect({
+          materialId: selectedItemForAdjustment.id,
+          totalStock: newStock,
+          previousTotalStock: prevStock,
+          reorderPoint,
+          updateLastRestocked: adjustment.type === 'add',
+          triggeredBy,
+        });
+      }
+
+      const newStatus = computePersistedStockStatus(persistedTotal, reorderPoint);
       void insertRawMaterialLog(supabase, {
         rawMaterialId: selectedItemForAdjustment.id,
         action: 'stock_adjusted',
@@ -325,9 +394,9 @@ export default function MaterialCategoryPage() {
         }`,
         performedBy: actorName,
         performedByRole: actorRole,
-        oldValue: { total_stock: prevTotal },
-        newValue: { total_stock: newTotal, status: newStatus },
-        metadata: { source: 'material_category_page' },
+        oldValue: { total_stock: prevStock, branch: selectedBranch ?? null },
+        newValue: { total_stock: newStock, status: newStatus, branch: selectedBranch ?? null },
+        metadata: { source: 'material_category_page', aggregate_total: persistedTotal },
       });
       void fetchMaterials();
     } catch (err: unknown) {
@@ -366,11 +435,7 @@ export default function MaterialCategoryPage() {
     return Math.min((m.total_stock / (m.reorder_point * 2)) * 100, 100);
   };
 
-  const getStockForBranch = (m: RawMaterialRow) => {
-    if (!selectedBranch) return m.total_stock;
-    const row = m.material_stock.find(s => s.branches?.name === selectedBranch);
-    return row?.quantity ?? 0;
-  };
+  const getStockForBranch = (m: RawMaterialRow) => getMaterialStockForBranch(m, selectedBranch);
 
   const getStatusBadge = (m: RawMaterialRow): 'success' | 'warning' | 'danger' | 'default' => {
     if (m.reorder_point > 0 && m.total_stock <= m.reorder_point * 0.5) return 'danger';

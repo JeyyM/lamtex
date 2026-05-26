@@ -63,8 +63,7 @@ function mapSupplierRow(row: SupplierRow): SupplierExportRow {
     .map((sb) => {
       const name = sb.branches?.name ?? '';
       const code = sb.branches?.code ?? '';
-      const primary = sb.is_primary ? ' (primary)' : '';
-      return code ? `${name} [${code}]${primary}` : `${name}${primary}`;
+      return code ? `${name} [${code}]` : name;
     })
     .filter(Boolean)
     .join('; ');

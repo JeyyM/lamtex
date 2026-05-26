@@ -70,6 +70,8 @@ import {
   fetchDriversForBranch,
   fetchBranchHqCoords,
   updateTrip,
+  applyOrderLabelsToTrips,
+  fetchOrderIdsMatchingDispatchSearch,
 } from '@/src/lib/logisticsScheduling';
 import { RoutePlanningView } from '@/src/components/logistics/RoutePlanningView';
 import { ContainerScheduleView } from '@/src/components/logistics/ContainerScheduleView';
@@ -92,24 +94,11 @@ import {
   tripStatusDisplay,
   tripStatusIsCompletedUi,
   getDispatchVehicleColor,
+  tripMatchesDispatchSearch,
 } from '@/src/lib/dispatchQueueUi';
 
 type ViewMode = 'dispatch' | 'fleet' | 'routes' | 'shipments';
 type TransportType = 'truck' | 'interisland';
-
-function tripMatchesDispatchSearch(trip: Trip, query: string): boolean {
-  const q = query.trim().toLowerCase();
-  if (!q) return true;
-  if (trip.tripNumber.toLowerCase().includes(q)) return true;
-  if (trip.driverName?.toLowerCase().includes(q)) return true;
-  if (trip.vehicleName?.toLowerCase().includes(q)) return true;
-  if (trip.plateNumber?.toLowerCase().includes(q)) return true;
-  if (trip.destinations.some((d) => d.toLowerCase().includes(q))) return true;
-  if (trip.customerLabel && trip.customerLabel.toLowerCase().includes(q)) return true;
-  if (trip.customerNames?.some((n) => n.toLowerCase().includes(q))) return true;
-  if (trip.orderNumbers?.some((n) => n.toLowerCase().includes(q))) return true;
-  return false;
-}
 
 function tripSubline(trip: Trip, interIsland: boolean): string {
   const suffix = interIsland
@@ -139,7 +128,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 }
 
 export function LogisticsPage() {
-  const { branch } = useAppContext();
+  const { branch, employeeName } = useAppContext();
   const { search } = useLocation();
   const initialParams = useMemo(() => parseLogisticsSearch(search), []);
   const [transportType, setTransportType] = useState<TransportType>(() =>
@@ -215,6 +204,8 @@ export function LogisticsPage() {
   const [tripLowestOrderStatus, setTripLowestOrderStatus] = useState<Record<string, string>>({});
   // Full per-trip order status map — used for real-time badge updates
   const [tripOrderStatusMap, setTripOrderStatusMap] = useState<Record<string, Record<string, string>>>({});
+  const [tripOrderMeta, setTripOrderMeta] = useState<Record<string, { orderNumber: string }>>({});
+  const [searchMatchedOrderIds, setSearchMatchedOrderIds] = useState<Set<string>>(new Set());
   /** Prefer trip-level Delayed so reporting a delay is not hidden by orders still marked In Transit. */
   const lowestOrderStatus = (tripId: string, tripStatus: string) => {
     if (tripStatus === 'Delayed') return 'Delayed';
@@ -279,6 +270,7 @@ export function LogisticsPage() {
 
       setScheduleTrips(tripsResult.trips);
       setLogisticsLoadError(tripsResult.error ?? null);
+      setLogisticsLoading(false);
 
       if (tripsResult.error && import.meta.env.DEV) {
         console.warn('[logistics] trips load issue (orders may still be available):', tripsResult.error);
@@ -288,14 +280,31 @@ export function LogisticsPage() {
       if (allOrderIds.length) {
         const { data: orderRows, error: orderStatusErr } = await supabase
           .from('orders')
-          .select('id, status')
+          .select('id, status, order_number, customer_name')
           .in('id', allOrderIds);
+        if (gen !== logisticsRefreshGenRef.current) return;
         if (orderStatusErr) {
           if (import.meta.env.DEV) console.warn('[logistics] trip order status fetch failed:', orderStatusErr.message);
           setTripLowestOrderStatus({});
           setTripOrderStatusMap({});
+          setTripOrderMeta({});
           return;
         }
+
+        setScheduleTrips((prev) =>
+          applyOrderLabelsToTrips(prev.length ? prev : tripsResult.trips, (orderRows ?? []).map((r) => ({
+            id: r.id as string,
+            order_number: r.order_number as string | null,
+            customer_name: r.customer_name as string | null,
+          }))),
+        );
+
+        const meta: Record<string, { orderNumber: string }> = {};
+        for (const row of orderRows ?? []) {
+          const num = String(row.order_number ?? '').trim();
+          if (num) meta[row.id as string] = { orderNumber: num };
+        }
+        setTripOrderMeta(meta);
         const statusMap: Record<string, string> = {};
         for (const row of orderRows ?? []) statusMap[row.id as string] = (row.status as string) ?? 'Scheduled';
         const RANK: Record<string, number> = { Scheduled: 1, Loading: 2, Packed: 3, Ready: 4, 'In Transit': 5, Delivered: 6, Complete: 7, Delayed: 8, Cancelled: 9 };
@@ -322,6 +331,7 @@ export function LogisticsPage() {
       } else {
         setTripLowestOrderStatus({});
         setTripOrderStatusMap({});
+        setTripOrderMeta({});
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Could not load logistics data.';
@@ -332,6 +342,7 @@ export function LogisticsPage() {
       setLogisticsLoadError(message);
       setTripLowestOrderStatus({});
       setTripOrderStatusMap({});
+      setTripOrderMeta({});
     } finally {
       if (gen === logisticsRefreshGenRef.current) {
         setLogisticsLoading(false);
@@ -490,12 +501,18 @@ export function LogisticsPage() {
   const dispatchCalByDateKey = useMemo(() => {
     const m: Record<string, Trip[]> = {};
     for (const t of trips) {
-      if (!t.scheduledDate) continue;
-      if (!m[t.scheduledDate]) m[t.scheduledDate] = [];
-      m[t.scheduledDate].push(t);
+      const dk = (t.scheduledDate ?? '').slice(0, 10);
+      if (!dk) continue;
+      if (!m[dk]) m[dk] = [];
+      m[dk].push(t);
     }
     return m;
   }, [trips]);
+
+  const calendarStripDateKeys = useMemo(
+    () => new Set(nextFourteenCalendarDays.map((d) => d.date)),
+    [nextFourteenCalendarDays],
+  );
 
   // Sort + filter helpers
   const handleTripSort = (key: string) => {
@@ -576,10 +593,56 @@ export function LogisticsPage() {
     );
   }, [trips, dispatchPeriodQuery, liveDispatch]);
 
+  /** 14-day strip shows every trip on those days (including future dates); not limited by queue period end. */
+  const calendarTrips = useMemo(
+    () =>
+      trips.filter((t) => {
+        const dk = (t.scheduledDate ?? '').slice(0, 10);
+        return dk && calendarStripDateKeys.has(dk);
+      }),
+    [trips, calendarStripDateKeys],
+  );
+
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (!q || !branch?.trim() || !liveDispatch) {
+      setSearchMatchedOrderIds(new Set());
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void fetchOrderIdsMatchingDispatchSearch(branch, q).then((ids) => {
+        if (!cancelled) setSearchMatchedOrderIds(new Set(ids));
+      });
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [searchQuery, branch, liveDispatch]);
+
+  const dispatchSearchExtras = useMemo(
+    () => ({
+      orderMetaById: tripOrderMeta,
+      matchedOrderIds: searchMatchedOrderIds.size > 0 ? searchMatchedOrderIds : undefined,
+    }),
+    [tripOrderMeta, searchMatchedOrderIds],
+  );
+
+  const dispatchQueueEmptyMessage = useMemo(() => {
+    if (!logisticsFromDb) return 'Could not load trips from the database for this branch.';
+    if (searchQuery.trim()) {
+      return 'No trips match this search. Confirm the order is on a trip and try Show Completed.';
+    }
+    if (showCompleted) return 'No trips found for this branch.';
+    return 'No active trips found. Turn on Show Completed to include finished trips.';
+  }, [logisticsFromDb, searchQuery, showCompleted]);
+
   const filteredTrips = useMemo(() => {
-    const source = liveDispatch ? dateFilteredTrips : trips;
+    const searching = searchQuery.trim().length > 0;
+    const source = liveDispatch && !searching ? dateFilteredTrips : trips;
     const filtered = source.filter((trip) => {
-      const matchesSearch = tripMatchesDispatchSearch(trip, searchQuery);
+      const matchesSearch = tripMatchesDispatchSearch(trip, searchQuery, dispatchSearchExtras);
       const matchesStatus = filterStatus === 'All'
         ? (showCompleted || (trip.status !== 'Complete' && trip.status !== 'Delivered' && trip.status !== 'Cancelled'))
         : trip.status === filterStatus;
@@ -626,7 +689,7 @@ export function LogisticsPage() {
       if (as > bs) return tripSortDir === 'asc' ? 1 : -1;
       return 0;
     });
-  }, [trips, dateFilteredTrips, transportType, searchQuery, filterStatus, showCompleted, tripSortKey, tripSortDir, tripLowestOrderStatus, dispatchPeriodQuery]);
+  }, [trips, dateFilteredTrips, transportType, searchQuery, filterStatus, showCompleted, tripSortKey, tripSortDir, tripLowestOrderStatus, dispatchPeriodQuery, dispatchSearchExtras, liveDispatch]);
 
   const dispatchQueueTotalPages = Math.max(1, Math.ceil(filteredTrips.length / TABLE_PAGE_SIZE) || 1);
   const pagedDispatchTrips = useMemo(() => {
@@ -789,6 +852,7 @@ export function LogisticsPage() {
                   totalWeightKg: totalWeight,
                   totalVolumeCbm: totalVolume,
                   routeLabel,
+                  scheduledBy: employeeName?.trim() || null,
                 });
                 if (!res.ok) {
                   window.alert(res.error ?? 'Could not schedule shipment');
@@ -861,8 +925,9 @@ export function LogisticsPage() {
                 <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2">
                   {(() => {
                     const eventsByDate: Record<string, Trip[]> = {};
-                    filteredTrips.forEach((trip) => {
-                      const dateKey = trip.scheduledDate;
+                    calendarTrips.forEach((trip) => {
+                      const dateKey = (trip.scheduledDate ?? '').slice(0, 10);
+                      if (!dateKey) return;
                       if (!eventsByDate[dateKey]) eventsByDate[dateKey] = [];
                       eventsByDate[dateKey].push(trip);
                     });
@@ -980,7 +1045,7 @@ export function LogisticsPage() {
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                     <input
                       type="text"
-                      placeholder={isInterIsland ? 'Search shipment, container, customer, order #, route…' : 'Search trip, driver, customer, order #, destination…'}
+                      placeholder={isInterIsland ? 'Search shipment, container, customer, order ID, route…' : 'Search trip, driver, customer, order ID, destination…'}
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                       disabled={logisticsLoading}
@@ -1076,11 +1141,7 @@ export function LogisticsPage() {
                     {filteredTrips.length === 0 && (
                       <tr>
                         <td colSpan={5} className="px-6 py-12 text-center text-sm text-gray-500">
-                          {logisticsFromDb
-                            ? showCompleted
-                              ? 'No trips found for this branch.'
-                              : 'No active trips found. Turn on Show Completed to include finished trips.'
-                            : 'Could not load trips from the database for this branch.'}
+                          {dispatchQueueEmptyMessage}
                         </td>
                       </tr>
                     )}
@@ -1141,11 +1202,7 @@ export function LogisticsPage() {
               <div className="md:hidden divide-y divide-gray-200">
                 {filteredTrips.length === 0 && (
                   <div className="p-8 text-center text-sm text-gray-500">
-                    {logisticsFromDb
-                      ? showCompleted
-                        ? 'No trips found for this branch.'
-                        : 'No active trips found. Turn on Show Completed to include finished trips.'
-                      : 'Could not load trips from the database for this branch.'}
+                    {dispatchQueueEmptyMessage}
                   </div>
                 )}
                 {pagedDispatchTrips.map((trip) => (
@@ -1230,7 +1287,7 @@ export function LogisticsPage() {
             </div>
             <div className="p-4 space-y-4">
               <p className="text-sm text-gray-600">
-                Filter dispatch queue and calendar by trip scheduled date. Search and status filters apply on top. Period persists when you switch branches.
+                Filter dispatch queue by trip scheduled date. Search, status, and Show Completed apply to the queue only. The 14-day calendar shows all trips on those dates, including completed and upcoming.
               </p>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 {DATE_PERIOD_OPTIONS.map(({ kind, label }) => (
@@ -1569,6 +1626,7 @@ export function LogisticsPage() {
               totalVolumeCbm: totalVolume,
               driverUuid: driverId ?? null,
               driverName: driverRecord?.name ?? null,
+              scheduledBy: employeeName?.trim() || null,
             });
             if (!res.ok) {
               window.alert(res.error ?? 'Could not create trip');
@@ -1682,7 +1740,11 @@ export function LogisticsPage() {
           vehicles={fleetTrucks}
           availableOrders={planningOrders}
           onSave={async (params) => {
-            const result = await updateTrip({ tripId: selectedTrip.id, ...params });
+            const result = await updateTrip({
+              tripId: selectedTrip.id,
+              ...params,
+              scheduledBy: employeeName?.trim() || null,
+            });
             if (!result.ok) throw new Error(result.error ?? 'Failed to save trip');
             setShowEditTrip(false);
             setSelectedTrip(null);

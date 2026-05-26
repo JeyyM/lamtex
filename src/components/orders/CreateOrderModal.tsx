@@ -59,8 +59,9 @@ interface OrderItem {
 
 export function CreateOrderModal({ customerId: initialCustomerId, customerName: initialCustomerName, onClose, onSuccess }: CreateOrderModalProps) {
   const navigate = useNavigate();
-  const { branch, role, addAuditLog } = useAppContext();
+  const { branch, role, employeeId, employeeName, isExecutiveUser, addAuditLog } = useAppContext();
   const catalogBranch = orderCatalogBranch(branch, branch);
+  const isExecutiveCreator = isExecutiveUser;
 
   // Customers fetched from Supabase
   const [allCustomers, setAllCustomers] = useState<{ id: string; name: string; email: string | null; phone: string | null; address: string | null; contact_person: string | null }[]>([]);
@@ -77,25 +78,33 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
         .eq('name', branch)
         .single();
       if (!branchData) return;
-      const [{ data: customers }, { data: agents }] = await Promise.all([
-        supabase
-          .from('customers')
-          .select('id, name, email, phone, address, contact_person')
-          .eq('branch_id', branchData.id)
-          .order('name'),
-        supabase
-          .from('employees')
-          .select('id, employee_name, employee_id')
-          .eq('branch_id', branchData.id)
-          .eq('role', 'Sales Agent')
-          .eq('status', 'active')
-          .order('employee_name'),
-      ]);
+      const customersPromise = supabase
+        .from('customers')
+        .select('id, name, email, phone, address, contact_person')
+        .eq('branch_id', branchData.id)
+        .order('name');
+      const agentsPromise = isExecutiveCreator
+        ? supabase
+            .from('employees')
+            .select('id, employee_name, employee_id')
+            .eq('branch_id', branchData.id)
+            .eq('role', 'Sales Agent')
+            .eq('status', 'active')
+            .order('employee_name')
+        : Promise.resolve({ data: [] as { id: string; employee_name: string; employee_id: string }[] });
+      const [{ data: customers }, { data: agents }] = await Promise.all([customersPromise, agentsPromise]);
       setAllCustomers(customers ?? []);
       setAllAgents(agents ?? []);
     };
     fetchData();
-  }, [branch]);
+  }, [branch, isExecutiveCreator]);
+
+  useEffect(() => {
+    if (isExecutiveCreator) return;
+    if (!employeeId) return;
+    setSelectedAgentId(employeeId);
+    setSelectedAgentName(employeeName);
+  }, [isExecutiveCreator, employeeId, employeeName]);
   
   // Customer selection state
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>(initialCustomerId || '');
@@ -619,31 +628,59 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-4 md:p-6">
           <form onSubmit={handleSubmit} className="space-y-6">
-            {/* Agent Selection */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <User className="w-5 h-5" />
-                  Assign Agent
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <select
-                  value={selectedAgentId}
-                  onChange={(e) => {
-                    const agent = allAgents.find(a => a.id === e.target.value);
-                    setSelectedAgentId(e.target.value);
-                    setSelectedAgentName(agent?.employee_name ?? '');
-                  }}
-                  className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 text-sm bg-white"
-                >
-                  <option value="">— No agent assigned —</option>
-                  {allAgents.map(a => (
-                    <option key={a.id} value={a.id}>{a.employee_name} ({a.employee_id})</option>
-                  ))}
-                </select>
-              </CardContent>
-            </Card>
+            {/* Branch & agent — locked for non-executives */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <MapPin className="w-5 h-5" />
+                    Branch
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {isExecutiveCreator ? (
+                    <p className="text-sm text-gray-600">
+                      Using topbar branch: <span className="font-semibold text-gray-900">{branch || '—'}</span>
+                    </p>
+                  ) : (
+                    <div className="w-full px-3 py-2.5 border border-gray-200 rounded-lg bg-gray-50 text-sm font-medium text-gray-900">
+                      {branch || '—'}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <User className="w-5 h-5" />
+                    {isExecutiveCreator ? 'Assign Agent' : 'Assigned Agent'}
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {isExecutiveCreator ? (
+                    <select
+                      value={selectedAgentId}
+                      onChange={(e) => {
+                        const agent = allAgents.find(a => a.id === e.target.value);
+                        setSelectedAgentId(e.target.value);
+                        setSelectedAgentName(agent?.employee_name ?? '');
+                      }}
+                      className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 text-sm bg-white"
+                    >
+                      <option value="">— No agent assigned —</option>
+                      {allAgents.map(a => (
+                        <option key={a.id} value={a.id}>{a.employee_name} ({a.employee_id})</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <div className="w-full px-3 py-2.5 border border-gray-200 rounded-lg bg-gray-50 text-sm font-medium text-gray-900">
+                      {selectedAgentName || employeeName || '—'}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
 
             {/* Customer Selection - Only show if no customer pre-selected */}
             {!initialCustomerId && (

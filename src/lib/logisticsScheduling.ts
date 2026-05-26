@@ -5,6 +5,7 @@
 import { supabase } from '@/src/lib/supabase';
 import { resolveBranchIdByName } from '@/src/lib/branchCompanySettings';
 import { fetchBranchDepotPinByBranchName } from '@/src/lib/companyAddressesSettings';
+import { notifyCustomerOrdersUnscheduledFromTrip, notifyDriverTripAssigned, notifyLogisticsOrderLoading, notifyOrdersScheduled } from '@/src/lib/notifications/notificationsData';
 import type { OrderReadyForDispatch, Trip, DriverOption } from '@/src/types/logistics';
 
 const QUEUE_STATUSES = ['Approved', 'Partially Fulfilled'] as const;
@@ -47,6 +48,59 @@ function isActiveTripStatus(status: string | null | undefined): boolean {
     (ACTIVE_TRIP_DB_STATUSES as readonly string[]).includes(s) ||
     (ACTIVE_TRIP_STATUSES as readonly string[]).includes(s)
   );
+}
+
+type ScheduleNotifyOpts = {
+  scheduledBy?: string | null;
+  tripNumber?: string | null;
+  scheduledDate?: string | null;
+  vehicleName?: string | null;
+  driverName?: string | null;
+};
+
+function fireOrderScheduledNotifications(orderIds: string[], opts: ScheduleNotifyOpts): void {
+  if (!orderIds.length) return;
+  void notifyOrdersScheduled(orderIds, opts).catch((e) => {
+    console.warn('[logisticsScheduling] scheduled notification failed', e);
+  });
+}
+
+async function fetchOrderScheduledDepartureDates(orderIds: string[]): Promise<Record<string, string | null>> {
+  if (!orderIds.length) return {};
+  const { data, error } = await supabase
+    .from('orders')
+    .select('id, scheduled_departure_date')
+    .in('id', orderIds);
+  if (error) {
+    console.warn('[logisticsScheduling] Could not load previous scheduled dates', error);
+    return {};
+  }
+  const out: Record<string, string | null> = {};
+  for (const row of data ?? []) {
+    const r = row as { id?: string; scheduled_departure_date?: string | null };
+    if (!r.id) continue;
+    out[r.id] = r.scheduled_departure_date ? String(r.scheduled_departure_date).slice(0, 10) : null;
+  }
+  return out;
+}
+
+function fireOrderUnscheduledFromTripNotifications(
+  orderIds: string[],
+  previousDatesByOrderId: Record<string, string | null>,
+): void {
+  if (!orderIds.length) return;
+  void notifyCustomerOrdersUnscheduledFromTrip(orderIds, previousDatesByOrderId).catch((e) => {
+    console.warn('[logisticsScheduling] customer unscheduled notification failed', e);
+  });
+}
+
+function fireDriverTripAssignedNotification(
+  tripId: string,
+  opts: { assignedBy?: string | null },
+): void {
+  void notifyDriverTripAssigned(tripId, opts).catch((e) => {
+    console.warn('[logisticsScheduling] driver trip assigned notification failed', e);
+  });
 }
 
 const ORDER_QUEUE_SELECT_FULL =
@@ -134,20 +188,19 @@ function fmtDate(d: string | null | undefined): string {
 }
 
 /** Attach customer / order-number labels from linked orders for dispatch search + columns. */
-async function enrichTripsWithOrderCustomers(trips: Trip[]): Promise<Trip[]> {
-  const allOrderIds = [...new Set(trips.flatMap((t) => t.orders))];
-  if (!allOrderIds.length) return trips;
-
-  const { data: orderRows, error } = await supabase
-    .from('orders')
-    .select('id, customer_name, order_number')
-    .in('id', allOrderIds);
-  if (error || !orderRows?.length) return trips;
+export function applyOrderLabelsToTrips(
+  trips: Trip[],
+  orderRows: { id: string; customer_name?: string | null; order_number?: string | null }[],
+): Trip[] {
+  if (!orderRows.length) return trips;
 
   const byId = new Map(
     orderRows.map((r) => [
-      r.id as string,
-      { customer_name: (r.customer_name as string | null) ?? '', order_number: (r.order_number as string | null) ?? '' },
+      r.id,
+      {
+        customer_name: (r.customer_name ?? '').trim(),
+        order_number: (r.order_number ?? '').trim(),
+      },
     ]),
   );
 
@@ -157,8 +210,8 @@ async function enrichTripsWithOrderCustomers(trips: Trip[]): Promise<Trip[]> {
     for (const oid of trip.orders) {
       const row = byId.get(oid);
       if (!row) continue;
-      if (row.customer_name.trim()) names.push(row.customer_name.trim());
-      if (row.order_number.trim()) orderNums.push(row.order_number.trim());
+      if (row.customer_name) names.push(row.customer_name);
+      if (row.order_number) orderNums.push(row.order_number);
     }
     const uniqueNames = [...new Set(names)];
     let customerLabel = '—';
@@ -172,6 +225,76 @@ async function enrichTripsWithOrderCustomers(trips: Trip[]): Promise<Trip[]> {
       orderNumbers: orderNums,
     };
   });
+}
+
+async function enrichTripsWithOrderCustomers(trips: Trip[]): Promise<Trip[]> {
+  const allOrderIds = [...new Set(trips.flatMap((t) => t.orders))];
+  if (!allOrderIds.length) return trips;
+
+  const orderRows: { id: string; customer_name: string | null; order_number: string | null }[] = [];
+  const chunkSize = 100;
+  for (let i = 0; i < allOrderIds.length; i += chunkSize) {
+    const chunk = allOrderIds.slice(i, i + chunkSize);
+    const { data, error } = await supabase
+      .from('orders')
+      .select('id, customer_name, order_number')
+      .in('id', chunk);
+    if (error) {
+      if (import.meta.env.DEV) console.warn('[logisticsScheduling] order label enrich failed', error.message);
+      return trips;
+    }
+    for (const row of data ?? []) {
+      orderRows.push({
+        id: row.id as string,
+        customer_name: row.customer_name as string | null,
+        order_number: row.order_number as string | null,
+      });
+    }
+  }
+  if (!orderRows.length) return trips;
+
+  return applyOrderLabelsToTrips(trips, orderRows);
+}
+
+/** Resolve order UUIDs whose order_number matches a dispatch-queue search string. */
+export async function fetchOrderIdsMatchingDispatchSearch(
+  branchName: string,
+  query: string,
+): Promise<string[]> {
+  const q = query.trim();
+  if (q.length < 2) return [];
+
+  const bid = await resolveBranchIdByName(branchName.trim());
+  if (!bid) return [];
+
+  const escaped = q.replace(/[%_\\]/g, '\\$&');
+  const { data, error } = await supabase
+    .from('orders')
+    .select('id, order_number')
+    .eq('branch_id', bid)
+    .ilike('order_number', `%${escaped}%`)
+    .limit(40);
+
+  if (error) {
+    if (import.meta.env.DEV) console.warn('[logisticsScheduling] dispatch order search failed', error.message);
+    return [];
+  }
+
+  const qLower = q.toLowerCase();
+  const qNorm = qLower.replace(/[\s\-_#]/g, '');
+  const ids: string[] = [];
+  for (const row of data ?? []) {
+    const id = String(row.id ?? '');
+    const num = String(row.order_number ?? '');
+    const numLower = num.toLowerCase();
+    const numNorm = numLower.replace(/[\s\-_#]/g, '');
+    if (numLower.includes(qLower) || (qNorm.length >= 2 && numNorm.includes(qNorm))) {
+      ids.push(id);
+    } else if (id.toLowerCase().includes(qLower)) {
+      ids.push(id);
+    }
+  }
+  return [...new Set(ids)];
 }
 
 function mapDbTripStatus(s: string): Trip['status'] {
@@ -857,6 +980,7 @@ export async function createTripFromPlanning(params: {
   totalVolumeCbm: number;
   driverUuid?: string | null;
   driverName?: string | null;
+  scheduledBy?: string | null;
 }): Promise<{ ok: boolean; error?: string; tripId?: string; tripNumber?: string }> {
   const bid = await resolveBranchIdByName(params.branchName.trim());
   if (!bid) return { ok: false, error: 'Branch not found' };
@@ -942,6 +1066,18 @@ export async function createTripFromPlanning(params: {
     return { ok: false, error: ordErr.message };
   }
 
+  fireOrderScheduledNotifications(params.orderUuids, {
+    scheduledBy: params.scheduledBy ?? null,
+    tripNumber,
+    scheduledDate: d,
+    vehicleName: (veh.vehicle_name as string) ?? null,
+    driverName: params.driverName ?? null,
+  });
+
+  if (params.driverUuid && tripId) {
+    fireDriverTripAssignedNotification(tripId, { assignedBy: params.scheduledBy ?? null });
+  }
+
   return { ok: true, tripId, tripNumber };
 }
 
@@ -956,6 +1092,7 @@ export async function createContainerShipmentFromPlanning(params: {
   totalVolumeCbm: number;
   /** e.g. "Manila Port → Cebu" — stored on `trips.destinations`. */
   routeLabel: string;
+  scheduledBy?: string | null;
 }): Promise<{ ok: boolean; error?: string; tripId?: string; tripNumber?: string }> {
   const bid = await resolveBranchIdByName(params.branchName.trim());
   if (!bid) return { ok: false, error: 'Branch not found' };
@@ -1029,6 +1166,14 @@ export async function createContainerShipmentFromPlanning(params: {
     return { ok: false, error: ordErr.message };
   }
 
+  fireOrderScheduledNotifications(params.orderUuids, {
+    scheduledBy: params.scheduledBy ?? null,
+    tripNumber,
+    scheduledDate: d,
+    vehicleName: (veh.vehicle_name as string) ?? null,
+    driverName: null,
+  });
+
   return { ok: true, tripId, tripNumber };
 }
 
@@ -1052,7 +1197,15 @@ export async function updateTrip(params: {
   /** `trips.logistics_notes` — route / driver / dispatch notes (never delay text). */
   logisticsNotes: string;
   orderStatuses?: Record<string, string>;
+  scheduledBy?: string | null;
 }): Promise<{ ok: boolean; error?: string }> {
+  const { data: prevTrip } = await supabase
+    .from('trips')
+    .select('driver_id')
+    .eq('id', params.tripId)
+    .maybeSingle();
+  const previousDriverId = (prevTrip?.driver_id as string | null) ?? null;
+
   const { data: veh, error: vErr } = await supabase
     .from('vehicles')
     .select('vehicle_name, max_weight_kg, max_volume_cbm')
@@ -1110,11 +1263,13 @@ export async function updateTrip(params: {
 
   if (params.orderUuids.length === 0) {
     const removed = params.previousOrderUuids;
+    const previousDates = removed.length > 0 ? await fetchOrderScheduledDepartureDates(removed) : {};
     if (removed.length > 0) {
       await supabase
         .from('orders')
         .update({ status: 'Approved', scheduled_departure_date: null, updated_at: new Date().toISOString() })
         .in('id', removed);
+      fireOrderUnscheduledFromTripNotifications(removed, previousDates);
     }
     const { error: delErr } = await supabase.from('trips').delete().eq('id', params.tripId);
     if (delErr) return { ok: false, error: delErr.message };
@@ -1123,21 +1278,65 @@ export async function updateTrip(params: {
 
   // Orders removed from this trip → revert to Approved
   const removed = params.previousOrderUuids.filter((id) => !params.orderUuids.includes(id));
+  const previousDates = removed.length > 0 ? await fetchOrderScheduledDepartureDates(removed) : {};
   if (removed.length > 0) {
     await supabase
       .from('orders')
       .update({ status: 'Approved', scheduled_departure_date: null, updated_at: new Date().toISOString() })
       .in('id', removed);
+    fireOrderUnscheduledFromTripNotifications(removed, previousDates);
   }
 
   // Apply per-order status from the editor; fall back to 'Scheduled' for any without explicit status
   const orderNow = new Date().toISOString();
+  const prevOrderStatusById: Record<string, string> = {};
+  if (params.orderUuids.length > 0) {
+    const { data: prevRows } = await supabase
+      .from('orders')
+      .select('id, status')
+      .in('id', params.orderUuids);
+    for (const row of prevRows ?? []) {
+      const r = row as { id?: string; status?: string | null };
+      if (r.id) prevOrderStatusById[r.id] = String(r.status ?? '');
+    }
+  }
   for (const id of params.orderUuids) {
     const orderSt = params.orderStatuses?.[id] ?? 'Scheduled';
     await supabase
       .from('orders')
       .update({ status: orderSt, updated_at: orderNow })
       .eq('id', id);
+  }
+
+  const newlyLoading = params.orderUuids.filter((id) => {
+    const next = params.orderStatuses?.[id] ?? 'Scheduled';
+    return next === 'Loading' && prevOrderStatusById[id] !== 'Loading';
+  });
+  for (const orderId of newlyLoading) {
+    void notifyLogisticsOrderLoading(orderId, { markedBy: params.scheduledBy ?? null }).catch((e) => {
+      console.warn('[logisticsScheduling] logistics loading notification failed', orderId, e);
+    });
+  }
+
+  const newlyAdded = params.orderUuids.filter((id) => !params.previousOrderUuids.includes(id));
+  const newlyScheduled = newlyAdded.filter((id) => (params.orderStatuses?.[id] ?? 'Scheduled') === 'Scheduled');
+  if (newlyScheduled.length > 0) {
+    const { data: trip } = await supabase
+      .from('trips')
+      .select('trip_number, scheduled_date, vehicle_name, driver_name')
+      .eq('id', params.tripId)
+      .maybeSingle();
+    fireOrderScheduledNotifications(newlyScheduled, {
+      scheduledBy: params.scheduledBy ?? null,
+      tripNumber: (trip?.trip_number as string | undefined) ?? null,
+      scheduledDate: trip?.scheduled_date ? String(trip.scheduled_date).slice(0, 10) : null,
+      vehicleName: (trip?.vehicle_name as string | undefined) ?? params.vehicleName,
+      driverName: (trip?.driver_name as string | undefined) ?? params.driverName,
+    });
+  }
+
+  if (params.driverUuid && params.driverUuid !== previousDriverId) {
+    fireDriverTripAssignedNotification(params.tripId, { assignedBy: params.scheduledBy ?? null });
   }
 
   return { ok: true };
@@ -1277,4 +1476,79 @@ export async function releaseOrderFromActiveTrips(orderId: string): Promise<Rele
   }
 
   return { ok: true, tripsUpdated, tripsDeleted, tripIds };
+}
+
+/** Order statuses that allow the trip to be marked completed (all orders must reach one of these). */
+const TRIP_COMPLETE_ORDER_STATUSES = new Set(['Delivered', 'Complete', 'Cancelled']);
+
+export function allOrdersOnTripDelivered(
+  orderIds: string[],
+  statusById: Record<string, string>,
+): boolean {
+  if (orderIds.length === 0) return false;
+  return orderIds.every((id) => {
+    const st = statusById[id];
+    return st != null && TRIP_COMPLETE_ORDER_STATUSES.has(st);
+  });
+}
+
+/** Mark trip Completed when every assigned order is Delivered (or Cancelled). Returns true if updated. */
+export async function tryCompleteTripIfAllOrdersDelivered(tripId: string): Promise<boolean> {
+  const tid = tripId.trim();
+  if (!tid) return false;
+
+  const { data: trip, error: tripErr } = await supabase
+    .from('trips')
+    .select('id, status, order_ids')
+    .eq('id', tid)
+    .maybeSingle();
+  if (tripErr || !trip) return false;
+
+  const current = String(trip.status ?? '');
+  if (current === 'Completed' || current === 'Cancelled') return current === 'Completed';
+
+  const orderIds = ((trip.order_ids ?? []) as string[]).filter(Boolean);
+  if (!orderIds.length) return false;
+
+  const { data: orderRows, error: ordErr } = await supabase
+    .from('orders')
+    .select('id, status')
+    .in('id', orderIds);
+  if (ordErr) return false;
+
+  const statusById: Record<string, string> = {};
+  for (const row of orderRows ?? []) {
+    statusById[String(row.id)] = String(row.status ?? '');
+  }
+  if (!allOrdersOnTripDelivered(orderIds, statusById)) return false;
+
+  const now = new Date().toISOString();
+  const { error: updErr } = await supabase
+    .from('trips')
+    .update({ status: 'Completed', actual_arrival: now, updated_at: now })
+    .eq('id', tid);
+  if (updErr) {
+    if (import.meta.env.DEV) console.warn('[logisticsScheduling] trip auto-complete failed', updErr.message);
+    return false;
+  }
+  return true;
+}
+
+/** After an order is delivered, complete any trip whose remaining orders are all delivered. */
+export async function tryCompleteTripsForDeliveredOrder(orderId: string): Promise<string[]> {
+  const oid = orderId.trim();
+  if (!oid) return [];
+
+  const { data: tripRows, error } = await supabase
+    .from('trips')
+    .select('id')
+    .contains('order_ids', [oid]);
+  if (error || !tripRows?.length) return [];
+
+  const completed: string[] = [];
+  for (const row of tripRows) {
+    const tripId = String(row.id);
+    if (await tryCompleteTripIfAllOrdersDelivered(tripId)) completed.push(tripId);
+  }
+  return completed;
 }

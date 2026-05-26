@@ -22,6 +22,7 @@ import {
 import AddCategoryModal, { CategoryFormData } from '@/src/components/products/AddCategoryModal';
 import { supabase } from '@/src/lib/supabase';
 import { isCategoryCatalogHidden, CATALOG_HIDDEN_CLASS } from '@/src/lib/productCatalogVisibility';
+import { computeStockStatus } from '@/src/lib/stockStatus';
 
 // Local fallback images per category slug
 import hdpePipeImg     from '@/src/assets/product-images/HDPE Pipe.webp';
@@ -82,12 +83,29 @@ interface CategoryRow {
   is_active: boolean;
 }
 
+interface ProductStatVariantStock {
+  branch_id: string | null;
+  quantity: number | null;
+  branches?: { name?: string | null } | { name?: string | null }[] | null;
+}
+
+interface ProductStatVariant {
+  id: string;
+  is_hidden: boolean | null;
+  total_stock: number | null;
+  reorder_point: number | null;
+  product_variant_stock?: ProductStatVariantStock[] | null;
+}
+
 interface ProductStatRow {
   id: string;
   category_id: string | null;
   status: string;
   total_variants: number;
   total_revenue: number;
+  /** Derived client-side from the worst visible variant (branch-scoped when applicable). */
+  derived_status?: string;
+  product_variants?: ProductStatVariant[] | ProductStatVariant | null;
 }
 
 interface SummaryStats {
@@ -307,17 +325,67 @@ export function ProductsPage() {
     }
     let q = supabase
       .from('products')
-      .select('id, category_id, status, total_variants, total_revenue');
+      .select(
+        `id, category_id, status, total_variants, total_revenue,
+         product_variants(id, is_hidden, total_stock, reorder_point,
+           product_variant_stock(branch_id, quantity, branches(name)))`,
+      );
     if (currentBranch) q = q.eq('branch', currentBranch);
     if (scopedProductIds) q = q.in('id', scopedProductIds);
     const { data } = await q;
     if (data) {
-      setProductStats(data as ProductStatRow[]);
+      // Derive each family's worst variant status so a single low-stock variant
+      // surfaces in the low/critical/out-of-stock counts even if the persisted
+      // product.status (rolled up best-case) still says Active.
+      const wantBranch = currentBranch?.trim().toLowerCase() ?? null;
+      const rows = (data as ProductStatRow[]).map((p) => {
+        const variantEmbed = p.product_variants;
+        const variants: ProductStatVariant[] = Array.isArray(variantEmbed)
+          ? variantEmbed
+          : variantEmbed
+          ? [variantEmbed]
+          : [];
+        const visibleVariants = variants.filter((v) => v?.is_hidden !== true);
+        let worst = 'Active';
+        for (const v of visibleVariants) {
+          const reorder = Number(v.reorder_point) || 0;
+          let stock = Number(v.total_stock) || 0;
+          if (wantBranch) {
+            const stockRows = Array.isArray(v.product_variant_stock) ? v.product_variant_stock : [];
+            let branchQty: number | null = null;
+            for (const row of stockRows) {
+              const rel = row?.branches;
+              const branchObj = Array.isArray(rel) ? rel[0] : rel;
+              const name = branchObj?.name ? String(branchObj.name).trim().toLowerCase() : null;
+              if (name === wantBranch) {
+                branchQty = Number(row.quantity) || 0;
+                break;
+              }
+            }
+            stock = branchQty ?? 0;
+          }
+          const computed = computeStockStatus(stock, reorder);
+          const rank = computed === 'Out of Stock' ? 3
+            : computed === 'Critical' ? 2
+            : computed === 'Low Stock' ? 1
+            : 0;
+          const worstRank = worst === 'Out of Stock' ? 3
+            : worst === 'Critical' ? 2
+            : worst === 'Low Stock' ? 1
+            : 0;
+          if (rank > worstRank) worst = computed;
+        }
+        return { ...p, derived_status: worst } as ProductStatRow;
+      });
+
+      setProductStats(rows);
       setSummaryStats({
-        totalProducts: data.length,
-        totalVariants: data.reduce((s, p) => s + (p.total_variants ?? 0), 0),
-        lowStockCount: data.filter(p => ['Low Stock', 'Critical', 'Out of Stock'].includes(p.status)).length,
-        totalRevenue:  data.reduce((s, p) => s + (Number(p.total_revenue) || 0), 0),
+        totalProducts: rows.length,
+        totalVariants: rows.reduce((s, p) => s + (p.total_variants ?? 0), 0),
+        lowStockCount: rows.filter((p) =>
+          ['Low Stock', 'Critical', 'Out of Stock'].includes(p.derived_status ?? p.status),
+        ).length,
+        totalRevenue: rows.reduce((s, p) => s + (Number(p.total_revenue) || 0), 0),
       });
     }
     setSummaryLoading(false);
@@ -338,7 +406,9 @@ export function ProductsPage() {
     const rows = productStats.filter(p => p.category_id === catId);
     return {
       count:    rows.length,
-      lowStock: rows.filter(p => ['Low Stock', 'Critical', 'Out of Stock'].includes(p.status)).length,
+      lowStock: rows.filter(p =>
+        ['Low Stock', 'Critical', 'Out of Stock'].includes(p.derived_status ?? p.status),
+      ).length,
     };
   };
 

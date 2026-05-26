@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from 'react';
-import { X, Package, CheckCircle, AlertTriangle, Image as ImageIcon, Upload, ZoomIn, Trash2 } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { X, Package, CheckCircle, AlertTriangle, Image as ImageIcon, Upload, ZoomIn, Trash2, Loader2 } from 'lucide-react';
 import { OrderLineItem } from '@/src/types/orders';
 import ImageGalleryModal from '@/src/components/ImageGalleryModal';
-
-const ORDER_DELIVERY_PROOFS_FOLDER = 'order-delivery-proofs';
+import {
+  deliveryProofGalleryFolder,
+  uploadOrderProofBinary,
+} from '@/src/lib/orderProofPayments';
 
 /** Max units in scope for this line (recorded at in transit, or full line qty if none / zero shipped). */
 export function fulfillmentCap(item: OrderLineItem): number {
@@ -35,13 +37,22 @@ interface FulfillOrderModalProps {
   orderId: string;
   orderNumber: string;
   items: OrderLineItem[];
-  onFulfill: (fulfillmentData: FulfillmentData[], proofImageUrls: string[]) => void;
+  onFulfill: (
+    fulfillmentData: FulfillmentData[],
+    proofImageUrls: string[],
+    proofDetails?: DeliveryProofDetails,
+  ) => void | Promise<void>;
 }
 
 export interface FulfillmentData {
   itemId: string;
   orderedQuantity: number;
   deliveredQuantity: number;
+}
+
+export interface DeliveryProofDetails {
+  title?: string | null;
+  notes?: string | null;
 }
 
 export function FulfillOrderModal({
@@ -56,10 +67,19 @@ export function FulfillOrderModal({
   const [inputValues, setInputValues] = useState<Record<string, string>>({});
   const [proofImageUrls, setProofImageUrls] = useState<string[]>([]);
   const [showProofGallery, setShowProofGallery] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [proofUploadError, setProofUploadError] = useState<string | null>(null);
+  const [proofDocTitle, setProofDocTitle] = useState('');
+  const [proofNotes, setProofNotes] = useState('');
+  const localProofInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (isOpen) {
       setProofImageUrls([]);
+      setProofUploadError(null);
+      setProofDocTitle('');
+      setProofNotes('');
+      setIsSubmitting(false);
       const data = items.map((item) => {
         const remaining = fulfillmentRemaining(item);
         return {
@@ -105,9 +125,49 @@ export function FulfillOrderModal({
     );
   };
 
-  const handleFulfill = () => {
-    onFulfill(fulfillmentData, proofImageUrls);
-    onClose();
+  const handleFulfill = async () => {
+    setIsSubmitting(true);
+    setProofUploadError(null);
+    try {
+      const proofDetails: DeliveryProofDetails | undefined =
+        proofImageUrls.length > 0
+          ? {
+              title: proofDocTitle.trim() || null,
+              notes: proofNotes.trim() || null,
+            }
+          : undefined;
+      await onFulfill(fulfillmentData, proofImageUrls, proofDetails);
+      onClose();
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Could not save delivery';
+      setProofUploadError(message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleLocalProofFiles = async (files: FileList | null) => {
+    if (!files?.length || !orderId) return;
+    setProofUploadError(null);
+    setIsSubmitting(true);
+    try {
+      const uploaded: string[] = [];
+      for (const file of Array.from(files)) {
+        if (!file.type.startsWith('image/')) continue;
+        const { publicUrl } = await uploadOrderProofBinary(orderId, 'delivery', file);
+        uploaded.push(publicUrl);
+      }
+      if (uploaded.length === 0) {
+        setProofUploadError('Please select image files (JPEG, PNG, WebP, etc.).');
+        return;
+      }
+      setProofImageUrls((prev) => [...prev, ...uploaded]);
+    } catch (e) {
+      setProofUploadError(e instanceof Error ? e.message : 'Upload failed');
+    } finally {
+      setIsSubmitting(false);
+      if (localProofInputRef.current) localProofInputRef.current.value = '';
+    }
   };
 
   const openProofGallery = () => setShowProofGallery(true);
@@ -134,7 +194,7 @@ export function FulfillOrderModal({
   const fullyDeliveredItems = items.filter((line) => totalDeliveredAfterSave(line) === line.quantity)
     .length;
 
-  const proofStorageFolder = `${ORDER_DELIVERY_PROOFS_FOLDER}/${orderId || 'unknown'}`;
+  const proofStorageFolder = deliveryProofGalleryFolder(orderId || 'unknown');
 
   return (
     <>
@@ -293,11 +353,29 @@ export function FulfillOrderModal({
               <button
                 type="button"
                 onClick={openProofGallery}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                disabled={isSubmitting}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
               >
                 <Upload className="w-3.5 h-3.5" />
-                {proofImageUrls.length > 0 ? 'Change selection' : 'Add images'}
+                {proofImageUrls.length > 0 ? 'Gallery' : 'Gallery / upload'}
               </button>
+              <button
+                type="button"
+                onClick={() => localProofInputRef.current?.click()}
+                disabled={isSubmitting}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+              >
+                <ImageIcon className="w-3.5 h-3.5" />
+                From device
+              </button>
+              <input
+                ref={localProofInputRef}
+                type="file"
+                accept="image/jpeg,image/jpg,image/png,image/webp,image/avif,image/gif"
+                multiple
+                className="hidden"
+                onChange={(e) => void handleLocalProofFiles(e.target.files)}
+              />
             </div>
             {proofImageUrls.length === 0 ? (
               <div
@@ -310,8 +388,8 @@ export function FulfillOrderModal({
                 <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center mb-3">
                   <ImageIcon className="w-6 h-6 text-gray-300" />
                 </div>
-                <p className="text-sm text-gray-500">Click to select from image gallery</p>
-                <p className="text-xs text-gray-400 mt-1">Upload new images inside the gallery if needed</p>
+                <p className="text-sm text-gray-500">Add proof from gallery or your device</p>
+                <p className="text-xs text-gray-400 mt-1">Saved to Documents &amp; Proofs when you confirm delivery</p>
               </div>
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
@@ -357,6 +435,33 @@ export function FulfillOrderModal({
                 </div>
               </div>
             )}
+            {proofUploadError && (
+              <p className="mt-2 text-sm text-red-600">{proofUploadError}</p>
+            )}
+            <div className="mt-4 space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Title / purpose (optional)</label>
+                <input
+                  type="text"
+                  value={proofDocTitle}
+                  onChange={(e) => setProofDocTitle(e.target.value)}
+                  placeholder="Proof of delivery"
+                  disabled={isSubmitting}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none disabled:opacity-50"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Notes (optional)</label>
+                <textarea
+                  value={proofNotes}
+                  onChange={(e) => setProofNotes(e.target.value)}
+                  rows={3}
+                  disabled={isSubmitting}
+                  placeholder="Delivery details, recipient name, condition, etc."
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none resize-y disabled:opacity-50"
+                />
+              </div>
+            </div>
           </div>
 
           {/* Fulfillment Status Alert */}
@@ -390,20 +495,22 @@ export function FulfillOrderModal({
         <div className="flex items-center justify-end gap-3 p-6 border-t border-gray-200 bg-gray-50">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-gray-700 hover:bg-gray-200 rounded-lg transition-colors"
+            disabled={isSubmitting}
+            className="px-4 py-2 text-gray-700 hover:bg-gray-200 rounded-lg transition-colors disabled:opacity-50"
           >
             Cancel
           </button>
           <button
-            onClick={handleFulfill}
-            className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2 font-medium"
+            onClick={() => void handleFulfill()}
+            disabled={isSubmitting}
+            className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2 font-medium disabled:opacity-50"
           >
-            <CheckCircle className="w-5 h-5" />
+            {isSubmitting ? <Loader2 className="w-5 h-5 animate-spin" /> : <CheckCircle className="w-5 h-5" />}
             {!hasLineItems
-              ? 'Confirm'
+              ? isSubmitting ? 'Saving…' : 'Confirm'
               : isPartialFulfillment
-                ? 'Mark as Partially Fulfilled'
-                : 'Mark as Delivered'}
+                ? isSubmitting ? 'Saving…' : 'Mark as Partially Fulfilled'
+                : isSubmitting ? 'Saving…' : 'Mark as Delivered'}
           </button>
         </div>
       </div>

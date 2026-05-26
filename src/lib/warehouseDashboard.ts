@@ -300,16 +300,19 @@ interface StockSourceRow {
   lastRestocked: string | null;
 }
 
-async function fetchScopedVariants(scope: WarehouseAssignmentScope): Promise<StockSourceRow[]> {
+async function fetchScopedVariants(
+  scope: WarehouseAssignmentScope,
+  branchId: string | null,
+): Promise<StockSourceRow[]> {
   try {
     let q = supabase
       .from('product_variants')
       .select(
         `id, sku, size, total_stock, reorder_point, safety_stock, last_restocked,
+         product_variant_stock(branch_id, quantity),
          products!inner(id, name, is_hidden, product_categories(slug))`,
       )
       .eq('is_hidden', false)
-      .order('total_stock', { ascending: true })
       .limit(500);
 
     if (scope.productIds !== null) {
@@ -320,7 +323,7 @@ async function fetchScopedVariants(scope: WarehouseAssignmentScope): Promise<Sto
     const { data, error } = await q;
     if (error) throw error;
 
-    return ((data ?? []) as Array<Record<string, unknown>>)
+    const rows = ((data ?? []) as Array<Record<string, unknown>>)
       .map((r) => {
         const product = nestedAs<{
           id?: unknown;
@@ -332,6 +335,18 @@ async function fetchScopedVariants(scope: WarehouseAssignmentScope): Promise<Sto
         if (product.is_hidden === true) return null;
         const category = product.product_categories;
         const categoryObj = Array.isArray(category) ? category[0] : category;
+
+        // Use branch-specific quantity when a branch is selected; otherwise
+        // fall back to the cross-branch aggregate so org-wide views still work.
+        let effectiveStock = toNumber(r.total_stock);
+        if (branchId) {
+          const branchStockRows = Array.isArray(r.product_variant_stock)
+            ? (r.product_variant_stock as Array<Record<string, unknown>>)
+            : [];
+          const match = branchStockRows.find((row) => String(row.branch_id) === branchId);
+          effectiveStock = match ? toNumber(match.quantity) : 0;
+        }
+
         return {
           variantId: String(r.id),
           productId: String(product.id ?? ''),
@@ -339,13 +354,16 @@ async function fetchScopedVariants(scope: WarehouseAssignmentScope): Promise<Sto
           productName: toStr(product.name) ?? '—',
           sku: toStr(r.sku) ?? '—',
           size: toStr(r.size) ?? '—',
-          totalStock: toNumber(r.total_stock),
+          totalStock: effectiveStock,
           reorderPoint: toNumber(r.reorder_point),
           safetyStock: toNumber(r.safety_stock),
           lastRestocked: toStr(r.last_restocked),
         };
       })
-      .filter((r): r is StockSourceRow => r !== null);
+      .filter((r): r is StockSourceRow => r !== null)
+      .sort((a, b) => a.totalStock - b.totalStock);
+
+    return rows;
   } catch (e) {
     logDev('scoped variants', e);
     return [];
@@ -893,7 +911,7 @@ export async function fetchWarehouseManagerDashboard(opts: {
     myPOs,
     movements,
   ] = await Promise.all([
-    fetchScopedVariants(opts.scope),
+    fetchScopedVariants(opts.scope, branchId),
     fetchScopedMaterials(opts.scope),
     fetchIncomingPurchaseOrders(branchId),
     fetchOrdersAwaitingFulfillment(branchId),

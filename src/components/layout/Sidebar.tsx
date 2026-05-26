@@ -18,7 +18,8 @@ import {
   ChevronLeft,
   ChevronRight,
   X,
-  LogOut
+  LogOut,
+  Mail,
 } from 'lucide-react';
 import { cn } from '@/src/lib/utils';
 import lamtexLogo from '../../assets/Lamtex Logo.png';
@@ -44,11 +45,19 @@ export function Sidebar() {
     { name: 'Chats', path: '/chats', icon: MessageCircle, roles: ['Executive', 'Warehouse', 'Logistics', 'Agent', 'Finance', 'Production', 'Manager'] },
     { name: 'Customers', path: '/customers', icon: Users, roles: ['Executive', 'Agent', 'Manager'] },
     { name: 'Suppliers', path: '/suppliers', icon: Truck, roles: ['Executive', 'Procurement', 'Manager'] },
-    { name: 'Invoices & Payments', path: '/finance', icon: CreditCard, roles: ['Executive', 'Finance', 'Agent', 'Manager'] },
+    { name: 'Finance', path: '/finance', icon: CreditCard, roles: ['Executive', 'Finance', 'Agent', 'Manager'] },
     { name: 'Employees', path: '/employees', icon: Users, roles: ['Executive', 'Manager'] },
     { name: 'Agent Analytics', path: '/agents', icon: UserCheck, roles: ['Executive', 'Manager'] },
     { name: 'Reports', path: '/reports', icon: BarChart3, roles: ['Executive', 'Finance', 'Manager'] },
     { name: 'Settings', path: '/settings', icon: Settings, roles: ['Executive', 'Warehouse', 'Logistics', 'Agent', 'Driver', 'Finance', 'Production', 'Manager', 'Procurement'] },
+    ...(import.meta.env.DEV
+      ? [{
+          name: 'Email Testing',
+          path: '/dev/email-testing',
+          icon: Mail,
+          roles: ['Executive', 'Warehouse', 'Logistics', 'Agent', 'Driver', 'Finance', 'Production', 'Manager', 'Procurement'],
+        }]
+      : []),
   ];
 
   const filteredNav = navItems.filter(item => item.roles.includes(role));

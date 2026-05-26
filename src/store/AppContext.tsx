@@ -4,6 +4,7 @@ import { supabase } from '@/src/lib/supabase';
 import { fetchWarehouseAssignmentIds } from '@/src/lib/warehouseAssignments';
 import { buildWarehouseAssignmentScope, type WarehouseAssignmentScope } from '@/src/lib/warehouseScope';
 import { getSelectedBranch, setSelectedBranch, SELECTED_BRANCH_STORAGE_KEY } from '@/src/lib/selectedBranchStorage';
+import { isExecutiveDashboardRole, resolveDashboardRole } from '@/src/lib/resolveDashboardRole';
 import type { Session } from '@supabase/supabase-js';
 
 interface AppContextType {
@@ -11,6 +12,10 @@ interface AppContextType {
   setRole: (role: UserRole) => void;
   branch: Branch;
   setBranch: (branch: Branch) => void;
+  /** True when the logged-in employee has user_role Executive (can switch branch/role). */
+  isExecutiveUser: boolean;
+  /** False until employee profile (role/branch) is loaded for the current session. */
+  profileLoaded: boolean;
   auditLogs: AuditLog[];
   addAuditLog: (action: string, entity: string, details: string) => void;
   isSidebarCollapsed: boolean;
@@ -34,8 +39,12 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [role, setRole] = useState<UserRole>('Executive');
+  const [role, setRoleState] = useState<UserRole>('Executive');
   const [branch, setBranchState] = useState<Branch>(() => getSelectedBranch());
+  const [isExecutiveUser, setIsExecutiveUser] = useState(false);
+  const [profileLoaded, setProfileLoaded] = useState(false);
+  const [employeeRole, setEmployeeRole] = useState<UserRole | null>(null);
+  const [employeeBranch, setEmployeeBranch] = useState<Branch | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [hideBranchSelector, setHideBranchSelector] = useState(false);
@@ -85,47 +94,142 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     await loadWarehouseScope(employeeId, role);
   }, [employeeId, loadWarehouseScope, role]);
 
-  const setBranch = useCallback((next: Branch) => {
-    setBranchState(next);
-    setSelectedBranch(next);
-  }, []);
+  const setBranch = useCallback(
+    (next: Branch) => {
+      if (!isExecutiveUser) return;
+      setBranchState(next);
+      setSelectedBranch(next);
+    },
+    [isExecutiveUser],
+  );
+
+  const setRole = useCallback(
+    (next: UserRole) => {
+      if (!isExecutiveUser) return;
+      setRoleState(next);
+    },
+    [isExecutiveUser],
+  );
+
+  useEffect(() => {
+    if (isExecutiveUser) return;
+    if (employeeRole) setRoleState(employeeRole);
+    if (employeeBranch) {
+      setBranchState(employeeBranch);
+    }
+  }, [isExecutiveUser, employeeRole, employeeBranch]);
 
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
       if (event.key !== SELECTED_BRANCH_STORAGE_KEY) return;
+      if (!isExecutiveUser) return;
       setBranchState((event.newValue ?? '') as Branch);
     };
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
-  }, []);
+  }, [isExecutiveUser]);
 
-  const fetchEmployeeSession = async (email: string) => {
-    const { data } = await supabase
+  const fetchEmployeeSession = async (userId: string, email: string) => {
+    setProfileLoaded(false);
+    const selectCols = 'id, employee_name, user_role, role, branches(name)';
+
+    let row: {
+      id: string;
+      employee_name: string;
+      user_role: UserRole | null;
+      role: string | null;
+      branches: { name: string } | { name: string }[] | null;
+    } | null = null;
+
+    const { data: byAuth } = await supabase
       .from('employees')
-      .select('id, employee_name')
-      .eq('email', email)
+      .select(selectCols)
+      .eq('auth_user_id', userId)
       .maybeSingle();
-    setEmployeeName(data?.employee_name ?? email);
-    setEmployeeId(data?.id ?? null);
+
+    if (byAuth) {
+      row = byAuth as typeof row;
+    } else {
+      const { data: byEmail } = await supabase
+        .from('employees')
+        .select(selectCols)
+        .eq('email', email)
+        .maybeSingle();
+      row = (byEmail as typeof row) ?? null;
+    }
+
+    if (!row) {
+      setEmployeeName(email);
+      setEmployeeId(null);
+      setEmployeeRole(null);
+      setEmployeeBranch(null);
+      setIsExecutiveUser(false);
+      setProfileLoaded(true);
+      return;
+    }
+
+    const branchJoin = row.branches;
+    const branchName =
+      branchJoin == null
+        ? null
+        : Array.isArray(branchJoin)
+          ? branchJoin[0]?.name ?? null
+          : branchJoin.name;
+
+    const effectiveRole = resolveDashboardRole(row.user_role, row.role);
+    const executive = isExecutiveDashboardRole(effectiveRole);
+
+    setEmployeeName(row.employee_name ?? email);
+    setEmployeeId(row.id ?? null);
+    setEmployeeRole(effectiveRole);
+    setEmployeeBranch(branchName);
+    setIsExecutiveUser(executive);
+
+    if (executive) {
+      if (effectiveRole) setRoleState(effectiveRole);
+      const stored = getSelectedBranch();
+      if (stored) {
+        setBranchState(stored);
+      } else if (branchName) {
+        setBranchState(branchName);
+        setSelectedBranch(branchName);
+      }
+    } else {
+      if (effectiveRole) setRoleState(effectiveRole);
+      if (branchName) {
+        setBranchState(branchName);
+        setSelectedBranch(branchName);
+      }
+    }
+
+    setProfileLoaded(true);
   };
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session: s } }) => {
       setSession(s);
       setSessionLoading(false);
-      if (s?.user?.email) void fetchEmployeeSession(s.user.email);
+      if (s?.user?.email && s.user.id) void fetchEmployeeSession(s.user.id, s.user.email);
       else {
         setEmployeeName('');
         setEmployeeId(null);
+        setEmployeeRole(null);
+        setEmployeeBranch(null);
+        setIsExecutiveUser(false);
+        setProfileLoaded(true);
       }
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
       setSession(s);
-      if (s?.user?.email) void fetchEmployeeSession(s.user.email);
+      if (s?.user?.email && s.user.id) void fetchEmployeeSession(s.user.id, s.user.email);
       else {
         setEmployeeName('');
         setEmployeeId(null);
+        setEmployeeRole(null);
+        setEmployeeBranch(null);
+        setIsExecutiveUser(false);
+        setProfileLoaded(true);
       }
     });
 
@@ -140,6 +244,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     await supabase.auth.signOut();
     setSession(null);
     setEmployeeId(null);
+    setEmployeeRole(null);
+    setEmployeeBranch(null);
+    setIsExecutiveUser(false);
+    setProfileLoaded(false);
     setAssignedProductIds(null);
     setAssignedMaterialIds(null);
   };
@@ -169,6 +277,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setRole,
         branch,
         setBranch,
+        isExecutiveUser,
+        profileLoaded,
         auditLogs,
         addAuditLog,
         isSidebarCollapsed,

@@ -117,6 +117,7 @@ BEGIN
     o.order_number,
     o.order_date,
     o.required_date,
+    o.actual_delivery,
     o.status,
     o.payment_status,
     o.payment_terms,
@@ -272,7 +273,20 @@ BEGIN
   )
   INTO v_driver
   FROM trips t
-  LEFT JOIN employees drv ON drv.id = t.driver_id
+  LEFT JOIN LATERAL (
+    SELECT e.id, e.employee_name, e.email, e.phone
+    FROM employees e
+    WHERE (t.driver_id IS NOT NULL AND e.id = t.driver_id)
+       OR (
+         NULLIF(trim(t.driver_name), '') IS NOT NULL
+         AND lower(trim(COALESCE(e.employee_name, ''))) = lower(trim(t.driver_name))
+         AND e.user_role = 'Driver'::user_role
+       )
+    ORDER BY
+      CASE WHEN t.driver_id IS NOT NULL AND e.id = t.driver_id THEN 0 ELSE 1 END,
+      CASE WHEN e.status = 'active'::employee_status THEN 0 ELSE 1 END
+    LIMIT 1
+  ) drv ON true
   LEFT JOIN employee_contact_info drv_ci ON drv_ci.employee_id = drv.id
   WHERE v_order.id = ANY(t.order_ids)
     AND (
@@ -280,15 +294,19 @@ BEGIN
       OR NULLIF(trim(t.driver_name), '') IS NOT NULL
     )
   ORDER BY
-    CASE t.status::text
-      WHEN 'In Transit' THEN 1
-      WHEN 'Loading' THEN 2
-      WHEN 'Packed' THEN 3
-      WHEN 'Ready' THEN 4
-      WHEN 'Scheduled' THEN 5
+    CASE
+      WHEN v_order.status IN ('Delivered', 'Partially Fulfilled', 'Completed')
+        AND t.status::text = 'Completed' THEN 1
+      WHEN t.status::text = 'In Transit' THEN 2
+      WHEN t.status::text = 'Loading' THEN 3
+      WHEN t.status::text = 'Planned' THEN 4
+      WHEN t.status::text = 'Pending' THEN 5
+      WHEN t.status::text = 'Completed' THEN 6
+      WHEN t.status::text = 'Delayed' THEN 7
       ELSE 10
     END,
     t.scheduled_date DESC NULLS LAST,
+    t.updated_at DESC NULLS LAST,
     t.created_at DESC
   LIMIT 1;
 
@@ -327,9 +345,37 @@ BEGIN
   ), '[]'::jsonb)
   INTO v_trips
   FROM trips t
-  LEFT JOIN employees drv ON drv.id = t.driver_id
+  LEFT JOIN LATERAL (
+    SELECT e.id, e.employee_name, e.email, e.phone
+    FROM employees e
+    WHERE (t.driver_id IS NOT NULL AND e.id = t.driver_id)
+       OR (
+         NULLIF(trim(t.driver_name), '') IS NOT NULL
+         AND lower(trim(COALESCE(e.employee_name, ''))) = lower(trim(t.driver_name))
+         AND e.user_role = 'Driver'::user_role
+       )
+    ORDER BY
+      CASE WHEN t.driver_id IS NOT NULL AND e.id = t.driver_id THEN 0 ELSE 1 END,
+      CASE WHEN e.status = 'active'::employee_status THEN 0 ELSE 1 END
+    LIMIT 1
+  ) drv ON true
   LEFT JOIN employee_contact_info drv_ci ON drv_ci.employee_id = drv.id
   WHERE v_order.id = ANY(t.order_ids);
+
+  IF v_driver IS NULL OR NULLIF(trim(COALESCE(v_driver->>'name', '')), '') IS NULL THEN
+    SELECT jsonb_build_object(
+      'name', NULLIF(trim(trip_row->>'driverName'), ''),
+      'phone', NULLIF(trim(trip_row->>'driverPhone'), ''),
+      'email', NULLIF(trim(trip_row->>'driverEmail'), ''),
+      'vehicleName', NULLIF(trim(trip_row->>'vehicleName'), ''),
+      'tripNumber', NULLIF(trim(trip_row->>'tripNumber'), ''),
+      'status', NULLIF(trim(trip_row->>'status'), '')
+    )
+    INTO v_driver
+    FROM jsonb_array_elements(v_trips) AS trip_row
+    WHERE NULLIF(trim(trip_row->>'driverName'), '') IS NOT NULL
+    LIMIT 1;
+  END IF;
 
   SELECT COALESCE(jsonb_agg(
     jsonb_build_object(
@@ -369,6 +415,7 @@ BEGIN
     'orderNumber', v_order.order_number,
     'orderDate', v_order.order_date,
     'requiredDate', v_order.required_date,
+    'actualDelivery', v_order.actual_delivery,
     'status', v_order.status,
     'paymentStatus', v_order.payment_status,
     'paymentTerms', COALESCE(v_invoice.payment_terms::text, v_order.payment_terms::text),

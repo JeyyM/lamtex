@@ -1,11 +1,8 @@
 import { supabase } from '@/src/lib/supabase';
-
-/** material_status enum: no "Critical" — valid values for raw_materials.status */
-function materialAggStatus(q: number, reorder: number): string {
-  if (q <= 0) return 'Out of Stock';
-  if (q <= reorder) return 'Low Stock';
-  return 'Active';
-}
+import {
+  applyMaterialBranchStockDelta,
+  setMaterialTotalStockDirect,
+} from '@/src/lib/rawMaterialStock';
 
 export async function validateBomConsumption(
   variantId: string,
@@ -174,43 +171,43 @@ export async function applyAggregatedBomDeductions(
   logMeta?: MaterialConsumptionLogMeta | null,
 ): Promise<void> {
   const ledger: { materialId: string; quantity: number }[] = [];
+  const triggeredBy = logMeta?.remarks?.trim() || 'BOM consumption';
 
   for (const [materialId, need] of needByMaterial) {
     if (need <= 0) continue;
 
-    const { data: ms } = await supabase
-      .from('material_stock')
-      .select('quantity')
-      .eq('material_id', materialId)
-      .eq('branch_id', branchId)
-      .maybeSingle();
-    const prev = Number(ms?.quantity ?? 0);
-    const next = Math.max(0, prev - need);
-
-    const { error: upMs } = await supabase
-      .from('material_stock')
-      .update({ quantity: next, updated_at: new Date().toISOString() })
-      .eq('material_id', materialId)
-      .eq('branch_id', branchId);
-    if (upMs) throw upMs;
-
-    const { data: rmRow } = await supabase
+    const { data: rmRow, error: rmErr } = await supabase
       .from('raw_materials')
       .select('total_stock, reorder_point')
       .eq('id', materialId)
       .maybeSingle();
-    if (rmRow) {
-      const nextTotal = Math.max(0, Number(rmRow.total_stock) - need);
-      const st = materialAggStatus(nextTotal, Number(rmRow.reorder_point) || 0);
-      const { error: upRm } = await supabase
-        .from('raw_materials')
-        .update({
-          total_stock: nextTotal,
-          status: st,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', materialId);
-      if (upRm) throw upRm;
+    if (rmErr) throw rmErr;
+    if (!rmRow) continue;
+
+    const reorderPoint = Number(rmRow.reorder_point) || 0;
+    const { count: branchRowCount, error: countErr } = await supabase
+      .from('material_stock')
+      .select('id', { count: 'exact', head: true })
+      .eq('material_id', materialId);
+    if (countErr) throw countErr;
+
+    if ((branchRowCount ?? 0) > 0) {
+      await applyMaterialBranchStockDelta({
+        materialId,
+        branchId,
+        delta: -need,
+        reorderPoint,
+        triggeredBy,
+      });
+    } else {
+      const prevTotal = Number(rmRow.total_stock) || 0;
+      await setMaterialTotalStockDirect({
+        materialId,
+        totalStock: Math.max(0, prevTotal - need),
+        previousTotalStock: prevTotal,
+        reorderPoint,
+        triggeredBy,
+      });
     }
 
     ledger.push({ materialId, quantity: need });

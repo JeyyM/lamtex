@@ -13,6 +13,7 @@
 
 import { supabase } from '@/src/lib/supabase';
 import { encodeProofNotes, periodKeyForDate } from '@/src/lib/financeData';
+import { notifyAgentOrderCommissionPaidOut } from '@/src/lib/notifications/notificationsData';
 import { proofRequiresCommissionPayout, tryMarkOrderCompletedAfterFinance } from '@/src/lib/orderCommissionCompletion';
 import { proofPaymentParts } from '@/src/lib/orderProofPayments';
 
@@ -455,6 +456,13 @@ export async function markProofCommissionPaid(
   });
 
   const orderCompleted = await tryMarkOrderCompletedAfterFinance(String(proof.order_id));
+  void notifyAgentOrderCommissionPaidOut(String(proof.order_id), {
+    paidBy: values.paidBy,
+    cashAmount: cash,
+    proofCount: 1,
+  }).catch((err) => {
+    console.warn('[notifications] agent commission paid notify failed', err);
+  });
   return { orderCompleted };
 }
 
@@ -472,13 +480,16 @@ export async function markAllProofCommissionsPaidForOrder(
     .eq('type', 'payment');
   if (pErr) throw pErr;
 
-  const pendingIds = (proofs ?? [])
-    .filter((p) => proofRequiresCommissionPayout(p) && !p.commission_paid_at)
-    .map((p) => String(p.id));
+  const pendingProofs = (proofs ?? []).filter(
+    (p) => proofRequiresCommissionPayout(p) && !p.commission_paid_at,
+  );
+  const pendingIds = pendingProofs.map((p) => String(p.id));
 
   if (pendingIds.length === 0) {
     return { orderCompleted: false, releasedCount: 0 };
   }
+
+  const totalCash = pendingProofs.reduce((sum, p) => sum + proofPaymentParts(p).cash, 0);
 
   const now = ts();
   const { error: updErr } = await supabase
@@ -498,6 +509,13 @@ export async function markAllProofCommissionsPaidForOrder(
   });
 
   const orderCompleted = await tryMarkOrderCompletedAfterFinance(orderId);
+  void notifyAgentOrderCommissionPaidOut(orderId, {
+    paidBy: values.paidBy,
+    cashAmount: totalCash,
+    proofCount: pendingIds.length,
+  }).catch((err) => {
+    console.warn('[notifications] agent commission paid notify failed', err);
+  });
   return { orderCompleted, releasedCount: pendingIds.length };
 }
 

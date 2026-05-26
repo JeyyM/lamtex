@@ -1795,6 +1795,10 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
   currency               TEXT NOT NULL DEFAULT 'PHP',
   notes                  TEXT,
   created_by             TEXT,
+  submitted_by           TEXT,
+  submitted_at           TIMESTAMPTZ,
+  submitted_by_auth_user_id UUID,
+  submitted_by_employee_id UUID REFERENCES employees(id) ON DELETE SET NULL,
   accepted_by            TEXT,
   accepted_at            TIMESTAMPTZ,
   rejected_by            TEXT,
@@ -1843,7 +1847,7 @@ CREATE TABLE IF NOT EXISTS purchase_order_items (
   created_at            TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Proof-of-receiving images attached to a PO receipt event
+-- Proof-of-receiving images attached to a PO receipt event (legacy; new uploads use purchase_order_proof_documents)
 CREATE TABLE IF NOT EXISTS purchase_order_receipts (
   id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   order_id    UUID        NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
@@ -1853,6 +1857,25 @@ CREATE TABLE IF NOT EXISTS purchase_order_receipts (
   note        TEXT,
   uploaded_by TEXT,
   created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- PO proof documents (delivery, payment, other) — mirrors order_proof_documents
+CREATE TABLE IF NOT EXISTS purchase_order_proof_documents (
+  id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  purchase_order_id     UUID NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+  type                  proof_type NOT NULL,
+  file_name             VARCHAR(500),
+  file_url              TEXT NOT NULL DEFAULT '',
+  file_size             BIGINT,
+  uploaded_by           VARCHAR(200),
+  uploaded_by_role      TEXT,
+  status                proof_status DEFAULT 'verified',
+  notes                 TEXT,
+  title                 VARCHAR(500),
+  payment_cash_amount   NUMERIC(14, 2) DEFAULT 0,
+  payment_credit_amount NUMERIC(14, 2) DEFAULT 0,
+  payment_adjustment    NUMERIC(14, 2) DEFAULT 0,
+  uploaded_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Activity log for a purchase order (who requested, status changes, receive, payment, etc.)
@@ -2582,12 +2605,15 @@ CREATE TABLE IF NOT EXISTS notifications (
   id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id     UUID,                     -- Target user
   category    notification_category NOT NULL,
+  title       TEXT,
   message     TEXT NOT NULL,
   urgent      BOOLEAN DEFAULT FALSE,
   read        BOOLEAN DEFAULT FALSE,
   action_url  TEXT,
   action_label TEXT,
   branch_id   UUID REFERENCES branches(id) ON DELETE SET NULL,
+  metadata    JSONB,
+  event_type  TEXT,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -3002,6 +3028,31 @@ CREATE INDEX IF NOT EXISTS idx_purchase_orders_ibr
 CREATE INDEX IF NOT EXISTS idx_purchase_order_items_order ON purchase_order_items(order_id);
 CREATE INDEX IF NOT EXISTS idx_purchase_order_items_material ON purchase_order_items(material_id);
 CREATE INDEX IF NOT EXISTS idx_po_receipts_order ON purchase_order_receipts(order_id);
+CREATE INDEX IF NOT EXISTS idx_po_proof_docs_po ON purchase_order_proof_documents(purchase_order_id);
+CREATE INDEX IF NOT EXISTS idx_po_proof_docs_type ON purchase_order_proof_documents(purchase_order_id, type);
+
+-- RLS for purchase_order_proof_documents (table may be created after bootstrap bulk RLS loop)
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.purchase_order_proof_documents TO authenticated;
+ALTER TABLE public.purchase_order_proof_documents ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS auth_select_purchase_order_proof_documents ON public.purchase_order_proof_documents;
+DROP POLICY IF EXISTS auth_insert_purchase_order_proof_documents ON public.purchase_order_proof_documents;
+DROP POLICY IF EXISTS auth_update_purchase_order_proof_documents ON public.purchase_order_proof_documents;
+DROP POLICY IF EXISTS auth_delete_purchase_order_proof_documents ON public.purchase_order_proof_documents;
+DROP POLICY IF EXISTS lamtex_authenticated_select_purchase_order_proof_documents ON public.purchase_order_proof_documents;
+DROP POLICY IF EXISTS lamtex_authenticated_insert_purchase_order_proof_documents ON public.purchase_order_proof_documents;
+DROP POLICY IF EXISTS lamtex_authenticated_update_purchase_order_proof_documents ON public.purchase_order_proof_documents;
+DROP POLICY IF EXISTS lamtex_authenticated_delete_purchase_order_proof_documents ON public.purchase_order_proof_documents;
+
+CREATE POLICY lamtex_authenticated_select_purchase_order_proof_documents
+  ON public.purchase_order_proof_documents FOR SELECT TO authenticated USING (true);
+CREATE POLICY lamtex_authenticated_insert_purchase_order_proof_documents
+  ON public.purchase_order_proof_documents FOR INSERT TO authenticated WITH CHECK (true);
+CREATE POLICY lamtex_authenticated_update_purchase_order_proof_documents
+  ON public.purchase_order_proof_documents FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY lamtex_authenticated_delete_purchase_order_proof_documents
+  ON public.purchase_order_proof_documents FOR DELETE TO authenticated USING (true);
+
 CREATE INDEX IF NOT EXISTS idx_po_logs_order ON purchase_order_logs(order_id);
 CREATE INDEX IF NOT EXISTS idx_product_logs_product_order ON product_logs(product_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_raw_material_logs_material_order ON raw_material_logs(raw_material_id, created_at DESC);
@@ -3074,6 +3125,8 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_branch ON audit_logs(branch_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_category ON notifications(category);
 CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(read);
+CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id, read);
+CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_logistics_alerts_type ON logistics_alerts(type);
 CREATE INDEX IF NOT EXISTS idx_warehouse_alerts_type ON warehouse_alerts(type);
 CREATE INDEX IF NOT EXISTS idx_agent_alerts_agent ON agent_alerts(agent_id);
@@ -3583,6 +3636,7 @@ BEGIN
     o.order_number,
     o.order_date,
     o.required_date,
+    o.actual_delivery,
     o.status,
     o.payment_status,
     o.payment_terms,
@@ -3738,7 +3792,20 @@ BEGIN
   )
   INTO v_driver
   FROM trips t
-  LEFT JOIN employees drv ON drv.id = t.driver_id
+  LEFT JOIN LATERAL (
+    SELECT e.id, e.employee_name, e.email, e.phone
+    FROM employees e
+    WHERE (t.driver_id IS NOT NULL AND e.id = t.driver_id)
+       OR (
+         NULLIF(trim(t.driver_name), '') IS NOT NULL
+         AND lower(trim(COALESCE(e.employee_name, ''))) = lower(trim(t.driver_name))
+         AND e.user_role = 'Driver'::user_role
+       )
+    ORDER BY
+      CASE WHEN t.driver_id IS NOT NULL AND e.id = t.driver_id THEN 0 ELSE 1 END,
+      CASE WHEN e.status = 'active'::employee_status THEN 0 ELSE 1 END
+    LIMIT 1
+  ) drv ON true
   LEFT JOIN employee_contact_info drv_ci ON drv_ci.employee_id = drv.id
   WHERE v_order.id = ANY(t.order_ids)
     AND (
@@ -3746,15 +3813,19 @@ BEGIN
       OR NULLIF(trim(t.driver_name), '') IS NOT NULL
     )
   ORDER BY
-    CASE t.status::text
-      WHEN 'In Transit' THEN 1
-      WHEN 'Loading' THEN 2
-      WHEN 'Packed' THEN 3
-      WHEN 'Ready' THEN 4
-      WHEN 'Scheduled' THEN 5
+    CASE
+      WHEN v_order.status IN ('Delivered', 'Partially Fulfilled', 'Completed')
+        AND t.status::text = 'Completed' THEN 1
+      WHEN t.status::text = 'In Transit' THEN 2
+      WHEN t.status::text = 'Loading' THEN 3
+      WHEN t.status::text = 'Planned' THEN 4
+      WHEN t.status::text = 'Pending' THEN 5
+      WHEN t.status::text = 'Completed' THEN 6
+      WHEN t.status::text = 'Delayed' THEN 7
       ELSE 10
     END,
     t.scheduled_date DESC NULLS LAST,
+    t.updated_at DESC NULLS LAST,
     t.created_at DESC
   LIMIT 1;
 
@@ -3793,9 +3864,37 @@ BEGIN
   ), '[]'::jsonb)
   INTO v_trips
   FROM trips t
-  LEFT JOIN employees drv ON drv.id = t.driver_id
+  LEFT JOIN LATERAL (
+    SELECT e.id, e.employee_name, e.email, e.phone
+    FROM employees e
+    WHERE (t.driver_id IS NOT NULL AND e.id = t.driver_id)
+       OR (
+         NULLIF(trim(t.driver_name), '') IS NOT NULL
+         AND lower(trim(COALESCE(e.employee_name, ''))) = lower(trim(t.driver_name))
+         AND e.user_role = 'Driver'::user_role
+       )
+    ORDER BY
+      CASE WHEN t.driver_id IS NOT NULL AND e.id = t.driver_id THEN 0 ELSE 1 END,
+      CASE WHEN e.status = 'active'::employee_status THEN 0 ELSE 1 END
+    LIMIT 1
+  ) drv ON true
   LEFT JOIN employee_contact_info drv_ci ON drv_ci.employee_id = drv.id
   WHERE v_order.id = ANY(t.order_ids);
+
+  IF v_driver IS NULL OR NULLIF(trim(COALESCE(v_driver->>'name', '')), '') IS NULL THEN
+    SELECT jsonb_build_object(
+      'name', NULLIF(trim(trip_row->>'driverName'), ''),
+      'phone', NULLIF(trim(trip_row->>'driverPhone'), ''),
+      'email', NULLIF(trim(trip_row->>'driverEmail'), ''),
+      'vehicleName', NULLIF(trim(trip_row->>'vehicleName'), ''),
+      'tripNumber', NULLIF(trim(trip_row->>'tripNumber'), ''),
+      'status', NULLIF(trim(trip_row->>'status'), '')
+    )
+    INTO v_driver
+    FROM jsonb_array_elements(v_trips) AS trip_row
+    WHERE NULLIF(trim(trip_row->>'driverName'), '') IS NOT NULL
+    LIMIT 1;
+  END IF;
 
   SELECT COALESCE(jsonb_agg(
     jsonb_build_object(
@@ -3835,6 +3934,7 @@ BEGIN
     'orderNumber', v_order.order_number,
     'orderDate', v_order.order_date,
     'requiredDate', v_order.required_date,
+    'actualDelivery', v_order.actual_delivery,
     'status', v_order.status,
     'paymentStatus', v_order.payment_status,
     'paymentTerms', COALESCE(v_invoice.payment_terms::text, v_order.payment_terms::text),
@@ -4066,6 +4166,4358 @@ COMMENT ON FUNCTION public.create_employee_auth_account(UUID, TEXT) IS
   'Executive-only: create or link Supabase Auth login for an employee; sets employees.auth_user_id.';
 
 
+-- ── 24i: Notify executives when an order is created ───────────────────────
+CREATE OR REPLACE FUNCTION notify_executives_order_created(p_order_id UUID)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  o RECORD;
+  exec RECORD;
+  branch_name TEXT;
+  line_count INT;
+  msg TEXT;
+  inserted INT := 0;
+BEGIN
+  SELECT *
+  INTO o
+  FROM orders
+  WHERE id = p_order_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Order not found: %', p_order_id;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = o.branch_id;
+  SELECT COUNT(*)::INT INTO line_count FROM order_line_items WHERE order_id = o.id;
+
+  msg := format(
+    'Order %s created by %s for %s — %s item(s), total ₱%s',
+    o.order_number,
+    COALESCE(o.agent_name, 'Unknown agent'),
+    COALESCE(o.customer_name, 'Unknown customer'),
+    line_count,
+    to_char(COALESCE(o.total_amount, 0), 'FM999,999,990.00')
+  );
+
+  FOR exec IN
+    SELECT e.auth_user_id
+    FROM employees e
+    WHERE e.user_role = 'Executive'::user_role
+      AND e.auth_user_id IS NOT NULL
+      AND e.status = 'active'::employee_status
+  LOOP
+    INSERT INTO notifications (
+      user_id,
+      category,
+      title,
+      message,
+      urgent,
+      action_url,
+      action_label,
+      branch_id,
+      metadata,
+      event_type
+    ) VALUES (
+      exec.auth_user_id,
+      'Approvals'::notification_category,
+      'New order created',
+      msg,
+      o.urgency IN ('High'::urgency_level, 'Critical'::urgency_level),
+      '/orders/' || o.id::text,
+      'View order',
+      o.branch_id,
+      jsonb_build_object(
+        'orderId', o.id,
+        'orderNumber', o.order_number,
+        'customerName', o.customer_name,
+        'agentName', o.agent_name,
+        'branchName', branch_name,
+        'totalAmount', o.total_amount,
+        'subtotal', o.subtotal,
+        'lineCount', line_count,
+        'status', o.status,
+        'requiredDate', o.required_date,
+        'deliveryAddress', o.delivery_address,
+        'urgency', o.urgency
+      ),
+      'order_created'
+    );
+    inserted := inserted + 1;
+  END LOOP;
+
+  RETURN inserted;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION notify_executives_order_created(UUID) TO authenticated;
+
+COMMENT ON FUNCTION notify_executives_order_created(UUID) IS
+  'Fan-out in-app notification to all active Executive users when an order is created.';
+
+
+-- ── 24j: Notify executives when an order is submitted for approval ──────────
+CREATE OR REPLACE FUNCTION notify_executives_order_submitted_for_approval(p_order_id UUID)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  o RECORD;
+  exec RECORD;
+  branch_name TEXT;
+  line_count INT;
+  msg TEXT;
+  inserted INT := 0;
+BEGIN
+  SELECT *
+  INTO o
+  FROM orders
+  WHERE id = p_order_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Order not found: %', p_order_id;
+  END IF;
+
+  IF o.status IS DISTINCT FROM 'Pending'::order_status THEN
+    RAISE EXCEPTION 'Order % is not Pending (current: %)', o.order_number, o.status;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = o.branch_id;
+  SELECT COUNT(*)::INT INTO line_count FROM order_line_items WHERE order_id = o.id;
+
+  msg := format(
+    'Order %s submitted for approval by %s — %s for %s item(s), total ₱%s',
+    o.order_number,
+    COALESCE(o.agent_name, 'Unknown agent'),
+    COALESCE(o.customer_name, 'Unknown customer'),
+    line_count,
+    to_char(COALESCE(o.total_amount, 0), 'FM999,999,990.00')
+  );
+
+  FOR exec IN
+    SELECT e.auth_user_id
+    FROM employees e
+    WHERE e.user_role = 'Executive'::user_role
+      AND e.auth_user_id IS NOT NULL
+      AND e.status = 'active'::employee_status
+  LOOP
+    INSERT INTO notifications (
+      user_id,
+      category,
+      title,
+      message,
+      urgent,
+      action_url,
+      action_label,
+      branch_id,
+      metadata,
+      event_type
+    ) VALUES (
+      exec.auth_user_id,
+      'Approvals'::notification_category,
+      'Order awaiting approval',
+      msg,
+      o.urgency IN ('High'::urgency_level, 'Critical'::urgency_level),
+      '/orders/' || o.id::text,
+      'Review order',
+      o.branch_id,
+      jsonb_build_object(
+        'orderId', o.id,
+        'orderNumber', o.order_number,
+        'customerName', o.customer_name,
+        'agentName', o.agent_name,
+        'branchName', branch_name,
+        'totalAmount', o.total_amount,
+        'subtotal', o.subtotal,
+        'lineCount', line_count,
+        'status', o.status,
+        'requiredDate', o.required_date,
+        'deliveryAddress', o.delivery_address,
+        'urgency', o.urgency,
+        'discountPercent', o.discount_percent
+      ),
+      'order_submitted_for_approval'
+    );
+    inserted := inserted + 1;
+  END LOOP;
+
+  RETURN inserted;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION notify_executives_order_submitted_for_approval(UUID) TO authenticated;
+
+COMMENT ON FUNCTION notify_executives_order_submitted_for_approval(UUID) IS
+  'Fan-out in-app notification to all active Executive users when an order is submitted for approval.';
+
+
+-- ── 24k: Notify agent when order is approved or rejected ────────────────────
+CREATE OR REPLACE FUNCTION notify_agent_order_approved(
+  p_order_id UUID,
+  p_decided_by TEXT DEFAULT NULL
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  o RECORD;
+  agent RECORD;
+  branch_name TEXT;
+  line_count INT;
+  msg TEXT;
+BEGIN
+  SELECT *
+  INTO o
+  FROM orders
+  WHERE id = p_order_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Order not found: %', p_order_id;
+  END IF;
+
+  IF o.status IS DISTINCT FROM 'Approved'::order_status THEN
+    RAISE EXCEPTION 'Order % is not Approved (current: %)', o.order_number, o.status;
+  END IF;
+
+  IF o.agent_id IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  SELECT e.auth_user_id, e.employee_name
+  INTO agent
+  FROM employees e
+  WHERE e.id = o.agent_id
+    AND e.status = 'active'::employee_status
+    AND e.auth_user_id IS NOT NULL;
+
+  IF agent.auth_user_id IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = o.branch_id;
+  SELECT COUNT(*)::INT INTO line_count FROM order_line_items WHERE order_id = o.id;
+
+  msg := format(
+    'Order %s for %s was approved%s — total ₱%s',
+    o.order_number,
+    COALESCE(o.customer_name, 'Unknown customer'),
+    CASE WHEN p_decided_by IS NOT NULL AND trim(p_decided_by) <> '' THEN format(' by %s', p_decided_by) ELSE '' END,
+    to_char(COALESCE(o.total_amount, 0), 'FM999,999,990.00')
+  );
+
+  INSERT INTO notifications (
+    user_id,
+    category,
+    title,
+    message,
+    urgent,
+    action_url,
+    action_label,
+    branch_id,
+    metadata,
+    event_type
+  ) VALUES (
+    agent.auth_user_id,
+    'Approvals'::notification_category,
+    'Order approved',
+    msg,
+    false,
+    '/orders/' || o.id::text,
+    'View order',
+    o.branch_id,
+    jsonb_build_object(
+      'orderId', o.id,
+      'orderNumber', o.order_number,
+      'customerName', o.customer_name,
+      'agentName', o.agent_name,
+      'branchName', branch_name,
+      'totalAmount', o.total_amount,
+      'subtotal', o.subtotal,
+      'lineCount', line_count,
+      'status', o.status,
+      'decidedBy', p_decided_by,
+      'requiredDate', o.required_date,
+      'urgency', o.urgency
+    ),
+    'order_approved'
+  );
+
+  RETURN 1;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION notify_agent_order_rejected(
+  p_order_id UUID,
+  p_decided_by TEXT DEFAULT NULL,
+  p_rejection_reason TEXT DEFAULT NULL
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  o RECORD;
+  agent RECORD;
+  branch_name TEXT;
+  line_count INT;
+  msg TEXT;
+BEGIN
+  SELECT *
+  INTO o
+  FROM orders
+  WHERE id = p_order_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Order not found: %', p_order_id;
+  END IF;
+
+  IF o.status IS DISTINCT FROM 'Rejected'::order_status THEN
+    RAISE EXCEPTION 'Order % is not Rejected (current: %)', o.order_number, o.status;
+  END IF;
+
+  IF o.agent_id IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  SELECT e.auth_user_id, e.employee_name
+  INTO agent
+  FROM employees e
+  WHERE e.id = o.agent_id
+    AND e.status = 'active'::employee_status
+    AND e.auth_user_id IS NOT NULL;
+
+  IF agent.auth_user_id IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = o.branch_id;
+  SELECT COUNT(*)::INT INTO line_count FROM order_line_items WHERE order_id = o.id;
+
+  msg := format(
+    'Order %s for %s was rejected%s%s',
+    o.order_number,
+    COALESCE(o.customer_name, 'Unknown customer'),
+    CASE WHEN p_decided_by IS NOT NULL AND trim(p_decided_by) <> '' THEN format(' by %s', p_decided_by) ELSE '' END,
+    CASE
+      WHEN p_rejection_reason IS NOT NULL AND trim(p_rejection_reason) <> ''
+      THEN format('. Reason: %s', p_rejection_reason)
+      ELSE ''
+    END
+  );
+
+  INSERT INTO notifications (
+    user_id,
+    category,
+    title,
+    message,
+    urgent,
+    action_url,
+    action_label,
+    branch_id,
+    metadata,
+    event_type
+  ) VALUES (
+    agent.auth_user_id,
+    'Approvals'::notification_category,
+    'Order rejected',
+    msg,
+    true,
+    '/orders/' || o.id::text,
+    'View order',
+    o.branch_id,
+    jsonb_build_object(
+      'orderId', o.id,
+      'orderNumber', o.order_number,
+      'customerName', o.customer_name,
+      'agentName', o.agent_name,
+      'branchName', branch_name,
+      'totalAmount', o.total_amount,
+      'subtotal', o.subtotal,
+      'lineCount', line_count,
+      'status', o.status,
+      'decidedBy', p_decided_by,
+      'rejectionReason', p_rejection_reason,
+      'requiredDate', o.required_date,
+      'urgency', o.urgency
+    ),
+    'order_rejected'
+  );
+
+  RETURN 1;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION notify_agent_order_approved(UUID, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION notify_agent_order_rejected(UUID, TEXT, TEXT) TO authenticated;
+
+COMMENT ON FUNCTION notify_agent_order_approved(UUID, TEXT) IS
+  'In-app notification to the assigned agent when their order is approved.';
+COMMENT ON FUNCTION notify_agent_order_rejected(UUID, TEXT, TEXT) IS
+  'In-app notification to the assigned agent when their order is rejected.';
+
+
+-- ── 24k2: Notify branch logistics when order is approved & ready to schedule ─
+CREATE OR REPLACE FUNCTION notify_branch_logistics_order_ready_for_schedule(
+  p_order_id UUID,
+  p_approved_by TEXT DEFAULT NULL
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  o RECORD;
+  logist RECORD;
+  branch_name TEXT;
+  line_count INT;
+  msg TEXT;
+  action_path TEXT;
+  action_lbl TEXT;
+  inserted INT := 0;
+BEGIN
+  SELECT *
+  INTO o
+  FROM orders
+  WHERE id = p_order_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Order not found: %', p_order_id;
+  END IF;
+
+  IF o.status IS DISTINCT FROM 'Approved'::order_status THEN
+    RAISE EXCEPTION 'Order % is not Approved (current: %)', o.order_number, o.status;
+  END IF;
+
+  IF o.branch_id IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = o.branch_id;
+  SELECT COUNT(*)::INT INTO line_count FROM order_line_items WHERE order_id = o.id;
+
+  IF o.delivery_type = 'Ship'::delivery_type THEN
+    action_path := '/logistics?order=' || o.id::text || '&tab=dispatch&mode=interisland';
+    action_lbl := 'Schedule shipment';
+  ELSE
+    action_path := '/logistics?order=' || o.id::text || '&tab=routes';
+    action_lbl := 'Plan route';
+  END IF;
+
+  msg := format(
+    'Order %s for %s was approved%s — ready to schedule (%s item(s), total ₱%s)',
+    o.order_number,
+    COALESCE(o.customer_name, 'Unknown customer'),
+    CASE WHEN p_approved_by IS NOT NULL AND trim(p_approved_by) <> '' THEN format(' by %s', p_approved_by) ELSE '' END,
+    line_count,
+    to_char(COALESCE(o.total_amount, 0), 'FM999,999,990.00')
+  );
+
+  FOR logist IN
+    SELECT e.auth_user_id
+    FROM employees e
+    WHERE e.user_role = 'Logistics'::user_role
+      AND e.branch_id = o.branch_id
+      AND e.auth_user_id IS NOT NULL
+      AND e.status = 'active'::employee_status
+  LOOP
+    INSERT INTO notifications (
+      user_id,
+      category,
+      title,
+      message,
+      urgent,
+      action_url,
+      action_label,
+      branch_id,
+      metadata,
+      event_type
+    ) VALUES (
+      logist.auth_user_id,
+      'Delivery'::notification_category,
+      'Order ready to schedule',
+      msg,
+      o.urgency IN ('High'::urgency_level, 'Critical'::urgency_level),
+      action_path,
+      action_lbl,
+      o.branch_id,
+      jsonb_build_object(
+        'orderId', o.id,
+        'orderNumber', o.order_number,
+        'customerName', o.customer_name,
+        'agentName', o.agent_name,
+        'branchName', branch_name,
+        'totalAmount', o.total_amount,
+        'subtotal', o.subtotal,
+        'lineCount', line_count,
+        'status', o.status,
+        'approvedBy', p_approved_by,
+        'requiredDate', o.required_date,
+        'deliveryAddress', o.delivery_address,
+        'deliveryType', o.delivery_type,
+        'urgency', o.urgency
+      ),
+      'order_ready_for_schedule'
+    );
+    inserted := inserted + 1;
+  END LOOP;
+
+  RETURN inserted;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION notify_branch_logistics_order_ready_for_schedule(UUID, TEXT) TO authenticated;
+
+COMMENT ON FUNCTION notify_branch_logistics_order_ready_for_schedule(UUID, TEXT) IS
+  'Fan-out in-app notification to active Logistics staff at the order branch when an order is approved and ready to schedule.';
+
+
+-- ── 24k-b: Notify branch logistics when an order is marked Loading ───────────
+CREATE OR REPLACE FUNCTION notify_branch_logistics_order_loading(
+  p_order_id UUID,
+  p_marked_by TEXT DEFAULT NULL
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  o RECORD;
+  logist RECORD;
+  branch_name TEXT;
+  line_count INT;
+  msg TEXT;
+  inserted INT := 0;
+BEGIN
+  SELECT *
+  INTO o
+  FROM orders
+  WHERE id = p_order_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Order not found: %', p_order_id;
+  END IF;
+
+  IF o.status IS DISTINCT FROM 'Loading'::order_status THEN
+    RAISE EXCEPTION 'Order % is not Loading (current: %)', o.order_number, o.status;
+  END IF;
+
+  IF o.branch_id IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = o.branch_id;
+  SELECT COUNT(*)::INT INTO line_count FROM order_line_items WHERE order_id = o.id;
+
+  msg := format(
+    'Order %s for %s is now loading at the warehouse%s (%s item(s), total ₱%s)',
+    o.order_number,
+    COALESCE(o.customer_name, 'Unknown customer'),
+    CASE WHEN p_marked_by IS NOT NULL AND trim(p_marked_by) <> '' THEN format(' — started by %s', p_marked_by) ELSE '' END,
+    line_count,
+    to_char(COALESCE(o.total_amount, 0), 'FM999,999,990.00')
+  );
+
+  FOR logist IN
+    SELECT e.auth_user_id
+    FROM employees e
+    WHERE e.user_role = 'Logistics'::user_role
+      AND e.branch_id = o.branch_id
+      AND e.auth_user_id IS NOT NULL
+      AND e.status = 'active'::employee_status
+  LOOP
+    INSERT INTO notifications (
+      user_id,
+      category,
+      title,
+      message,
+      urgent,
+      action_url,
+      action_label,
+      branch_id,
+      metadata,
+      event_type
+    ) VALUES (
+      logist.auth_user_id,
+      'Delivery'::notification_category,
+      'Order loading started',
+      msg,
+      o.urgency IN ('High'::urgency_level, 'Critical'::urgency_level),
+      '/logistics?order=' || o.id::text || '&tab=routes',
+      'View in logistics',
+      o.branch_id,
+      jsonb_build_object(
+        'orderId', o.id,
+        'orderNumber', o.order_number,
+        'customerName', o.customer_name,
+        'agentName', o.agent_name,
+        'branchName', branch_name,
+        'totalAmount', o.total_amount,
+        'subtotal', o.subtotal,
+        'lineCount', line_count,
+        'status', o.status,
+        'markedBy', p_marked_by,
+        'requiredDate', o.required_date,
+        'scheduledDepartureDate', o.scheduled_departure_date,
+        'deliveryAddress', o.delivery_address,
+        'deliveryType', o.delivery_type,
+        'urgency', o.urgency
+      ),
+      'order_loading'
+    );
+    inserted := inserted + 1;
+  END LOOP;
+
+  RETURN inserted;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION notify_branch_logistics_order_loading(UUID, TEXT) TO authenticated;
+
+COMMENT ON FUNCTION notify_branch_logistics_order_loading(UUID, TEXT) IS
+  'Fan-out in-app notification to active Logistics staff at the order branch when an order is marked Loading.';
+
+
+-- ── 24k-c: Notify logistics and agent when an order is marked Packed ───────────
+CREATE OR REPLACE FUNCTION notify_order_packed(
+  p_order_id UUID,
+  p_marked_by TEXT DEFAULT NULL
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  o RECORD;
+  recipient RECORD;
+  branch_name TEXT;
+  line_count INT;
+  msg_logistics TEXT;
+  msg_agent TEXT;
+  inserted INT := 0;
+BEGIN
+  SELECT *
+  INTO o
+  FROM orders
+  WHERE id = p_order_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Order not found: %', p_order_id;
+  END IF;
+
+  IF o.status IS DISTINCT FROM 'Packed'::order_status THEN
+    RAISE EXCEPTION 'Order % is not Packed (current: %)', o.order_number, o.status;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = o.branch_id;
+  SELECT COUNT(*)::INT INTO line_count FROM order_line_items WHERE order_id = o.id;
+
+  msg_logistics := format(
+    'Order %s for %s is packed and ready for dispatch%s (%s item(s), total ₱%s)',
+    o.order_number,
+    COALESCE(o.customer_name, 'Unknown customer'),
+    CASE WHEN p_marked_by IS NOT NULL AND trim(p_marked_by) <> '' THEN format(' — packed by %s', p_marked_by) ELSE '' END,
+    line_count,
+    to_char(COALESCE(o.total_amount, 0), 'FM999,999,990.00')
+  );
+
+  msg_agent := format(
+    'Order %s for %s has been packed%s — ready for dispatch',
+    o.order_number,
+    COALESCE(o.customer_name, 'Unknown customer'),
+    CASE WHEN p_marked_by IS NOT NULL AND trim(p_marked_by) <> '' THEN format(' by %s', p_marked_by) ELSE '' END
+  );
+
+  IF o.branch_id IS NOT NULL THEN
+    FOR recipient IN
+      SELECT e.auth_user_id
+      FROM employees e
+      WHERE e.user_role = 'Logistics'::user_role
+        AND e.branch_id = o.branch_id
+        AND e.auth_user_id IS NOT NULL
+        AND e.status = 'active'::employee_status
+    LOOP
+      INSERT INTO notifications (
+        user_id,
+        category,
+        title,
+        message,
+        urgent,
+        action_url,
+        action_label,
+        branch_id,
+        metadata,
+        event_type
+      ) VALUES (
+        recipient.auth_user_id,
+        'Delivery'::notification_category,
+        'Order packed',
+        msg_logistics,
+        o.urgency IN ('High'::urgency_level, 'Critical'::urgency_level),
+        '/logistics?order=' || o.id::text || '&tab=routes',
+        'View in logistics',
+        o.branch_id,
+        jsonb_build_object(
+          'orderId', o.id,
+          'orderNumber', o.order_number,
+          'customerName', o.customer_name,
+          'agentName', o.agent_name,
+          'branchName', branch_name,
+          'totalAmount', o.total_amount,
+          'subtotal', o.subtotal,
+          'lineCount', line_count,
+          'status', o.status,
+          'markedBy', p_marked_by,
+          'requiredDate', o.required_date,
+          'scheduledDepartureDate', o.scheduled_departure_date,
+          'deliveryAddress', o.delivery_address,
+          'deliveryType', o.delivery_type,
+          'urgency', o.urgency
+        ),
+        'order_packed'
+      );
+      inserted := inserted + 1;
+    END LOOP;
+  END IF;
+
+  IF o.agent_id IS NOT NULL THEN
+    SELECT e.auth_user_id
+    INTO recipient
+    FROM employees e
+    WHERE e.id = o.agent_id
+      AND e.status = 'active'::employee_status
+      AND e.auth_user_id IS NOT NULL;
+
+    IF recipient.auth_user_id IS NOT NULL THEN
+      INSERT INTO notifications (
+        user_id,
+        category,
+        title,
+        message,
+        urgent,
+        action_url,
+        action_label,
+        branch_id,
+        metadata,
+        event_type
+      ) VALUES (
+        recipient.auth_user_id,
+        'Delivery'::notification_category,
+        'Order packed',
+        msg_agent,
+        false,
+        '/orders/' || o.id::text,
+        'View order',
+        o.branch_id,
+        jsonb_build_object(
+          'orderId', o.id,
+          'orderNumber', o.order_number,
+          'customerName', o.customer_name,
+          'agentName', o.agent_name,
+          'branchName', branch_name,
+          'totalAmount', o.total_amount,
+          'subtotal', o.subtotal,
+          'lineCount', line_count,
+          'status', o.status,
+          'markedBy', p_marked_by,
+          'requiredDate', o.required_date,
+          'scheduledDepartureDate', o.scheduled_departure_date,
+          'deliveryAddress', o.delivery_address,
+          'deliveryType', o.delivery_type,
+          'urgency', o.urgency
+        ),
+        'order_packed'
+      );
+      inserted := inserted + 1;
+    END IF;
+  END IF;
+
+  RETURN inserted;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION notify_order_packed(UUID, TEXT) TO authenticated;
+
+COMMENT ON FUNCTION notify_order_packed(UUID, TEXT) IS
+  'Fan-out in-app notification to branch Logistics staff and the assigned agent when an order is marked Packed.';
+
+
+-- ── 24k-d: Notify executives, warehouse, and agent when an order is In Transit ─
+CREATE OR REPLACE FUNCTION notify_order_in_transit(
+  p_order_id UUID,
+  p_marked_by TEXT DEFAULT NULL,
+  p_trip_number TEXT DEFAULT NULL,
+  p_vehicle_name TEXT DEFAULT NULL,
+  p_driver_name TEXT DEFAULT NULL
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  o RECORD;
+  recipient RECORD;
+  branch_name TEXT;
+  line_count INT;
+  trip_suffix TEXT;
+  dispatch_suffix TEXT;
+  msg_exec TEXT;
+  msg_wh TEXT;
+  msg_agent TEXT;
+  inserted INT := 0;
+BEGIN
+  SELECT *
+  INTO o
+  FROM orders
+  WHERE id = p_order_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Order not found: %', p_order_id;
+  END IF;
+
+  IF o.status IS DISTINCT FROM 'In Transit'::order_status THEN
+    RAISE EXCEPTION 'Order % is not In Transit (current: %)', o.order_number, o.status;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = o.branch_id;
+  SELECT COUNT(*)::INT INTO line_count FROM order_line_items WHERE order_id = o.id;
+
+  trip_suffix := CASE
+    WHEN p_trip_number IS NOT NULL AND trim(p_trip_number) <> '' THEN
+      format(' (trip %s)', trim(p_trip_number))
+    ELSE ''
+  END;
+
+  dispatch_suffix := CASE
+    WHEN p_marked_by IS NOT NULL AND trim(p_marked_by) <> '' THEN format(' by %s', p_marked_by)
+    ELSE ''
+  END;
+
+  msg_exec := format(
+    'Order %s for %s is in transit%s%s — %s item(s), total ₱%s',
+    o.order_number,
+    COALESCE(o.customer_name, 'Unknown customer'),
+    trip_suffix,
+    dispatch_suffix,
+    line_count,
+    to_char(COALESCE(o.total_amount, 0), 'FM999,999,990.00')
+  );
+
+  msg_wh := format(
+    'Order %s for %s has departed and is in transit%s%s',
+    o.order_number,
+    COALESCE(o.customer_name, 'Unknown customer'),
+    trip_suffix,
+    dispatch_suffix
+  );
+
+  msg_agent := format(
+    'Order %s for %s is now in transit%s%s',
+    o.order_number,
+    COALESCE(o.customer_name, 'Unknown customer'),
+    trip_suffix,
+    dispatch_suffix
+  );
+
+  FOR recipient IN
+    SELECT e.auth_user_id
+    FROM employees e
+    WHERE e.user_role = 'Executive'::user_role
+      AND e.auth_user_id IS NOT NULL
+      AND e.status = 'active'::employee_status
+  LOOP
+    INSERT INTO notifications (
+      user_id,
+      category,
+      title,
+      message,
+      urgent,
+      action_url,
+      action_label,
+      branch_id,
+      metadata,
+      event_type
+    ) VALUES (
+      recipient.auth_user_id,
+      'Delivery'::notification_category,
+      'Order in transit',
+      msg_exec,
+      o.urgency IN ('High'::urgency_level, 'Critical'::urgency_level),
+      '/orders/' || o.id::text,
+      'View order',
+      o.branch_id,
+      jsonb_build_object(
+        'orderId', o.id,
+        'orderNumber', o.order_number,
+        'customerName', o.customer_name,
+        'agentName', o.agent_name,
+        'branchName', branch_name,
+        'totalAmount', o.total_amount,
+        'subtotal', o.subtotal,
+        'lineCount', line_count,
+        'status', o.status,
+        'markedBy', p_marked_by,
+        'tripNumber', p_trip_number,
+        'vehicleName', p_vehicle_name,
+        'driverName', p_driver_name,
+        'requiredDate', o.required_date,
+        'scheduledDepartureDate', o.scheduled_departure_date,
+        'deliveryAddress', o.delivery_address,
+        'deliveryType', o.delivery_type,
+        'urgency', o.urgency
+      ),
+      'order_in_transit'
+    );
+    inserted := inserted + 1;
+  END LOOP;
+
+  IF o.branch_id IS NOT NULL THEN
+    FOR recipient IN
+      SELECT e.auth_user_id
+      FROM employees e
+      WHERE e.user_role = 'Warehouse'::user_role
+        AND e.branch_id = o.branch_id
+        AND e.auth_user_id IS NOT NULL
+        AND e.status = 'active'::employee_status
+    LOOP
+      INSERT INTO notifications (
+        user_id,
+        category,
+        title,
+        message,
+        urgent,
+        action_url,
+        action_label,
+        branch_id,
+        metadata,
+        event_type
+      ) VALUES (
+        recipient.auth_user_id,
+        'Delivery'::notification_category,
+        'Order departed — in transit',
+        msg_wh,
+        o.urgency IN ('High'::urgency_level, 'Critical'::urgency_level),
+        '/orders/' || o.id::text,
+        'View order',
+        o.branch_id,
+        jsonb_build_object(
+          'orderId', o.id,
+          'orderNumber', o.order_number,
+          'customerName', o.customer_name,
+          'agentName', o.agent_name,
+          'branchName', branch_name,
+          'totalAmount', o.total_amount,
+          'subtotal', o.subtotal,
+          'lineCount', line_count,
+          'status', o.status,
+          'markedBy', p_marked_by,
+          'tripNumber', p_trip_number,
+          'vehicleName', p_vehicle_name,
+          'driverName', p_driver_name,
+          'requiredDate', o.required_date,
+          'scheduledDepartureDate', o.scheduled_departure_date,
+          'deliveryAddress', o.delivery_address,
+          'deliveryType', o.delivery_type,
+          'urgency', o.urgency
+        ),
+        'order_in_transit'
+      );
+      inserted := inserted + 1;
+    END LOOP;
+  END IF;
+
+  IF o.agent_id IS NOT NULL THEN
+    SELECT e.auth_user_id
+    INTO recipient
+    FROM employees e
+    WHERE e.id = o.agent_id
+      AND e.status = 'active'::employee_status
+      AND e.auth_user_id IS NOT NULL;
+
+    IF recipient.auth_user_id IS NOT NULL THEN
+      INSERT INTO notifications (
+        user_id,
+        category,
+        title,
+        message,
+        urgent,
+        action_url,
+        action_label,
+        branch_id,
+        metadata,
+        event_type
+      ) VALUES (
+        recipient.auth_user_id,
+        'Delivery'::notification_category,
+        'Customer order in transit',
+        msg_agent,
+        o.urgency IN ('High'::urgency_level, 'Critical'::urgency_level),
+        '/orders/' || o.id::text,
+        'View order',
+        o.branch_id,
+        jsonb_build_object(
+          'orderId', o.id,
+          'orderNumber', o.order_number,
+          'customerName', o.customer_name,
+          'agentName', o.agent_name,
+          'branchName', branch_name,
+          'totalAmount', o.total_amount,
+          'subtotal', o.subtotal,
+          'lineCount', line_count,
+          'status', o.status,
+          'markedBy', p_marked_by,
+          'tripNumber', p_trip_number,
+          'vehicleName', p_vehicle_name,
+          'driverName', p_driver_name,
+          'requiredDate', o.required_date,
+          'scheduledDepartureDate', o.scheduled_departure_date,
+          'deliveryAddress', o.delivery_address,
+          'deliveryType', o.delivery_type,
+          'urgency', o.urgency
+        ),
+        'order_in_transit'
+      );
+      inserted := inserted + 1;
+    END IF;
+  END IF;
+
+  RETURN inserted;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION notify_order_in_transit(UUID, TEXT, TEXT, TEXT, TEXT) TO authenticated;
+
+COMMENT ON FUNCTION notify_order_in_transit(UUID, TEXT, TEXT, TEXT, TEXT) IS
+  'Fan-out in-app notification to executives, branch warehouse staff, and the assigned agent when an order is In Transit.';
+
+
+-- ── 24k-e: Notify executives and agent when delivery is recorded ─────────────
+CREATE OR REPLACE FUNCTION notify_order_delivery_recorded(
+  p_order_id UUID,
+  p_recorded_by TEXT DEFAULT NULL,
+  p_trip_number TEXT DEFAULT NULL
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  o RECORD;
+  recipient RECORD;
+  branch_name TEXT;
+  line_count INT;
+  trip_suffix TEXT;
+  recorded_suffix TEXT;
+  msg_exec TEXT;
+  msg_agent TEXT;
+  title_exec TEXT;
+  title_agent TEXT;
+  inserted INT := 0;
+BEGIN
+  SELECT *
+  INTO o
+  FROM orders
+  WHERE id = p_order_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Order not found: %', p_order_id;
+  END IF;
+
+  IF o.status NOT IN ('Delivered'::order_status, 'Partially Fulfilled'::order_status) THEN
+    RAISE EXCEPTION 'Order % delivery not recorded (current: %)', o.order_number, o.status;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = o.branch_id;
+  SELECT COUNT(*)::INT INTO line_count FROM order_line_items WHERE order_id = o.id;
+
+  trip_suffix := CASE
+    WHEN p_trip_number IS NOT NULL AND trim(p_trip_number) <> '' THEN
+      format(' (trip %s)', trim(p_trip_number))
+    ELSE ''
+  END;
+
+  recorded_suffix := CASE
+    WHEN p_recorded_by IS NOT NULL AND trim(p_recorded_by) <> '' THEN format(' by %s', p_recorded_by)
+    ELSE ''
+  END;
+
+  IF o.status = 'Delivered'::order_status THEN
+    title_exec := 'Order delivered';
+    title_agent := 'Customer order delivered';
+    msg_exec := format(
+      'Order %s for %s was fully delivered%s%s — %s item(s), total ₱%s',
+      o.order_number,
+      COALESCE(o.customer_name, 'Unknown customer'),
+      trip_suffix,
+      recorded_suffix,
+      line_count,
+      to_char(COALESCE(o.total_amount, 0), 'FM999,999,990.00')
+    );
+    msg_agent := format(
+      'Order %s for %s was fully delivered%s%s',
+      o.order_number,
+      COALESCE(o.customer_name, 'Unknown customer'),
+      trip_suffix,
+      recorded_suffix
+    );
+  ELSE
+    title_exec := 'Partial delivery recorded';
+    title_agent := 'Partial delivery recorded';
+    msg_exec := format(
+      'Partial delivery recorded for order %s (%s)%s%s — %s item(s), total ₱%s',
+      o.order_number,
+      COALESCE(o.customer_name, 'Unknown customer'),
+      trip_suffix,
+      recorded_suffix,
+      line_count,
+      to_char(COALESCE(o.total_amount, 0), 'FM999,999,990.00')
+    );
+    msg_agent := format(
+      'Partial delivery recorded for order %s for %s%s%s',
+      o.order_number,
+      COALESCE(o.customer_name, 'Unknown customer'),
+      trip_suffix,
+      recorded_suffix
+    );
+  END IF;
+
+  FOR recipient IN
+    SELECT e.auth_user_id
+    FROM employees e
+    WHERE e.user_role = 'Executive'::user_role
+      AND e.auth_user_id IS NOT NULL
+      AND e.status = 'active'::employee_status
+  LOOP
+    INSERT INTO notifications (
+      user_id,
+      category,
+      title,
+      message,
+      urgent,
+      action_url,
+      action_label,
+      branch_id,
+      metadata,
+      event_type
+    ) VALUES (
+      recipient.auth_user_id,
+      'Delivery'::notification_category,
+      title_exec,
+      msg_exec,
+      false,
+      '/orders/' || o.id::text,
+      'View order',
+      o.branch_id,
+      jsonb_build_object(
+        'orderId', o.id,
+        'orderNumber', o.order_number,
+        'customerName', o.customer_name,
+        'agentName', o.agent_name,
+        'branchName', branch_name,
+        'totalAmount', o.total_amount,
+        'subtotal', o.subtotal,
+        'lineCount', line_count,
+        'status', o.status,
+        'recordedBy', p_recorded_by,
+        'tripNumber', p_trip_number,
+        'actualDelivery', o.actual_delivery,
+        'requiredDate', o.required_date,
+        'deliveryAddress', o.delivery_address,
+        'deliveryType', o.delivery_type,
+        'urgency', o.urgency
+      ),
+      'order_delivery_recorded'
+    );
+    inserted := inserted + 1;
+  END LOOP;
+
+  IF o.agent_id IS NOT NULL THEN
+    SELECT e.auth_user_id
+    INTO recipient
+    FROM employees e
+    WHERE e.id = o.agent_id
+      AND e.status = 'active'::employee_status
+      AND e.auth_user_id IS NOT NULL;
+
+    IF recipient.auth_user_id IS NOT NULL THEN
+      INSERT INTO notifications (
+        user_id,
+        category,
+        title,
+        message,
+        urgent,
+        action_url,
+        action_label,
+        branch_id,
+        metadata,
+        event_type
+      ) VALUES (
+        recipient.auth_user_id,
+        'Delivery'::notification_category,
+        title_agent,
+        msg_agent,
+        false,
+        '/orders/' || o.id::text,
+        'View order',
+        o.branch_id,
+        jsonb_build_object(
+          'orderId', o.id,
+          'orderNumber', o.order_number,
+          'customerName', o.customer_name,
+          'agentName', o.agent_name,
+          'branchName', branch_name,
+          'totalAmount', o.total_amount,
+          'subtotal', o.subtotal,
+          'lineCount', line_count,
+          'status', o.status,
+          'recordedBy', p_recorded_by,
+          'tripNumber', p_trip_number,
+          'actualDelivery', o.actual_delivery,
+          'requiredDate', o.required_date,
+          'deliveryAddress', o.delivery_address,
+          'deliveryType', o.delivery_type,
+          'urgency', o.urgency
+        ),
+        'order_delivery_recorded'
+      );
+      inserted := inserted + 1;
+    END IF;
+  END IF;
+
+  RETURN inserted;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION notify_order_delivery_recorded(UUID, TEXT, TEXT) TO authenticated;
+
+COMMENT ON FUNCTION notify_order_delivery_recorded(UUID, TEXT, TEXT) IS
+  'Fan-out in-app notification to executives and the assigned agent when delivery is recorded (Delivered or Partially Fulfilled).';
+
+
+-- ── 24k-f: Notify agent when delivery proof is uploaded (not by the agent) ───
+CREATE OR REPLACE FUNCTION notify_agent_order_delivery_proof_uploaded(
+  p_order_id UUID,
+  p_uploaded_by TEXT DEFAULT NULL,
+  p_uploader_employee_id UUID DEFAULT NULL,
+  p_proof_count INT DEFAULT 1
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  o RECORD;
+  agent RECORD;
+  branch_name TEXT;
+  line_count INT;
+  proof_label TEXT;
+  uploaded_suffix TEXT;
+  msg TEXT;
+BEGIN
+  SELECT *
+  INTO o
+  FROM orders
+  WHERE id = p_order_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Order not found: %', p_order_id;
+  END IF;
+
+  IF o.agent_id IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  IF p_uploader_employee_id IS NOT NULL AND p_uploader_employee_id = o.agent_id THEN
+    RETURN 0;
+  END IF;
+
+  SELECT e.auth_user_id, e.employee_name
+  INTO agent
+  FROM employees e
+  WHERE e.id = o.agent_id
+    AND e.status = 'active'::employee_status
+    AND e.auth_user_id IS NOT NULL;
+
+  IF agent.auth_user_id IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = o.branch_id;
+  SELECT COUNT(*)::INT INTO line_count FROM order_line_items WHERE order_id = o.id;
+
+  proof_label := CASE
+    WHEN COALESCE(p_proof_count, 1) <= 1 THEN '1 delivery proof'
+    ELSE format('%s delivery proofs', COALESCE(p_proof_count, 1))
+  END;
+
+  uploaded_suffix := CASE
+    WHEN p_uploaded_by IS NOT NULL AND trim(p_uploaded_by) <> '' THEN format(' by %s', p_uploaded_by)
+    ELSE ''
+  END;
+
+  msg := format(
+    '%s uploaded for order %s (%s)%s',
+    proof_label,
+    o.order_number,
+    COALESCE(o.customer_name, 'Unknown customer'),
+    uploaded_suffix
+  );
+
+  INSERT INTO notifications (
+    user_id,
+    category,
+    title,
+    message,
+    urgent,
+    action_url,
+    action_label,
+    branch_id,
+    metadata,
+    event_type
+  ) VALUES (
+    agent.auth_user_id,
+    'Delivery'::notification_category,
+    'Delivery proof uploaded',
+    msg,
+    false,
+    '/orders/' || o.id::text,
+    'View order',
+    o.branch_id,
+    jsonb_build_object(
+      'orderId', o.id,
+      'orderNumber', o.order_number,
+      'customerName', o.customer_name,
+      'agentName', o.agent_name,
+      'branchName', branch_name,
+      'totalAmount', o.total_amount,
+      'subtotal', o.subtotal,
+      'lineCount', line_count,
+      'status', o.status,
+      'uploadedBy', p_uploaded_by,
+      'proofCount', COALESCE(p_proof_count, 1),
+      'requiredDate', o.required_date,
+      'deliveryAddress', o.delivery_address,
+      'deliveryType', o.delivery_type,
+      'urgency', o.urgency
+    ),
+    'order_delivery_proof_uploaded'
+  );
+
+  RETURN 1;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION notify_agent_order_delivery_proof_uploaded(UUID, TEXT, UUID, INT) TO authenticated;
+
+COMMENT ON FUNCTION notify_agent_order_delivery_proof_uploaded(UUID, TEXT, UUID, INT) IS
+  'In-app notification to the assigned agent when delivery proof is uploaded, skipped when the uploader is that agent.';
+
+
+-- ── 24k-g: Notify agent when other order proof is uploaded (not by the agent) ─
+CREATE OR REPLACE FUNCTION notify_agent_order_other_proof_uploaded(
+  p_order_id UUID,
+  p_uploaded_by TEXT DEFAULT NULL,
+  p_uploader_employee_id UUID DEFAULT NULL,
+  p_proof_count INT DEFAULT 1
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  o RECORD;
+  agent RECORD;
+  branch_name TEXT;
+  line_count INT;
+  proof_label TEXT;
+  uploaded_suffix TEXT;
+  msg TEXT;
+BEGIN
+  SELECT *
+  INTO o
+  FROM orders
+  WHERE id = p_order_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Order not found: %', p_order_id;
+  END IF;
+
+  IF o.agent_id IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  IF p_uploader_employee_id IS NOT NULL AND p_uploader_employee_id = o.agent_id THEN
+    RETURN 0;
+  END IF;
+
+  SELECT e.auth_user_id, e.employee_name
+  INTO agent
+  FROM employees e
+  WHERE e.id = o.agent_id
+    AND e.status = 'active'::employee_status
+    AND e.auth_user_id IS NOT NULL;
+
+  IF agent.auth_user_id IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = o.branch_id;
+  SELECT COUNT(*)::INT INTO line_count FROM order_line_items WHERE order_id = o.id;
+
+  proof_label := CASE
+    WHEN COALESCE(p_proof_count, 1) <= 1 THEN '1 other document'
+    ELSE format('%s other documents', COALESCE(p_proof_count, 1))
+  END;
+
+  uploaded_suffix := CASE
+    WHEN p_uploaded_by IS NOT NULL AND trim(p_uploaded_by) <> '' THEN format(' by %s', p_uploaded_by)
+    ELSE ''
+  END;
+
+  msg := format(
+    '%s uploaded for order %s (%s)%s',
+    proof_label,
+    o.order_number,
+    COALESCE(o.customer_name, 'Unknown customer'),
+    uploaded_suffix
+  );
+
+  INSERT INTO notifications (
+    user_id,
+    category,
+    title,
+    message,
+    urgent,
+    action_url,
+    action_label,
+    branch_id,
+    metadata,
+    event_type
+  ) VALUES (
+    agent.auth_user_id,
+    'System'::notification_category,
+    'Other document uploaded',
+    msg,
+    false,
+    '/orders/' || o.id::text,
+    'View order',
+    o.branch_id,
+    jsonb_build_object(
+      'orderId', o.id,
+      'orderNumber', o.order_number,
+      'customerName', o.customer_name,
+      'agentName', o.agent_name,
+      'branchName', branch_name,
+      'totalAmount', o.total_amount,
+      'subtotal', o.subtotal,
+      'lineCount', line_count,
+      'status', o.status,
+      'uploadedBy', p_uploaded_by,
+      'proofCount', COALESCE(p_proof_count, 1),
+      'proofType', 'other',
+      'requiredDate', o.required_date,
+      'deliveryAddress', o.delivery_address,
+      'deliveryType', o.delivery_type,
+      'urgency', o.urgency
+    ),
+    'order_other_proof_uploaded'
+  );
+
+  RETURN 1;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION notify_agent_order_other_proof_uploaded(UUID, TEXT, UUID, INT) TO authenticated;
+
+COMMENT ON FUNCTION notify_agent_order_other_proof_uploaded(UUID, TEXT, UUID, INT) IS
+  'In-app notification to the assigned agent when an other order proof is uploaded, skipped when the uploader is that agent.';
+
+
+-- ── 24k2: Notify agent / executives on payment proof & payment recorded ─────
+CREATE OR REPLACE FUNCTION notify_agent_order_payment_proof_uploaded(
+  p_order_id UUID,
+  p_uploaded_by TEXT DEFAULT NULL,
+  p_uploader_employee_id UUID DEFAULT NULL,
+  p_proof_count INT DEFAULT 1,
+  p_payment_cash NUMERIC DEFAULT 0,
+  p_payment_credit NUMERIC DEFAULT 0
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  o RECORD;
+  agent RECORD;
+  branch_name TEXT;
+  line_count INT;
+  proof_label TEXT;
+  uploaded_suffix TEXT;
+  payment_total NUMERIC;
+  is_paid_in_full BOOLEAN;
+  notif_title TEXT;
+  event_type_val TEXT;
+  msg TEXT;
+BEGIN
+  SELECT *
+  INTO o
+  FROM orders
+  WHERE id = p_order_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Order not found: %', p_order_id;
+  END IF;
+
+  IF o.agent_id IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  IF p_uploader_employee_id IS NOT NULL AND p_uploader_employee_id = o.agent_id THEN
+    RETURN 0;
+  END IF;
+
+  SELECT e.auth_user_id, e.employee_name
+  INTO agent
+  FROM employees e
+  WHERE e.id = o.agent_id
+    AND e.status = 'active'::employee_status
+    AND e.auth_user_id IS NOT NULL;
+
+  IF agent.auth_user_id IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = o.branch_id;
+  SELECT COUNT(*)::INT INTO line_count FROM order_line_items WHERE order_id = o.id;
+
+  payment_total := COALESCE(p_payment_cash, 0) + COALESCE(p_payment_credit, 0);
+  is_paid_in_full := COALESCE(o.balance_due, 0) <= 0
+    OR o.payment_status = 'Paid'::payment_status;
+
+  proof_label := CASE
+    WHEN COALESCE(p_proof_count, 1) <= 1 THEN '1 payment proof'
+    ELSE format('%s payment proofs', COALESCE(p_proof_count, 1))
+  END;
+
+  uploaded_suffix := CASE
+    WHEN p_uploaded_by IS NOT NULL AND trim(p_uploaded_by) <> '' THEN format(' by %s', p_uploaded_by)
+    ELSE ''
+  END;
+
+  IF is_paid_in_full AND payment_total > 0 THEN
+    notif_title := 'Order paid in full';
+    event_type_val := 'order_payment_completed';
+    msg := format(
+      'Order %s (%s) is now fully paid%s — final payment cash ₱%s, credit ₱%s (total paid ₱%s)',
+      o.order_number,
+      COALESCE(o.customer_name, 'Unknown customer'),
+      uploaded_suffix,
+      to_char(COALESCE(p_payment_cash, 0), 'FM999,999,990.00'),
+      to_char(COALESCE(p_payment_credit, 0), 'FM999,999,990.00'),
+      to_char(COALESCE(o.amount_paid, 0), 'FM999,999,990.00')
+    );
+  ELSIF payment_total > 0 THEN
+    notif_title := 'Payment proof uploaded';
+    event_type_val := 'order_payment_proof_uploaded';
+    msg := format(
+      'Payment proof recorded for order %s (%s): cash ₱%s, credit ₱%s%s — balance ₱%s',
+      o.order_number,
+      COALESCE(o.customer_name, 'Unknown customer'),
+      to_char(COALESCE(p_payment_cash, 0), 'FM999,999,990.00'),
+      to_char(COALESCE(p_payment_credit, 0), 'FM999,999,990.00'),
+      uploaded_suffix,
+      to_char(COALESCE(o.balance_due, 0), 'FM999,999,990.00')
+    );
+  ELSE
+    notif_title := 'Payment proof uploaded';
+    event_type_val := 'order_payment_proof_uploaded';
+    msg := format(
+      '%s uploaded for order %s (%s)%s',
+      proof_label,
+      o.order_number,
+      COALESCE(o.customer_name, 'Unknown customer'),
+      uploaded_suffix
+    );
+  END IF;
+
+  INSERT INTO notifications (
+    user_id,
+    category,
+    title,
+    message,
+    urgent,
+    action_url,
+    action_label,
+    branch_id,
+    metadata,
+    event_type
+  ) VALUES (
+    agent.auth_user_id,
+    'Payment'::notification_category,
+    notif_title,
+    msg,
+    is_paid_in_full AND payment_total > 0,
+    '/orders/' || o.id::text,
+    'View order',
+    o.branch_id,
+    jsonb_build_object(
+      'orderId', o.id,
+      'orderNumber', o.order_number,
+      'customerName', o.customer_name,
+      'agentName', o.agent_name,
+      'branchName', branch_name,
+      'totalAmount', o.total_amount,
+      'amountPaid', o.amount_paid,
+      'balanceDue', o.balance_due,
+      'paymentStatus', o.payment_status,
+      'paidInFull', is_paid_in_full AND payment_total > 0,
+      'subtotal', o.subtotal,
+      'lineCount', line_count,
+      'status', o.status,
+      'uploadedBy', p_uploaded_by,
+      'proofCount', COALESCE(p_proof_count, 1),
+      'proofType', 'payment',
+      'paymentCash', COALESCE(p_payment_cash, 0),
+      'paymentCredit', COALESCE(p_payment_credit, 0),
+      'requiredDate', o.required_date,
+      'deliveryAddress', o.delivery_address,
+      'deliveryType', o.delivery_type,
+      'urgency', o.urgency
+    ),
+    event_type_val
+  );
+
+  RETURN 1;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION notify_agent_order_payment_proof_uploaded(UUID, TEXT, UUID, INT, NUMERIC, NUMERIC) TO authenticated;
+
+COMMENT ON FUNCTION notify_agent_order_payment_proof_uploaded(UUID, TEXT, UUID, INT, NUMERIC, NUMERIC) IS
+  'In-app notification to the assigned agent when a payment proof is uploaded, skipped when the uploader is that agent.';
+
+CREATE OR REPLACE FUNCTION notify_executives_order_payment_recorded(
+  p_order_id UUID,
+  p_recorded_by TEXT DEFAULT NULL,
+  p_payment_cash NUMERIC DEFAULT 0,
+  p_payment_credit NUMERIC DEFAULT 0
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  o RECORD;
+  exec RECORD;
+  branch_name TEXT;
+  line_count INT;
+  payment_total NUMERIC;
+  is_paid_in_full BOOLEAN;
+  notif_title TEXT;
+  event_type_val TEXT;
+  recorded_suffix TEXT;
+  msg TEXT;
+  inserted INT := 0;
+BEGIN
+  payment_total := COALESCE(p_payment_cash, 0) + COALESCE(p_payment_credit, 0);
+
+  IF payment_total <= 0 THEN
+    RETURN 0;
+  END IF;
+
+  SELECT *
+  INTO o
+  FROM orders
+  WHERE id = p_order_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Order not found: %', p_order_id;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = o.branch_id;
+  SELECT COUNT(*)::INT INTO line_count FROM order_line_items WHERE order_id = o.id;
+
+  recorded_suffix := CASE
+    WHEN p_recorded_by IS NOT NULL AND trim(p_recorded_by) <> '' THEN format(' by %s', p_recorded_by)
+    ELSE ''
+  END;
+
+  is_paid_in_full := COALESCE(o.balance_due, 0) <= 0
+    OR o.payment_status = 'Paid'::payment_status;
+
+  IF is_paid_in_full THEN
+    notif_title := 'Order paid in full';
+    event_type_val := 'order_payment_completed';
+    msg := format(
+      'Order %s (%s) is now fully paid%s — final payment ₱%s, total ₱%s',
+      o.order_number,
+      COALESCE(o.customer_name, 'Unknown customer'),
+      recorded_suffix,
+      to_char(payment_total, 'FM999,999,990.00'),
+      to_char(COALESCE(o.total_amount, 0), 'FM999,999,990.00')
+    );
+  ELSE
+    notif_title := 'Payment received';
+    event_type_val := 'order_payment_recorded';
+    msg := format(
+      'Payment of ₱%s recorded on order %s (%s)%s — paid ₱%s / total ₱%s, balance ₱%s',
+      to_char(payment_total, 'FM999,999,990.00'),
+      o.order_number,
+      COALESCE(o.customer_name, 'Unknown customer'),
+      recorded_suffix,
+      to_char(COALESCE(o.amount_paid, 0), 'FM999,999,990.00'),
+      to_char(COALESCE(o.total_amount, 0), 'FM999,999,990.00'),
+      to_char(COALESCE(o.balance_due, 0), 'FM999,999,990.00')
+    );
+  END IF;
+
+  FOR exec IN
+    SELECT e.auth_user_id
+    FROM employees e
+    WHERE e.user_role = 'Executive'::user_role
+      AND e.auth_user_id IS NOT NULL
+      AND e.status = 'active'::employee_status
+  LOOP
+    INSERT INTO notifications (
+      user_id,
+      category,
+      title,
+      message,
+      urgent,
+      action_url,
+      action_label,
+      branch_id,
+      metadata,
+      event_type
+    ) VALUES (
+      exec.auth_user_id,
+      'Payment'::notification_category,
+      notif_title,
+      msg,
+      is_paid_in_full,
+      '/orders/' || o.id::text,
+      'View order',
+      o.branch_id,
+      jsonb_build_object(
+        'orderId', o.id,
+        'orderNumber', o.order_number,
+        'customerName', o.customer_name,
+        'agentName', o.agent_name,
+        'branchName', branch_name,
+        'totalAmount', o.total_amount,
+        'amountPaid', o.amount_paid,
+        'balanceDue', o.balance_due,
+        'paymentStatus', o.payment_status,
+        'paidInFull', is_paid_in_full,
+        'subtotal', o.subtotal,
+        'lineCount', line_count,
+        'status', o.status,
+        'recordedBy', p_recorded_by,
+        'paymentCash', COALESCE(p_payment_cash, 0),
+        'paymentCredit', COALESCE(p_payment_credit, 0),
+        'paymentAmount', payment_total,
+        'requiredDate', o.required_date,
+        'deliveryAddress', o.delivery_address,
+        'deliveryType', o.delivery_type,
+        'urgency', o.urgency
+      ),
+      event_type_val
+    );
+    inserted := inserted + 1;
+  END LOOP;
+
+  RETURN inserted;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION notify_executives_order_payment_recorded(UUID, TEXT, NUMERIC, NUMERIC) TO authenticated;
+
+COMMENT ON FUNCTION notify_executives_order_payment_recorded(UUID, TEXT, NUMERIC, NUMERIC) IS
+  'In-app notification to all active executives when a payment is recorded on an order (cash or credit > 0).';
+
+CREATE OR REPLACE FUNCTION notify_agent_order_commission_paid(
+  p_order_id UUID,
+  p_paid_by TEXT DEFAULT NULL,
+  p_commission_amount NUMERIC DEFAULT 0,
+  p_cash_amount NUMERIC DEFAULT 0,
+  p_proof_count INT DEFAULT 1
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  o RECORD;
+  agent RECORD;
+  branch_name TEXT;
+  line_count INT;
+  paid_suffix TEXT;
+  msg TEXT;
+  title TEXT;
+BEGIN
+  SELECT *
+  INTO o
+  FROM orders
+  WHERE id = p_order_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Order not found: %', p_order_id;
+  END IF;
+
+  IF o.agent_id IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  SELECT e.auth_user_id, e.employee_name
+  INTO agent
+  FROM employees e
+  WHERE e.id = o.agent_id
+    AND e.status = 'active'::employee_status
+    AND e.auth_user_id IS NOT NULL;
+
+  IF agent.auth_user_id IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = o.branch_id;
+  SELECT COUNT(*)::INT INTO line_count FROM order_line_items WHERE order_id = o.id;
+
+  paid_suffix := CASE
+    WHEN p_paid_by IS NOT NULL AND trim(p_paid_by) <> '' THEN format(' by %s', p_paid_by)
+    ELSE ''
+  END;
+
+  IF COALESCE(p_proof_count, 1) <= 1 THEN
+    title := 'Commission paid out';
+    msg := format(
+      'Commission of ₱%s paid out on order %s (%s) for cash payment ₱%s%s',
+      to_char(COALESCE(p_commission_amount, 0), 'FM999,999,990.00'),
+      o.order_number,
+      COALESCE(o.customer_name, 'Unknown customer'),
+      to_char(COALESCE(p_cash_amount, 0), 'FM999,999,990.00'),
+      paid_suffix
+    );
+  ELSE
+    title := 'Commissions paid out';
+    msg := format(
+      'Commission of ₱%s paid out on order %s (%s) — %s payment proof(s), cash ₱%s%s',
+      to_char(COALESCE(p_commission_amount, 0), 'FM999,999,990.00'),
+      o.order_number,
+      COALESCE(o.customer_name, 'Unknown customer'),
+      COALESCE(p_proof_count, 1),
+      to_char(COALESCE(p_cash_amount, 0), 'FM999,999,990.00'),
+      paid_suffix
+    );
+  END IF;
+
+  INSERT INTO notifications (
+    user_id,
+    category,
+    title,
+    message,
+    urgent,
+    action_url,
+    action_label,
+    branch_id,
+    metadata,
+    event_type
+  ) VALUES (
+    agent.auth_user_id,
+    'Payment'::notification_category,
+    title,
+    msg,
+    false,
+    '/orders/' || o.id::text,
+    'View order',
+    o.branch_id,
+    jsonb_build_object(
+      'orderId', o.id,
+      'orderNumber', o.order_number,
+      'customerName', o.customer_name,
+      'agentName', o.agent_name,
+      'branchName', branch_name,
+      'totalAmount', o.total_amount,
+      'amountPaid', o.amount_paid,
+      'balanceDue', o.balance_due,
+      'paymentStatus', o.payment_status,
+      'subtotal', o.subtotal,
+      'lineCount', line_count,
+      'status', o.status,
+      'paidBy', p_paid_by,
+      'commissionAmount', COALESCE(p_commission_amount, 0),
+      'cashAmount', COALESCE(p_cash_amount, 0),
+      'proofCount', COALESCE(p_proof_count, 1),
+      'requiredDate', o.required_date,
+      'deliveryAddress', o.delivery_address,
+      'deliveryType', o.delivery_type,
+      'urgency', o.urgency
+    ),
+    'order_commission_paid'
+  );
+
+  RETURN 1;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION notify_agent_order_commission_paid(UUID, TEXT, NUMERIC, NUMERIC, INT) TO authenticated;
+
+COMMENT ON FUNCTION notify_agent_order_commission_paid(UUID, TEXT, NUMERIC, NUMERIC, INT) IS
+  'In-app notification to the assigned agent when commission is marked paid out on payment proof(s).';
+
+CREATE OR REPLACE FUNCTION notify_product_stock_threshold_if_crossed(
+  p_variant_id UUID,
+  p_product_id UUID,
+  p_sku TEXT,
+  p_size TEXT,
+  p_is_hidden BOOLEAN,
+  p_status product_status,
+  p_old_stock INT,
+  p_new_stock INT,
+  p_old_rp INT,
+  p_new_rp INT,
+  p_branch_id UUID DEFAULT NULL,
+  p_branch_name TEXT DEFAULT NULL
+)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  product_rec RECORD;
+  product_action_url TEXT;
+  alert_type TEXT;
+  notif_title TEXT;
+  msg TEXT;
+  is_urgent BOOLEAN;
+  branch_label TEXT;
+  was_already_low BOOLEAN;
+  is_now_low BOOLEAN;
+  recipient RECORD;
+BEGIN
+  IF COALESCE(p_is_hidden, false) THEN
+    RETURN;
+  END IF;
+
+  IF p_status = 'Discontinued'::product_status THEN
+    RETURN;
+  END IF;
+
+  IF p_old_stock IS NOT DISTINCT FROM p_new_stock
+     AND p_old_rp IS NOT DISTINCT FROM p_new_rp THEN
+    RETURN;
+  END IF;
+
+  -- "Already low" = previous state was at/under previous reorder point with positive stock.
+  was_already_low := COALESCE(p_old_rp, 0) > 0
+    AND COALESCE(p_old_stock, 0) > 0
+    AND COALESCE(p_old_stock, 0) <= COALESCE(p_old_rp, 0);
+
+  -- "Now low" = current stock is positive and at/under the (current) reorder point.
+  is_now_low := COALESCE(p_new_rp, 0) > 0
+    AND COALESCE(p_new_stock, 0) > 0
+    AND COALESCE(p_new_stock, 0) <= COALESCE(p_new_rp, 0);
+
+  -- Out-of-stock takes priority: any transition into zero (or below) when there was stock before.
+  IF COALESCE(p_old_stock, 0) > 0 AND COALESCE(p_new_stock, 0) <= 0 THEN
+    alert_type := 'product_out_of_stock';
+    notif_title := 'Product out of stock';
+    is_urgent := true;
+  -- Fresh crossing into low-stock: wasn't low before, is low now.
+  ELSIF is_now_low AND NOT was_already_low THEN
+    alert_type := 'product_below_reorder_point';
+    notif_title := 'Product below reorder point';
+    is_urgent := true;
+  -- Stock dropped further while still low (e.g. 80 → 40 with rp 100): re-alert so the
+  -- continued decline is visible. Skip identical no-op writes.
+  ELSIF is_now_low AND was_already_low
+        AND COALESCE(p_new_stock, 0) < COALESCE(p_old_stock, 0) THEN
+    alert_type := 'product_below_reorder_point';
+    notif_title := 'Product stock still below reorder point';
+    is_urgent := true;
+  ELSE
+    RETURN;
+  END IF;
+
+  SELECT p.id, p.name, p.branch, pc.slug AS category_slug
+  INTO product_rec
+  FROM products p
+  LEFT JOIN product_categories pc ON pc.id = p.category_id
+  WHERE p.id = p_product_id;
+
+  IF NOT FOUND THEN
+    RETURN;
+  END IF;
+
+  product_action_url := CASE
+    WHEN product_rec.category_slug IS NOT NULL AND trim(product_rec.category_slug) <> '' THEN
+      '/products/category/' || trim(product_rec.category_slug) || '/family/' || p_product_id::text
+    ELSE
+      '/products/' || p_product_id::text
+  END;
+
+  branch_label := CASE
+    WHEN p_branch_name IS NOT NULL AND trim(p_branch_name) <> '' THEN format(' — %s', p_branch_name)
+    ELSE ''
+  END;
+
+  IF alert_type = 'product_out_of_stock' THEN
+    msg := format(
+      '%s (%s%s) is out of stock%s',
+      p_sku,
+      COALESCE(product_rec.name, 'Unknown product'),
+      CASE WHEN p_size IS NOT NULL AND trim(p_size) <> '' THEN format(', %s', p_size) ELSE '' END,
+      branch_label
+    );
+  ELSE
+    msg := format(
+      '%s (%s%s) is below reorder point: %s units left (reorder at %s)%s',
+      p_sku,
+      COALESCE(product_rec.name, 'Unknown product'),
+      CASE WHEN p_size IS NOT NULL AND trim(p_size) <> '' THEN format(', %s', p_size) ELSE '' END,
+      COALESCE(p_new_stock, 0),
+      COALESCE(p_new_rp, 0),
+      branch_label
+    );
+  END IF;
+
+  FOR recipient IN
+    SELECT e.auth_user_id
+    FROM employees e
+    WHERE e.user_role = 'Executive'::user_role
+      AND e.auth_user_id IS NOT NULL
+      AND e.status = 'active'::employee_status
+  LOOP
+    INSERT INTO notifications (
+      user_id,
+      category,
+      title,
+      message,
+      urgent,
+      action_url,
+      action_label,
+      branch_id,
+      metadata,
+      event_type
+    ) VALUES (
+      recipient.auth_user_id,
+      'Inventory'::notification_category,
+      notif_title,
+      msg,
+      is_urgent,
+      product_action_url,
+      'View product',
+      p_branch_id,
+      jsonb_build_object(
+        'variantId', p_variant_id,
+        'productId', p_product_id,
+        'productName', product_rec.name,
+        'sku', p_sku,
+        'size', p_size,
+        'branchName', p_branch_name,
+        'totalStock', p_new_stock,
+        'previousStock', p_old_stock,
+        'reorderPoint', p_new_rp,
+        'alertType', alert_type
+      ),
+      alert_type
+    );
+  END LOOP;
+
+  FOR recipient IN
+    SELECT e.auth_user_id
+    FROM employees e
+    WHERE e.user_role = 'Warehouse'::user_role
+      AND e.auth_user_id IS NOT NULL
+      AND e.status = 'active'::employee_status
+  LOOP
+    INSERT INTO notifications (
+      user_id,
+      category,
+      title,
+      message,
+      urgent,
+      action_url,
+      action_label,
+      branch_id,
+      metadata,
+      event_type
+    ) VALUES (
+      recipient.auth_user_id,
+      'Inventory'::notification_category,
+      notif_title,
+      msg,
+      is_urgent,
+      product_action_url,
+      'View product',
+      p_branch_id,
+      jsonb_build_object(
+        'variantId', p_variant_id,
+        'productId', p_product_id,
+        'productName', product_rec.name,
+        'sku', p_sku,
+        'size', p_size,
+        'branchName', p_branch_name,
+        'totalStock', p_new_stock,
+        'previousStock', p_old_stock,
+        'reorderPoint', p_new_rp,
+        'alertType', alert_type
+      ),
+      alert_type
+    );
+  END LOOP;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION trg_product_variant_branch_stock_alert()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v RECORD;
+  branch_name TEXT;
+  old_qty INT;
+  new_qty INT;
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  END IF;
+
+  old_qty := CASE WHEN TG_OP = 'INSERT' THEN 0 ELSE COALESCE(OLD.quantity, 0) END;
+  new_qty := COALESCE(NEW.quantity, 0);
+
+  IF old_qty IS NOT DISTINCT FROM new_qty THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT
+    pv.id,
+    pv.product_id,
+    pv.sku,
+    pv.size,
+    pv.is_hidden,
+    pv.status,
+    pv.reorder_point
+  INTO v
+  FROM product_variants pv
+  WHERE pv.id = NEW.variant_id;
+
+  IF NOT FOUND THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT b.name INTO branch_name FROM branches b WHERE b.id = NEW.branch_id;
+
+  PERFORM notify_product_stock_threshold_if_crossed(
+    v.id,
+    v.product_id,
+    v.sku,
+    v.size,
+    v.is_hidden,
+    v.status,
+    old_qty,
+    new_qty,
+    COALESCE(v.reorder_point, 0),
+    COALESCE(v.reorder_point, 0),
+    NEW.branch_id,
+    branch_name
+  );
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION trg_product_variant_stock_alert()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  has_branch_rows BOOLEAN;
+BEGIN
+  IF TG_OP <> 'UPDATE' THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT EXISTS (
+    SELECT 1 FROM product_variant_stock pvs WHERE pvs.variant_id = NEW.id LIMIT 1
+  ) INTO has_branch_rows;
+
+  IF has_branch_rows
+     AND NEW.total_stock IS DISTINCT FROM OLD.total_stock
+     AND NEW.reorder_point IS NOT DISTINCT FROM OLD.reorder_point THEN
+    RETURN NEW;
+  END IF;
+
+  IF NEW.total_stock IS NOT DISTINCT FROM OLD.total_stock
+     AND NEW.reorder_point IS NOT DISTINCT FROM OLD.reorder_point THEN
+    RETURN NEW;
+  END IF;
+
+  PERFORM notify_product_stock_threshold_if_crossed(
+    NEW.id,
+    NEW.product_id,
+    NEW.sku,
+    NEW.size,
+    NEW.is_hidden,
+    NEW.status,
+    COALESCE(OLD.total_stock, 0),
+    COALESCE(NEW.total_stock, 0),
+    COALESCE(OLD.reorder_point, 0),
+    COALESCE(NEW.reorder_point, 0),
+    NULL,
+    NULL
+  );
+
+  RETURN NEW;
+END;
+$$;
+
+-- Triggers optional; app calls notify_product_stock_threshold_rpc after stock writes.
+/*
+DROP TRIGGER IF EXISTS product_variant_branch_stock_alert ON product_variant_stock;
+CREATE TRIGGER product_variant_branch_stock_alert
+  AFTER INSERT OR UPDATE OF quantity ON product_variant_stock
+  FOR EACH ROW
+  EXECUTE FUNCTION trg_product_variant_branch_stock_alert();
+
+DROP TRIGGER IF EXISTS product_variant_stock_alert ON product_variants;
+CREATE TRIGGER product_variant_stock_alert
+  AFTER UPDATE OF total_stock, reorder_point ON product_variants
+  FOR EACH ROW
+  EXECUTE FUNCTION trg_product_variant_stock_alert();
+*/
+
+COMMENT ON FUNCTION notify_product_stock_threshold_if_crossed(UUID, UUID, TEXT, TEXT, BOOLEAN, product_status, INT, INT, INT, INT, UUID, TEXT) IS
+  'Insert Inventory notifications for Executives and Warehouse when stock crosses out-of-stock or reorder thresholds.';
+
+COMMENT ON FUNCTION trg_product_variant_branch_stock_alert() IS
+  'Trigger: branch-level product stock alerts (matches per-branch stock in the UI).';
+
+COMMENT ON FUNCTION trg_product_variant_stock_alert() IS
+  'Trigger: variant-level alerts for reorder_point changes and legacy total_stock updates without branch rows.';
+
+CREATE OR REPLACE FUNCTION notify_product_stock_threshold_rpc(
+  p_variant_id UUID,
+  p_old_stock INT,
+  p_new_stock INT,
+  p_old_rp INT DEFAULT NULL,
+  p_new_rp INT DEFAULT NULL,
+  p_branch_id UUID DEFAULT NULL
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v RECORD;
+  branch_name TEXT;
+BEGIN
+  SELECT
+    pv.id,
+    pv.product_id,
+    pv.sku,
+    pv.size,
+    pv.is_hidden,
+    pv.status,
+    pv.reorder_point
+  INTO v
+  FROM product_variants pv
+  WHERE pv.id = p_variant_id;
+
+  IF NOT FOUND THEN
+    RETURN 0;
+  END IF;
+
+  branch_name := NULL;
+  IF p_branch_id IS NOT NULL THEN
+    SELECT b.name INTO branch_name FROM branches b WHERE b.id = p_branch_id;
+  END IF;
+
+  PERFORM notify_product_stock_threshold_if_crossed(
+    v.id,
+    v.product_id,
+    v.sku,
+    v.size,
+    v.is_hidden,
+    v.status,
+    COALESCE(p_old_stock, 0),
+    COALESCE(p_new_stock, 0),
+    COALESCE(p_old_rp, v.reorder_point, 0),
+    COALESCE(p_new_rp, v.reorder_point, 0),
+    p_branch_id,
+    branch_name
+  );
+
+  RETURN 1;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION notify_product_stock_threshold_rpc(UUID, INT, INT, INT, INT, UUID) TO authenticated;
+
+COMMENT ON FUNCTION notify_product_stock_threshold_rpc(UUID, INT, INT, INT, INT, UUID) IS
+  'Client-callable wrapper to emit product low-stock / out-of-stock in-app notifications.';
+
+
+-- ── 24k.b: Raw material stock alert RPC (mirrors product variant flow) ──────
+CREATE OR REPLACE FUNCTION notify_material_stock_threshold_if_crossed(
+  p_material_id UUID,
+  p_sku TEXT,
+  p_name TEXT,
+  p_unit TEXT,
+  p_status material_status,
+  p_old_stock NUMERIC,
+  p_new_stock NUMERIC,
+  p_old_rp NUMERIC,
+  p_new_rp NUMERIC,
+  p_branch_id UUID DEFAULT NULL,
+  p_branch_name TEXT DEFAULT NULL
+)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  alert_type TEXT;
+  notif_title TEXT;
+  msg TEXT;
+  is_urgent BOOLEAN;
+  branch_label TEXT;
+  unit_label TEXT;
+  was_already_low BOOLEAN;
+  is_now_low BOOLEAN;
+  recipient RECORD;
+BEGIN
+  IF p_status = 'Discontinued'::material_status THEN
+    RETURN;
+  END IF;
+
+  IF p_old_stock IS NOT DISTINCT FROM p_new_stock
+     AND p_old_rp IS NOT DISTINCT FROM p_new_rp THEN
+    RETURN;
+  END IF;
+
+  was_already_low := COALESCE(p_old_rp, 0) > 0
+    AND COALESCE(p_old_stock, 0) > 0
+    AND COALESCE(p_old_stock, 0) <= COALESCE(p_old_rp, 0);
+
+  is_now_low := COALESCE(p_new_rp, 0) > 0
+    AND COALESCE(p_new_stock, 0) > 0
+    AND COALESCE(p_new_stock, 0) <= COALESCE(p_new_rp, 0);
+
+  IF COALESCE(p_old_stock, 0) > 0 AND COALESCE(p_new_stock, 0) <= 0 THEN
+    alert_type := 'material_out_of_stock';
+    notif_title := 'Material out of stock';
+    is_urgent := true;
+  ELSIF is_now_low AND NOT was_already_low THEN
+    alert_type := 'material_below_reorder_point';
+    notif_title := 'Material below reorder point';
+    is_urgent := true;
+  ELSIF is_now_low AND was_already_low
+        AND COALESCE(p_new_stock, 0) < COALESCE(p_old_stock, 0) THEN
+    alert_type := 'material_below_reorder_point';
+    notif_title := 'Material stock still below reorder point';
+    is_urgent := true;
+  ELSE
+    RETURN;
+  END IF;
+
+  branch_label := CASE
+    WHEN p_branch_name IS NOT NULL AND trim(p_branch_name) <> '' THEN format(' — %s', p_branch_name)
+    ELSE ''
+  END;
+  unit_label := COALESCE(NULLIF(trim(p_unit), ''), 'units');
+
+  IF alert_type = 'material_out_of_stock' THEN
+    msg := format(
+      '%s (%s) is out of stock%s',
+      p_sku,
+      COALESCE(p_name, 'Unknown material'),
+      branch_label
+    );
+  ELSE
+    msg := format(
+      '%s (%s) is below reorder point: %s %s left (reorder at %s)%s',
+      p_sku,
+      COALESCE(p_name, 'Unknown material'),
+      COALESCE(p_new_stock, 0),
+      unit_label,
+      COALESCE(p_new_rp, 0),
+      branch_label
+    );
+  END IF;
+
+  FOR recipient IN
+    SELECT e.auth_user_id FROM employees e
+    WHERE e.user_role = 'Executive'::user_role
+      AND e.auth_user_id IS NOT NULL
+      AND e.status = 'active'::employee_status
+  LOOP
+    INSERT INTO notifications (
+      user_id, category, title, message, urgent,
+      action_url, action_label, branch_id, metadata, event_type
+    ) VALUES (
+      recipient.auth_user_id,
+      'Inventory'::notification_category,
+      notif_title, msg, is_urgent,
+      '/materials/' || p_material_id::text, 'View material',
+      p_branch_id,
+      jsonb_build_object(
+        'materialId', p_material_id,
+        'name', p_name,
+        'sku', p_sku,
+        'unit', p_unit,
+        'branchName', p_branch_name,
+        'totalStock', p_new_stock,
+        'previousStock', p_old_stock,
+        'reorderPoint', p_new_rp,
+        'alertType', alert_type
+      ),
+      alert_type
+    );
+  END LOOP;
+
+  FOR recipient IN
+    SELECT e.auth_user_id FROM employees e
+    WHERE e.user_role = 'Warehouse'::user_role
+      AND e.auth_user_id IS NOT NULL
+      AND e.status = 'active'::employee_status
+  LOOP
+    INSERT INTO notifications (
+      user_id, category, title, message, urgent,
+      action_url, action_label, branch_id, metadata, event_type
+    ) VALUES (
+      recipient.auth_user_id,
+      'Inventory'::notification_category,
+      notif_title, msg, is_urgent,
+      '/materials/' || p_material_id::text, 'View material',
+      p_branch_id,
+      jsonb_build_object(
+        'materialId', p_material_id,
+        'name', p_name,
+        'sku', p_sku,
+        'unit', p_unit,
+        'branchName', p_branch_name,
+        'totalStock', p_new_stock,
+        'previousStock', p_old_stock,
+        'reorderPoint', p_new_rp,
+        'alertType', alert_type
+      ),
+      alert_type
+    );
+  END LOOP;
+END;
+$$;
+
+COMMENT ON FUNCTION notify_material_stock_threshold_if_crossed(UUID, TEXT, TEXT, TEXT, material_status, NUMERIC, NUMERIC, NUMERIC, NUMERIC, UUID, TEXT) IS
+  'Insert Inventory notifications for Executives and Warehouse when raw material stock crosses out-of-stock or reorder thresholds.';
+
+CREATE OR REPLACE FUNCTION notify_material_stock_threshold_rpc(
+  p_material_id UUID,
+  p_old_stock NUMERIC,
+  p_new_stock NUMERIC,
+  p_old_rp NUMERIC DEFAULT NULL,
+  p_new_rp NUMERIC DEFAULT NULL,
+  p_branch_id UUID DEFAULT NULL
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  m RECORD;
+  branch_name TEXT;
+BEGIN
+  SELECT rm.id, rm.sku, rm.name, rm.unit_of_measure, rm.status, rm.reorder_point
+  INTO m FROM raw_materials rm WHERE rm.id = p_material_id;
+  IF NOT FOUND THEN RETURN 0; END IF;
+
+  branch_name := NULL;
+  IF p_branch_id IS NOT NULL THEN
+    SELECT b.name INTO branch_name FROM branches b WHERE b.id = p_branch_id;
+  END IF;
+
+  PERFORM notify_material_stock_threshold_if_crossed(
+    m.id, m.sku, m.name, m.unit_of_measure::text, m.status,
+    COALESCE(p_old_stock, 0),
+    COALESCE(p_new_stock, 0),
+    COALESCE(p_old_rp, m.reorder_point, 0),
+    COALESCE(p_new_rp, m.reorder_point, 0),
+    p_branch_id, branch_name
+  );
+
+  RETURN 1;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION notify_material_stock_threshold_rpc(UUID, NUMERIC, NUMERIC, NUMERIC, NUMERIC, UUID) TO authenticated;
+
+COMMENT ON FUNCTION notify_material_stock_threshold_rpc(UUID, NUMERIC, NUMERIC, NUMERIC, NUMERIC, UUID) IS
+  'Client-callable wrapper to emit raw material low-stock / out-of-stock in-app notifications.';
+
+
+-- ── 24l: Notify executives when a rejected order is revised & resubmitted ───
+CREATE OR REPLACE FUNCTION notify_executives_order_revised(p_order_id UUID)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  o RECORD;
+  exec RECORD;
+  branch_name TEXT;
+  line_count INT;
+  msg TEXT;
+  inserted INT := 0;
+BEGIN
+  SELECT *
+  INTO o
+  FROM orders
+  WHERE id = p_order_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Order not found: %', p_order_id;
+  END IF;
+
+  IF o.status IS DISTINCT FROM 'Pending'::order_status THEN
+    RAISE EXCEPTION 'Order % is not Pending (current: %)', o.order_number, o.status;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = o.branch_id;
+  SELECT COUNT(*)::INT INTO line_count FROM order_line_items WHERE order_id = o.id;
+
+  msg := format(
+    'Order %s revised and resubmitted by %s — %s for %s item(s), total ₱%s',
+    o.order_number,
+    COALESCE(o.agent_name, 'Unknown agent'),
+    COALESCE(o.customer_name, 'Unknown customer'),
+    line_count,
+    to_char(COALESCE(o.total_amount, 0), 'FM999,999,990.00')
+  );
+
+  FOR exec IN
+    SELECT e.auth_user_id
+    FROM employees e
+    WHERE e.user_role = 'Executive'::user_role
+      AND e.auth_user_id IS NOT NULL
+      AND e.status = 'active'::employee_status
+  LOOP
+    INSERT INTO notifications (
+      user_id,
+      category,
+      title,
+      message,
+      urgent,
+      action_url,
+      action_label,
+      branch_id,
+      metadata,
+      event_type
+    ) VALUES (
+      exec.auth_user_id,
+      'Approvals'::notification_category,
+      'Order revised & resubmitted',
+      msg,
+      o.urgency IN ('High'::urgency_level, 'Critical'::urgency_level),
+      '/orders/' || o.id::text,
+      'Review revised order',
+      o.branch_id,
+      jsonb_build_object(
+        'orderId', o.id,
+        'orderNumber', o.order_number,
+        'customerName', o.customer_name,
+        'agentName', o.agent_name,
+        'branchName', branch_name,
+        'totalAmount', o.total_amount,
+        'subtotal', o.subtotal,
+        'lineCount', line_count,
+        'status', o.status,
+        'requiredDate', o.required_date,
+        'deliveryAddress', o.delivery_address,
+        'urgency', o.urgency,
+        'discountPercent', o.discount_percent,
+        'revised', true
+      ),
+      'order_revised'
+    );
+    inserted := inserted + 1;
+  END LOOP;
+
+  RETURN inserted;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION notify_executives_order_revised(UUID) TO authenticated;
+
+COMMENT ON FUNCTION notify_executives_order_revised(UUID) IS
+  'Fan-out in-app notification to all active Executive users when a rejected order is revised and resubmitted.';
+
+
+-- ── 24m: Notify on order cancellation (agent → executives, executive → agent) ─
+CREATE OR REPLACE FUNCTION notify_executives_order_cancelled(
+  p_order_id UUID,
+  p_cancelled_by TEXT DEFAULT NULL,
+  p_cancellation_reason TEXT DEFAULT NULL
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  o RECORD;
+  exec RECORD;
+  branch_name TEXT;
+  line_count INT;
+  msg TEXT;
+  inserted INT := 0;
+BEGIN
+  SELECT *
+  INTO o
+  FROM orders
+  WHERE id = p_order_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Order not found: %', p_order_id;
+  END IF;
+
+  IF o.status IS DISTINCT FROM 'Cancelled'::order_status THEN
+    RAISE EXCEPTION 'Order % is not Cancelled (current: %)', o.order_number, o.status;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = o.branch_id;
+  SELECT COUNT(*)::INT INTO line_count FROM order_line_items WHERE order_id = o.id;
+
+  msg := format(
+    'Order %s cancelled by agent %s — %s%s',
+    o.order_number,
+    COALESCE(p_cancelled_by, o.agent_name, 'Unknown'),
+    COALESCE(o.customer_name, 'Unknown customer'),
+    CASE
+      WHEN p_cancellation_reason IS NOT NULL AND trim(p_cancellation_reason) <> ''
+      THEN format('. Reason: %s', p_cancellation_reason)
+      ELSE ''
+    END
+  );
+
+  FOR exec IN
+    SELECT e.auth_user_id
+    FROM employees e
+    WHERE e.user_role = 'Executive'::user_role
+      AND e.auth_user_id IS NOT NULL
+      AND e.status = 'active'::employee_status
+  LOOP
+    INSERT INTO notifications (
+      user_id,
+      category,
+      title,
+      message,
+      urgent,
+      action_url,
+      action_label,
+      branch_id,
+      metadata,
+      event_type
+    ) VALUES (
+      exec.auth_user_id,
+      'System'::notification_category,
+      'Order cancelled by agent',
+      msg,
+      false,
+      '/orders/' || o.id::text,
+      'View order',
+      o.branch_id,
+      jsonb_build_object(
+        'orderId', o.id,
+        'orderNumber', o.order_number,
+        'customerName', o.customer_name,
+        'agentName', o.agent_name,
+        'branchName', branch_name,
+        'totalAmount', o.total_amount,
+        'subtotal', o.subtotal,
+        'lineCount', line_count,
+        'status', o.status,
+        'cancelledBy', p_cancelled_by,
+        'cancellationReason', p_cancellation_reason,
+        'requiredDate', o.required_date,
+        'urgency', o.urgency
+      ),
+      'order_cancelled_by_agent'
+    );
+    inserted := inserted + 1;
+  END LOOP;
+
+  RETURN inserted;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION notify_agent_order_cancelled(
+  p_order_id UUID,
+  p_cancelled_by TEXT DEFAULT NULL,
+  p_cancellation_reason TEXT DEFAULT NULL
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  o RECORD;
+  agent RECORD;
+  branch_name TEXT;
+  line_count INT;
+  msg TEXT;
+BEGIN
+  SELECT *
+  INTO o
+  FROM orders
+  WHERE id = p_order_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Order not found: %', p_order_id;
+  END IF;
+
+  IF o.status IS DISTINCT FROM 'Cancelled'::order_status THEN
+    RAISE EXCEPTION 'Order % is not Cancelled (current: %)', o.order_number, o.status;
+  END IF;
+
+  IF o.agent_id IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  SELECT e.auth_user_id, e.employee_name
+  INTO agent
+  FROM employees e
+  WHERE e.id = o.agent_id
+    AND e.status = 'active'::employee_status
+    AND e.auth_user_id IS NOT NULL;
+
+  IF agent.auth_user_id IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = o.branch_id;
+  SELECT COUNT(*)::INT INTO line_count FROM order_line_items WHERE order_id = o.id;
+
+  msg := format(
+    'Order %s for %s was cancelled%s%s',
+    o.order_number,
+    COALESCE(o.customer_name, 'Unknown customer'),
+    CASE WHEN p_cancelled_by IS NOT NULL AND trim(p_cancelled_by) <> '' THEN format(' by %s', p_cancelled_by) ELSE '' END,
+    CASE
+      WHEN p_cancellation_reason IS NOT NULL AND trim(p_cancellation_reason) <> ''
+      THEN format('. Reason: %s', p_cancellation_reason)
+      ELSE ''
+    END
+  );
+
+  INSERT INTO notifications (
+    user_id,
+    category,
+    title,
+    message,
+    urgent,
+    action_url,
+    action_label,
+    branch_id,
+    metadata,
+    event_type
+  ) VALUES (
+    agent.auth_user_id,
+    'System'::notification_category,
+    'Order cancelled',
+    msg,
+    true,
+    '/orders/' || o.id::text,
+    'View order',
+    o.branch_id,
+    jsonb_build_object(
+      'orderId', o.id,
+      'orderNumber', o.order_number,
+      'customerName', o.customer_name,
+      'agentName', o.agent_name,
+      'branchName', branch_name,
+      'totalAmount', o.total_amount,
+      'subtotal', o.subtotal,
+      'lineCount', line_count,
+      'status', o.status,
+      'cancelledBy', p_cancelled_by,
+      'cancellationReason', p_cancellation_reason,
+      'requiredDate', o.required_date,
+      'urgency', o.urgency
+    ),
+    'order_cancelled_by_executive'
+  );
+
+  RETURN 1;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION notify_executives_order_cancelled(UUID, TEXT, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION notify_agent_order_cancelled(UUID, TEXT, TEXT) TO authenticated;
+
+COMMENT ON FUNCTION notify_executives_order_cancelled(UUID, TEXT, TEXT) IS
+  'Fan-out in-app notification to executives when an agent cancels an order.';
+COMMENT ON FUNCTION notify_agent_order_cancelled(UUID, TEXT, TEXT) IS
+  'In-app notification to the assigned agent when an executive cancels their order.';
+
+
+-- Order scheduled — executives, branch warehouse, and assigned agent
+CREATE OR REPLACE FUNCTION notify_order_scheduled(
+  p_order_id UUID,
+  p_scheduled_by TEXT DEFAULT NULL,
+  p_trip_number TEXT DEFAULT NULL,
+  p_scheduled_date DATE DEFAULT NULL,
+  p_vehicle_name TEXT DEFAULT NULL,
+  p_driver_name TEXT DEFAULT NULL
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  o RECORD;
+  recipient RECORD;
+  branch_name TEXT;
+  line_count INT;
+  schedule_label TEXT;
+  trip_suffix TEXT;
+  msg_exec TEXT;
+  msg_wh TEXT;
+  msg_agent TEXT;
+  inserted INT := 0;
+BEGIN
+  SELECT *
+  INTO o
+  FROM orders
+  WHERE id = p_order_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Order not found: %', p_order_id;
+  END IF;
+
+  IF o.status IS DISTINCT FROM 'Scheduled'::order_status THEN
+    RAISE EXCEPTION 'Order % is not Scheduled (current: %)', o.order_number, o.status;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = o.branch_id;
+  SELECT COUNT(*)::INT INTO line_count FROM order_line_items WHERE order_id = o.id;
+
+  schedule_label := COALESCE(
+    to_char(p_scheduled_date, 'Mon DD, YYYY'),
+    to_char(o.scheduled_departure_date, 'Mon DD, YYYY'),
+    'the planned date'
+  );
+
+  trip_suffix := CASE
+    WHEN p_trip_number IS NOT NULL AND trim(p_trip_number) <> '' THEN
+      format(' (trip %s)', trim(p_trip_number))
+    ELSE ''
+  END;
+
+  msg_exec := format(
+    'Order %s for %s scheduled for %s%s%s — %s item(s), total ₱%s',
+    o.order_number,
+    COALESCE(o.customer_name, 'Unknown customer'),
+    schedule_label,
+    trip_suffix,
+    CASE WHEN p_scheduled_by IS NOT NULL AND trim(p_scheduled_by) <> '' THEN format(' by %s', p_scheduled_by) ELSE '' END,
+    line_count,
+    to_char(COALESCE(o.total_amount, 0), 'FM999,999,990.00')
+  );
+
+  msg_wh := format(
+    'Order %s for %s is scheduled for %s%s — prepare for loading (%s item(s))',
+    o.order_number,
+    COALESCE(o.customer_name, 'Unknown customer'),
+    schedule_label,
+    trip_suffix,
+    line_count
+  );
+
+  msg_agent := format(
+    'Order %s for %s was scheduled for %s%s',
+    o.order_number,
+    COALESCE(o.customer_name, 'Unknown customer'),
+    schedule_label,
+    trip_suffix
+  );
+
+  FOR recipient IN
+    SELECT e.auth_user_id
+    FROM employees e
+    WHERE e.user_role = 'Executive'::user_role
+      AND e.auth_user_id IS NOT NULL
+      AND e.status = 'active'::employee_status
+  LOOP
+    INSERT INTO notifications (
+      user_id,
+      category,
+      title,
+      message,
+      urgent,
+      action_url,
+      action_label,
+      branch_id,
+      metadata,
+      event_type
+    ) VALUES (
+      recipient.auth_user_id,
+      'Delivery'::notification_category,
+      'Order scheduled',
+      msg_exec,
+      o.urgency IN ('High'::urgency_level, 'Critical'::urgency_level),
+      '/orders/' || o.id::text,
+      'View order',
+      o.branch_id,
+      jsonb_build_object(
+        'orderId', o.id,
+        'orderNumber', o.order_number,
+        'customerName', o.customer_name,
+        'agentName', o.agent_name,
+        'branchName', branch_name,
+        'totalAmount', o.total_amount,
+        'subtotal', o.subtotal,
+        'lineCount', line_count,
+        'status', o.status,
+        'scheduledBy', p_scheduled_by,
+        'tripNumber', p_trip_number,
+        'scheduledDate', COALESCE(p_scheduled_date, o.scheduled_departure_date),
+        'vehicleName', p_vehicle_name,
+        'driverName', p_driver_name,
+        'requiredDate', o.required_date,
+        'deliveryAddress', o.delivery_address,
+        'deliveryType', o.delivery_type,
+        'urgency', o.urgency
+      ),
+      'order_scheduled'
+    );
+    inserted := inserted + 1;
+  END LOOP;
+
+  IF o.branch_id IS NOT NULL THEN
+    FOR recipient IN
+      SELECT e.auth_user_id
+      FROM employees e
+      WHERE e.user_role = 'Warehouse'::user_role
+        AND e.branch_id = o.branch_id
+        AND e.auth_user_id IS NOT NULL
+        AND e.status = 'active'::employee_status
+    LOOP
+      INSERT INTO notifications (
+        user_id,
+        category,
+        title,
+        message,
+        urgent,
+        action_url,
+        action_label,
+        branch_id,
+        metadata,
+        event_type
+      ) VALUES (
+        recipient.auth_user_id,
+        'Delivery'::notification_category,
+        'Order scheduled for fulfillment',
+        msg_wh,
+        o.urgency IN ('High'::urgency_level, 'Critical'::urgency_level),
+        '/orders/' || o.id::text,
+        'View order',
+        o.branch_id,
+        jsonb_build_object(
+          'orderId', o.id,
+          'orderNumber', o.order_number,
+          'customerName', o.customer_name,
+          'agentName', o.agent_name,
+          'branchName', branch_name,
+          'totalAmount', o.total_amount,
+          'subtotal', o.subtotal,
+          'lineCount', line_count,
+          'status', o.status,
+          'scheduledBy', p_scheduled_by,
+          'tripNumber', p_trip_number,
+          'scheduledDate', COALESCE(p_scheduled_date, o.scheduled_departure_date),
+          'vehicleName', p_vehicle_name,
+          'driverName', p_driver_name,
+          'requiredDate', o.required_date,
+          'deliveryAddress', o.delivery_address,
+          'deliveryType', o.delivery_type,
+          'urgency', o.urgency
+        ),
+        'order_scheduled'
+      );
+      inserted := inserted + 1;
+    END LOOP;
+  END IF;
+
+  IF o.agent_id IS NOT NULL THEN
+    SELECT e.auth_user_id
+    INTO recipient
+    FROM employees e
+    WHERE e.id = o.agent_id
+      AND e.status = 'active'::employee_status
+      AND e.auth_user_id IS NOT NULL;
+
+    IF recipient.auth_user_id IS NOT NULL THEN
+      INSERT INTO notifications (
+        user_id,
+        category,
+        title,
+        message,
+        urgent,
+        action_url,
+        action_label,
+        branch_id,
+        metadata,
+        event_type
+      ) VALUES (
+        recipient.auth_user_id,
+        'Delivery'::notification_category,
+        'Customer order scheduled',
+        msg_agent,
+        o.urgency IN ('High'::urgency_level, 'Critical'::urgency_level),
+        '/orders/' || o.id::text,
+        'View order',
+        o.branch_id,
+        jsonb_build_object(
+          'orderId', o.id,
+          'orderNumber', o.order_number,
+          'customerName', o.customer_name,
+          'agentName', o.agent_name,
+          'branchName', branch_name,
+          'totalAmount', o.total_amount,
+          'subtotal', o.subtotal,
+          'lineCount', line_count,
+          'status', o.status,
+          'scheduledBy', p_scheduled_by,
+          'tripNumber', p_trip_number,
+          'scheduledDate', COALESCE(p_scheduled_date, o.scheduled_departure_date),
+          'vehicleName', p_vehicle_name,
+          'driverName', p_driver_name,
+          'requiredDate', o.required_date,
+          'deliveryAddress', o.delivery_address,
+          'deliveryType', o.delivery_type,
+          'urgency', o.urgency
+        ),
+        'order_scheduled'
+      );
+      inserted := inserted + 1;
+    END IF;
+  END IF;
+
+  RETURN inserted;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION notify_order_scheduled(UUID, TEXT, TEXT, DATE, TEXT, TEXT) TO authenticated;
+
+COMMENT ON FUNCTION notify_order_scheduled(UUID, TEXT, TEXT, DATE, TEXT, TEXT) IS
+  'Fan-out in-app notification to executives, branch warehouse staff, and the assigned agent when an order is scheduled.';
+
+
+-- Trip assigned to truck driver
+CREATE OR REPLACE FUNCTION notify_driver_trip_assigned(
+  p_trip_id UUID,
+  p_assigned_by TEXT DEFAULT NULL
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  t RECORD;
+  driver RECORD;
+  branch_name TEXT;
+  order_count INT;
+  schedule_label TEXT;
+  msg TEXT;
+BEGIN
+  SELECT
+    tr.id,
+    tr.trip_number,
+    tr.scheduled_date,
+    tr.vehicle_name,
+    tr.driver_id,
+    tr.driver_name,
+    tr.order_ids,
+    tr.branch_id
+  INTO t
+  FROM trips tr
+  WHERE tr.id = p_trip_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Trip not found: %', p_trip_id;
+  END IF;
+
+  IF t.driver_id IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  SELECT e.auth_user_id, e.employee_name
+  INTO driver
+  FROM employees e
+  WHERE e.id = t.driver_id
+    AND e.status = 'active'::employee_status
+    AND e.auth_user_id IS NOT NULL;
+
+  IF driver.auth_user_id IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = t.branch_id;
+  order_count := COALESCE(array_length(t.order_ids, 1), 0);
+
+  schedule_label := COALESCE(
+    to_char(t.scheduled_date, 'Mon DD, YYYY'),
+    'the planned date'
+  );
+
+  msg := format(
+    'You were assigned to trip %s on %s — %s order(s), vehicle %s%s',
+    t.trip_number,
+    schedule_label,
+    order_count,
+    COALESCE(t.vehicle_name, 'TBD'),
+    CASE WHEN p_assigned_by IS NOT NULL AND trim(p_assigned_by) <> '' THEN format(' (by %s)', p_assigned_by) ELSE '' END
+  );
+
+  INSERT INTO notifications (
+    user_id,
+    category,
+    title,
+    message,
+    urgent,
+    action_url,
+    action_label,
+    branch_id,
+    metadata,
+    event_type
+  ) VALUES (
+    driver.auth_user_id,
+    'Delivery'::notification_category,
+    'Trip assigned to you',
+    msg,
+    false,
+    '/',
+    'Open driver dashboard',
+    t.branch_id,
+    jsonb_build_object(
+      'tripId', t.id,
+      'tripNumber', t.trip_number,
+      'scheduledDate', t.scheduled_date,
+      'vehicleName', t.vehicle_name,
+      'driverId', t.driver_id,
+      'driverName', t.driver_name,
+      'orderCount', order_count,
+      'orderIds', to_jsonb(COALESCE(t.order_ids, ARRAY[]::uuid[])),
+      'branchName', branch_name,
+      'assignedBy', p_assigned_by
+    ),
+    'trip_assigned_to_driver'
+  );
+
+  RETURN 1;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION notify_driver_trip_assigned(UUID, TEXT) TO authenticated;
+
+COMMENT ON FUNCTION notify_driver_trip_assigned(UUID, TEXT) IS
+  'In-app notification to the assigned truck driver when they are assigned to a trip.';
+
+
+-- ── 24?: Purchase order approval workflow notifications ───────────────────
+ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS submitted_by TEXT;
+ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMPTZ;
+ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS submitted_by_auth_user_id UUID;
+ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS submitted_by_employee_id UUID REFERENCES employees(id) ON DELETE SET NULL;
+
+CREATE OR REPLACE FUNCTION resolve_po_submitter_auth_user_id(p_po_id UUID)
+RETURNS UUID
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  po RECORD;
+  uid UUID;
+  submitter TEXT;
+BEGIN
+  SELECT *
+  INTO po
+  FROM purchase_orders
+  WHERE id = p_po_id;
+
+  IF NOT FOUND THEN
+    RETURN NULL;
+  END IF;
+
+  IF po.submitted_by_auth_user_id IS NOT NULL THEN
+    RETURN po.submitted_by_auth_user_id;
+  END IF;
+
+  IF po.submitted_by_employee_id IS NOT NULL THEN
+    SELECT e.auth_user_id
+    INTO uid
+    FROM employees e
+    WHERE e.id = po.submitted_by_employee_id
+      AND e.status = 'active'::employee_status
+      AND e.auth_user_id IS NOT NULL;
+
+    IF uid IS NOT NULL THEN
+      RETURN uid;
+    END IF;
+  END IF;
+
+  submitter := COALESCE(
+    NULLIF(trim(po.submitted_by), ''),
+    (
+      SELECT l.performed_by
+      FROM purchase_order_logs l
+      WHERE l.order_id = po.id
+        AND l.action = 'submitted'
+      ORDER BY l.created_at DESC
+      LIMIT 1
+    ),
+    NULLIF(trim(po.created_by), '')
+  );
+
+  IF submitter IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  IF position('@' IN submitter) > 0 THEN
+    SELECT u.id
+    INTO uid
+    FROM auth.users u
+    WHERE lower(u.email) = lower(trim(submitter))
+    LIMIT 1;
+
+    IF uid IS NOT NULL THEN
+      RETURN uid;
+    END IF;
+  END IF;
+
+  SELECT e.auth_user_id
+  INTO uid
+  FROM employees e
+  WHERE e.status = 'active'::employee_status
+    AND e.auth_user_id IS NOT NULL
+    AND (
+      e.employee_name = submitter
+      OR e.email = submitter
+      OR lower(trim(e.employee_name)) = lower(trim(submitter))
+      OR lower(split_part(e.email, '@', 1)) = lower(trim(submitter))
+    )
+  ORDER BY e.updated_at DESC NULLS LAST
+  LIMIT 1;
+
+  RETURN uid;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION resolve_po_submitter_auth_user_id(UUID) TO authenticated;
+
+CREATE OR REPLACE FUNCTION notify_executives_po_submitted_for_approval(p_po_id UUID)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  po RECORD;
+  exec RECORD;
+  branch_name TEXT;
+  supplier_name TEXT;
+  line_count INT;
+  msg TEXT;
+  inserted INT := 0;
+BEGIN
+  SELECT *
+  INTO po
+  FROM purchase_orders
+  WHERE id = p_po_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Purchase order not found: %', p_po_id;
+  END IF;
+
+  IF po.status IS DISTINCT FROM 'Requested' THEN
+    RAISE EXCEPTION 'PO % is not Requested (current: %)', po.po_number, po.status;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = po.branch_id;
+  SELECT name INTO supplier_name FROM suppliers WHERE id = po.supplier_id;
+  SELECT COUNT(*)::INT INTO line_count FROM purchase_order_items WHERE order_id = po.id;
+
+  msg := format(
+    'PO %s submitted for approval by %s — %s, %s item(s), total %s%s',
+    po.po_number,
+    COALESCE(po.submitted_by, po.created_by, 'Unknown'),
+    COALESCE(supplier_name, 'No supplier'),
+    line_count,
+    CASE WHEN po.currency = 'USD' THEN '$' ELSE '₱' END,
+    to_char(COALESCE(po.total_amount, 0), 'FM999,999,990.00')
+  );
+
+  FOR exec IN
+    SELECT DISTINCT e.auth_user_id
+    FROM employees e
+    WHERE e.user_role = 'Executive'::user_role
+      AND e.auth_user_id IS NOT NULL
+      AND e.status = 'active'::employee_status
+  LOOP
+    INSERT INTO notifications (
+      user_id,
+      category,
+      title,
+      message,
+      urgent,
+      action_url,
+      action_label,
+      branch_id,
+      metadata,
+      event_type
+    ) VALUES (
+      exec.auth_user_id,
+      'Approvals'::notification_category,
+      'Purchase order awaiting approval',
+      msg,
+      false,
+      '/purchase-orders/' || po.id::text,
+      'Review PO',
+      po.branch_id,
+      jsonb_build_object(
+        'purchaseOrderId', po.id,
+        'poNumber', po.po_number,
+        'supplierName', supplier_name,
+        'submittedBy', po.submitted_by,
+        'branchName', branch_name,
+        'totalAmount', po.total_amount,
+        'currency', po.currency,
+        'lineCount', line_count,
+        'status', po.status
+      ),
+      'purchase_order_submitted_for_approval'
+    );
+    inserted := inserted + 1;
+  END LOOP;
+
+  RETURN inserted;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION notify_po_submitter_cancelled(
+  p_po_id UUID,
+  p_cancelled_by TEXT DEFAULT NULL,
+  p_cancellation_reason TEXT DEFAULT NULL
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  po RECORD;
+  submitter_uid UUID;
+  branch_name TEXT;
+  supplier_name TEXT;
+  line_count INT;
+  msg TEXT;
+BEGIN
+  SELECT *
+  INTO po
+  FROM purchase_orders
+  WHERE id = p_po_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Purchase order not found: %', p_po_id;
+  END IF;
+
+  IF po.status IS DISTINCT FROM 'Cancelled' THEN
+    RAISE EXCEPTION 'PO % is not Cancelled (current: %)', po.po_number, po.status;
+  END IF;
+
+  submitter_uid := resolve_po_submitter_auth_user_id(p_po_id);
+
+  IF submitter_uid IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  IF po.submitted_by IS NOT NULL
+     AND p_cancelled_by IS NOT NULL
+     AND lower(trim(p_cancelled_by)) = lower(trim(po.submitted_by)) THEN
+    RETURN 0;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = po.branch_id;
+  SELECT name INTO supplier_name FROM suppliers WHERE id = po.supplier_id;
+  SELECT COUNT(*)::INT INTO line_count FROM purchase_order_items WHERE order_id = po.id;
+
+  msg := format(
+    'PO %s was cancelled by %s%s',
+    po.po_number,
+    COALESCE(NULLIF(trim(p_cancelled_by), ''), 'someone'),
+    CASE
+      WHEN p_cancellation_reason IS NOT NULL AND trim(p_cancellation_reason) <> ''
+      THEN format('. Reason: %s', p_cancellation_reason)
+      ELSE ''
+    END
+  );
+
+  INSERT INTO notifications (
+    user_id,
+    category,
+    title,
+    message,
+    urgent,
+    action_url,
+    action_label,
+    branch_id,
+    metadata,
+    event_type
+  ) VALUES (
+    submitter_uid,
+    'System'::notification_category,
+    'Purchase order cancelled',
+    msg,
+    true,
+    '/purchase-orders/' || po.id::text,
+    'View PO',
+    po.branch_id,
+    jsonb_build_object(
+      'purchaseOrderId', po.id,
+      'poNumber', po.po_number,
+      'supplierName', supplier_name,
+      'submittedBy', po.submitted_by,
+      'cancelledBy', p_cancelled_by,
+      'cancellationReason', p_cancellation_reason,
+      'branchName', branch_name,
+      'totalAmount', po.total_amount,
+      'currency', po.currency,
+      'lineCount', line_count,
+      'status', po.status
+    ),
+    'purchase_order_cancelled'
+  );
+
+  RETURN 1;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION notify_po_submitter_rejected(
+  p_po_id UUID,
+  p_rejected_by TEXT DEFAULT NULL,
+  p_rejection_reason TEXT DEFAULT NULL
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  po RECORD;
+  submitter_uid UUID;
+  branch_name TEXT;
+  supplier_name TEXT;
+  line_count INT;
+  msg TEXT;
+BEGIN
+  SELECT *
+  INTO po
+  FROM purchase_orders
+  WHERE id = p_po_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Purchase order not found: %', p_po_id;
+  END IF;
+
+  IF po.status IS DISTINCT FROM 'Rejected' THEN
+    RAISE EXCEPTION 'PO % is not Rejected (current: %)', po.po_number, po.status;
+  END IF;
+
+  submitter_uid := resolve_po_submitter_auth_user_id(p_po_id);
+
+  IF submitter_uid IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = po.branch_id;
+  SELECT name INTO supplier_name FROM suppliers WHERE id = po.supplier_id;
+  SELECT COUNT(*)::INT INTO line_count FROM purchase_order_items WHERE order_id = po.id;
+
+  msg := format(
+    'PO %s was rejected%s%s',
+    po.po_number,
+    CASE WHEN p_rejected_by IS NOT NULL AND trim(p_rejected_by) <> '' THEN format(' by %s', p_rejected_by) ELSE '' END,
+    CASE
+      WHEN p_rejection_reason IS NOT NULL AND trim(p_rejection_reason) <> ''
+      THEN format('. Reason: %s', p_rejection_reason)
+      ELSE ''
+    END
+  );
+
+  INSERT INTO notifications (
+    user_id,
+    category,
+    title,
+    message,
+    urgent,
+    action_url,
+    action_label,
+    branch_id,
+    metadata,
+    event_type
+  ) VALUES (
+    submitter_uid,
+    'Approvals'::notification_category,
+    'Purchase order rejected',
+    msg,
+    true,
+    '/purchase-orders/' || po.id::text,
+    'View PO',
+    po.branch_id,
+    jsonb_build_object(
+      'purchaseOrderId', po.id,
+      'poNumber', po.po_number,
+      'supplierName', supplier_name,
+      'submittedBy', po.submitted_by,
+      'rejectedBy', p_rejected_by,
+      'rejectionReason', p_rejection_reason,
+      'branchName', branch_name,
+      'totalAmount', po.total_amount,
+      'currency', po.currency,
+      'lineCount', line_count,
+      'status', po.status
+    ),
+    'purchase_order_rejected'
+  );
+
+  RETURN 1;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION notify_po_submitter_accepted(
+  p_po_id UUID,
+  p_accepted_by TEXT DEFAULT NULL
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  po RECORD;
+  submitter_uid UUID;
+  branch_name TEXT;
+  supplier_name TEXT;
+  line_count INT;
+  msg TEXT;
+BEGIN
+  SELECT *
+  INTO po
+  FROM purchase_orders
+  WHERE id = p_po_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Purchase order not found: %', p_po_id;
+  END IF;
+
+  IF po.status IS DISTINCT FROM 'Accepted' THEN
+    RAISE EXCEPTION 'PO % is not Accepted (current: %)', po.po_number, po.status;
+  END IF;
+
+  submitter_uid := resolve_po_submitter_auth_user_id(p_po_id);
+
+  IF submitter_uid IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = po.branch_id;
+  SELECT name INTO supplier_name FROM suppliers WHERE id = po.supplier_id;
+  SELECT COUNT(*)::INT INTO line_count FROM purchase_order_items WHERE order_id = po.id;
+
+  msg := format(
+    'PO %s was accepted%s — confirm with the supplier when ready',
+    po.po_number,
+    CASE WHEN p_accepted_by IS NOT NULL AND trim(p_accepted_by) <> '' THEN format(' by %s', p_accepted_by) ELSE '' END
+  );
+
+  INSERT INTO notifications (
+    user_id,
+    category,
+    title,
+    message,
+    urgent,
+    action_url,
+    action_label,
+    branch_id,
+    metadata,
+    event_type
+  ) VALUES (
+    submitter_uid,
+    'Approvals'::notification_category,
+    'Purchase order accepted',
+    msg,
+    false,
+    '/purchase-orders/' || po.id::text,
+    'View PO',
+    po.branch_id,
+    jsonb_build_object(
+      'purchaseOrderId', po.id,
+      'poNumber', po.po_number,
+      'supplierName', supplier_name,
+      'submittedBy', po.submitted_by,
+      'acceptedBy', p_accepted_by,
+      'branchName', branch_name,
+      'totalAmount', po.total_amount,
+      'currency', po.currency,
+      'lineCount', line_count,
+      'status', po.status
+    ),
+    'purchase_order_accepted'
+  );
+
+  RETURN 1;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION notify_executives_and_warehouse_po_confirmed(
+  p_po_id UUID,
+  p_confirmed_by TEXT DEFAULT NULL
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  po RECORD;
+  recipient RECORD;
+  branch_name TEXT;
+  supplier_name TEXT;
+  line_count INT;
+  msg_exec TEXT;
+  msg_wh TEXT;
+  inserted INT := 0;
+BEGIN
+  SELECT *
+  INTO po
+  FROM purchase_orders
+  WHERE id = p_po_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Purchase order not found: %', p_po_id;
+  END IF;
+
+  IF po.status IS DISTINCT FROM 'Confirmed' THEN
+    RAISE EXCEPTION 'PO % is not Confirmed (current: %)', po.po_number, po.status;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = po.branch_id;
+  SELECT name INTO supplier_name FROM suppliers WHERE id = po.supplier_id;
+  SELECT COUNT(*)::INT INTO line_count FROM purchase_order_items WHERE order_id = po.id;
+
+  msg_exec := format(
+    'PO %s confirmed with supplier%s — %s, %s item(s), total %s%s',
+    po.po_number,
+    CASE WHEN p_confirmed_by IS NOT NULL AND trim(p_confirmed_by) <> '' THEN format(' by %s', p_confirmed_by) ELSE '' END,
+    COALESCE(supplier_name, 'No supplier'),
+    line_count,
+    CASE WHEN po.currency = 'USD' THEN '$' ELSE '₱' END,
+    to_char(COALESCE(po.total_amount, 0), 'FM999,999,990.00')
+  );
+
+  msg_wh := format(
+    'PO %s is confirmed with %s — %s item(s) incoming%s, ready to receive',
+    po.po_number,
+    COALESCE(supplier_name, 'the supplier'),
+    line_count,
+    CASE WHEN branch_name IS NOT NULL AND trim(branch_name) <> '' THEN format(' at %s', branch_name) ELSE '' END
+  );
+
+  FOR recipient IN
+    SELECT DISTINCT e.auth_user_id
+    FROM employees e
+    WHERE e.user_role = 'Executive'::user_role
+      AND e.auth_user_id IS NOT NULL
+      AND e.status = 'active'::employee_status
+  LOOP
+    INSERT INTO notifications (
+      user_id,
+      category,
+      title,
+      message,
+      urgent,
+      action_url,
+      action_label,
+      branch_id,
+      metadata,
+      event_type
+    ) VALUES (
+      recipient.auth_user_id,
+      'Approvals'::notification_category,
+      'Purchase order confirmed',
+      msg_exec,
+      false,
+      '/purchase-orders/' || po.id::text,
+      'View PO',
+      po.branch_id,
+      jsonb_build_object(
+        'purchaseOrderId', po.id,
+        'poNumber', po.po_number,
+        'supplierName', supplier_name,
+        'confirmedBy', p_confirmed_by,
+        'branchName', branch_name,
+        'totalAmount', po.total_amount,
+        'currency', po.currency,
+        'lineCount', line_count,
+        'status', po.status,
+        'audience', 'executive'
+      ),
+      'purchase_order_confirmed'
+    );
+    inserted := inserted + 1;
+  END LOOP;
+
+  FOR recipient IN
+    SELECT DISTINCT e.auth_user_id
+    FROM employees e
+    WHERE e.user_role = 'Warehouse'::user_role
+      AND e.auth_user_id IS NOT NULL
+      AND e.status = 'active'::employee_status
+  LOOP
+    INSERT INTO notifications (
+      user_id,
+      category,
+      title,
+      message,
+      urgent,
+      action_url,
+      action_label,
+      branch_id,
+      metadata,
+      event_type
+    ) VALUES (
+      recipient.auth_user_id,
+      'Inventory'::notification_category,
+      'Purchase order ready to receive',
+      msg_wh,
+      false,
+      '/purchase-orders/' || po.id::text,
+      'Receive PO',
+      po.branch_id,
+      jsonb_build_object(
+        'purchaseOrderId', po.id,
+        'poNumber', po.po_number,
+        'supplierName', supplier_name,
+        'confirmedBy', p_confirmed_by,
+        'branchName', branch_name,
+        'totalAmount', po.total_amount,
+        'currency', po.currency,
+        'lineCount', line_count,
+        'status', po.status,
+        'audience', 'warehouse'
+      ),
+      'purchase_order_confirmed'
+    );
+    inserted := inserted + 1;
+  END LOOP;
+
+  RETURN inserted;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION notify_executives_po_submitted_for_approval(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION notify_po_submitter_cancelled(UUID, TEXT, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION notify_po_submitter_rejected(UUID, TEXT, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION notify_po_submitter_accepted(UUID, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION notify_executives_and_warehouse_po_confirmed(UUID, TEXT) TO authenticated;
+
+COMMENT ON FUNCTION resolve_po_submitter_auth_user_id(UUID) IS
+  'Resolve auth.users.id for the employee who submitted a purchase order.';
+COMMENT ON FUNCTION notify_executives_po_submitted_for_approval(UUID) IS
+  'Fan-out in-app notification to all active Executive users when a PO is submitted for approval.';
+COMMENT ON FUNCTION notify_po_submitter_cancelled(UUID, TEXT, TEXT) IS
+  'In-app notification to the employee who submitted a PO when it is cancelled by someone else.';
+COMMENT ON FUNCTION notify_po_submitter_rejected(UUID, TEXT, TEXT) IS
+  'In-app notification to the employee who submitted a PO when it is rejected.';
+COMMENT ON FUNCTION notify_po_submitter_accepted(UUID, TEXT) IS
+  'In-app notification to the employee who submitted a PO when it is accepted.';
+COMMENT ON FUNCTION notify_executives_and_warehouse_po_confirmed(UUID, TEXT) IS
+  'Fan-out in-app notification to all active Executive and Warehouse users when a PO is confirmed with the supplier.';
+
+CREATE OR REPLACE FUNCTION notify_executives_and_warehouse_po_received(
+  p_po_id UUID,
+  p_received_by TEXT DEFAULT NULL,
+  p_quantity_received NUMERIC DEFAULT 0,
+  p_is_full BOOLEAN DEFAULT FALSE
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  po RECORD;
+  recipient RECORD;
+  branch_name TEXT;
+  supplier_name TEXT;
+  line_count INT;
+  total_received NUMERIC;
+  total_ordered NUMERIC;
+  qty_ratio TEXT;
+  recorded_suffix TEXT;
+  msg_exec TEXT;
+  msg_wh TEXT;
+  title_val TEXT;
+  inserted INT := 0;
+BEGIN
+  SELECT *
+  INTO po
+  FROM purchase_orders
+  WHERE id = p_po_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Purchase order not found: %', p_po_id;
+  END IF;
+
+  IF po.status NOT IN ('Partially Received', 'Completed') THEN
+    RAISE EXCEPTION 'PO % receive not recorded (current: %)', po.po_number, po.status;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = po.branch_id;
+  SELECT name INTO supplier_name FROM suppliers WHERE id = po.supplier_id;
+  SELECT COUNT(*)::INT INTO line_count FROM purchase_order_items WHERE order_id = po.id;
+
+  SELECT
+    COALESCE(SUM(quantity_received), 0),
+    COALESCE(SUM(quantity_ordered), 0)
+  INTO total_received, total_ordered
+  FROM purchase_order_items
+  WHERE order_id = po.id;
+
+  qty_ratio := format(
+    '%s / %s',
+    to_char(total_received, 'FM999,999,990.##'),
+    to_char(total_ordered, 'FM999,999,990.##')
+  );
+
+  recorded_suffix := CASE
+    WHEN p_received_by IS NOT NULL AND trim(p_received_by) <> '' THEN format(' by %s', p_received_by)
+    ELSE ''
+  END;
+
+  IF p_is_full OR po.status = 'Completed' THEN
+    title_val := 'Purchase order fully received';
+    msg_exec := format(
+      'PO %s from %s fully received%s — %s received, %s item(s), total %s%s',
+      po.po_number,
+      COALESCE(supplier_name, 'supplier'),
+      recorded_suffix,
+      qty_ratio,
+      line_count,
+      CASE WHEN po.currency = 'USD' THEN '$' ELSE '₱' END,
+      to_char(COALESCE(po.total_amount, 0), 'FM999,999,990.00')
+    );
+    msg_wh := format(
+      'PO %s from %s fully received%s — %s received%s',
+      po.po_number,
+      COALESCE(supplier_name, 'the supplier'),
+      recorded_suffix,
+      qty_ratio,
+      CASE WHEN branch_name IS NOT NULL AND trim(branch_name) <> '' THEN format(' at %s', branch_name) ELSE '' END
+    );
+  ELSE
+    title_val := 'Partial receipt recorded';
+    msg_exec := format(
+      'Partial receipt on PO %s (%s)%s — %s received, %s item(s)',
+      po.po_number,
+      COALESCE(supplier_name, 'supplier'),
+      recorded_suffix,
+      qty_ratio,
+      line_count
+    );
+    msg_wh := format(
+      'Partial receipt on PO %s from %s%s — %s received',
+      po.po_number,
+      COALESCE(supplier_name, 'the supplier'),
+      recorded_suffix,
+      qty_ratio
+    );
+  END IF;
+
+  FOR recipient IN
+    SELECT DISTINCT e.auth_user_id
+    FROM employees e
+    WHERE e.user_role = 'Executive'::user_role
+      AND e.auth_user_id IS NOT NULL
+      AND e.status = 'active'::employee_status
+  LOOP
+    INSERT INTO notifications (
+      user_id,
+      category,
+      title,
+      message,
+      urgent,
+      action_url,
+      action_label,
+      branch_id,
+      metadata,
+      event_type
+    ) VALUES (
+      recipient.auth_user_id,
+      'Inventory'::notification_category,
+      title_val,
+      msg_exec,
+      false,
+      '/purchase-orders/' || po.id::text,
+      'View PO',
+      po.branch_id,
+      jsonb_build_object(
+        'purchaseOrderId', po.id,
+        'poNumber', po.po_number,
+        'supplierName', supplier_name,
+        'receivedBy', p_received_by,
+        'branchName', branch_name,
+        'totalAmount', po.total_amount,
+        'currency', po.currency,
+        'lineCount', line_count,
+        'status', po.status,
+        'quantityReceived', total_received,
+        'quantityOrdered', total_ordered,
+        'quantityReceivedOnEvent', COALESCE(p_quantity_received, 0),
+        'isFullReceive', p_is_full OR po.status = 'Completed',
+        'audience', 'executive'
+      ),
+      'purchase_order_received'
+    );
+    inserted := inserted + 1;
+  END LOOP;
+
+  FOR recipient IN
+    SELECT DISTINCT e.auth_user_id
+    FROM employees e
+    WHERE e.user_role = 'Warehouse'::user_role
+      AND e.auth_user_id IS NOT NULL
+      AND e.status = 'active'::employee_status
+  LOOP
+    INSERT INTO notifications (
+      user_id,
+      category,
+      title,
+      message,
+      urgent,
+      action_url,
+      action_label,
+      branch_id,
+      metadata,
+      event_type
+    ) VALUES (
+      recipient.auth_user_id,
+      'Inventory'::notification_category,
+      title_val,
+      msg_wh,
+      false,
+      '/purchase-orders/' || po.id::text,
+      'View PO',
+      po.branch_id,
+      jsonb_build_object(
+        'purchaseOrderId', po.id,
+        'poNumber', po.po_number,
+        'supplierName', supplier_name,
+        'receivedBy', p_received_by,
+        'branchName', branch_name,
+        'totalAmount', po.total_amount,
+        'currency', po.currency,
+        'lineCount', line_count,
+        'status', po.status,
+        'quantityReceived', total_received,
+        'quantityOrdered', total_ordered,
+        'quantityReceivedOnEvent', COALESCE(p_quantity_received, 0),
+        'isFullReceive', p_is_full OR po.status = 'Completed',
+        'audience', 'warehouse'
+      ),
+      'purchase_order_received'
+    );
+    inserted := inserted + 1;
+  END LOOP;
+
+  RETURN inserted;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION notify_executives_po_payment_recorded(
+  p_po_id UUID,
+  p_recorded_by TEXT DEFAULT NULL,
+  p_payment_amount NUMERIC DEFAULT 0
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  po RECORD;
+  exec RECORD;
+  branch_name TEXT;
+  supplier_name TEXT;
+  line_count INT;
+  payment_total NUMERIC;
+  is_paid_in_full BOOLEAN;
+  notif_title TEXT;
+  event_type_val TEXT;
+  recorded_suffix TEXT;
+  msg TEXT;
+  inserted INT := 0;
+BEGIN
+  payment_total := COALESCE(p_payment_amount, 0);
+
+  IF payment_total <= 0 THEN
+    RETURN 0;
+  END IF;
+
+  SELECT *
+  INTO po
+  FROM purchase_orders
+  WHERE id = p_po_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Purchase order not found: %', p_po_id;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = po.branch_id;
+  SELECT name INTO supplier_name FROM suppliers WHERE id = po.supplier_id;
+  SELECT COUNT(*)::INT INTO line_count FROM purchase_order_items WHERE order_id = po.id;
+
+  recorded_suffix := CASE
+    WHEN p_recorded_by IS NOT NULL AND trim(p_recorded_by) <> '' THEN format(' by %s', p_recorded_by)
+    ELSE ''
+  END;
+
+  is_paid_in_full := COALESCE(po.amount_paid, 0) >= COALESCE(po.total_amount, 0)
+    AND COALESCE(po.total_amount, 0) > 0
+    OR po.payment_status = 'Paid';
+
+  IF is_paid_in_full THEN
+    notif_title := 'Purchase order paid in full';
+    event_type_val := 'purchase_order_payment_completed';
+    msg := format(
+      'PO %s (%s) is now fully paid%s — final payment %s%s, total %s%s',
+      po.po_number,
+      COALESCE(supplier_name, 'supplier'),
+      recorded_suffix,
+      CASE WHEN po.currency = 'USD' THEN '$' ELSE '₱' END,
+      to_char(payment_total, 'FM999,999,990.00'),
+      CASE WHEN po.currency = 'USD' THEN '$' ELSE '₱' END,
+      to_char(COALESCE(po.total_amount, 0), 'FM999,999,990.00')
+    );
+  ELSE
+    notif_title := 'PO payment recorded';
+    event_type_val := 'purchase_order_payment_recorded';
+    msg := format(
+      'Payment of %s%s recorded on PO %s (%s)%s — paid %s%s / total %s%s',
+      CASE WHEN po.currency = 'USD' THEN '$' ELSE '₱' END,
+      to_char(payment_total, 'FM999,999,990.00'),
+      po.po_number,
+      COALESCE(supplier_name, 'supplier'),
+      recorded_suffix,
+      CASE WHEN po.currency = 'USD' THEN '$' ELSE '₱' END,
+      to_char(COALESCE(po.amount_paid, 0), 'FM999,999,990.00'),
+      CASE WHEN po.currency = 'USD' THEN '$' ELSE '₱' END,
+      to_char(COALESCE(po.total_amount, 0), 'FM999,999,990.00')
+    );
+  END IF;
+
+  FOR exec IN
+    SELECT e.auth_user_id
+    FROM employees e
+    WHERE e.user_role = 'Executive'::user_role
+      AND e.auth_user_id IS NOT NULL
+      AND e.status = 'active'::employee_status
+  LOOP
+    INSERT INTO notifications (
+      user_id,
+      category,
+      title,
+      message,
+      urgent,
+      action_url,
+      action_label,
+      branch_id,
+      metadata,
+      event_type
+    ) VALUES (
+      exec.auth_user_id,
+      'Payment'::notification_category,
+      notif_title,
+      msg,
+      is_paid_in_full,
+      '/purchase-orders/' || po.id::text,
+      'View PO',
+      po.branch_id,
+      jsonb_build_object(
+        'purchaseOrderId', po.id,
+        'poNumber', po.po_number,
+        'supplierName', supplier_name,
+        'branchName', branch_name,
+        'totalAmount', po.total_amount,
+        'amountPaid', po.amount_paid,
+        'paymentStatus', po.payment_status,
+        'paidInFull', is_paid_in_full,
+        'currency', po.currency,
+        'lineCount', line_count,
+        'status', po.status,
+        'recordedBy', p_recorded_by,
+        'paymentAmount', payment_total
+      ),
+      event_type_val
+    );
+    inserted := inserted + 1;
+  END LOOP;
+
+  RETURN inserted;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION notify_executives_po_proof_uploaded(
+  p_po_id UUID,
+  p_proof_type TEXT DEFAULT 'delivery',
+  p_uploaded_by TEXT DEFAULT NULL,
+  p_proof_count INT DEFAULT 1,
+  p_proof_title TEXT DEFAULT NULL,
+  p_payment_amount NUMERIC DEFAULT 0
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  po RECORD;
+  recipient RECORD;
+  branch_name TEXT;
+  supplier_name TEXT;
+  line_count INT;
+  proof_type_norm TEXT;
+  proof_label TEXT;
+  uploaded_suffix TEXT;
+  notif_title TEXT;
+  notif_category notification_category;
+  event_type_val TEXT;
+  msg TEXT;
+  inserted INT := 0;
+BEGIN
+  proof_type_norm := lower(trim(COALESCE(p_proof_type, 'delivery')));
+  IF proof_type_norm NOT IN ('delivery', 'payment', 'other') THEN
+    RAISE EXCEPTION 'Invalid proof type: % (expected delivery, payment, or other)', p_proof_type;
+  END IF;
+
+  SELECT *
+  INTO po
+  FROM purchase_orders
+  WHERE id = p_po_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Purchase order not found: %', p_po_id;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = po.branch_id;
+  SELECT name INTO supplier_name FROM suppliers WHERE id = po.supplier_id;
+  SELECT COUNT(*)::INT INTO line_count FROM purchase_order_items WHERE order_id = po.id;
+
+  proof_label := CASE proof_type_norm
+    WHEN 'delivery' THEN
+      CASE WHEN COALESCE(p_proof_count, 1) <= 1 THEN '1 delivery proof' ELSE format('%s delivery proofs', COALESCE(p_proof_count, 1)) END
+    WHEN 'payment' THEN
+      CASE WHEN COALESCE(p_proof_count, 1) <= 1 THEN '1 payment proof' ELSE format('%s payment proofs', COALESCE(p_proof_count, 1)) END
+    ELSE
+      CASE WHEN COALESCE(p_proof_count, 1) <= 1 THEN '1 other document' ELSE format('%s other documents', COALESCE(p_proof_count, 1)) END
+  END;
+
+  uploaded_suffix := CASE
+    WHEN p_uploaded_by IS NOT NULL AND trim(p_uploaded_by) <> '' THEN format(' by %s', p_uploaded_by)
+    ELSE ''
+  END;
+
+  notif_title := CASE proof_type_norm
+    WHEN 'delivery' THEN 'PO delivery proof uploaded'
+    WHEN 'payment' THEN 'PO payment proof uploaded'
+    ELSE 'PO other document uploaded'
+  END;
+
+  notif_category := CASE proof_type_norm
+    WHEN 'delivery' THEN 'Delivery'::notification_category
+    WHEN 'payment' THEN 'Payment'::notification_category
+    ELSE 'System'::notification_category
+  END;
+
+  event_type_val := CASE proof_type_norm
+    WHEN 'delivery' THEN 'purchase_order_delivery_proof_uploaded'
+    WHEN 'payment' THEN 'purchase_order_payment_proof_uploaded'
+    ELSE 'purchase_order_other_proof_uploaded'
+  END;
+
+  msg := format(
+    '%s uploaded for PO %s (%s)%s',
+    proof_label,
+    po.po_number,
+    COALESCE(supplier_name, 'supplier'),
+    uploaded_suffix
+  );
+
+  IF p_proof_title IS NOT NULL AND trim(p_proof_title) <> '' THEN
+    msg := msg || format(' — %s', trim(p_proof_title));
+  END IF;
+
+  IF proof_type_norm = 'payment' AND COALESCE(p_payment_amount, 0) > 0 THEN
+    msg := msg || format(
+      ' (%s%s)',
+      CASE WHEN po.currency = 'USD' THEN '$' ELSE '₱' END,
+      to_char(COALESCE(p_payment_amount, 0), 'FM999,999,990.00')
+    );
+  END IF;
+
+  FOR recipient IN
+    SELECT DISTINCT e.auth_user_id, e.user_role
+    FROM employees e
+    WHERE e.user_role IN ('Executive'::user_role, 'Warehouse'::user_role)
+      AND e.auth_user_id IS NOT NULL
+      AND e.status = 'active'::employee_status
+  LOOP
+    INSERT INTO notifications (
+      user_id,
+      category,
+      title,
+      message,
+      urgent,
+      action_url,
+      action_label,
+      branch_id,
+      metadata,
+      event_type
+    ) VALUES (
+      recipient.auth_user_id,
+      notif_category,
+      notif_title,
+      msg,
+      false,
+      '/purchase-orders/' || po.id::text,
+      'View PO',
+      po.branch_id,
+      jsonb_build_object(
+        'purchaseOrderId', po.id,
+        'poNumber', po.po_number,
+        'supplierName', supplier_name,
+        'branchName', branch_name,
+        'totalAmount', po.total_amount,
+        'amountPaid', po.amount_paid,
+        'paymentStatus', po.payment_status,
+        'currency', po.currency,
+        'lineCount', line_count,
+        'status', po.status,
+        'uploadedBy', p_uploaded_by,
+        'proofCount', COALESCE(p_proof_count, 1),
+        'proofType', proof_type_norm,
+        'proofTitle', p_proof_title,
+        'paymentAmount', COALESCE(p_payment_amount, 0),
+        'audience', lower(recipient.user_role::text)
+      ),
+      event_type_val
+    );
+    inserted := inserted + 1;
+  END LOOP;
+
+  RETURN inserted;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION trg_po_proof_documents_notify_stmt()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  agg RECORD;
+BEGIN
+  FOR agg IN
+    SELECT
+      i.purchase_order_id,
+      lower(i.type::text) AS proof_type,
+      max(i.uploaded_by) AS uploaded_by,
+      count(*)::int AS proof_count,
+      max(nullif(trim(i.title), '')) AS proof_title,
+      max(coalesce(i.payment_cash_amount, 0)) AS payment_amount
+    FROM inserted i
+    GROUP BY i.purchase_order_id, lower(i.type::text)
+  LOOP
+    BEGIN
+      PERFORM notify_executives_po_proof_uploaded(
+        agg.purchase_order_id,
+        agg.proof_type,
+        agg.uploaded_by,
+        agg.proof_count,
+        agg.proof_title,
+        agg.payment_amount
+      );
+    EXCEPTION WHEN OTHERS THEN
+      RAISE WARNING 'PO proof notification failed for PO %: %', agg.purchase_order_id, SQLERRM;
+    END;
+  END LOOP;
+
+  RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_po_proof_documents_notify ON public.purchase_order_proof_documents;
+CREATE TRIGGER trg_po_proof_documents_notify
+  AFTER INSERT ON public.purchase_order_proof_documents
+  REFERENCING NEW TABLE AS inserted
+  FOR EACH STATEMENT
+  EXECUTE FUNCTION trg_po_proof_documents_notify_stmt();
+
+GRANT EXECUTE ON FUNCTION notify_executives_and_warehouse_po_received(UUID, TEXT, NUMERIC, BOOLEAN) TO authenticated;
+GRANT EXECUTE ON FUNCTION notify_executives_po_payment_recorded(UUID, TEXT, NUMERIC) TO authenticated;
+GRANT EXECUTE ON FUNCTION notify_executives_po_proof_uploaded(UUID, TEXT, TEXT, INT, TEXT, NUMERIC) TO authenticated;
+GRANT EXECUTE ON FUNCTION trg_po_proof_documents_notify_stmt() TO authenticated;
+
+COMMENT ON FUNCTION notify_executives_and_warehouse_po_received(UUID, TEXT, NUMERIC, BOOLEAN) IS
+  'Fan-out in-app notification to all active Executive and Warehouse users when a PO receipt is recorded.';
+COMMENT ON FUNCTION notify_executives_po_payment_recorded(UUID, TEXT, NUMERIC) IS
+  'In-app notification to all active executives when a payment is recorded on a purchase order.';
+COMMENT ON FUNCTION notify_executives_po_proof_uploaded(UUID, TEXT, TEXT, INT, TEXT, NUMERIC) IS
+  'In-app notification to all active executives and warehouse users when a PO proof document is uploaded.';
+COMMENT ON FUNCTION trg_po_proof_documents_notify_stmt() IS
+  'Statement trigger: calls notify_executives_po_proof_uploaded after purchase_order_proof_documents inserts.';
+
+
 -- ============================================================================
 -- SECTION 25: TRIGGER - Auto-update updated_at
 -- ============================================================================
@@ -4157,6 +8609,125 @@ BEGIN
     END;
   END LOOP;
 END $$;
+
+-- Inventory stock writes (branch upserts + aggregate roll-up).
+-- Mirrors database/rls_inventory_stock_adjustment_writes.sql for bootstrap installs.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'product_variant_stock'
+      AND policyname = 'lamtex_authenticated_insert_product_variant_stock'
+  ) THEN
+    CREATE POLICY lamtex_authenticated_insert_product_variant_stock
+      ON public.product_variant_stock
+      FOR INSERT
+      TO authenticated
+      WITH CHECK (true);
+  END IF;
+END
+$$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'product_variant_stock'
+      AND policyname = 'lamtex_authenticated_update_product_variant_stock'
+  ) THEN
+    CREATE POLICY lamtex_authenticated_update_product_variant_stock
+      ON public.product_variant_stock
+      FOR UPDATE
+      TO authenticated
+      USING (true)
+      WITH CHECK (true);
+  END IF;
+END
+$$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'material_stock'
+      AND policyname = 'lamtex_authenticated_insert_material_stock'
+  ) THEN
+    CREATE POLICY lamtex_authenticated_insert_material_stock
+      ON public.material_stock
+      FOR INSERT
+      TO authenticated
+      WITH CHECK (true);
+  END IF;
+END
+$$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'material_stock'
+      AND policyname = 'lamtex_authenticated_update_material_stock'
+  ) THEN
+    CREATE POLICY lamtex_authenticated_update_material_stock
+      ON public.material_stock
+      FOR UPDATE
+      TO authenticated
+      USING (true)
+      WITH CHECK (true);
+  END IF;
+END
+$$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'raw_materials'
+      AND policyname = 'lamtex_authenticated_update_raw_materials'
+  ) THEN
+    CREATE POLICY lamtex_authenticated_update_raw_materials
+      ON public.raw_materials
+      FOR UPDATE
+      TO authenticated
+      USING (true)
+      WITH CHECK (true);
+  END IF;
+END
+$$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'product_variants'
+      AND policyname = 'lamtex_authenticated_update_product_variants'
+  ) THEN
+    CREATE POLICY lamtex_authenticated_update_product_variants
+      ON public.product_variants
+      FOR UPDATE
+      TO authenticated
+      USING (true)
+      WITH CHECK (true);
+  END IF;
+END
+$$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'products'
+      AND policyname = 'lamtex_authenticated_update_products'
+  ) THEN
+    CREATE POLICY lamtex_authenticated_update_products
+      ON public.products
+      FOR UPDATE
+      TO authenticated
+      USING (true)
+      WITH CHECK (true);
+  END IF;
+END
+$$;
 
 
 -- ============================================================================

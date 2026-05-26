@@ -8,21 +8,14 @@ import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagin
 import { ProofOfDeliveryModal } from '@/src/components/orders/ProofOfDeliveryModal';
 import { useAppContext } from '@/src/store/AppContext';
 import { supabase } from '@/src/lib/supabase';
+import { orderStatusBadgeVariant, paymentStatusBadgeVariant } from '@/src/lib/orderStatusBadges';
+import { createDraftOrder } from '@/src/lib/createDraftOrder';
 import { getPeriodRange, type PeriodKey } from '@/src/lib/agentAnalytics';
 import {
   fetchDelayedTripOrderIdsForBranch,
   markOrdersDelayedForTrip,
   orderListDisplayStatus,
 } from '@/src/lib/orderTripDelay';
-const orderLogRoleMap: Record<string, 'Agent' | 'Warehouse Staff' | 'Manager' | 'Admin' | 'System' | 'Logistics'> = {
-  Executive: 'Admin',
-  Manager: 'Manager',
-  Agent: 'Agent',
-  'Warehouse Staff': 'Warehouse Staff',
-  Warehouse: 'Warehouse Staff',
-  Logistics: 'Logistics',
-  Driver: 'Logistics',
-};
 import {
   Search,
   Plus,
@@ -452,7 +445,7 @@ async function downloadOrdersWorkbook(rows: OrderRow[], lineRows: OrderLineExpor
 
 export function OrdersPage() {
   const navigate = useNavigate();
-  const { branch, addAuditLog, role, employeeName, session } = useAppContext();
+  const { branch, addAuditLog, role, employeeName, session, employeeId } = useAppContext();
   const [searchTerm, setSearchTerm] = useState('');
   const [creating, setCreating] = useState(false);
   const [showProofModal, setShowProofModal] = useState(false);
@@ -825,24 +818,9 @@ export function OrdersPage() {
     if (tablePage > totalListPages) setTablePage(totalListPages);
   }, [tablePage, totalListPages]);
 
-  const getStatusBadgeVariant = (status: string): 'success' | 'warning' | 'danger' | 'info' | 'default' | 'neutral' | 'outline' | 'destructive' => {
-    if (status === 'Delayed') return 'danger';
-    if (['Delivered', 'Completed', 'Approved'].includes(status)) return 'success';
-    if (['Pending', 'Scheduled', 'Loading', 'Packed', 'Ready'].includes(status)) return 'warning';
-    if (['Rejected', 'Cancelled'].includes(status)) return 'danger';
-    if (status === 'In Transit') return 'info';
-    if (status === 'Draft') return 'neutral';
-    return 'default';
-  };
+  const getStatusBadgeVariant = (status: string) => orderStatusBadgeVariant(status);
 
-  const getPaymentBadgeVariant = (status: string): 'success' | 'warning' | 'danger' | 'info' | 'default' | 'neutral' | 'outline' | 'destructive' => {
-    if (status === 'Paid') return 'success';
-    if (status === 'On Credit') return 'info';
-    if (status === 'Overdue') return 'danger';
-    if (['Partially Paid', 'Invoiced'].includes(status)) return 'warning';
-    if (status === 'Unbilled') return 'neutral';
-    return 'default';
-  };
+  const getPaymentBadgeVariant = (status: string) => paymentStatusBadgeVariant(status);
 
   const displayUrgency = (u: string | null): OrderUrgency =>
     u === 'Low' || u === 'Medium' || u === 'High' || u === 'Critical' ? u : 'Medium';
@@ -869,43 +847,17 @@ export function OrdersPage() {
   const handleNewOrder = async () => {
     setCreating(true);
     try {
-      let branchId: string | null = null;
-      if (branch) {
-        const { data: bd } = await supabase.from('branches').select('id').eq('name', branch).single();
-        branchId = bd?.id ?? null;
-      }
-      if (!branchId) {
-        alert('Select a branch in the header first.');
-        return;
-      }
-      const orderNumber = `ORD-${Date.now().toString(36).toUpperCase()}`;
-      const actor = employeeName || session?.user?.email || 'User';
-      const { data, error: insErr } = await supabase
-        .from('orders')
-        .insert({
-          order_number: orderNumber,
-          branch_id: branchId,
-          status: 'Draft',
-          order_date: new Date().toISOString().split('T')[0],
-          subtotal: 0,
-          total_amount: 0,
-          payment_status: 'Unbilled',
-        })
-        .select('id')
-        .single();
-      if (insErr) throw insErr;
-      const logRole = orderLogRoleMap[role] ?? 'System';
-      const { error: logErr } = await supabase.from('order_logs').insert({
-        order_id: data.id,
-        action: 'created',
-        performed_by: actor,
-        performed_by_role: logRole,
-        description: 'Created as draft — add customer and lines, then submit for approval',
-        metadata: { order_number: orderNumber },
+      const { id, orderNumber } = await createDraftOrder({
+        branchName: branch,
+        role,
+        actorName: employeeName,
+        actorEmail: session?.user?.email,
+        ...(role === 'Agent' && employeeId
+          ? { agentId: employeeId, agentName: employeeName }
+          : {}),
       });
-      if (logErr && import.meta.env.DEV) console.warn('[order log]', logErr.message);
       addAuditLog('Created Order (draft)', 'Order', orderNumber);
-      navigate(`/orders/${data.id}`);
+      navigate(`/orders/${id}`);
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : 'Failed to create order');
     } finally {
@@ -1200,7 +1152,7 @@ export function OrdersPage() {
                         key={order.id}
                         className="group hover:bg-gray-50 transition-colors focus-within:bg-gray-50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-red-500"
                       >
-                        <td className="relative px-6 py-4 align-top">
+                        <td className="relative px-6 py-4 align-middle">
                           {rowOverlay({ primary: true })}
                           <div className="relative z-10 flex items-start gap-2 w-full pointer-events-none">
                             <div className="min-w-0">
@@ -1221,15 +1173,15 @@ export function OrdersPage() {
                             {order.requires_approval && <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />}
                           </div>
                         </td>
-                        <td className="relative px-6 py-4 align-top text-gray-600">
+                        <td className="relative px-6 py-4 align-middle text-gray-600">
                           {rowOverlay({})}
                           <span className="relative z-10 pointer-events-none">{order.order_date ?? '—'}</span>
                         </td>
-                        <td className="relative px-6 py-4 align-top text-gray-600">
+                        <td className="relative px-6 py-4 align-middle text-gray-600">
                           {rowOverlay({})}
                           <span className="relative z-10 pointer-events-none">{order.required_date ?? '—'}</span>
                         </td>
-                        <td className="relative px-6 py-4 align-top">
+                        <td className="relative px-6 py-4 align-middle">
                           {rowOverlay({})}
                           <div className="relative z-10 pointer-events-none">
                             <div className="font-medium text-gray-900">₱{order.total_amount.toLocaleString()}</div>
@@ -1240,13 +1192,13 @@ export function OrdersPage() {
                             )}
                           </div>
                         </td>
-                        <td className="relative px-6 py-4 align-top">
+                        <td className="relative px-6 py-4 align-middle">
                           {rowOverlay({})}
                           <span className="relative z-10 inline-flex pointer-events-none">
                             <Badge variant={getStatusBadgeVariant(orderDisplayStatus(order))} className="min-w-[120px] justify-center">{orderDisplayStatus(order)}</Badge>
                           </span>
                         </td>
-                        <td className="relative px-6 py-4 align-top">
+                        <td className="relative px-6 py-4 align-middle">
                           {rowOverlay({})}
                           <span className="relative z-10 inline-flex pointer-events-none">
                             <Badge variant={getUrgencyBadgeVariant(order.urgency)} className="min-w-[100px] justify-center">
@@ -1254,7 +1206,7 @@ export function OrdersPage() {
                             </Badge>
                           </span>
                         </td>
-                        <td className="relative px-6 py-4 align-top">
+                        <td className="relative px-6 py-4 align-middle">
                           {rowOverlay({})}
                           <span className="relative z-10 inline-flex pointer-events-none">
                             <Badge variant={getPaymentBadgeVariant(order.payment_status)} className="min-w-[100px] justify-center">{order.payment_status}</Badge>

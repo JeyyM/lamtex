@@ -205,6 +205,9 @@ export interface ProofDocument {
   paymentCreditAmount?: number;
   /** Payment proof: correction (may be negative) to recorded paid total. */
   paymentAdjustment?: number;
+  /** When executive marked agent commission as paid for this cash proof. */
+  commissionPaidAt?: string | null;
+  commissionPaidBy?: string | null;
 }
 
 export interface Invoice {

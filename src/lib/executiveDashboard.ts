@@ -657,59 +657,71 @@ async function fetchPendingInterBranchRequests(branchId: string | null): Promise
   }
 }
 
-async function fetchLowStockProducts(branchName: string | null): Promise<ExecutiveLowStockProductRow[]> {
+async function fetchLowStockProducts(branchId: string | null): Promise<ExecutiveLowStockProductRow[]> {
   try {
-    // Variants whose total_stock is at or below their reorder_point (excluding hidden / zero-reorder rows).
-    // `branch` on product_variants is a denormalised name; we filter softly client-side so a missing
-    // value still surfaces in the org-wide view.
     const { data, error } = await supabase
       .from('product_variants')
       .select(
         `id, sku, size, total_stock, reorder_point, safety_stock, branch,
+         product_variant_stock(branch_id, quantity, branches(name)),
          products(id, name, is_hidden, product_categories(slug))`,
       )
       .gt('reorder_point', 0)
       .eq('is_hidden', false)
-      .order('total_stock', { ascending: true })
-      .limit(50);
+      .limit(500);
     if (error) throw error;
 
-    const wantBranch = branchName?.trim().toLowerCase() ?? null;
     const rows: ExecutiveLowStockProductRow[] = (data ?? [])
       .map((r) => {
-        const stock = toNumber((r as Record<string, unknown>).total_stock);
-        const reorder = toNumber((r as Record<string, unknown>).reorder_point);
-        const safety = toNumber((r as Record<string, unknown>).safety_stock);
-        const product = (r as Record<string, unknown>).products as
+        const raw = r as Record<string, unknown>;
+        const totalStock = toNumber(raw.total_stock);
+        const reorder = toNumber(raw.reorder_point);
+        const safety = toNumber(raw.safety_stock);
+        const product = raw.products as
           | { id?: unknown; name?: unknown; is_hidden?: unknown }
           | { id?: unknown; name?: unknown; is_hidden?: unknown }[]
           | null
           | undefined;
         const productObj = Array.isArray(product) ? product[0] : product;
         if (productObj?.is_hidden === true) return null;
-        if (stock > reorder) return null;
-        const branchTag = toStr((r as Record<string, unknown>).branch);
-        if (wantBranch && branchTag && branchTag.trim().toLowerCase() !== wantBranch) {
-          return null;
+
+        const branchStockRows = (Array.isArray(raw.product_variant_stock)
+          ? (raw.product_variant_stock as Array<Record<string, unknown>>)
+          : []);
+
+        let effectiveStock = totalStock;
+        let branchTag = toStr(raw.branch);
+        if (branchId) {
+          const match = branchStockRows.find((row) => String(row.branch_id) === branchId);
+          if (!match) return null;
+          effectiveStock = toNumber(match.quantity);
+          const branchRel = match.branches as { name?: unknown } | { name?: unknown }[] | null | undefined;
+          const branchObj = Array.isArray(branchRel) ? branchRel[0] : branchRel;
+          branchTag = toStr(branchObj?.name) ?? branchTag;
         }
+
+        if (effectiveStock > reorder) return null;
+
         const category = (productObj as { product_categories?: unknown } | undefined)?.product_categories;
         const categoryObj = Array.isArray(category) ? category[0] : category;
         const categorySlug = toStr((categoryObj as { slug?: unknown } | null | undefined)?.slug);
         return {
-          variantId: String((r as Record<string, unknown>).id),
+          variantId: String(raw.id),
           productId: String(productObj?.id ?? ''),
           categorySlug,
           productName: toStr(productObj?.name ?? null) ?? '—',
-          sku: toStr((r as Record<string, unknown>).sku) ?? '—',
-          size: toStr((r as Record<string, unknown>).size) ?? '—',
-          totalStock: stock,
+          sku: toStr(raw.sku) ?? '—',
+          size: toStr(raw.size) ?? '—',
+          totalStock: effectiveStock,
           reorderPoint: reorder,
           safetyStock: safety,
           branch: branchTag,
           daysOfCover: null,
         };
       })
-      .filter((r): r is ExecutiveLowStockProductRow => r !== null);
+      .filter((r): r is ExecutiveLowStockProductRow => r !== null)
+      .sort((a, b) => a.totalStock - b.totalStock)
+      .slice(0, 50);
 
     return rows;
   } catch (e) {
@@ -1371,7 +1383,7 @@ export async function fetchExecutiveDashboard(opts: {
         commissionsPaidOut: 0,
       } satisfies FinanceMetrics;
     }),
-    fetchLowStockProducts(null),
+    fetchLowStockProducts(branchId),
     fetchLowStockMaterials(),
     fetchRevenueTrend(branchId),
     fetchBranchBreakdown(),

@@ -15,6 +15,7 @@ import { insertProductLog, mapAppRoleToLogRole } from '../lib/domainActivityLog'
 import { isCategoryCatalogHidden, isProductFamilyCatalogHidden, CATALOG_HIDDEN_CLASS } from '../lib/productCatalogVisibility';
 import { scopedProductIdList } from '../lib/warehouseScope';
 import { effectiveInventoryBranch } from '../lib/inventoryAccess';
+import { computeStockStatus } from '../lib/stockStatus';
 
 // Local image fallbacks
 import hdpePipeImg    from '../assets/product-images/HDPE Pipe.webp';
@@ -25,6 +26,20 @@ import inHouseImg     from '../assets/product-images/In House Pipe.webp';
 import pressureImg    from '../assets/product-images/Pressure Line Pipe.webp';
 
 const fallbackImages = [hdpePipeImg, elbowPipeImg, sanitaryPipeImg, pipesImg, inHouseImg, pressureImg];
+
+interface VariantStockRow {
+  branch_id: string | null;
+  quantity: number | null;
+  branches?: { name?: string | null } | { name?: string | null }[] | null;
+}
+
+interface VariantRow {
+  id: string;
+  is_hidden: boolean | null;
+  total_stock: number | null;
+  reorder_point: number | null;
+  product_variant_stock?: VariantStockRow[] | null;
+}
 
 interface ProductRow {
   id: string;
@@ -39,7 +54,63 @@ interface ProductRow {
   total_revenue: number;
   total_units_sold: number;
   branch: string | null;
-  product_variants: { is_hidden: boolean }[] | { is_hidden: boolean } | null;
+  product_variants: VariantRow[] | VariantRow | null;
+}
+
+// Severity ranking — higher = worse. Used to roll variants up to a family status.
+const STATUS_RANK: Record<string, number> = {
+  'Active': 0,
+  'In Stock': 0,
+  'Low Stock': 1,
+  'Critical': 2,
+  'Out of Stock': 3,
+};
+
+function variantsArrayFromProduct(p: ProductRow): VariantRow[] {
+  const embed = p.product_variants;
+  if (Array.isArray(embed)) return embed;
+  if (embed && typeof embed === 'object') return [embed];
+  return [];
+}
+
+/**
+ * Compute the family's effective stock status from the *worst* visible variant.
+ * Uses branch-scoped quantity when an inventory branch is selected, otherwise
+ * the variant's aggregate `total_stock`.
+ */
+function deriveFamilyStockStatus(p: ProductRow, inventoryBranch: string | null): string {
+  const variants = variantsArrayFromProduct(p).filter((v) => v?.is_hidden !== true);
+  if (variants.length === 0) {
+    return p.status ?? 'Active';
+  }
+
+  const wantBranch = inventoryBranch?.trim().toLowerCase() ?? null;
+  let worst = 'Active';
+  for (const v of variants) {
+    const reorder = Number(v.reorder_point) || 0;
+
+    let stock = Number(v.total_stock) || 0;
+    if (wantBranch) {
+      const rows = Array.isArray(v.product_variant_stock) ? v.product_variant_stock : [];
+      let branchQty: number | null = null;
+      for (const row of rows) {
+        const rel = row?.branches;
+        const branchObj = Array.isArray(rel) ? rel[0] : rel;
+        const name = branchObj?.name ? String(branchObj.name).trim().toLowerCase() : null;
+        if (name === wantBranch) {
+          branchQty = Number(row.quantity) || 0;
+          break;
+        }
+      }
+      stock = branchQty ?? 0;
+    }
+
+    const computed = computeStockStatus(stock, reorder);
+    if ((STATUS_RANK[computed] ?? 0) > (STATUS_RANK[worst] ?? 0)) {
+      worst = computed;
+    }
+  }
+  return worst;
 }
 
 interface ProductFamilyExportRow {
@@ -275,7 +346,12 @@ export default function ProductCategoryPage() {
 
       let q = supabase
         .from('products')
-        .select('id, name, category_id, description, image_url, status, total_variants, total_stock, avg_price, total_revenue, total_units_sold, branch, product_variants(is_hidden)')
+        .select(
+          `id, name, category_id, description, image_url, status, total_variants,
+           total_stock, avg_price, total_revenue, total_units_sold, branch,
+           product_variants(id, is_hidden, total_stock, reorder_point,
+             product_variant_stock(branch_id, quantity, branches(name)))`,
+        )
         .eq('category_id', catData.id);
       if (inventoryBranch) q = q.eq('branch', inventoryBranch);
       if (scopedProductIds) q = q.in('id', scopedProductIds);
@@ -432,14 +508,19 @@ export default function ProductCategoryPage() {
     });
 
   const totalRevenue  = filteredProducts.reduce((s, p) => s + (Number(p.total_revenue) || 0), 0);
-  const lowStockCount = filteredProducts.filter(p => ['Low Stock', 'Critical', 'Out of Stock'].includes(p.status)).length;
+  // Roll up to the worst variant per family so a single low-stock variant counts the whole family.
+  const familyDerivedStatus = new Map<string, string>();
+  for (const p of filteredProducts) {
+    familyDerivedStatus.set(p.id, deriveFamilyStockStatus(p, inventoryBranch));
+  }
+  const lowStockCount = filteredProducts.filter((p) => {
+    const s = familyDerivedStatus.get(p.id) ?? p.status;
+    return ['Low Stock', 'Critical', 'Out of Stock'].includes(s);
+  }).length;
   const categoryHidden = isCategoryCatalogHidden(categoryActive);
 
   function variantRowsFromProduct(p: ProductRow): { is_hidden?: boolean | null }[] {
-    const embed = p.product_variants;
-    if (Array.isArray(embed)) return embed;
-    if (embed && typeof embed === 'object') return [embed];
-    return [];
+    return variantsArrayFromProduct(p);
   }
 
   // ── Render ──
@@ -589,6 +670,9 @@ export default function ProductCategoryPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {filteredProducts.map((p, idx) => {
             const familyHidden = isProductFamilyCatalogHidden(variantRowsFromProduct(p), categoryActive);
+            // Derived from the worst variant — keeps the badge honest when one
+            // variant goes low while siblings still have plenty of stock.
+            const derivedStatus = familyDerivedStatus.get(p.id) ?? p.status;
             return (
             <div key={p.id} className={`group relative ${familyHidden ? CATALOG_HIDDEN_CLASS : ''}`}>
               <button
@@ -621,11 +705,11 @@ export default function ProductCategoryPage() {
                           </Badge>
                         ) : (
                         <Badge
-                          variant={p.status === 'Critical' ? 'destructive' : p.status === 'Low Stock' ? 'warning' : p.status === 'Out of Stock' ? 'destructive' : 'success'}
+                          variant={derivedStatus === 'Critical' ? 'destructive' : derivedStatus === 'Low Stock' ? 'warning' : derivedStatus === 'Out of Stock' ? 'destructive' : 'success'}
                           size="sm"
                           className="whitespace-nowrap text-center flex-shrink-0"
                         >
-                          {p.status === 'Active' ? 'In Stock' : p.status === 'Critical' ? 'Critical Stock' : p.status}
+                          {derivedStatus === 'Active' ? 'In Stock' : derivedStatus === 'Critical' ? 'Critical Stock' : derivedStatus}
                         </Badge>
                         )}
                       </div>
@@ -662,11 +746,11 @@ export default function ProductCategoryPage() {
                         </span>
                       </div>
                     </div>
-                    {['Low Stock', 'Critical', 'Out of Stock'].includes(p.status) && (
-                      <div className={`flex items-start gap-2 p-3 rounded-lg border ${p.status === 'Critical' || p.status === 'Out of Stock' ? 'bg-red-50 border-red-200' : 'bg-orange-50 border-orange-200'}`}>
-                        <AlertTriangle className={`w-4 h-4 flex-shrink-0 mt-0.5 ${p.status === 'Critical' || p.status === 'Out of Stock' ? 'text-red-600' : 'text-orange-600'}`} />
-                        <div className={`text-xs ${p.status === 'Critical' || p.status === 'Out of Stock' ? 'text-red-700' : 'text-orange-700'}`}>
-                          <span className="font-semibold">{p.status === 'Critical' ? 'Critical Stock' : p.status}!</span> Consider reviewing production schedule.
+                    {['Low Stock', 'Critical', 'Out of Stock'].includes(derivedStatus) && (
+                      <div className={`flex items-start gap-2 p-3 rounded-lg border ${derivedStatus === 'Critical' || derivedStatus === 'Out of Stock' ? 'bg-red-50 border-red-200' : 'bg-orange-50 border-orange-200'}`}>
+                        <AlertTriangle className={`w-4 h-4 flex-shrink-0 mt-0.5 ${derivedStatus === 'Critical' || derivedStatus === 'Out of Stock' ? 'text-red-600' : 'text-orange-600'}`} />
+                        <div className={`text-xs ${derivedStatus === 'Critical' || derivedStatus === 'Out of Stock' ? 'text-red-700' : 'text-orange-700'}`}>
+                          <span className="font-semibold">{derivedStatus === 'Critical' ? 'Critical Stock' : derivedStatus}!</span> Consider reviewing production schedule.
                         </div>
                       </div>
                     )}

@@ -1,5 +1,56 @@
 /** Shared UI constants for Logistics dispatch queue and matching truck trip tables. */
 
+import type { Trip } from '@/src/types/logistics';
+
+export function normalizeDispatchSearchToken(value: string): string {
+  return value.toLowerCase().replace(/[\s\-_#]/g, '');
+}
+
+/** Dispatch queue search — trip, driver, customer, destination, order #, or order UUID. */
+export type DispatchSearchExtras = {
+  orderMetaById?: Record<string, { orderNumber?: string }>;
+  matchedOrderIds?: ReadonlySet<string>;
+};
+
+export function tripMatchesDispatchSearch(
+  trip: Trip,
+  query: string,
+  extras?: DispatchSearchExtras,
+): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const qNorm = normalizeDispatchSearchToken(q);
+
+  const matchText = (value: string | null | undefined): boolean => {
+    if (!value?.trim()) return false;
+    const lower = value.toLowerCase();
+    if (lower.includes(q)) return true;
+    if (qNorm.length >= 3 && normalizeDispatchSearchToken(value).includes(qNorm)) return true;
+    return false;
+  };
+
+  if (matchText(trip.tripNumber)) return true;
+  if (matchText(trip.driverName)) return true;
+  if (matchText(trip.vehicleName)) return true;
+  if (matchText(trip.plateNumber)) return true;
+  if (matchText(trip.customerLabel)) return true;
+  if (trip.destinations.some((d) => matchText(d))) return true;
+  if (trip.customerNames?.some((n) => matchText(n))) return true;
+  if (trip.orderNumbers?.some((n) => matchText(n))) return true;
+  if (trip.orders.some((id) => matchText(id))) return true;
+
+  if (extras?.orderMetaById) {
+    for (const oid of trip.orders) {
+      if (matchText(extras.orderMetaById[oid]?.orderNumber)) return true;
+    }
+  }
+  if (extras?.matchedOrderIds?.size) {
+    if (trip.orders.some((id) => extras.matchedOrderIds!.has(id))) return true;
+  }
+
+  return false;
+}
+
 export function localYmd(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');

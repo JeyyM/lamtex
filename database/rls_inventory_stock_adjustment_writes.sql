@@ -42,7 +42,23 @@ BEGIN
 END
 $$;
 
--- material_stock + raw_materials: deduct on production consumption
+-- material_stock + raw_materials: branch upserts + aggregate roll-up on adjust / BOM
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'material_stock'
+      AND policyname = 'lamtex_authenticated_insert_material_stock'
+  ) THEN
+    CREATE POLICY lamtex_authenticated_insert_material_stock
+      ON public.material_stock
+      FOR INSERT
+      TO authenticated
+      WITH CHECK (true);
+  END IF;
+END
+$$;
+
 DO $$
 BEGIN
   IF NOT EXISTS (
