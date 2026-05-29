@@ -1,7 +1,5 @@
--- PO proof uploaded: in-app notifications to executives + warehouse (same fan-out as PO receive).
--- Also installs a statement trigger on purchase_order_proof_documents so uploads always notify
--- even if the client RPC call fails or is skipped.
--- Run in Supabase SQL editor after notifications_purchase_order_workflow.sql.
+-- PO proof upload notifications (Executive + Warehouse) + automatic trigger on insert.
+-- Run in Supabase SQL editor (required for proof notifications to work).
 
 CREATE OR REPLACE FUNCTION notify_executives_po_proof_uploaded(
   p_po_id UUID,
@@ -101,8 +99,9 @@ BEGIN
     );
   END IF;
 
+  -- Executive + Warehouse (same audience pattern as PO receive notifications).
   FOR recipient IN
-    SELECT DISTINCT e.auth_user_id, e.user_role
+    SELECT DISTINCT e.auth_user_id
     FROM employees e
     WHERE e.user_role IN ('Executive'::user_role, 'Warehouse'::user_role)
       AND e.auth_user_id IS NOT NULL
@@ -143,8 +142,7 @@ BEGIN
         'proofCount', COALESCE(p_proof_count, 1),
         'proofType', proof_type_norm,
         'proofTitle', p_proof_title,
-        'paymentAmount', COALESCE(p_payment_amount, 0),
-        'audience', lower(recipient.user_role::text)
+        'paymentAmount', COALESCE(p_payment_amount, 0)
       ),
       event_type_val
     );
@@ -155,55 +153,13 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION trg_po_proof_documents_notify_stmt()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-DECLARE
-  agg RECORD;
-BEGIN
-  FOR agg IN
-    SELECT
-      i.purchase_order_id,
-      lower(i.type::text) AS proof_type,
-      max(i.uploaded_by) AS uploaded_by,
-      count(*)::int AS proof_count,
-      max(nullif(trim(i.title), '')) AS proof_title,
-      max(coalesce(i.payment_cash_amount, 0)) AS payment_amount
-    FROM inserted i
-    GROUP BY i.purchase_order_id, lower(i.type::text)
-  LOOP
-    BEGIN
-      PERFORM notify_executives_po_proof_uploaded(
-        agg.purchase_order_id,
-        agg.proof_type,
-        agg.uploaded_by,
-        agg.proof_count,
-        agg.proof_title,
-        agg.payment_amount
-      );
-    EXCEPTION WHEN OTHERS THEN
-      RAISE WARNING 'PO proof notification failed for PO %: %', agg.purchase_order_id, SQLERRM;
-    END;
-  END LOOP;
-
-  RETURN NULL;
-END;
-$$;
-
-DROP TRIGGER IF EXISTS trg_po_proof_documents_notify ON public.purchase_order_proof_documents;
-CREATE TRIGGER trg_po_proof_documents_notify
-  AFTER INSERT ON public.purchase_order_proof_documents
-  REFERENCING NEW TABLE AS inserted
-  FOR EACH STATEMENT
-  EXECUTE FUNCTION trg_po_proof_documents_notify_stmt();
+-- The app calls this RPC directly from the client after inserting proof rows
+-- (same pattern as notify_agent_order_*_proof_uploaded on the order detail page).
+-- Any legacy AFTER INSERT trigger is dropped here to avoid double notifications.
+DROP TRIGGER IF EXISTS trg_po_proof_document_notify ON public.purchase_order_proof_documents;
+DROP FUNCTION IF EXISTS trg_po_proof_document_notify();
 
 GRANT EXECUTE ON FUNCTION notify_executives_po_proof_uploaded(UUID, TEXT, TEXT, INT, TEXT, NUMERIC) TO authenticated;
-GRANT EXECUTE ON FUNCTION trg_po_proof_documents_notify_stmt() TO authenticated;
 
 COMMENT ON FUNCTION notify_executives_po_proof_uploaded(UUID, TEXT, TEXT, INT, TEXT, NUMERIC) IS
-  'In-app notification to all active executives and warehouse users when a PO proof document is uploaded.';
-COMMENT ON FUNCTION trg_po_proof_documents_notify_stmt() IS
-  'Statement trigger: calls notify_executives_po_proof_uploaded after purchase_order_proof_documents inserts.';
+  'In-app notification to active Executive and Warehouse users when a PO proof document is uploaded.';

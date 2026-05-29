@@ -39,6 +39,7 @@ import {
   Loader2,
   RefreshCw,
   Package,
+  PackageCheck,
   Truck,
   Ban,
   ClipboardList,
@@ -51,7 +52,7 @@ import {
   X,
 } from 'lucide-react';
 // ── Types ──────────────────────────────────────────────────
-type POStatus = 'Draft' | 'Requested' | 'Rejected' | 'Accepted' | 'Sent' | 'Confirmed' | 'Partially Received' | 'Completed' | 'Cancelled';
+type POStatus = 'Draft' | 'Requested' | 'Rejected' | 'Accepted' | 'Sent' | 'Confirmed' | 'Partially Received' | 'Received' | 'Completed' | 'Cancelled';
 
 interface PORow {
   id: string;
@@ -96,6 +97,7 @@ const fmt = (date: string | null) =>
 
 const getStatusVariant = (status: POStatus): 'success' | 'warning' | 'danger' | 'neutral' | 'default' => {
   if (status === 'Completed')          return 'success';
+  if (status === 'Received')           return 'default';
   if (status === 'Partially Received') return 'warning';
   if (status === 'Cancelled' || status === 'Rejected') return 'danger';
   if (status === 'Requested')         return 'warning';
@@ -118,6 +120,7 @@ const getStatusIcon = (status: POStatus) => {
   if (status === 'Completed')          return <CheckCircle className="w-3.5 h-3.5" />;
   if (status === 'Sent')               return <Send className="w-3.5 h-3.5" />;
   if (status === 'Confirmed')          return <Truck className="w-3.5 h-3.5" />;
+  if (status === 'Received')           return <PackageCheck className="w-3.5 h-3.5" />;
   if (status === 'Partially Received') return <Package className="w-3.5 h-3.5" />;
   if (status === 'Cancelled')          return <Ban className="w-3.5 h-3.5" />;
   if (status === 'Requested')          return <ClipboardList className="w-3.5 h-3.5" />;
@@ -342,7 +345,7 @@ export function PurchaseOrdersPage() {
   const draftPOs     = dateFilteredPurchaseOrders.filter((po) => po.status === 'Draft').length;
   const awaitingPOs  = dateFilteredPurchaseOrders.filter((po) => po.status === 'Requested').length;
   const pendingPOs   = dateFilteredPurchaseOrders.filter(po =>
-    ['Accepted', 'Sent', 'Confirmed', 'Partially Received'].includes(po.status)
+    ['Accepted', 'Sent', 'Confirmed', 'Partially Received', 'Received'].includes(po.status)
   ).length;
   const completedPOs = dateFilteredPurchaseOrders.filter(po => po.status === 'Completed').length;
 

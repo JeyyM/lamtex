@@ -5,6 +5,12 @@ export function notificationSubject(audience: NotificationAudience, body: string
   return `[${audience}] ${body}`;
 }
 
+/** Warehouse email subject with branch name, e.g. [Warehouse - Manila] … */
+export function warehouseBranchSubject(branchName: string | null | undefined, body: string): string {
+  const name = branchName?.trim() || 'Branch';
+  return `[Warehouse - ${name}] ${body}`;
+}
+
 type OrderRef = { orderNumber: string; customerName?: string | null };
 
 export function orderCreatedSubject(p: OrderRef): string {
@@ -38,6 +44,57 @@ export function purchaseOrderCancelledSubject(p: PurchaseOrderRef): string {
   return notificationSubject(
     'Warehouse',
     `${p.poNumber} cancelled — ${p.supplierName ?? 'Supplier'}`,
+  );
+}
+
+type ProductionRequestRef = { prNumber: string; branchName?: string | null };
+
+export function productionRequestSubmittedForApprovalSubject(p: ProductionRequestRef): string {
+  return notificationSubject(
+    'Executive',
+    `${p.prNumber} submitted for approval — ${p.branchName ?? 'Branch'}`,
+  );
+}
+
+export function productionRequestCancelledSubject(p: ProductionRequestRef): string {
+  return notificationSubject(
+    'Warehouse',
+    `${p.prNumber} cancelled — ${p.branchName ?? 'Branch'}`,
+  );
+}
+
+export function productionRequestAcceptedSubject(p: ProductionRequestRef): string {
+  return notificationSubject(
+    'Warehouse',
+    `${p.prNumber} accepted — ${p.branchName ?? 'Branch'}`,
+  );
+}
+
+export function productionRequestRejectedSubject(p: ProductionRequestRef): string {
+  return notificationSubject(
+    'Warehouse',
+    `${p.prNumber} rejected — ${p.branchName ?? 'Branch'}`,
+  );
+}
+
+export function productionRequestStartedSubject(p: ProductionRequestRef): string {
+  return notificationSubject(
+    'Warehouse',
+    `${p.prNumber} production started — ${p.branchName ?? 'Branch'}`,
+  );
+}
+
+export function productionRequestCompletedSubject(p: ProductionRequestRef): string {
+  return notificationSubject(
+    'Warehouse',
+    `${p.prNumber} production completed — ${p.branchName ?? 'Branch'}`,
+  );
+}
+
+export function productionRequestInventoryAddedSubject(p: ProductionRequestRef): string {
+  return notificationSubject(
+    'Warehouse',
+    `${p.prNumber} new inventory recorded — ${p.branchName ?? 'Branch'}`,
   );
 }
 
@@ -275,6 +332,25 @@ export function orderPaymentRecordedExecutiveSubject(
   );
 }
 
+export function orderPaymentOverdueSubject(
+  p: Pick<OrderRef, 'orderNumber' | 'customerName'> & { daysOverdue?: number; balanceDue?: number },
+  target: 'executive' | 'agent',
+): string {
+  const days = p.daysOverdue != null && p.daysOverdue > 0 ? ` — ${p.daysOverdue}d overdue` : '';
+  const role = target === 'agent' ? 'Agent' : 'Executive';
+  return notificationSubject(
+    role,
+    `Payment overdue — order ${p.orderNumber} (${p.customerName ?? 'Customer'})${days}`,
+  );
+}
+
+export function orderCustomerPaymentOverdueSubject(
+  p: Pick<OrderRef, 'orderNumber'> & { daysOverdue?: number },
+): string {
+  const days = p.daysOverdue != null && p.daysOverdue > 0 ? ` — ${p.daysOverdue} day(s) past due` : '';
+  return notificationSubject('Customer', `Payment reminder — order ${p.orderNumber}${days}`);
+}
+
 export function orderCommissionPaidAgentSubject(
   p: Pick<OrderRef, 'orderNumber' | 'customerName'> & { commissionAmount?: number; proofCount?: number },
 ): string {
@@ -335,6 +411,66 @@ export function materialStockAlertSubject(p: {
     return notificationSubject(audience, `Material critical stock — ${p.sku} (${p.name})${branchSuffix}`);
   }
   return notificationSubject(audience, `Material low stock — ${p.sku} (${p.name})${branchSuffix}`);
+}
+
+type InterBranchRef = {
+  ibrNumber: string;
+  requestingBranchName?: string | null;
+  fulfillingBranchName?: string | null;
+};
+
+export function interBranchSubmittedForApprovalSubject(p: InterBranchRef): string {
+  return notificationSubject(
+    'Executive',
+    `${p.ibrNumber} submitted for approval — ${p.requestingBranchName ?? 'Branch'} → ${p.fulfillingBranchName ?? 'Branch'}`,
+  );
+}
+
+export function interBranchApprovedSubject(p: InterBranchRef, branchName?: string | null): string {
+  return warehouseBranchSubject(
+    branchName ?? p.requestingBranchName,
+    `${p.ibrNumber} approved — ${p.requestingBranchName ?? 'Branch'} → ${p.fulfillingBranchName ?? 'Branch'}`,
+  );
+}
+
+export function interBranchLogisticsSubject(
+  p: InterBranchRef & { status: string },
+  branchName?: string | null,
+): string {
+  const statusLabel = p.status.trim() || 'updated';
+  return warehouseBranchSubject(
+    branchName ?? p.requestingBranchName,
+    `${p.ibrNumber} ${statusLabel.toLowerCase()} — from ${p.fulfillingBranchName ?? 'Branch'}`,
+  );
+}
+
+export function interBranchDeliveryRecordedSubject(p: InterBranchRef & { status: string }, branchName?: string | null): string {
+  return warehouseBranchSubject(
+    branchName,
+    `${p.ibrNumber} delivery recorded — ${p.status}`,
+  );
+}
+
+export function interBranchFulfilledSubject(p: InterBranchRef, audience: 'executive' | 'warehouse', branchName?: string | null): string {
+  const body = `${p.ibrNumber} fulfilled and closed — ${p.requestingBranchName ?? 'Branch'} ↔ ${p.fulfillingBranchName ?? 'Branch'}`;
+  if (audience === 'executive') {
+    return notificationSubject('Executive', body);
+  }
+  return warehouseBranchSubject(branchName, body);
+}
+
+export function interBranchCancelledSubject(p: InterBranchRef, branchName?: string | null): string {
+  return warehouseBranchSubject(
+    branchName,
+    `${p.ibrNumber} cancelled — ${p.requestingBranchName ?? 'Branch'} → ${p.fulfillingBranchName ?? 'Branch'}`,
+  );
+}
+
+export function interBranchRejectedSubject(p: InterBranchRef, branchName?: string | null): string {
+  return warehouseBranchSubject(
+    branchName ?? p.requestingBranchName,
+    `${p.ibrNumber} rejected — ${p.requestingBranchName ?? 'Branch'} → ${p.fulfillingBranchName ?? 'Branch'}`,
+  );
 }
 
 export function orderScheduledSubject(

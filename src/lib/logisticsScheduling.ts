@@ -1534,6 +1534,200 @@ export async function tryCompleteTripIfAllOrdersDelivered(tripId: string): Promi
   return true;
 }
 
+// ============================================================================
+// Inter-branch request (IBR) trips
+//
+// An IBR shipment reserves a fleet vehicle on the same `trips` calendar that
+// customer orders use, so the truck appears on the logistics schedule and
+// cannot be double-booked. IBR trips carry `inter_branch_request_id` and no
+// customer orders (`order_ids = []`).
+// ============================================================================
+
+/** Graceful detection for the optional `trips.inter_branch_request_id` column. */
+let tripsIbrColumnAvailable = true;
+
+function isMissingIbrColumnError(err: { message?: string } | null | undefined): boolean {
+  const m = (err?.message ?? '').toLowerCase();
+  return m.includes('inter_branch_request_id') || (m.includes('column') && m.includes('does not exist'));
+}
+
+export interface IbrTripScheduleParams {
+  /** Fulfilling (shipping) branch — owns the truck and the trip. */
+  fulfillingBranchName: string;
+  vehicleUuid: string;
+  driverUuid?: string | null;
+  driverName?: string | null;
+  /** YYYY-MM-DD departure date. */
+  scheduledDate: string;
+  ibrId: string;
+  ibrNumber: string;
+  /** Requesting branch name — stored as the trip destination label. */
+  destinationLabel?: string | null;
+  /** When set, reuse/update this trip instead of creating a new one (reschedule). */
+  existingTripId?: string | null;
+  scheduledBy?: string | null;
+}
+
+/**
+ * Create (or update) the trip that reserves a truck for an inter-branch request
+ * departure. Links the trip to the IBR and the IBR back to the trip.
+ */
+export async function createOrUpdateIbrTrip(params: IbrTripScheduleParams): Promise<{
+  ok: boolean;
+  error?: string;
+  tripId?: string;
+  tripNumber?: string;
+}> {
+  const bid = await resolveBranchIdByName(params.fulfillingBranchName.trim());
+  if (!bid) return { ok: false, error: 'Fulfilling branch not found' };
+  if (!params.vehicleUuid) return { ok: false, error: 'Select a truck' };
+  const d = fmtDate(params.scheduledDate);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return { ok: false, error: 'Invalid date' };
+
+  // Block dates the truck is in (incomplete) maintenance.
+  const { data: maintRow } = await supabase
+    .from('maintenance_records')
+    .select('id, status')
+    .eq('vehicle_id', params.vehicleUuid)
+    .eq('scheduled_date', d)
+    .limit(5);
+  const maintBlocked = (maintRow ?? []).some(
+    (r: { status?: string | null }) => String(r.status ?? '').trim().toLowerCase() !== 'completed',
+  );
+  if (maintBlocked) return { ok: false, error: `This truck has maintenance scheduled on ${d}.` };
+
+  const { data: veh, error: vErr } = await supabase
+    .from('vehicles')
+    .select('vehicle_name, max_weight_kg, max_volume_cbm')
+    .eq('id', params.vehicleUuid)
+    .maybeSingle();
+  if (vErr || !veh) return { ok: false, error: vErr?.message ?? 'Truck not found' };
+
+  const destinations = params.destinationLabel?.trim() ? [params.destinationLabel.trim()] : [];
+  const now = new Date().toISOString();
+  const maxW = num(veh.max_weight_kg, 5000);
+  const maxV = num(veh.max_volume_cbm, 25);
+
+  // Reschedule: update the existing IBR trip in place.
+  if (params.existingTripId) {
+    const { error: updErr } = await supabase
+      .from('trips')
+      .update({
+        vehicle_id: params.vehicleUuid,
+        vehicle_name: (veh.vehicle_name as string) ?? null,
+        driver_id: params.driverUuid ?? null,
+        driver_name: params.driverName ?? null,
+        scheduled_date: d,
+        destinations,
+        max_weight_kg: maxW,
+        max_volume_cbm: maxV,
+        updated_at: now,
+      })
+      .eq('id', params.existingTripId);
+    if (updErr) return { ok: false, error: updErr.message };
+    if (params.driverUuid) {
+      fireDriverTripAssignedNotification(params.existingTripId, { assignedBy: params.scheduledBy ?? null });
+    }
+    return { ok: true, tripId: params.existingTripId };
+  }
+
+  const suffix = Math.random().toString(36).slice(2, 6).toUpperCase();
+  const tripNumber = `TRIP-IBR-${d.replace(/-/g, '')}-${suffix}`;
+
+  const baseInsert: Record<string, unknown> = {
+    trip_number: tripNumber,
+    vehicle_id: params.vehicleUuid,
+    vehicle_name: (veh.vehicle_name as string) ?? null,
+    driver_id: params.driverUuid ?? null,
+    driver_name: params.driverName ?? null,
+    status: toDbTripStatus('Scheduled'),
+    scheduled_date: d,
+    order_ids: [],
+    destinations,
+    max_weight_kg: maxW,
+    max_volume_cbm: maxV,
+    branch_id: bid,
+  };
+
+  const insertPayload = tripsIbrColumnAvailable
+    ? { ...baseInsert, inter_branch_request_id: params.ibrId }
+    : baseInsert;
+
+  let { data: inserted, error: insErr } = await supabase
+    .from('trips')
+    .insert(insertPayload)
+    .select('id')
+    .single();
+
+  if (insErr && tripsIbrColumnAvailable && isMissingIbrColumnError(insErr)) {
+    tripsIbrColumnAvailable = false;
+    console.warn(
+      '[logistics] trips.inter_branch_request_id missing — run database/inter_branch_request_trip.sql. Creating IBR trip without the link.',
+    );
+    ({ data: inserted, error: insErr } = await supabase
+      .from('trips')
+      .insert(baseInsert)
+      .select('id')
+      .single());
+  }
+
+  if (insErr) return { ok: false, error: insErr.message };
+  const tripId = inserted?.id as string;
+
+  // Link the IBR back to its trip (best-effort; column may be absent).
+  const { error: linkErr } = await supabase
+    .from('inter_branch_requests')
+    .update({ linked_trip_id: tripId, updated_at: now })
+    .eq('id', params.ibrId);
+  if (linkErr && import.meta.env.DEV) {
+    console.warn('[logistics] could not store linked_trip_id on IBR', linkErr.message);
+  }
+
+  if (params.driverUuid && tripId) {
+    fireDriverTripAssignedNotification(tripId, { assignedBy: params.scheduledBy ?? null });
+  }
+
+  return { ok: true, tripId, tripNumber };
+}
+
+/** Delete the trip reserved for an IBR (truck freed). Used on cancel/reject/unschedule. */
+export async function releaseIbrTrip(ibrId: string, tripId?: string | null): Promise<void> {
+  const id = ibrId.trim();
+  if (!id) return;
+  const targetTripId = tripId?.trim() || null;
+  if (targetTripId) {
+    await supabase.from('trips').delete().eq('id', targetTripId);
+  } else if (tripsIbrColumnAvailable) {
+    const { data, error } = await supabase.from('trips').select('id').eq('inter_branch_request_id', id);
+    if (!error) {
+      for (const row of data ?? []) {
+        await supabase.from('trips').delete().eq('id', String((row as { id: string }).id));
+      }
+    }
+  }
+  await supabase
+    .from('inter_branch_requests')
+    .update({ linked_trip_id: null, updated_at: new Date().toISOString() })
+    .eq('id', id);
+}
+
+/** Update the status of the trip reserved for an IBR (e.g. In Transit, Complete). */
+export async function setIbrTripStatus(
+  tripId: string | null | undefined,
+  status: Trip['status'],
+): Promise<void> {
+  const tid = (tripId ?? '').trim();
+  if (!tid) return;
+  const payload: Record<string, unknown> = {
+    status: toDbTripStatus(status),
+    updated_at: new Date().toISOString(),
+  };
+  if (status === 'Complete' || status === 'Delivered') {
+    payload.actual_arrival = new Date().toISOString();
+  }
+  await supabase.from('trips').update(payload).eq('id', tid);
+}
+
 /** After an order is delivered, complete any trip whose remaining orders are all delivered. */
 export async function tryCompleteTripsForDeliveredOrder(orderId: string): Promise<string[]> {
   const oid = orderId.trim();

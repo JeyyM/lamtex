@@ -199,7 +199,7 @@ const IBR_FULFILL_STATUSES = ['Pending', 'Approved', 'Scheduled', 'Loading', 'Pa
 const ACTIVE_PR_STATUSES = ['Draft', 'Requested', 'Accepted', 'In Progress'];
 
 /** "Active" worker-created POs the manager is still tracking. */
-const ACTIVE_PO_STATUSES = ['Draft', 'Requested', 'Accepted', 'Sent', 'Confirmed', 'Partially Received'];
+const ACTIVE_PO_STATUSES = ['Draft', 'Requested', 'Accepted', 'Sent', 'Confirmed', 'Partially Received', 'Received'];
 
 // ---------------------------------------------------------------------------
 // Helpers

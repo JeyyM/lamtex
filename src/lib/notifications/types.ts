@@ -209,6 +209,24 @@ export interface OrderPaymentRecordedNotifyPayload extends OrderCreatedNotifyPay
   paymentStatus: string;
 }
 
+export interface OrderPaymentOverdueNotifyPayload extends OrderCreatedNotifyPayload {
+  dueDate: string | null;
+  daysOverdue: number;
+  amountPaid: number;
+  balanceDue: number;
+  paymentStatus: string;
+  notifyTarget: 'executive' | 'agent';
+  agentEmail?: string | null;
+}
+
+export interface OrderCustomerPaymentOverdueNotifyPayload extends OrderCustomerApprovedNotifyPayload {
+  dueDate: string | null;
+  daysOverdue: number;
+  amountPaid: number;
+  balanceDue: number;
+  paymentStatus: string;
+}
+
 export interface OrderCommissionPaidNotifyPayload extends OrderCreatedNotifyPayload {
   paidBy: string | null;
   agentEmail: string;
@@ -328,5 +346,64 @@ export interface PurchaseOrderPaymentRecordedNotifyPayload extends PurchaseOrder
   amountPaid: number;
   paymentStatus: string;
   paidInFull: boolean;
+  recipientEmails?: (string | null | undefined)[];
+}
+
+export interface ProductionRequestNotifyLineItem {
+  productName: string;
+  variantLabel?: string | null;
+  sku?: string | null;
+  quantity: number;
+  quantityCompleted?: number | null;
+}
+
+export interface ProductionRequestSubmittedNotifyPayload {
+  productionRequestId: string;
+  prNumber: string;
+  branchName: string | null;
+  submittedBy: string | null;
+  createdBy: string | null;
+  requestDate: string | null;
+  expectedCompletionDate: string | null;
+  status: string;
+  notes?: string | null;
+  totalQuantity: number;
+  lineCount: number;
+  items: ProductionRequestNotifyLineItem[];
+  recipientEmails?: (string | null | undefined)[];
+}
+
+export interface ProductionRequestCancelledNotifyPayload extends ProductionRequestSubmittedNotifyPayload {
+  cancelledBy: string | null;
+  cancellationReason?: string | null;
+  submitterEmail?: string | null;
+}
+
+export interface ProductionRequestAcceptedNotifyPayload extends ProductionRequestSubmittedNotifyPayload {
+  acceptedBy: string | null;
+  submitterEmail?: string | null;
+}
+
+export interface ProductionRequestRejectedNotifyPayload extends ProductionRequestSubmittedNotifyPayload {
+  rejectedBy: string | null;
+  rejectionReason?: string | null;
+  submitterEmail?: string | null;
+}
+
+export interface ProductionRequestStartedNotifyPayload extends ProductionRequestSubmittedNotifyPayload {
+  startedBy: string | null;
+  recipientEmails?: (string | null | undefined)[];
+}
+
+export interface ProductionRequestCompletedNotifyPayload extends ProductionRequestSubmittedNotifyPayload {
+  completedBy: string | null;
+  producedQuantity?: number | null;
+  recipientEmails?: (string | null | undefined)[];
+}
+
+export interface ProductionRequestInventoryAddedNotifyPayload extends ProductionRequestSubmittedNotifyPayload {
+  recordedBy: string | null;
+  addedUnits?: number | null;
+  producedQuantity?: number | null;
   recipientEmails?: (string | null | undefined)[];
 }

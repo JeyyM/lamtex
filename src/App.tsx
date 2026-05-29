@@ -23,7 +23,6 @@ import { SupplierDetailPage } from './pages/SupplierDetailPage';
 import { FinancePageNew } from './pages/FinancePageNew';
 import { ReportsPage } from './pages/ReportsPage';
 import SettingsPage from './pages/SettingsPage';
-import { EmailTestingPage } from './pages/EmailTestingPage';
 import { AuditLogsPage } from './pages/AuditLogsPage';
 import { PlaceholderPage } from './pages/PlaceholderPage';
 import { PaymentPage } from './pages/PaymentPage';
@@ -134,7 +133,6 @@ function AppRoutes() {
             <Route path="agents/:agentId" element={<AgentProfilePage />} />
             <Route path="reports" element={<ReportsPage />} />
             <Route path="settings" element={<SettingsPage />} />
-            {import.meta.env.DEV && <Route path="dev/email-testing" element={<EmailTestingPage />} />}
             <Route path="audit" element={<AuditLogsPage />} />
             <Route path="purchase-requests" element={<PurchaseRequestsPage />} />
             <Route path="purchase-requests/new/:materialId" element={<PurchaseRequestsPage />} />

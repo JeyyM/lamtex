@@ -307,8 +307,8 @@ export function computeDueDateFromDelivery(deliveryDate: string | null, paymentT
 
 /**
  * For every order in the list that should be overdue (computed due < today and
- * payment_status is still an unpaid/credit status), update the DB row to Overdue.
- * Due is derived only from actual_delivery + payment_terms (not stored due_date).
+ * payment_status is still an unpaid/credit status), mark in DB and notify once.
+ * Due is derived from actual_delivery + payment_terms (not stored due_date alone).
  */
 async function syncOverdueStatuses(
   rows: Array<{
@@ -321,25 +321,36 @@ async function syncOverdueStatuses(
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  const overdueIds: string[] = [];
+  const overdueIds = new Set<string>();
   for (const r of rows) {
+    if (r.paymentStatus === 'Overdue') {
+      overdueIds.add(r.id);
+      continue;
+    }
     if (!OVERDUEABLE_STATUSES.includes(r.paymentStatus)) continue;
     const due = computeDueDateFromDelivery(r.actualDelivery, r.paymentTerms);
-    if (due && due < today) overdueIds.push(r.id);
+    if (due && due < today) overdueIds.add(r.id);
   }
-
-  if (overdueIds.length === 0) return new Set();
 
   try {
-    await supabase
-      .from('orders')
-      .update({ payment_status: 'Overdue' })
-      .in('id', overdueIds);
+    const { processNewlyOverdueOrders } = await import('@/src/lib/notifications/notificationsData');
+    const newlyMarked = await processNewlyOverdueOrders();
+    for (const id of newlyMarked.keys()) overdueIds.add(id);
   } catch {
-    // best-effort
+    const fallbackIds = [...overdueIds].filter((id) => {
+      const row = rows.find((r) => r.id === id);
+      return row && OVERDUEABLE_STATUSES.includes(row.paymentStatus);
+    });
+    if (fallbackIds.length > 0) {
+      try {
+        await supabase.from('orders').update({ payment_status: 'Overdue' }).in('id', fallbackIds);
+      } catch {
+        // best-effort
+      }
+    }
   }
 
-  return new Set(overdueIds);
+  return overdueIds;
 }
 
 function num(value: unknown): number {
@@ -1028,6 +1039,13 @@ async function fetchCommissionTotalsFromProofs(): Promise<{
 
 /** Aggregate KPIs for the page header. */
 export async function fetchFinanceMetrics(branchId?: string | null): Promise<FinanceMetrics> {
+  try {
+    const { processNewlyOverdueOrders } = await import('@/src/lib/notifications/notificationsData');
+    await processNewlyOverdueOrders();
+  } catch {
+    // best-effort — RPC may not be deployed yet
+  }
+
   let outQ = supabase
     .from('orders')
     .select('balance_due, actual_delivery, payment_terms, payment_status, status', { count: 'exact' })

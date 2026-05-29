@@ -1,5 +1,5 @@
 import { formatDistanceToNow } from 'date-fns';
-import { computeProofCommissionForClientType } from '@/src/lib/financeData';
+import { computeProofCommissionForClientType, computeDueDateFromDelivery, formatDateOnlyLocal } from '@/src/lib/financeData';
 import { ensureOrderCustomerPortal, recordOrderPortalEmailSent } from '@/src/lib/orderCustomerPortal';
 import { supabase } from '@/src/lib/supabase';
 import type { OrderDetail } from '@/src/types/orders';
@@ -24,6 +24,8 @@ import type {
   OrderDeliveryRecordedNotifyPayload,
   OrderDeliveryProofUploadedNotifyPayload,
   OrderPaymentRecordedNotifyPayload,
+  OrderPaymentOverdueNotifyPayload,
+  OrderCustomerPaymentOverdueNotifyPayload,
   OrderCommissionPaidNotifyPayload,
   OrderRevisedNotifyPayload,
   OrderScheduledNotifyPayload,
@@ -43,6 +45,13 @@ import type {
   PurchaseOrderReceivedNotifyPayload,
   PurchaseOrderReceivedAudience,
   PurchaseOrderPaymentRecordedNotifyPayload,
+  ProductionRequestSubmittedNotifyPayload,
+  ProductionRequestCancelledNotifyPayload,
+  ProductionRequestAcceptedNotifyPayload,
+  ProductionRequestRejectedNotifyPayload,
+  ProductionRequestStartedNotifyPayload,
+  ProductionRequestCompletedNotifyPayload,
+  ProductionRequestInventoryAddedNotifyPayload,
 } from './types';
 
 type NotificationRow = {
@@ -837,6 +846,572 @@ export async function notifyPurchaseOrderSubmitterCancelled(
   return count;
 }
 
+const PR_NOTIFY_LOG = '[PR notifications]';
+
+type PrNotifyDebugContext = {
+  currentAuthUserId?: string | null;
+  trigger?: string;
+};
+
+async function logProductionRequestNotificationDiagnostics(
+  label: string,
+  prId: string,
+  debug?: PrNotifyDebugContext,
+): Promise<void> {
+  console.group(`${PR_NOTIFY_LOG} ${label}`);
+  console.log('prId', prId);
+  console.log('trigger', debug?.trigger ?? '(unknown)');
+  console.log('currentAuthUserId (bell loads notifications for this user only)', debug?.currentAuthUserId ?? null);
+
+  const { data: pr, error: prErr } = await supabase
+    .from('production_requests')
+    .select(
+      'id, pr_number, status, created_by, submitted_by, submitted_at, submitted_by_auth_user_id, submitted_by_employee_id, created_by_auth_user_id, created_by_employee_id, branch_id',
+    )
+    .eq('id', prId)
+    .maybeSingle();
+  console.log('PR snapshot', { pr, prErr });
+
+  const { data: executives, error: execErr } = await supabase
+    .from('employees')
+    .select('id, employee_name, email, auth_user_id, user_role, status')
+    .eq('user_role', 'Executive')
+    .eq('status', 'active');
+  const execWithAuth = (executives ?? []).filter((e) => e.auth_user_id);
+  console.log('Active Executive employees (submit-for-approval recipients)', {
+    total: executives?.length ?? 0,
+    withLinkedLogin: execWithAuth.length,
+    recipients: execWithAuth.map((e) => ({
+      name: e.employee_name,
+      email: e.email,
+      auth_user_id: e.auth_user_id,
+    })),
+    execErr,
+  });
+  if (label.includes('submit')) {
+    console.info(
+      `${PR_NOTIFY_LOG} Submit fans out to all active Executives AND the submitter/creator (deduped) — everyone relevant gets a bell regardless of who submitted.`,
+    );
+  }
+  if (label.includes('cancel')) {
+    console.info(
+      `${PR_NOTIFY_LOG} Cancel fans out to the submitter/creator AND all active Executives (deduped) — everyone relevant gets a bell regardless of who cancelled.`,
+    );
+  }
+
+  const { data: submitterUid, error: submitterErr } = await supabase.rpc(
+    'resolve_pr_submitter_auth_user_id',
+    { p_pr_id: prId },
+  );
+  console.log('resolve_pr_submitter_auth_user_id', { submitterUid, submitterErr });
+
+  const { data: recentPrNotifs, error: recentErr } = await supabase
+    .from('notifications')
+    .select('id, user_id, title, event_type, created_at')
+    .in('event_type', ['production_request_submitted_for_approval', 'production_request_cancelled'])
+    .order('created_at', { ascending: false })
+    .limit(8);
+  console.log('Recent PR notifications in DB (any user)', { recentPrNotifs, recentErr });
+
+  if (debug?.currentAuthUserId) {
+    const { data: mine, error: mineErr } = await supabase
+      .from('notifications')
+      .select('id, title, event_type, read, created_at')
+      .eq('user_id', debug.currentAuthUserId)
+      .order('created_at', { ascending: false })
+      .limit(5);
+    console.log('Notifications for current logged-in user', { mine, mineErr });
+  }
+
+  console.groupEnd();
+}
+
+async function fetchProductionRequestSnapshotForNotify(
+  prId: string,
+): Promise<ProductionRequestSubmittedNotifyPayload | null> {
+  const { data: row, error } = await supabase
+    .from('production_requests')
+    .select(`
+      id, pr_number, branch_id, status, request_date, expected_completion_date, notes,
+      submitted_by, created_by,
+      branches:branches!branch_id(name),
+      production_request_items(
+        quantity, quantity_completed,
+        product_variants(sku, size, products(name))
+      )
+    `)
+    .eq('id', prId)
+    .maybeSingle();
+
+  if (error || !row) {
+    console.warn(`${PR_NOTIFY_LOG} Could not load PR for email`, error);
+    return null;
+  }
+
+  const r = row as Record<string, unknown>;
+  const branchName = (r.branches as { name?: string } | null)?.name ?? null;
+
+  const rawItems = (r.production_request_items as Array<Record<string, unknown>> | null) ?? [];
+  const items = rawItems.map((item) => {
+    const pv = item.product_variants as {
+      sku?: string;
+      size?: string;
+      products?: { name?: string } | null;
+    } | null;
+    const productName = pv?.products?.name?.trim() || 'Product';
+    const variantLabel = [pv?.sku, pv?.size].filter(Boolean).join(' · ') || null;
+    return {
+      productName,
+      variantLabel,
+      sku: pv?.sku ?? null,
+      quantity: Number(item.quantity) || 0,
+      quantityCompleted: Number(item.quantity_completed) || 0,
+    };
+  });
+
+  const totalQuantity = items.reduce((sum, item) => sum + item.quantity, 0);
+
+  return {
+    productionRequestId: prId,
+    prNumber: String(r.pr_number ?? ''),
+    branchName,
+    submittedBy: (r.submitted_by as string | null) ?? null,
+    createdBy: (r.created_by as string | null) ?? null,
+    requestDate: (r.request_date as string | null) ?? null,
+    expectedCompletionDate: (r.expected_completion_date as string | null) ?? null,
+    status: String(r.status ?? 'Requested'),
+    notes: (r.notes as string | null) ?? null,
+    totalQuantity,
+    lineCount: items.length,
+    items,
+  };
+}
+
+async function fetchProductionRequestSubmitterEmail(prId: string): Promise<string | null> {
+  const { data: pr, error } = await supabase
+    .from('production_requests')
+    .select('submitted_by_employee_id, submitted_by_auth_user_id, created_by_employee_id, created_by_auth_user_id, submitted_by, created_by')
+    .eq('id', prId)
+    .maybeSingle();
+
+  if (error || !pr) {
+    console.warn(`${PR_NOTIFY_LOG} Could not load PR submitter for email`, error);
+    return null;
+  }
+
+  const lookups: Array<{ column: 'id' | 'auth_user_id'; value: string | null | undefined }> = [
+    { column: 'id', value: pr.submitted_by_employee_id },
+    { column: 'auth_user_id', value: pr.submitted_by_auth_user_id },
+    { column: 'id', value: pr.created_by_employee_id },
+    { column: 'auth_user_id', value: pr.created_by_auth_user_id },
+  ];
+  for (const { column, value } of lookups) {
+    if (!value) continue;
+    const { data: emp } = await supabase
+      .from('employees')
+      .select('email')
+      .eq(column, value)
+      .maybeSingle();
+    const email = emp?.email?.trim();
+    if (email) return email;
+  }
+
+  const fallback = (pr.submitted_by ?? pr.created_by)?.trim();
+  if (fallback?.includes('@')) return fallback;
+
+  return null;
+}
+
+async function sendProductionRequestNotificationEmail(
+  endpoint: string,
+  payload: ProductionRequestSubmittedNotifyPayload | ProductionRequestCancelledNotifyPayload,
+): Promise<boolean> {
+  try {
+    console.log(`${PR_NOTIFY_LOG} sending email`, { endpoint, prNumber: payload.prNumber });
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      console.warn(`${PR_NOTIFY_LOG} Email send failed`, { status: res.status, body });
+      return false;
+    }
+    console.log(`${PR_NOTIFY_LOG} Email sent`, body);
+    return true;
+  } catch (e) {
+    console.warn(`${PR_NOTIFY_LOG} Email API unreachable — in-app notifications still created`, e);
+    return false;
+  }
+}
+
+/** PR submitted for approval: notify all active executives + the submitter, and email them. */
+export async function notifyExecutivesProductionRequestSubmittedForApproval(
+  prId: string,
+  debug?: PrNotifyDebugContext,
+): Promise<number> {
+  await logProductionRequestNotificationDiagnostics('pre-submit RPC', prId, debug);
+
+  console.log(`${PR_NOTIFY_LOG} calling notify_executives_pr_submitted_for_approval`, { prId });
+  const { data, error: rpcError } = await supabase.rpc('notify_executives_pr_submitted_for_approval', {
+    p_pr_id: prId,
+  });
+  console.log(`${PR_NOTIFY_LOG} RPC response`, { rawData: data, rpcError });
+
+  if (rpcError) {
+    console.error(`${PR_NOTIFY_LOG} RPC notify_executives_pr_submitted_for_approval failed`, rpcError);
+    throw rpcError;
+  }
+  const count = parseNotificationRpcCount(data);
+  if (count === 0) {
+    console.warn(
+      `${PR_NOTIFY_LOG} inserted 0 notifications — at least one active Executive (or the submitter) needs auth_user_id set. Run database/notifications_production_request_workflow.sql.`,
+    );
+  } else {
+    console.log(`${PR_NOTIFY_LOG} inserted ${count} notification(s)`);
+  }
+
+  const emailPayload = await fetchProductionRequestSnapshotForNotify(prId);
+  if (emailPayload) {
+    await sendProductionRequestNotificationEmail(
+      '/api/notifications/production-request-submitted-for-approval',
+      emailPayload,
+    );
+  } else {
+    console.warn(`${PR_NOTIFY_LOG} Skipped email — could not build PR payload`);
+  }
+
+  await logProductionRequestNotificationDiagnostics('post-submit RPC', prId, debug);
+  window.dispatchEvent(new Event('lamtex:notifications-refresh'));
+  return count;
+}
+
+/** PR cancelled: notify the employee who submitted it (skips if they cancelled it themselves). */
+export async function notifyProductionRequestSubmitterCancelled(
+  prId: string,
+  cancelledBy: string,
+  cancellationReason?: string | null,
+  debug?: PrNotifyDebugContext,
+): Promise<number> {
+  await logProductionRequestNotificationDiagnostics('pre-cancel RPC', prId, debug);
+
+  console.log(`${PR_NOTIFY_LOG} calling notify_pr_submitter_cancelled`, {
+    prId,
+    cancelledBy,
+    cancellationReason: cancellationReason ?? null,
+  });
+  const { data, error: rpcError } = await supabase.rpc('notify_pr_submitter_cancelled', {
+    p_pr_id: prId,
+    p_cancelled_by: cancelledBy,
+    p_cancellation_reason: cancellationReason ?? null,
+  });
+  console.log(`${PR_NOTIFY_LOG} RPC response`, { rawData: data, rpcError });
+
+  if (rpcError) {
+    console.error(`${PR_NOTIFY_LOG} RPC notify_pr_submitter_cancelled failed`, rpcError);
+    throw rpcError;
+  }
+  const count = parseNotificationRpcCount(data);
+  if (count === 0) {
+    console.warn(
+      `${PR_NOTIFY_LOG} cancel notification not delivered — no recipient (submitter/executives) has auth_user_id set.`,
+    );
+  } else {
+    console.log(`${PR_NOTIFY_LOG} cancel notification delivered to ${count} recipient(s)`);
+  }
+
+  const base = await fetchProductionRequestSnapshotForNotify(prId);
+  if (base) {
+    const submitterEmail = await fetchProductionRequestSubmitterEmail(prId);
+    const emailPayload: ProductionRequestCancelledNotifyPayload = {
+      ...base,
+      status: 'Cancelled',
+      cancelledBy,
+      cancellationReason: cancellationReason ?? null,
+      submitterEmail,
+    };
+    await sendProductionRequestNotificationEmail('/api/notifications/production-request-cancelled', emailPayload);
+  } else {
+    console.warn(`${PR_NOTIFY_LOG} Skipped cancellation email — could not build PR payload`);
+  }
+
+  await logProductionRequestNotificationDiagnostics('post-cancel RPC', prId, debug);
+  window.dispatchEvent(new Event('lamtex:notifications-refresh'));
+  return count;
+}
+
+/** @deprecated Use notifyProductionRequestSubmitterCancelled */
+export const notifyProductionRequestCreatorCancelled = notifyProductionRequestSubmitterCancelled;
+
+/** PR accepted by an executive: notify the submitter and email them. */
+export async function notifyProductionRequestSubmitterAccepted(
+  prId: string,
+  acceptedBy: string,
+  debug?: PrNotifyDebugContext,
+): Promise<number> {
+  await logProductionRequestNotificationDiagnostics('pre-accept RPC', prId, debug);
+
+  console.log(`${PR_NOTIFY_LOG} calling notify_pr_submitter_accepted`, { prId, acceptedBy });
+  const { data, error: rpcError } = await supabase.rpc('notify_pr_submitter_accepted', {
+    p_pr_id: prId,
+    p_accepted_by: acceptedBy,
+  });
+  console.log(`${PR_NOTIFY_LOG} RPC response`, { rawData: data, rpcError });
+
+  if (rpcError) {
+    console.error(`${PR_NOTIFY_LOG} RPC notify_pr_submitter_accepted failed`, rpcError);
+    throw rpcError;
+  }
+  const count = parseNotificationRpcCount(data);
+  if (count === 0) {
+    console.warn(
+      `${PR_NOTIFY_LOG} accept notification not delivered — submitter auth account unresolved. Run database/notifications_production_request_workflow.sql.`,
+    );
+  } else {
+    console.log(`${PR_NOTIFY_LOG} accept notification delivered to submitter`);
+  }
+
+  const base = await fetchProductionRequestSnapshotForNotify(prId);
+  if (base) {
+    const submitterEmail = await fetchProductionRequestSubmitterEmail(prId);
+    const emailPayload: ProductionRequestAcceptedNotifyPayload = {
+      ...base,
+      status: 'Accepted',
+      acceptedBy,
+      submitterEmail,
+    };
+    await sendProductionRequestNotificationEmail('/api/notifications/production-request-accepted', emailPayload);
+  } else {
+    console.warn(`${PR_NOTIFY_LOG} Skipped accept email — could not build PR payload`);
+  }
+
+  await logProductionRequestNotificationDiagnostics('post-accept RPC', prId, debug);
+  window.dispatchEvent(new Event('lamtex:notifications-refresh'));
+  return count;
+}
+
+/** PR rejected by an executive: notify the submitter and email them. */
+export async function notifyProductionRequestSubmitterRejected(
+  prId: string,
+  rejectedBy: string,
+  rejectionReason?: string | null,
+  debug?: PrNotifyDebugContext,
+): Promise<number> {
+  await logProductionRequestNotificationDiagnostics('pre-reject RPC', prId, debug);
+
+  console.log(`${PR_NOTIFY_LOG} calling notify_pr_submitter_rejected`, {
+    prId,
+    rejectedBy,
+    rejectionReason: rejectionReason ?? null,
+  });
+  const { data, error: rpcError } = await supabase.rpc('notify_pr_submitter_rejected', {
+    p_pr_id: prId,
+    p_rejected_by: rejectedBy,
+    p_rejection_reason: rejectionReason ?? null,
+  });
+  console.log(`${PR_NOTIFY_LOG} RPC response`, { rawData: data, rpcError });
+
+  if (rpcError) {
+    console.error(`${PR_NOTIFY_LOG} RPC notify_pr_submitter_rejected failed`, rpcError);
+    throw rpcError;
+  }
+  const count = parseNotificationRpcCount(data);
+  if (count === 0) {
+    console.warn(
+      `${PR_NOTIFY_LOG} reject notification not delivered — submitter auth account unresolved. Run database/notifications_production_request_workflow.sql.`,
+    );
+  } else {
+    console.log(`${PR_NOTIFY_LOG} reject notification delivered to submitter`);
+  }
+
+  const base = await fetchProductionRequestSnapshotForNotify(prId);
+  if (base) {
+    const submitterEmail = await fetchProductionRequestSubmitterEmail(prId);
+    const emailPayload: ProductionRequestRejectedNotifyPayload = {
+      ...base,
+      status: 'Rejected',
+      rejectedBy,
+      rejectionReason: rejectionReason ?? null,
+      submitterEmail,
+    };
+    await sendProductionRequestNotificationEmail('/api/notifications/production-request-rejected', emailPayload);
+  } else {
+    console.warn(`${PR_NOTIFY_LOG} Skipped reject email — could not build PR payload`);
+  }
+
+  await logProductionRequestNotificationDiagnostics('post-reject RPC', prId, debug);
+  window.dispatchEvent(new Event('lamtex:notifications-refresh'));
+  return count;
+}
+
+async function fetchEmailsForRoles(roles: string[]): Promise<string[]> {
+  const { data, error } = await supabase
+    .from('employees')
+    .select('email, user_role, status')
+    .in('user_role', roles)
+    .eq('status', 'active');
+  if (error) {
+    console.warn(`${PR_NOTIFY_LOG} Could not load emails for roles ${roles.join(', ')}`, error);
+    return [];
+  }
+  const emails = (data ?? [])
+    .map((e) => e.email?.trim())
+    .filter((e): e is string => !!e);
+  return [...new Set(emails)];
+}
+
+function fetchWarehouseAndExecutiveEmails(): Promise<string[]> {
+  return fetchEmailsForRoles(['Warehouse', 'Executive']);
+}
+
+/** Production started: notify all active warehouse staff + executives, and email them. */
+export async function notifyWarehouseAndExecutivesProductionRequestStarted(
+  prId: string,
+  startedBy: string,
+  debug?: PrNotifyDebugContext,
+): Promise<number> {
+  await logProductionRequestNotificationDiagnostics('pre-start RPC', prId, debug);
+
+  console.log(`${PR_NOTIFY_LOG} calling notify_warehouse_and_executives_pr_started`, { prId, startedBy });
+  const { data, error: rpcError } = await supabase.rpc('notify_warehouse_and_executives_pr_started', {
+    p_pr_id: prId,
+    p_started_by: startedBy,
+  });
+  console.log(`${PR_NOTIFY_LOG} RPC response`, { rawData: data, rpcError });
+
+  if (rpcError) {
+    console.error(`${PR_NOTIFY_LOG} RPC notify_warehouse_and_executives_pr_started failed`, rpcError);
+    throw rpcError;
+  }
+  const count = parseNotificationRpcCount(data);
+  if (count === 0) {
+    console.warn(
+      `${PR_NOTIFY_LOG} start notification inserted 0 — no active Warehouse/Executive has auth_user_id set. Run database/notifications_production_request_workflow.sql.`,
+    );
+  } else {
+    console.log(`${PR_NOTIFY_LOG} start notification delivered to ${count} recipient(s)`);
+  }
+
+  const base = await fetchProductionRequestSnapshotForNotify(prId);
+  if (base) {
+    const recipientEmails = await fetchWarehouseAndExecutiveEmails();
+    const emailPayload: ProductionRequestStartedNotifyPayload = {
+      ...base,
+      status: 'In Progress',
+      startedBy,
+      recipientEmails,
+    };
+    await sendProductionRequestNotificationEmail('/api/notifications/production-request-started', emailPayload);
+  } else {
+    console.warn(`${PR_NOTIFY_LOG} Skipped start email — could not build PR payload`);
+  }
+
+  await logProductionRequestNotificationDiagnostics('post-start RPC', prId, debug);
+  window.dispatchEvent(new Event('lamtex:notifications-refresh'));
+  return count;
+}
+
+/** Inventory added: notify active warehouse staff (and email them) whenever recording production adds new finished stock. */
+export async function notifyWarehouseProductionRequestInventoryAdded(
+  prId: string,
+  recordedBy: string,
+  addedUnits: number,
+  debug?: PrNotifyDebugContext,
+): Promise<number> {
+  await logProductionRequestNotificationDiagnostics('pre-inventory-added RPC', prId, debug);
+
+  console.log(`${PR_NOTIFY_LOG} calling notify_warehouse_pr_inventory_added`, { prId, recordedBy, addedUnits });
+  const { data, error: rpcError } = await supabase.rpc('notify_warehouse_pr_inventory_added', {
+    p_pr_id: prId,
+    p_recorded_by: recordedBy,
+    p_added_units: addedUnits,
+  });
+  console.log(`${PR_NOTIFY_LOG} RPC response`, { rawData: data, rpcError });
+
+  if (rpcError) {
+    console.error(`${PR_NOTIFY_LOG} RPC notify_warehouse_pr_inventory_added failed`, rpcError);
+    throw rpcError;
+  }
+  const count = parseNotificationRpcCount(data);
+  if (count === 0) {
+    console.warn(
+      `${PR_NOTIFY_LOG} inventory-added notification inserted 0 — no active Warehouse has auth_user_id set. Run database/notifications_production_request_workflow.sql.`,
+    );
+  } else {
+    console.log(`${PR_NOTIFY_LOG} inventory-added notification delivered to ${count} recipient(s)`);
+  }
+
+  const base = await fetchProductionRequestSnapshotForNotify(prId);
+  if (base) {
+    const recipientEmails = await fetchEmailsForRoles(['Warehouse']);
+    const producedQuantity = base.items.reduce((sum, item) => sum + (Number(item.quantityCompleted) || 0), 0);
+    const emailPayload: ProductionRequestInventoryAddedNotifyPayload = {
+      ...base,
+      recordedBy,
+      addedUnits,
+      producedQuantity,
+      recipientEmails,
+    };
+    await sendProductionRequestNotificationEmail('/api/notifications/production-request-inventory-added', emailPayload);
+  } else {
+    console.warn(`${PR_NOTIFY_LOG} Skipped inventory-added email — could not build PR payload`);
+  }
+
+  await logProductionRequestNotificationDiagnostics('post-inventory-added RPC', prId, debug);
+  window.dispatchEvent(new Event('lamtex:notifications-refresh'));
+  return count;
+}
+
+/** Production completed: notify active warehouse staff + executives, and email them. */
+export async function notifyWarehouseAndExecutivesProductionRequestCompleted(
+  prId: string,
+  completedBy: string,
+  debug?: PrNotifyDebugContext,
+): Promise<number> {
+  await logProductionRequestNotificationDiagnostics('pre-complete RPC', prId, debug);
+
+  console.log(`${PR_NOTIFY_LOG} calling notify_warehouse_and_executives_pr_completed`, { prId, completedBy });
+  const { data, error: rpcError } = await supabase.rpc('notify_warehouse_and_executives_pr_completed', {
+    p_pr_id: prId,
+    p_completed_by: completedBy,
+  });
+  console.log(`${PR_NOTIFY_LOG} RPC response`, { rawData: data, rpcError });
+
+  if (rpcError) {
+    console.error(`${PR_NOTIFY_LOG} RPC notify_warehouse_and_executives_pr_completed failed`, rpcError);
+    throw rpcError;
+  }
+  const count = parseNotificationRpcCount(data);
+  if (count === 0) {
+    console.warn(
+      `${PR_NOTIFY_LOG} complete notification inserted 0 — no active Warehouse/Executive has auth_user_id set. Run database/notifications_production_request_workflow.sql.`,
+    );
+  } else {
+    console.log(`${PR_NOTIFY_LOG} complete notification delivered to ${count} recipient(s)`);
+  }
+
+  const base = await fetchProductionRequestSnapshotForNotify(prId);
+  if (base) {
+    const recipientEmails = await fetchWarehouseAndExecutiveEmails();
+    const producedQuantity = base.items.reduce((sum, item) => sum + (Number(item.quantityCompleted) || 0), 0);
+    const emailPayload: ProductionRequestCompletedNotifyPayload = {
+      ...base,
+      status: 'Completed',
+      completedBy,
+      producedQuantity,
+      recipientEmails,
+    };
+    await sendProductionRequestNotificationEmail('/api/notifications/production-request-completed', emailPayload);
+  } else {
+    console.warn(`${PR_NOTIFY_LOG} Skipped complete email — could not build PR payload`);
+  }
+
+  await logProductionRequestNotificationDiagnostics('post-complete RPC', prId, debug);
+  window.dispatchEvent(new Event('lamtex:notifications-refresh'));
+  return count;
+}
+
 async function fetchPoReceiveTotals(
   poId: string,
 ): Promise<{ quantityReceived: number; quantityOrdered: number }> {
@@ -1052,7 +1627,7 @@ export async function notifyExecutivesPurchaseOrderProofUploaded(
   const count = parseNotificationRpcCount(data);
   if (count <= 0) {
     console.warn(
-      `${PO_NOTIFY_LOG} notify_executives_po_proof_uploaded returned 0 — run database/notifications_purchase_order_proof_uploaded.sql in Supabase`,
+      `${PO_NOTIFY_LOG} notify_executives_po_proof_uploaded returned 0 — run database/notifications_purchase_order_proof_uploaded.sql and ensure active Executive/Warehouse employees have auth_user_id set.`,
     );
   }
   window.dispatchEvent(new Event('lamtex:notifications-refresh'));
@@ -2071,6 +2646,144 @@ export async function notifyOrderPaymentProofRecorded(
     paymentCash: opts.paymentCash,
     paymentCredit: opts.paymentCredit,
   });
+}
+
+export async function buildOrderPaymentOverdueNotifyPayload(
+  orderUuid: string,
+  daysOverdue: number,
+  notifyTarget: 'executive' | 'agent',
+): Promise<OrderPaymentOverdueNotifyPayload | null> {
+  const order = await fetchOrderDetailSnapshotForNotify(orderUuid);
+  if (!order) return null;
+
+  const dueDt = computeDueDateFromDelivery(order.actualDelivery ?? null, order.paymentTerms ?? null);
+  const dueDate = dueDt ? formatDateOnlyLocal(dueDt) : null;
+  const agentEmail = order.agentId?.trim() ? await fetchAgentEmail(order.agentId) : null;
+  const base = buildOrderNotifyPayload({ ...order, paymentStatus: 'Overdue' }, orderUuid);
+
+  return {
+    ...base,
+    dueDate,
+    daysOverdue,
+    amountPaid: order.amountPaid,
+    balanceDue: order.balanceDue,
+    paymentStatus: 'Overdue',
+    notifyTarget,
+    agentEmail,
+  };
+}
+
+export async function buildOrderCustomerPaymentOverdueNotifyPayload(
+  orderUuid: string,
+  daysOverdue: number,
+): Promise<OrderCustomerPaymentOverdueNotifyPayload | null> {
+  const order = await fetchOrderDetailSnapshotForNotify(orderUuid);
+  if (!order) return null;
+
+  const base = await buildOrderCustomerNotifyPayload(order, orderUuid, { status: order.status });
+  if (!base) return null;
+
+  const dueDt = computeDueDateFromDelivery(order.actualDelivery ?? null, order.paymentTerms ?? null);
+  const dueDate = dueDt ? formatDateOnlyLocal(dueDt) : null;
+
+  return {
+    ...base,
+    dueDate,
+    daysOverdue,
+    amountPaid: order.amountPaid,
+    balanceDue: order.balanceDue,
+    paymentStatus: 'Overdue',
+  };
+}
+
+async function sendOrderPaymentOverdueEmail(
+  payload: OrderPaymentOverdueNotifyPayload,
+  notifyTarget: 'executive' | 'agent',
+): Promise<void> {
+  try {
+    const res = await fetch('/api/notifications/order-payment-overdue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...payload, notifyTarget }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      console.warn('[notifications] Order payment overdue email failed', notifyTarget, body);
+    }
+  } catch (e) {
+    console.warn('[notifications] Order payment overdue email API unreachable', notifyTarget, e);
+  }
+}
+
+async function sendOrderCustomerPaymentOverdueEmail(
+  payload: OrderCustomerPaymentOverdueNotifyPayload,
+): Promise<void> {
+  try {
+    const res = await fetch('/api/notifications/order-payment-overdue-customer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      console.warn('[notifications] Customer payment overdue email failed', body);
+    }
+  } catch (e) {
+    console.warn('[notifications] Customer payment overdue email API unreachable', e);
+  }
+}
+
+/** Send overdue emails to executive, agent, and customer for one order. In-app is handled by RPC. */
+export async function notifyOrderPaymentOverdueEmails(
+  orderUuid: string,
+  daysOverdue: number,
+): Promise<void> {
+  const execPayload = await buildOrderPaymentOverdueNotifyPayload(orderUuid, daysOverdue, 'executive');
+  if (execPayload) {
+    await sendOrderPaymentOverdueEmail(execPayload, 'executive');
+  }
+
+  const agentPayload = await buildOrderPaymentOverdueNotifyPayload(orderUuid, daysOverdue, 'agent');
+  if (agentPayload?.agentEmail?.trim()) {
+    await sendOrderPaymentOverdueEmail(agentPayload, 'agent');
+  }
+
+  const customerPayload = await buildOrderCustomerPaymentOverdueNotifyPayload(orderUuid, daysOverdue);
+  if (customerPayload) {
+    await sendOrderCustomerPaymentOverdueEmail(customerPayload);
+  }
+}
+
+/**
+ * Mark newly overdue orders (DB RPC), notify executives + agent in-app, then email executive, agent, and customer.
+ * Returns map of order UUID → days overdue for orders processed this run.
+ */
+export async function processNewlyOverdueOrders(): Promise<Map<string, number>> {
+  const { data, error } = await supabase.rpc('process_newly_overdue_orders');
+  if (error) {
+    console.warn('[notifications] RPC process_newly_overdue_orders failed', error);
+    return new Map();
+  }
+
+  const rows = (data ?? []) as Array<{ order_id: string; days_overdue: number }>;
+  const result = new Map<string, number>();
+
+  for (const row of rows) {
+    const orderId = String(row.order_id);
+    const daysOverdue = Number(row.days_overdue) || 0;
+    result.set(orderId, daysOverdue);
+    try {
+      await notifyOrderPaymentOverdueEmails(orderId, daysOverdue);
+    } catch (e) {
+      console.warn('[notifications] order payment overdue notify failed', orderId, e);
+    }
+  }
+
+  if (rows.length > 0) {
+    window.dispatchEvent(new Event('lamtex:notifications-refresh'));
+  }
+
+  return result;
 }
 
 async function fetchCustomerClientTypeForNotify(customerId: string): Promise<string> {
@@ -3157,4 +3870,451 @@ export function subscribeToUserNotifications(
   return () => {
     void supabase.removeChannel(channel);
   };
+}
+
+const IBR_NOTIFY_LOG = '[notifications][ibr]';
+
+type InterBranchWorkflowEventType =
+  | 'submitted_for_approval'
+  | 'approved'
+  | 'scheduled'
+  | 'loading'
+  | 'packed'
+  | 'ready'
+  | 'in_transit'
+  | 'delivery_recorded'
+  | 'fulfilled'
+  | 'cancelled'
+  | 'rejected';
+
+type InterBranchNotifyEmailPayload = {
+  interBranchRequestId: string;
+  ibrNumber: string;
+  eventType: InterBranchWorkflowEventType;
+  status: string;
+  requestingBranchName: string | null;
+  fulfillingBranchName: string | null;
+  createdBy?: string | null;
+  submittedBy?: string | null;
+  approvedBy?: string | null;
+  fulfilledBy?: string | null;
+  cancelledBy?: string | null;
+  rejectedBy?: string | null;
+  rejectionReason?: string | null;
+  actor?: string | null;
+  note?: string | null;
+  scheduledDepartureDate?: string | null;
+  notes?: string | null;
+  lineCount?: number | null;
+  items: Array<{
+    lineKind: 'raw_material' | 'product';
+    label: string;
+    sku?: string | null;
+    unitOfMeasure?: string | null;
+    quantity: number;
+  }>;
+  recipientGroups?: Array<{
+    audience: 'executive' | 'warehouse';
+    branchName?: string | null;
+    emails: string[];
+  }>;
+};
+
+type InterBranchNotifyBase = Omit<
+  InterBranchNotifyEmailPayload,
+  'eventType' | 'status' | 'approvedBy' | 'fulfilledBy' | 'cancelledBy' | 'rejectedBy' | 'rejectionReason' | 'actor' | 'note' | 'recipientGroups'
+> & {
+  requestingBranchId: string;
+  fulfillingBranchId: string;
+};
+
+function ibrLogisticsEventType(status: string): InterBranchWorkflowEventType | null {
+  const map: Record<string, InterBranchWorkflowEventType> = {
+    Scheduled: 'scheduled',
+    Loading: 'loading',
+    Packed: 'packed',
+    Ready: 'ready',
+    'In Transit': 'in_transit',
+  };
+  return map[status] ?? null;
+}
+
+async function fetchInterBranchRequestSnapshotForNotify(ibrId: string): Promise<InterBranchNotifyBase | null> {
+  const { data: row, error } = await supabase
+    .from('inter_branch_requests')
+    .select(`
+      id, ibr_number, status, notes, created_by, submitted_at, approved_by, scheduled_departure_date,
+      requesting_branch_id, fulfilling_branch_id,
+      req_br:branches!requesting_branch_id(name),
+      ful_br:branches!fulfilling_branch_id(name),
+      inter_branch_request_items(
+        line_kind, quantity, quantity_shipped, quantity_delivered,
+        raw_materials(name, sku, unit_of_measure),
+        product_variants(sku, size, products(name))
+      )
+    `)
+    .eq('id', ibrId)
+    .maybeSingle();
+
+  if (error || !row) {
+    console.warn(`${IBR_NOTIFY_LOG} Could not load IBR for email`, error);
+    return null;
+  }
+
+  const r = row as Record<string, unknown>;
+  const requestingBranchName = (r.req_br as { name?: string } | null)?.name ?? null;
+  const fulfillingBranchName = (r.ful_br as { name?: string } | null)?.name ?? null;
+
+  const rawItems = (r.inter_branch_request_items as Array<Record<string, unknown>> | null) ?? [];
+  const items = rawItems.map((item) => {
+    const lineKind = item.line_kind as 'raw_material' | 'product';
+    if (lineKind === 'raw_material') {
+      const mat = item.raw_materials as { name?: string; sku?: string; unit_of_measure?: string } | null;
+      return {
+        lineKind,
+        label: mat?.name?.trim() || 'Material',
+        sku: mat?.sku ?? null,
+        unitOfMeasure: mat?.unit_of_measure ?? null,
+        quantity: Number(item.quantity) || 0,
+      };
+    }
+    const pv = item.product_variants as {
+      sku?: string;
+      size?: string;
+      products?: { name?: string } | null;
+    } | null;
+    const productName = pv?.products?.name?.trim() || 'Product';
+    const variant = [pv?.sku, pv?.size].filter(Boolean).join(' · ');
+    return {
+      lineKind,
+      label: variant ? `${productName} — ${variant}` : productName,
+      sku: pv?.sku ?? null,
+      unitOfMeasure: 'units',
+      quantity: Number(item.quantity) || 0,
+    };
+  });
+
+  return {
+    interBranchRequestId: ibrId,
+    ibrNumber: String(r.ibr_number ?? ''),
+    requestingBranchId: String(r.requesting_branch_id ?? ''),
+    fulfillingBranchId: String(r.fulfilling_branch_id ?? ''),
+    requestingBranchName,
+    fulfillingBranchName,
+    createdBy: (r.created_by as string | null) ?? null,
+    submittedBy: (r.created_by as string | null) ?? null,
+    scheduledDepartureDate: (r.scheduled_departure_date as string | null) ?? null,
+    notes: (r.notes as string | null) ?? null,
+    lineCount: items.length,
+    items,
+  };
+}
+
+async function fetchBothBranchWarehouseRecipientGroups(
+  requestingBranchId: string,
+  fulfillingBranchId: string,
+  requestingBranchName: string | null,
+  fulfillingBranchName: string | null,
+): Promise<NonNullable<InterBranchNotifyEmailPayload['recipientGroups']>> {
+  const [reqEmails, fulEmails] = await Promise.all([
+    fetchBranchWarehouseEmails(requestingBranchId),
+    fetchBranchWarehouseEmails(fulfillingBranchId),
+  ]);
+  const groups: NonNullable<InterBranchNotifyEmailPayload['recipientGroups']> = [];
+  if (reqEmails.length) {
+    groups.push({ audience: 'warehouse', branchName: requestingBranchName, emails: reqEmails });
+  }
+  if (fulEmails.length) {
+    groups.push({ audience: 'warehouse', branchName: fulfillingBranchName, emails: fulEmails });
+  }
+  return groups;
+}
+
+async function fetchIbrSubmitterEmail(ibrId: string): Promise<string | null> {
+  const { data: row, error } = await supabase
+    .from('inter_branch_requests')
+    .select('created_by, requesting_branch_id')
+    .eq('id', ibrId)
+    .maybeSingle();
+
+  if (error || !row) {
+    console.warn(`${IBR_NOTIFY_LOG} Could not load IBR submitter for email`, error);
+    return null;
+  }
+
+  const { data: logRow } = await supabase
+    .from('inter_branch_request_logs')
+    .select('performed_by')
+    .eq('inter_branch_request_id', ibrId)
+    .eq('action', 'submitted')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const submitter = (logRow?.performed_by as string | null)?.trim() || (row.created_by as string | null)?.trim();
+  if (!submitter) return null;
+  if (submitter.includes('@')) return submitter;
+
+  const submitterBase = submitter.split(' (')[0]?.trim() || submitter;
+
+  const { data: emps } = await supabase
+    .from('employees')
+    .select('email, employee_name, branch_id')
+    .eq('status', 'active');
+
+  const requestingBranchId = row.requesting_branch_id as string;
+  const matches = (emps ?? []).filter((e) => {
+    const name = e.employee_name?.trim();
+    const email = e.email?.trim();
+    if (!name && !email) return false;
+    return (
+      name === submitter ||
+      email === submitter ||
+      name?.toLowerCase() === submitter.toLowerCase() ||
+      name?.toLowerCase() === submitterBase.toLowerCase() ||
+      email?.split('@')[0]?.toLowerCase() === submitter.toLowerCase() ||
+      email?.split('@')[0]?.toLowerCase() === submitterBase.toLowerCase()
+    );
+  });
+
+  matches.sort((a, b) => {
+    if (a.branch_id === requestingBranchId && b.branch_id !== requestingBranchId) return -1;
+    if (b.branch_id === requestingBranchId && a.branch_id !== requestingBranchId) return 1;
+    return 0;
+  });
+
+  return matches[0]?.email?.trim() ?? null;
+}
+
+async function fetchIbrRejectedRecipientEmails(ibrId: string, requestingBranchId: string): Promise<string[]> {
+  const submitterEmail = await fetchIbrSubmitterEmail(ibrId);
+  if (submitterEmail) return [submitterEmail];
+  return fetchBranchWarehouseEmails(requestingBranchId);
+}
+
+async function sendInterBranchWorkflowEmail(payload: InterBranchNotifyEmailPayload): Promise<boolean> {
+  try {
+    console.log(`${IBR_NOTIFY_LOG} sending email`, {
+      eventType: payload.eventType,
+      ibrNumber: payload.ibrNumber,
+      groupCount: payload.recipientGroups?.length ?? 0,
+    });
+    const res = await fetch('/api/notifications/inter-branch-workflow', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      console.warn(`${IBR_NOTIFY_LOG} Email send failed`, { status: res.status, body });
+      return false;
+    }
+    console.log(`${IBR_NOTIFY_LOG} Email sent`, body);
+    return true;
+  } catch (e) {
+    console.warn(`${IBR_NOTIFY_LOG} Email API unreachable — in-app notifications still created`, e);
+    return false;
+  }
+}
+
+async function notifyInterBranchWithEmail(
+  rpcName: string,
+  rpcParams: Record<string, unknown>,
+  buildEmail: (base: InterBranchNotifyBase) => Promise<InterBranchNotifyEmailPayload | null>,
+): Promise<number> {
+  console.log(`${IBR_NOTIFY_LOG} calling ${rpcName}`, rpcParams);
+  const { data, error: rpcError } = await supabase.rpc(rpcName, rpcParams);
+  if (rpcError) {
+    console.error(`${IBR_NOTIFY_LOG} RPC ${rpcName} failed`, rpcError);
+    throw rpcError;
+  }
+  const count = parseNotificationRpcCount(data);
+  console.log(`${IBR_NOTIFY_LOG} RPC ${rpcName} inserted ${count} notification(s)`);
+
+  const base = await fetchInterBranchRequestSnapshotForNotify(String(rpcParams.p_ibr_id ?? ''));
+  if (base) {
+    const emailPayload = await buildEmail(base);
+    if (emailPayload) {
+      await sendInterBranchWorkflowEmail(emailPayload);
+    }
+  } else {
+    console.warn(`${IBR_NOTIFY_LOG} Skipped email — could not build IBR payload`);
+  }
+
+  window.dispatchEvent(new Event('lamtex:notifications-refresh'));
+  return count;
+}
+
+/** IBR submitted for approval: notify executives + email them. */
+export async function notifyExecutivesInterBranchSubmittedForApproval(ibrId: string): Promise<number> {
+  return notifyInterBranchWithEmail(
+    'notify_executives_ibr_submitted_for_approval',
+    { p_ibr_id: ibrId },
+    async (base) => ({
+      ...base,
+      eventType: 'submitted_for_approval',
+      status: 'Pending',
+      recipientGroups: [{ audience: 'executive', emails: await fetchEmailsForRoles(['Executive']) }],
+    }),
+  );
+}
+
+/** IBR approved: notify both branches + email warehouse staff at each branch. */
+export async function notifyBothBranchesInterBranchApproved(ibrId: string, approvedBy: string): Promise<number> {
+  return notifyInterBranchWithEmail(
+    'notify_both_branches_ibr_approved',
+    { p_ibr_id: ibrId, p_approved_by: approvedBy },
+    async (base) => ({
+      ...base,
+      eventType: 'approved',
+      status: 'Approved',
+      approvedBy,
+      recipientGroups: await fetchBothBranchWarehouseRecipientGroups(
+        base.requestingBranchId,
+        base.fulfillingBranchId,
+        base.requestingBranchName,
+        base.fulfillingBranchName,
+      ),
+    }),
+  );
+}
+
+/** IBR logistics milestone: notify requesting branch warehouse + email them. */
+export async function notifyRequestingBranchInterBranchStatus(
+  ibrId: string,
+  status: string,
+  actor?: string | null,
+): Promise<number> {
+  const eventType = ibrLogisticsEventType(status);
+  if (!eventType) {
+    console.warn(`${IBR_NOTIFY_LOG} Skipped notify — unsupported logistics status ${status}`);
+    return 0;
+  }
+  return notifyInterBranchWithEmail(
+    'notify_requesting_branch_ibr_status',
+    { p_ibr_id: ibrId, p_status: status, p_actor: actor ?? null },
+    async (base) => ({
+      ...base,
+      eventType,
+      status,
+      actor: actor ?? null,
+      recipientGroups: [
+        {
+          audience: 'warehouse',
+          branchName: base.requestingBranchName,
+          emails: await fetchBranchWarehouseEmails(base.requestingBranchId),
+        },
+      ],
+    }),
+  );
+}
+
+/** IBR delivery recorded: notify both branches + email warehouse staff at each branch. */
+export async function notifyBothBranchesInterBranchDeliveryRecorded(
+  ibrId: string,
+  actor: string,
+  newStatus: string,
+): Promise<number> {
+  return notifyInterBranchWithEmail(
+    'notify_both_branches_ibr_delivery_recorded',
+    { p_ibr_id: ibrId, p_actor: actor, p_new_status: newStatus },
+    async (base) => ({
+      ...base,
+      eventType: 'delivery_recorded',
+      status: newStatus,
+      actor,
+      recipientGroups: await fetchBothBranchWarehouseRecipientGroups(
+        base.requestingBranchId,
+        base.fulfillingBranchId,
+        base.requestingBranchName,
+        base.fulfillingBranchName,
+      ),
+    }),
+  );
+}
+
+/** IBR fulfilled: notify both branches + executives + email all. */
+export async function notifyBothBranchesAndExecutivesInterBranchFulfilled(
+  ibrId: string,
+  fulfilledBy: string,
+): Promise<number> {
+  return notifyInterBranchWithEmail(
+    'notify_both_branches_and_executives_ibr_fulfilled',
+    { p_ibr_id: ibrId, p_fulfilled_by: fulfilledBy },
+    async (base) => {
+      const branchGroups = await fetchBothBranchWarehouseRecipientGroups(
+        base.requestingBranchId,
+        base.fulfillingBranchId,
+        base.requestingBranchName,
+        base.fulfillingBranchName,
+      );
+      const executiveEmails = await fetchEmailsForRoles(['Executive']);
+      return {
+        ...base,
+        eventType: 'fulfilled',
+        status: 'Fulfilled',
+        fulfilledBy,
+        recipientGroups: [
+          ...branchGroups,
+          ...(executiveEmails.length
+            ? [{ audience: 'executive' as const, emails: executiveEmails }]
+            : [{ audience: 'executive' as const, emails: [] }]),
+        ],
+      };
+    },
+  );
+}
+
+/** IBR cancelled: notify both branches + email warehouse staff at each branch. */
+export async function notifyBothBranchesInterBranchCancelled(
+  ibrId: string,
+  cancelledBy: string,
+  note?: string | null,
+): Promise<number> {
+  return notifyInterBranchWithEmail(
+    'notify_both_branches_ibr_cancelled',
+    { p_ibr_id: ibrId, p_cancelled_by: cancelledBy, p_note: note ?? null },
+    async (base) => ({
+      ...base,
+      eventType: 'cancelled',
+      status: 'Cancelled',
+      cancelledBy,
+      note: note ?? null,
+      recipientGroups: await fetchBothBranchWarehouseRecipientGroups(
+        base.requestingBranchId,
+        base.fulfillingBranchId,
+        base.requestingBranchName,
+        base.fulfillingBranchName,
+      ),
+    }),
+  );
+}
+
+/** IBR rejected: notify the submitter (or requesting-branch warehouse fallback) + email them. */
+export async function notifyInterBranchSubmitterRejected(
+  ibrId: string,
+  rejectedBy: string,
+  rejectionReason?: string | null,
+): Promise<number> {
+  return notifyInterBranchWithEmail(
+    'notify_ibr_submitter_rejected',
+    { p_ibr_id: ibrId, p_rejected_by: rejectedBy, p_rejection_reason: rejectionReason ?? null },
+    async (base) => {
+      const emails = await fetchIbrRejectedRecipientEmails(ibrId, base.requestingBranchId);
+      return {
+        ...base,
+        eventType: 'rejected',
+        status: 'Rejected',
+        rejectedBy,
+        rejectionReason: rejectionReason ?? null,
+        recipientGroups: [
+          {
+            audience: 'warehouse',
+            branchName: base.requestingBranchName,
+            emails,
+          },
+        ],
+      };
+    },
+  );
 }

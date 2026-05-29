@@ -1316,6 +1316,7 @@ CREATE TABLE IF NOT EXISTS orders (
   due_date            DATE,
   amount_paid         NUMERIC(14,2) DEFAULT 0,
   balance_due         NUMERIC(14,2) DEFAULT 0,
+  overdue_notified_at TIMESTAMPTZ,
   
   -- Notes
   order_notes         TEXT,
@@ -1787,7 +1788,7 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
   branch_id              UUID REFERENCES branches(id)   ON DELETE SET NULL,
   supplier_id            UUID REFERENCES suppliers(id)  ON DELETE SET NULL,
   status                 TEXT NOT NULL DEFAULT 'Draft'
-                           CHECK (status IN ('Draft','Requested','Rejected','Accepted','Sent','Confirmed','Partially Received','Completed','Cancelled')),
+                           CHECK (status IN ('Draft','Requested','Rejected','Accepted','Sent','Confirmed','Partially Received','Received','Completed','Cancelled')),
   order_date             DATE NOT NULL DEFAULT CURRENT_DATE,
   expected_delivery_date DATE,
   actual_delivery_date   DATE,
@@ -1920,6 +1921,12 @@ CREATE TABLE IF NOT EXISTS production_requests (
   expected_completion_date DATE,
   notes                    TEXT,
   created_by               TEXT,
+  created_by_auth_user_id  UUID,
+  created_by_employee_id   UUID REFERENCES employees(id) ON DELETE SET NULL,
+  submitted_by             TEXT,
+  submitted_at             TIMESTAMPTZ,
+  submitted_by_auth_user_id UUID,
+  submitted_by_employee_id UUID REFERENCES employees(id) ON DELETE SET NULL,
   accepted_by              TEXT,
   accepted_at              TIMESTAMPTZ,
   rejected_by              TEXT,
@@ -2221,6 +2228,19 @@ DO $$ BEGIN
     FOREIGN KEY (current_trip_id) REFERENCES trips(id) ON DELETE SET NULL;
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
+
+-- Inter-branch request ↔ trip linkage (see database/inter_branch_request_trip.sql).
+-- Lets an IBR departure reserve a fleet vehicle on the logistics/truck schedule.
+ALTER TABLE trips
+  ADD COLUMN IF NOT EXISTS inter_branch_request_id UUID
+  REFERENCES inter_branch_requests(id) ON DELETE SET NULL;
+ALTER TABLE inter_branch_requests
+  ADD COLUMN IF NOT EXISTS linked_trip_id UUID
+  REFERENCES trips(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_trips_inter_branch_request
+  ON trips(inter_branch_request_id);
+CREATE INDEX IF NOT EXISTS idx_ibr_linked_trip
+  ON inter_branch_requests(linked_trip_id);
 
 -- 13c: Delivery tracking
 CREATE TABLE IF NOT EXISTS delivery_tracking (
@@ -5950,6 +5970,258 @@ GRANT EXECUTE ON FUNCTION notify_executives_order_payment_recorded(UUID, TEXT, N
 COMMENT ON FUNCTION notify_executives_order_payment_recorded(UUID, TEXT, NUMERIC, NUMERIC) IS
   'In-app notification to all active executives when a payment is recorded on an order (cash or credit > 0).';
 
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS overdue_notified_at TIMESTAMPTZ;
+
+CREATE OR REPLACE FUNCTION order_compute_due_date(
+  p_actual_delivery DATE,
+  p_payment_terms payment_terms
+)
+RETURNS DATE
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+DECLARE
+  terms TEXT;
+  days INT;
+BEGIN
+  IF p_actual_delivery IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  terms := upper(trim(COALESCE(p_payment_terms::text, '')));
+
+  IF terms = 'COD' OR terms LIKE '%COD%' THEN
+    RETURN p_actual_delivery + 1;
+  END IF;
+
+  days := NULLIF(substring(terms from '\d+')::INT, 0);
+  IF days IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  RETURN p_actual_delivery + days;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION notify_order_payment_overdue(
+  p_order_id UUID,
+  p_days_overdue INT DEFAULT NULL
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  o RECORD;
+  recipient RECORD;
+  branch_name TEXT;
+  due_date DATE;
+  days_overdue INT;
+  msg_exec TEXT;
+  msg_agent TEXT;
+  inserted INT := 0;
+BEGIN
+  SELECT *
+  INTO o
+  FROM orders
+  WHERE id = p_order_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Order not found: %', p_order_id;
+  END IF;
+
+  due_date := COALESCE(o.due_date, order_compute_due_date(o.actual_delivery, o.payment_terms));
+  days_overdue := COALESCE(
+    p_days_overdue,
+    CASE WHEN due_date IS NOT NULL THEN GREATEST(0, (CURRENT_DATE - due_date)::INT) ELSE 0 END
+  );
+
+  SELECT name INTO branch_name FROM branches WHERE id = o.branch_id;
+
+  msg_exec := format(
+    'Order %s payment overdue — %s, ₱%s balance due, %s day(s) past payment terms',
+    o.order_number,
+    COALESCE(o.customer_name, 'Unknown customer'),
+    to_char(COALESCE(o.balance_due, 0), 'FM999,999,990.00'),
+    days_overdue
+  );
+
+  msg_agent := format(
+    'Order %s for %s is past payment terms — ₱%s due, %s day(s) overdue',
+    o.order_number,
+    COALESCE(o.customer_name, 'Unknown customer'),
+    to_char(COALESCE(o.balance_due, 0), 'FM999,999,990.00'),
+    days_overdue
+  );
+
+  FOR recipient IN
+    SELECT e.auth_user_id
+    FROM employees e
+    WHERE e.user_role = 'Executive'::user_role
+      AND e.auth_user_id IS NOT NULL
+      AND e.status = 'active'::employee_status
+  LOOP
+    INSERT INTO notifications (
+      user_id,
+      category,
+      title,
+      message,
+      urgent,
+      action_url,
+      action_label,
+      branch_id,
+      metadata,
+      event_type
+    ) VALUES (
+      recipient.auth_user_id,
+      'Payment'::notification_category,
+      'Order payment overdue',
+      msg_exec,
+      true,
+      '/orders/' || o.id::text,
+      'View order',
+      o.branch_id,
+      jsonb_build_object(
+        'orderId', o.id,
+        'orderNumber', o.order_number,
+        'customerName', o.customer_name,
+        'agentName', o.agent_name,
+        'branchName', branch_name,
+        'totalAmount', o.total_amount,
+        'amountPaid', o.amount_paid,
+        'balanceDue', o.balance_due,
+        'paymentStatus', o.payment_status,
+        'paymentTerms', o.payment_terms,
+        'dueDate', due_date,
+        'daysOverdue', days_overdue,
+        'status', o.status
+      ),
+      'order_payment_overdue'
+    );
+    inserted := inserted + 1;
+  END LOOP;
+
+  IF o.agent_id IS NOT NULL THEN
+    SELECT e.auth_user_id
+    INTO recipient
+    FROM employees e
+    WHERE e.id = o.agent_id
+      AND e.status = 'active'::employee_status
+      AND e.auth_user_id IS NOT NULL;
+
+    IF recipient.auth_user_id IS NOT NULL THEN
+      INSERT INTO notifications (
+        user_id,
+        category,
+        title,
+        message,
+        urgent,
+        action_url,
+        action_label,
+        branch_id,
+        metadata,
+        event_type
+      ) VALUES (
+        recipient.auth_user_id,
+        'Payment'::notification_category,
+        'Customer payment overdue',
+        msg_agent,
+        true,
+        '/orders/' || o.id::text,
+        'View order',
+        o.branch_id,
+        jsonb_build_object(
+          'orderId', o.id,
+          'orderNumber', o.order_number,
+          'customerName', o.customer_name,
+          'agentName', o.agent_name,
+          'branchName', branch_name,
+          'totalAmount', o.total_amount,
+          'amountPaid', o.amount_paid,
+          'balanceDue', o.balance_due,
+          'paymentStatus', o.payment_status,
+          'paymentTerms', o.payment_terms,
+          'dueDate', due_date,
+          'daysOverdue', days_overdue,
+          'status', o.status
+        ),
+        'order_payment_overdue'
+      );
+      inserted := inserted + 1;
+    END IF;
+  END IF;
+
+  RETURN inserted;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION process_newly_overdue_orders()
+RETURNS TABLE (
+  order_id UUID,
+  days_overdue INT
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  o RECORD;
+  due_date DATE;
+  days INT;
+BEGIN
+  FOR o IN
+    SELECT ord.*
+    FROM orders ord
+    WHERE ord.status IN ('Partially Fulfilled'::order_status, 'Delivered'::order_status, 'Completed'::order_status)
+      AND ord.overdue_notified_at IS NULL
+      AND ord.actual_delivery IS NOT NULL
+      AND COALESCE(ord.balance_due, 0) > 0.01
+      AND (
+        ord.payment_status IN (
+          'Unbilled'::payment_status,
+          'Invoiced'::payment_status,
+          'Partially Paid'::payment_status,
+          'On Credit'::payment_status
+        )
+        OR ord.payment_status = 'Overdue'::payment_status
+      )
+  LOOP
+    due_date := COALESCE(o.due_date, order_compute_due_date(o.actual_delivery, o.payment_terms));
+    IF due_date IS NULL OR due_date >= CURRENT_DATE THEN
+      CONTINUE;
+    END IF;
+
+    days := GREATEST(0, (CURRENT_DATE - due_date)::INT);
+
+    UPDATE orders
+    SET
+      payment_status = 'Overdue'::payment_status,
+      due_date = COALESCE(due_date, orders.due_date),
+      overdue_notified_at = NOW(),
+      updated_at = NOW()
+    WHERE id = o.id;
+
+    PERFORM notify_order_payment_overdue(o.id, days);
+
+    order_id := o.id;
+    days_overdue := days;
+    RETURN NEXT;
+  END LOOP;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION order_compute_due_date(DATE, payment_terms) TO authenticated;
+GRANT EXECUTE ON FUNCTION notify_order_payment_overdue(UUID, INT) TO authenticated;
+GRANT EXECUTE ON FUNCTION process_newly_overdue_orders() TO authenticated;
+
+COMMENT ON FUNCTION order_compute_due_date(DATE, payment_terms) IS
+  'Payment due date from actual delivery date and payment terms (COD = next day; Net N = N days).';
+COMMENT ON FUNCTION notify_order_payment_overdue(UUID, INT) IS
+  'In-app notification to executives and the assigned agent when an order payment is overdue.';
+COMMENT ON FUNCTION process_newly_overdue_orders() IS
+  'Mark newly overdue delivered orders, notify executives and agent once per order, return processed rows.';
+
 CREATE OR REPLACE FUNCTION notify_agent_order_commission_paid(
   p_order_id UUID,
   p_paid_by TEXT DEFAULT NULL,
@@ -8405,7 +8677,7 @@ BEGIN
   END IF;
 
   FOR recipient IN
-    SELECT DISTINCT e.auth_user_id, e.user_role
+    SELECT DISTINCT e.auth_user_id
     FROM employees e
     WHERE e.user_role IN ('Executive'::user_role, 'Warehouse'::user_role)
       AND e.auth_user_id IS NOT NULL
@@ -8446,8 +8718,7 @@ BEGIN
         'proofCount', COALESCE(p_proof_count, 1),
         'proofType', proof_type_norm,
         'proofTitle', p_proof_title,
-        'paymentAmount', COALESCE(p_payment_amount, 0),
-        'audience', lower(recipient.user_role::text)
+        'paymentAmount', COALESCE(p_payment_amount, 0)
       ),
       event_type_val
     );
@@ -8458,64 +8729,1610 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION trg_po_proof_documents_notify_stmt()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-DECLARE
-  agg RECORD;
-BEGIN
-  FOR agg IN
-    SELECT
-      i.purchase_order_id,
-      lower(i.type::text) AS proof_type,
-      max(i.uploaded_by) AS uploaded_by,
-      count(*)::int AS proof_count,
-      max(nullif(trim(i.title), '')) AS proof_title,
-      max(coalesce(i.payment_cash_amount, 0)) AS payment_amount
-    FROM inserted i
-    GROUP BY i.purchase_order_id, lower(i.type::text)
-  LOOP
-    BEGIN
-      PERFORM notify_executives_po_proof_uploaded(
-        agg.purchase_order_id,
-        agg.proof_type,
-        agg.uploaded_by,
-        agg.proof_count,
-        agg.proof_title,
-        agg.payment_amount
-      );
-    EXCEPTION WHEN OTHERS THEN
-      RAISE WARNING 'PO proof notification failed for PO %: %', agg.purchase_order_id, SQLERRM;
-    END;
-  END LOOP;
-
-  RETURN NULL;
-END;
-$$;
-
-DROP TRIGGER IF EXISTS trg_po_proof_documents_notify ON public.purchase_order_proof_documents;
-CREATE TRIGGER trg_po_proof_documents_notify
-  AFTER INSERT ON public.purchase_order_proof_documents
-  REFERENCING NEW TABLE AS inserted
-  FOR EACH STATEMENT
-  EXECUTE FUNCTION trg_po_proof_documents_notify_stmt();
+-- PO proof uploads are notified via the client-side RPC call (same pattern as
+-- notify_agent_order_*_proof_uploaded). Drop any legacy AFTER INSERT trigger to
+-- avoid double notifications.
+DROP TRIGGER IF EXISTS trg_po_proof_document_notify ON public.purchase_order_proof_documents;
+DROP FUNCTION IF EXISTS trg_po_proof_document_notify();
 
 GRANT EXECUTE ON FUNCTION notify_executives_and_warehouse_po_received(UUID, TEXT, NUMERIC, BOOLEAN) TO authenticated;
 GRANT EXECUTE ON FUNCTION notify_executives_po_payment_recorded(UUID, TEXT, NUMERIC) TO authenticated;
 GRANT EXECUTE ON FUNCTION notify_executives_po_proof_uploaded(UUID, TEXT, TEXT, INT, TEXT, NUMERIC) TO authenticated;
-GRANT EXECUTE ON FUNCTION trg_po_proof_documents_notify_stmt() TO authenticated;
 
 COMMENT ON FUNCTION notify_executives_and_warehouse_po_received(UUID, TEXT, NUMERIC, BOOLEAN) IS
   'Fan-out in-app notification to all active Executive and Warehouse users when a PO receipt is recorded.';
 COMMENT ON FUNCTION notify_executives_po_payment_recorded(UUID, TEXT, NUMERIC) IS
   'In-app notification to all active executives when a payment is recorded on a purchase order.';
 COMMENT ON FUNCTION notify_executives_po_proof_uploaded(UUID, TEXT, TEXT, INT, TEXT, NUMERIC) IS
-  'In-app notification to all active executives and warehouse users when a PO proof document is uploaded.';
-COMMENT ON FUNCTION trg_po_proof_documents_notify_stmt() IS
-  'Statement trigger: calls notify_executives_po_proof_uploaded after purchase_order_proof_documents inserts.';
+  'In-app notification to active Executive and Warehouse users when a PO proof document is uploaded.';
+
+
+-- Production request workflow notifications (in-app)
+ALTER TABLE production_requests ADD COLUMN IF NOT EXISTS created_by_auth_user_id UUID;
+ALTER TABLE production_requests ADD COLUMN IF NOT EXISTS created_by_employee_id UUID REFERENCES employees(id) ON DELETE SET NULL;
+ALTER TABLE production_requests ADD COLUMN IF NOT EXISTS submitted_by TEXT;
+ALTER TABLE production_requests ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMPTZ;
+ALTER TABLE production_requests ADD COLUMN IF NOT EXISTS submitted_by_auth_user_id UUID;
+ALTER TABLE production_requests ADD COLUMN IF NOT EXISTS submitted_by_employee_id UUID REFERENCES employees(id) ON DELETE SET NULL;
+
+CREATE OR REPLACE FUNCTION resolve_pr_submitter_auth_user_id(p_pr_id UUID)
+RETURNS UUID
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  pr RECORD;
+  uid UUID;
+  submitter TEXT;
+  submitter_base TEXT;
+BEGIN
+  SELECT *
+  INTO pr
+  FROM production_requests
+  WHERE id = p_pr_id;
+
+  IF NOT FOUND THEN
+    RETURN NULL;
+  END IF;
+
+  IF pr.submitted_by_auth_user_id IS NOT NULL THEN
+    RETURN pr.submitted_by_auth_user_id;
+  END IF;
+
+  IF pr.submitted_by_employee_id IS NOT NULL THEN
+    SELECT e.auth_user_id
+    INTO uid
+    FROM employees e
+    WHERE e.id = pr.submitted_by_employee_id
+      AND e.status = 'active'::employee_status
+      AND e.auth_user_id IS NOT NULL;
+
+    IF uid IS NOT NULL THEN
+      RETURN uid;
+    END IF;
+  END IF;
+
+  IF pr.created_by_auth_user_id IS NOT NULL THEN
+    RETURN pr.created_by_auth_user_id;
+  END IF;
+
+  IF pr.created_by_employee_id IS NOT NULL THEN
+    SELECT e.auth_user_id
+    INTO uid
+    FROM employees e
+    WHERE e.id = pr.created_by_employee_id
+      AND e.status = 'active'::employee_status
+      AND e.auth_user_id IS NOT NULL;
+
+    IF uid IS NOT NULL THEN
+      RETURN uid;
+    END IF;
+  END IF;
+
+  submitter := COALESCE(
+    NULLIF(trim(pr.submitted_by), ''),
+    (
+      SELECT l.performed_by
+      FROM production_request_logs l
+      WHERE l.request_id = pr.id
+        AND l.action = 'submitted'
+      ORDER BY l.created_at DESC
+      LIMIT 1
+    ),
+    NULLIF(trim(pr.created_by), ''),
+    (
+      SELECT l.performed_by
+      FROM production_request_logs l
+      WHERE l.request_id = pr.id
+        AND l.action = 'drafted'
+      ORDER BY l.created_at ASC
+      LIMIT 1
+    )
+  );
+
+  IF submitter IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  submitter_base := trim(split_part(submitter, ' (', 1));
+
+  IF position('@' IN submitter) > 0 THEN
+    SELECT u.id
+    INTO uid
+    FROM auth.users u
+    WHERE lower(u.email) = lower(trim(submitter))
+    LIMIT 1;
+
+    IF uid IS NOT NULL THEN
+      RETURN uid;
+    END IF;
+  END IF;
+
+  SELECT e.auth_user_id
+  INTO uid
+  FROM employees e
+  WHERE e.status = 'active'::employee_status
+    AND e.auth_user_id IS NOT NULL
+    AND (
+      e.employee_name = submitter
+      OR e.email = submitter
+      OR lower(trim(e.employee_name)) = lower(trim(submitter))
+      OR lower(trim(e.employee_name)) = lower(submitter_base)
+      OR lower(split_part(e.email, '@', 1)) = lower(trim(submitter))
+      OR lower(split_part(e.email, '@', 1)) = lower(submitter_base)
+    )
+  ORDER BY e.updated_at DESC NULLS LAST
+  LIMIT 1;
+
+  RETURN uid;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION notify_executives_pr_submitted_for_approval(p_pr_id UUID)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  pr RECORD;
+  branch_name TEXT;
+  line_count INT;
+  msg TEXT;
+  submitter_uid UUID;
+  recipient UUID;
+  recipients UUID[] := ARRAY[]::UUID[];
+  inserted INT := 0;
+BEGIN
+  SELECT *
+  INTO pr
+  FROM production_requests
+  WHERE id = p_pr_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Production request not found: %', p_pr_id;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = pr.branch_id;
+  SELECT COUNT(*)::INT INTO line_count FROM production_request_items WHERE request_id = pr.id;
+
+  msg := format(
+    'PR %s submitted for approval by %s — %s, %s product line(s)',
+    pr.pr_number,
+    COALESCE(pr.submitted_by, pr.created_by, 'Unknown'),
+    COALESCE(branch_name, 'No branch'),
+    line_count
+  );
+
+  SELECT COALESCE(array_agg(DISTINCT e.auth_user_id), ARRAY[]::UUID[])
+  INTO recipients
+  FROM employees e
+  WHERE e.user_role = 'Executive'::user_role
+    AND e.auth_user_id IS NOT NULL
+    AND e.status = 'active'::employee_status;
+
+  submitter_uid := resolve_pr_submitter_auth_user_id(p_pr_id);
+  IF submitter_uid IS NOT NULL AND NOT (submitter_uid = ANY(recipients)) THEN
+    recipients := array_append(recipients, submitter_uid);
+  END IF;
+
+  FOREACH recipient IN ARRAY recipients
+  LOOP
+    INSERT INTO notifications (
+      user_id,
+      category,
+      title,
+      message,
+      urgent,
+      action_url,
+      action_label,
+      branch_id,
+      metadata,
+      event_type
+    ) VALUES (
+      recipient,
+      'Approvals'::notification_category,
+      'Production request awaiting approval',
+      msg,
+      false,
+      '/production-requests/' || pr.id::text,
+      'Review PR',
+      pr.branch_id,
+      jsonb_build_object(
+        'productionRequestId', pr.id,
+        'prNumber', pr.pr_number,
+        'submittedBy', pr.submitted_by,
+        'createdBy', pr.created_by,
+        'branchName', branch_name,
+        'lineCount', line_count,
+        'status', pr.status
+      ),
+      'production_request_submitted_for_approval'
+    );
+    inserted := inserted + 1;
+  END LOOP;
+
+  RETURN inserted;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION notify_pr_submitter_cancelled(
+  p_pr_id UUID,
+  p_cancelled_by TEXT DEFAULT NULL,
+  p_cancellation_reason TEXT DEFAULT NULL
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  pr RECORD;
+  submitter_uid UUID;
+  branch_name TEXT;
+  line_count INT;
+  msg TEXT;
+  recipient UUID;
+  recipients UUID[] := ARRAY[]::UUID[];
+  inserted INT := 0;
+BEGIN
+  SELECT *
+  INTO pr
+  FROM production_requests
+  WHERE id = p_pr_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Production request not found: %', p_pr_id;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = pr.branch_id;
+  SELECT COUNT(*)::INT INTO line_count FROM production_request_items WHERE request_id = pr.id;
+
+  msg := format(
+    'PR %s was cancelled by %s%s',
+    pr.pr_number,
+    COALESCE(NULLIF(trim(p_cancelled_by), ''), 'someone'),
+    CASE
+      WHEN p_cancellation_reason IS NOT NULL AND trim(p_cancellation_reason) <> ''
+      THEN format('. Reason: %s', p_cancellation_reason)
+      ELSE ''
+    END
+  );
+
+  submitter_uid := resolve_pr_submitter_auth_user_id(p_pr_id);
+  IF submitter_uid IS NOT NULL THEN
+    recipients := array_append(recipients, submitter_uid);
+  END IF;
+
+  SELECT COALESCE(array_agg(DISTINCT e.auth_user_id), ARRAY[]::UUID[])
+  INTO recipients
+  FROM (
+    SELECT unnest(recipients) AS auth_user_id
+    UNION
+    SELECT e.auth_user_id
+    FROM employees e
+    WHERE e.user_role = 'Executive'::user_role
+      AND e.auth_user_id IS NOT NULL
+      AND e.status = 'active'::employee_status
+  ) e
+  WHERE e.auth_user_id IS NOT NULL;
+
+  FOREACH recipient IN ARRAY recipients
+  LOOP
+    INSERT INTO notifications (
+      user_id,
+      category,
+      title,
+      message,
+      urgent,
+      action_url,
+      action_label,
+      branch_id,
+      metadata,
+      event_type
+    ) VALUES (
+      recipient,
+      'System'::notification_category,
+      'Production request cancelled',
+      msg,
+      true,
+      '/production-requests/' || pr.id::text,
+      'View PR',
+      pr.branch_id,
+      jsonb_build_object(
+        'productionRequestId', pr.id,
+        'prNumber', pr.pr_number,
+        'submittedBy', pr.submitted_by,
+        'createdBy', pr.created_by,
+        'cancelledBy', p_cancelled_by,
+        'cancellationReason', p_cancellation_reason,
+        'branchName', branch_name,
+        'lineCount', line_count,
+        'status', pr.status
+      ),
+      'production_request_cancelled'
+    );
+    inserted := inserted + 1;
+  END LOOP;
+
+  RETURN inserted;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION notify_pr_submitter_accepted(
+  p_pr_id UUID,
+  p_accepted_by TEXT DEFAULT NULL
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  pr RECORD;
+  submitter_uid UUID;
+  branch_name TEXT;
+  line_count INT;
+  msg TEXT;
+BEGIN
+  SELECT *
+  INTO pr
+  FROM production_requests
+  WHERE id = p_pr_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Production request not found: %', p_pr_id;
+  END IF;
+
+  submitter_uid := resolve_pr_submitter_auth_user_id(p_pr_id);
+
+  IF submitter_uid IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = pr.branch_id;
+  SELECT COUNT(*)::INT INTO line_count FROM production_request_items WHERE request_id = pr.id;
+
+  msg := format(
+    'PR %s was accepted%s — ready to schedule production',
+    pr.pr_number,
+    CASE WHEN p_accepted_by IS NOT NULL AND trim(p_accepted_by) <> '' THEN format(' by %s', p_accepted_by) ELSE '' END
+  );
+
+  INSERT INTO notifications (
+    user_id,
+    category,
+    title,
+    message,
+    urgent,
+    action_url,
+    action_label,
+    branch_id,
+    metadata,
+    event_type
+  ) VALUES (
+    submitter_uid,
+    'Approvals'::notification_category,
+    'Production request accepted',
+    msg,
+    false,
+    '/production-requests/' || pr.id::text,
+    'View PR',
+    pr.branch_id,
+    jsonb_build_object(
+      'productionRequestId', pr.id,
+      'prNumber', pr.pr_number,
+      'submittedBy', pr.submitted_by,
+      'createdBy', pr.created_by,
+      'acceptedBy', p_accepted_by,
+      'branchName', branch_name,
+      'lineCount', line_count,
+      'status', pr.status
+    ),
+    'production_request_accepted'
+  );
+
+  RETURN 1;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION notify_pr_submitter_rejected(
+  p_pr_id UUID,
+  p_rejected_by TEXT DEFAULT NULL,
+  p_rejection_reason TEXT DEFAULT NULL
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  pr RECORD;
+  submitter_uid UUID;
+  branch_name TEXT;
+  line_count INT;
+  msg TEXT;
+BEGIN
+  SELECT *
+  INTO pr
+  FROM production_requests
+  WHERE id = p_pr_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Production request not found: %', p_pr_id;
+  END IF;
+
+  submitter_uid := resolve_pr_submitter_auth_user_id(p_pr_id);
+
+  IF submitter_uid IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = pr.branch_id;
+  SELECT COUNT(*)::INT INTO line_count FROM production_request_items WHERE request_id = pr.id;
+
+  msg := format(
+    'PR %s was rejected%s%s',
+    pr.pr_number,
+    CASE WHEN p_rejected_by IS NOT NULL AND trim(p_rejected_by) <> '' THEN format(' by %s', p_rejected_by) ELSE '' END,
+    CASE
+      WHEN p_rejection_reason IS NOT NULL AND trim(p_rejection_reason) <> ''
+      THEN format('. Reason: %s', p_rejection_reason)
+      ELSE ''
+    END
+  );
+
+  INSERT INTO notifications (
+    user_id,
+    category,
+    title,
+    message,
+    urgent,
+    action_url,
+    action_label,
+    branch_id,
+    metadata,
+    event_type
+  ) VALUES (
+    submitter_uid,
+    'Approvals'::notification_category,
+    'Production request rejected',
+    msg,
+    true,
+    '/production-requests/' || pr.id::text,
+    'View PR',
+    pr.branch_id,
+    jsonb_build_object(
+      'productionRequestId', pr.id,
+      'prNumber', pr.pr_number,
+      'submittedBy', pr.submitted_by,
+      'createdBy', pr.created_by,
+      'rejectedBy', p_rejected_by,
+      'rejectionReason', p_rejection_reason,
+      'branchName', branch_name,
+      'lineCount', line_count,
+      'status', pr.status
+    ),
+    'production_request_rejected'
+  );
+
+  RETURN 1;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION notify_warehouse_and_executives_pr_started(
+  p_pr_id UUID,
+  p_started_by TEXT DEFAULT NULL
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  pr RECORD;
+  branch_name TEXT;
+  line_count INT;
+  total_qty INT;
+  msg TEXT;
+  recipient UUID;
+  recipients UUID[] := ARRAY[]::UUID[];
+  inserted INT := 0;
+BEGIN
+  SELECT *
+  INTO pr
+  FROM production_requests
+  WHERE id = p_pr_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Production request not found: %', p_pr_id;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = pr.branch_id;
+  SELECT COUNT(*)::INT, COALESCE(SUM(quantity), 0)::INT
+  INTO line_count, total_qty
+  FROM production_request_items
+  WHERE request_id = pr.id;
+
+  msg := format(
+    'PR %s production started%s — %s, %s product line(s), %s total unit(s)',
+    pr.pr_number,
+    CASE WHEN p_started_by IS NOT NULL AND trim(p_started_by) <> '' THEN format(' by %s', p_started_by) ELSE '' END,
+    COALESCE(branch_name, 'No branch'),
+    line_count,
+    total_qty
+  );
+
+  SELECT COALESCE(array_agg(DISTINCT e.auth_user_id), ARRAY[]::UUID[])
+  INTO recipients
+  FROM employees e
+  WHERE e.user_role IN ('Warehouse'::user_role, 'Executive'::user_role)
+    AND e.auth_user_id IS NOT NULL
+    AND e.status = 'active'::employee_status;
+
+  FOREACH recipient IN ARRAY recipients
+  LOOP
+    INSERT INTO notifications (
+      user_id,
+      category,
+      title,
+      message,
+      urgent,
+      action_url,
+      action_label,
+      branch_id,
+      metadata,
+      event_type
+    ) VALUES (
+      recipient,
+      'System'::notification_category,
+      'Production started',
+      msg,
+      false,
+      '/production-requests/' || pr.id::text,
+      'View PR',
+      pr.branch_id,
+      jsonb_build_object(
+        'productionRequestId', pr.id,
+        'prNumber', pr.pr_number,
+        'startedBy', p_started_by,
+        'branchName', branch_name,
+        'lineCount', line_count,
+        'totalQuantity', total_qty,
+        'status', pr.status
+      ),
+      'production_request_started'
+    );
+    inserted := inserted + 1;
+  END LOOP;
+
+  RETURN inserted;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION notify_warehouse_pr_inventory_added(
+  p_pr_id UUID,
+  p_recorded_by TEXT DEFAULT NULL,
+  p_added_units NUMERIC DEFAULT NULL
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  pr RECORD;
+  branch_name TEXT;
+  line_count INT;
+  produced_qty INT;
+  msg TEXT;
+  recipient UUID;
+  recipients UUID[] := ARRAY[]::UUID[];
+  inserted INT := 0;
+BEGIN
+  SELECT *
+  INTO pr
+  FROM production_requests
+  WHERE id = p_pr_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Production request not found: %', p_pr_id;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = pr.branch_id;
+  SELECT COUNT(*)::INT, COALESCE(SUM(quantity_completed), 0)::INT
+  INTO line_count, produced_qty
+  FROM production_request_items
+  WHERE request_id = pr.id;
+
+  msg := format(
+    'PR %s added %s new unit(s) to %s stock%s — %s total unit(s) produced',
+    pr.pr_number,
+    COALESCE(to_char(p_added_units, 'FM999,999,990.##'), '0'),
+    COALESCE(branch_name, 'branch'),
+    CASE WHEN p_recorded_by IS NOT NULL AND trim(p_recorded_by) <> '' THEN format(' by %s', p_recorded_by) ELSE '' END,
+    produced_qty
+  );
+
+  SELECT COALESCE(array_agg(DISTINCT e.auth_user_id), ARRAY[]::UUID[])
+  INTO recipients
+  FROM employees e
+  WHERE e.user_role = 'Warehouse'::user_role
+    AND e.auth_user_id IS NOT NULL
+    AND e.status = 'active'::employee_status;
+
+  FOREACH recipient IN ARRAY recipients
+  LOOP
+    INSERT INTO notifications (
+      user_id,
+      category,
+      title,
+      message,
+      urgent,
+      action_url,
+      action_label,
+      branch_id,
+      metadata,
+      event_type
+    ) VALUES (
+      recipient,
+      'Inventory'::notification_category,
+      'New inventory from production',
+      msg,
+      false,
+      '/production-requests/' || pr.id::text,
+      'View PR',
+      pr.branch_id,
+      jsonb_build_object(
+        'productionRequestId', pr.id,
+        'prNumber', pr.pr_number,
+        'recordedBy', p_recorded_by,
+        'addedUnits', p_added_units,
+        'branchName', branch_name,
+        'lineCount', line_count,
+        'producedQuantity', produced_qty,
+        'status', pr.status
+      ),
+      'production_request_inventory_added'
+    );
+    inserted := inserted + 1;
+  END LOOP;
+
+  RETURN inserted;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION notify_warehouse_and_executives_pr_completed(
+  p_pr_id UUID,
+  p_completed_by TEXT DEFAULT NULL
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  pr RECORD;
+  branch_name TEXT;
+  line_count INT;
+  total_qty INT;
+  produced_qty INT;
+  msg TEXT;
+  recipient UUID;
+  recipients UUID[] := ARRAY[]::UUID[];
+  inserted INT := 0;
+BEGIN
+  SELECT *
+  INTO pr
+  FROM production_requests
+  WHERE id = p_pr_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Production request not found: %', p_pr_id;
+  END IF;
+
+  SELECT name INTO branch_name FROM branches WHERE id = pr.branch_id;
+  SELECT COUNT(*)::INT, COALESCE(SUM(quantity), 0)::INT, COALESCE(SUM(quantity_completed), 0)::INT
+  INTO line_count, total_qty, produced_qty
+  FROM production_request_items
+  WHERE request_id = pr.id;
+
+  msg := format(
+    'PR %s production completed%s — %s, %s product line(s), %s unit(s) produced',
+    pr.pr_number,
+    CASE WHEN p_completed_by IS NOT NULL AND trim(p_completed_by) <> '' THEN format(' by %s', p_completed_by) ELSE '' END,
+    COALESCE(branch_name, 'No branch'),
+    line_count,
+    produced_qty
+  );
+
+  SELECT COALESCE(array_agg(DISTINCT e.auth_user_id), ARRAY[]::UUID[])
+  INTO recipients
+  FROM employees e
+  WHERE e.user_role IN ('Warehouse'::user_role, 'Executive'::user_role)
+    AND e.auth_user_id IS NOT NULL
+    AND e.status = 'active'::employee_status;
+
+  FOREACH recipient IN ARRAY recipients
+  LOOP
+    INSERT INTO notifications (
+      user_id,
+      category,
+      title,
+      message,
+      urgent,
+      action_url,
+      action_label,
+      branch_id,
+      metadata,
+      event_type
+    ) VALUES (
+      recipient,
+      'System'::notification_category,
+      'Production completed',
+      msg,
+      false,
+      '/production-requests/' || pr.id::text,
+      'View PR',
+      pr.branch_id,
+      jsonb_build_object(
+        'productionRequestId', pr.id,
+        'prNumber', pr.pr_number,
+        'completedBy', p_completed_by,
+        'branchName', branch_name,
+        'lineCount', line_count,
+        'totalQuantity', total_qty,
+        'producedQuantity', produced_qty,
+        'status', pr.status
+      ),
+      'production_request_completed'
+    );
+    inserted := inserted + 1;
+  END LOOP;
+
+  RETURN inserted;
+END;
+$$;
+
+DROP FUNCTION IF EXISTS notify_pr_creator_cancelled(UUID, TEXT, TEXT);
+DROP FUNCTION IF EXISTS resolve_pr_creator_auth_user_id(UUID);
+DROP FUNCTION IF EXISTS notify_executives_pr_completed(UUID, TEXT);
+
+GRANT EXECUTE ON FUNCTION resolve_pr_submitter_auth_user_id(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION notify_executives_pr_submitted_for_approval(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION notify_pr_submitter_cancelled(UUID, TEXT, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION notify_pr_submitter_accepted(UUID, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION notify_pr_submitter_rejected(UUID, TEXT, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION notify_warehouse_and_executives_pr_started(UUID, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION notify_warehouse_pr_inventory_added(UUID, TEXT, NUMERIC) TO authenticated;
+GRANT EXECUTE ON FUNCTION notify_warehouse_and_executives_pr_completed(UUID, TEXT) TO authenticated;
+
+COMMENT ON FUNCTION resolve_pr_submitter_auth_user_id(UUID) IS
+  'Resolve auth.users.id for the employee who submitted a production request.';
+COMMENT ON FUNCTION notify_executives_pr_submitted_for_approval(UUID) IS
+  'Fan-out in-app notification to all active Executive users when a PR is submitted for approval.';
+COMMENT ON FUNCTION notify_pr_submitter_cancelled(UUID, TEXT, TEXT) IS
+  'In-app notification to the employee who submitted a PR when it is cancelled by someone else.';
+COMMENT ON FUNCTION notify_pr_submitter_accepted(UUID, TEXT) IS
+  'In-app notification to the PR submitter when an executive accepts the request.';
+COMMENT ON FUNCTION notify_pr_submitter_rejected(UUID, TEXT, TEXT) IS
+  'In-app notification to the PR submitter when an executive rejects the request.';
+COMMENT ON FUNCTION notify_warehouse_and_executives_pr_started(UUID, TEXT) IS
+  'Fan-out in-app notification to all active Warehouse staff and Executives when PR production starts.';
+COMMENT ON FUNCTION notify_warehouse_pr_inventory_added(UUID, TEXT, NUMERIC) IS
+  'In-app notification to active Warehouse staff when recording production adds new finished stock.';
+COMMENT ON FUNCTION notify_warehouse_and_executives_pr_completed(UUID, TEXT) IS
+  'Fan-out in-app notification to all active Warehouse staff and Executives when PR production completes.';
+
+-- Inter-branch request (IBR) workflow notifications
+CREATE OR REPLACE FUNCTION ibr_notify_warehouse_branch(
+  p_branch_id UUID,
+  p_title TEXT,
+  p_message TEXT,
+  p_ibr_id UUID,
+  p_event_type TEXT,
+  p_metadata JSONB,
+  p_category notification_category DEFAULT 'Inventory'::notification_category,
+  p_urgent BOOLEAN DEFAULT false
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  recipient UUID;
+  inserted INT := 0;
+BEGIN
+  IF p_branch_id IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  FOR recipient IN
+    SELECT DISTINCT e.auth_user_id
+    FROM employees e
+    WHERE e.user_role = 'Warehouse'::user_role
+      AND e.branch_id = p_branch_id
+      AND e.auth_user_id IS NOT NULL
+      AND e.status = 'active'::employee_status
+  LOOP
+    INSERT INTO notifications (
+      user_id,
+      category,
+      title,
+      message,
+      urgent,
+      action_url,
+      action_label,
+      branch_id,
+      metadata,
+      event_type
+    ) VALUES (
+      recipient,
+      p_category,
+      p_title,
+      p_message,
+      p_urgent,
+      '/inter-branch-requests/' || p_ibr_id::text,
+      'View IBR',
+      p_branch_id,
+      p_metadata,
+      p_event_type
+    );
+    inserted := inserted + 1;
+  END LOOP;
+
+  RETURN inserted;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION notify_executives_ibr_submitted_for_approval(p_ibr_id UUID)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  ibr RECORD;
+  req_name TEXT;
+  ful_name TEXT;
+  line_count INT;
+  msg TEXT;
+  recipient UUID;
+  inserted INT := 0;
+BEGIN
+  SELECT *
+  INTO ibr
+  FROM inter_branch_requests
+  WHERE id = p_ibr_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Inter-branch request not found: %', p_ibr_id;
+  END IF;
+
+  IF ibr.status IS DISTINCT FROM 'Pending' THEN
+    RAISE EXCEPTION 'IBR % is not Pending (current: %)', ibr.ibr_number, ibr.status;
+  END IF;
+
+  SELECT name INTO req_name FROM branches WHERE id = ibr.requesting_branch_id;
+  SELECT name INTO ful_name FROM branches WHERE id = ibr.fulfilling_branch_id;
+  SELECT COUNT(*)::INT INTO line_count FROM inter_branch_request_items WHERE request_id = ibr.id;
+
+  msg := format(
+    'IBR %s submitted for approval — %s → %s, %s line(s)',
+    ibr.ibr_number,
+    COALESCE(req_name, 'Requesting branch'),
+    COALESCE(ful_name, 'Fulfilling branch'),
+    line_count
+  );
+
+  FOR recipient IN
+    SELECT DISTINCT e.auth_user_id
+    FROM employees e
+    WHERE e.user_role = 'Executive'::user_role
+      AND e.auth_user_id IS NOT NULL
+      AND e.status = 'active'::employee_status
+  LOOP
+    INSERT INTO notifications (
+      user_id,
+      category,
+      title,
+      message,
+      urgent,
+      action_url,
+      action_label,
+      branch_id,
+      metadata,
+      event_type
+    ) VALUES (
+      recipient,
+      'Approvals'::notification_category,
+      'Inter-branch request awaiting approval',
+      msg,
+      false,
+      '/inter-branch-requests/' || ibr.id::text,
+      'Review IBR',
+      ibr.requesting_branch_id,
+      jsonb_build_object(
+        'interBranchRequestId', ibr.id,
+        'ibrNumber', ibr.ibr_number,
+        'requestingBranchId', ibr.requesting_branch_id,
+        'fulfillingBranchId', ibr.fulfilling_branch_id,
+        'requestingBranchName', req_name,
+        'fulfillingBranchName', ful_name,
+        'submittedBy', ibr.created_by,
+        'lineCount', line_count,
+        'status', ibr.status
+      ),
+      'ibr_submitted_for_approval'
+    );
+    inserted := inserted + 1;
+  END LOOP;
+
+  RETURN inserted;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION notify_both_branches_ibr_approved(
+  p_ibr_id UUID,
+  p_approved_by TEXT DEFAULT NULL
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  ibr RECORD;
+  req_name TEXT;
+  ful_name TEXT;
+  line_count INT;
+  msg TEXT;
+  meta JSONB;
+  inserted INT := 0;
+BEGIN
+  SELECT *
+  INTO ibr
+  FROM inter_branch_requests
+  WHERE id = p_ibr_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Inter-branch request not found: %', p_ibr_id;
+  END IF;
+
+  IF ibr.status IS DISTINCT FROM 'Approved' THEN
+    RAISE EXCEPTION 'IBR % is not Approved (current: %)', ibr.ibr_number, ibr.status;
+  END IF;
+
+  SELECT name INTO req_name FROM branches WHERE id = ibr.requesting_branch_id;
+  SELECT name INTO ful_name FROM branches WHERE id = ibr.fulfilling_branch_id;
+  SELECT COUNT(*)::INT INTO line_count FROM inter_branch_request_items WHERE request_id = ibr.id;
+
+  msg := format(
+    'IBR %s approved%s — %s → %s, %s line(s)',
+    ibr.ibr_number,
+    CASE WHEN p_approved_by IS NOT NULL AND trim(p_approved_by) <> '' THEN format(' by %s', p_approved_by) ELSE '' END,
+    COALESCE(req_name, 'Requesting branch'),
+    COALESCE(ful_name, 'Fulfilling branch'),
+    line_count
+  );
+
+  meta := jsonb_build_object(
+    'interBranchRequestId', ibr.id,
+    'ibrNumber', ibr.ibr_number,
+    'requestingBranchId', ibr.requesting_branch_id,
+    'fulfillingBranchId', ibr.fulfilling_branch_id,
+    'requestingBranchName', req_name,
+    'fulfillingBranchName', ful_name,
+    'approvedBy', p_approved_by,
+    'lineCount', line_count,
+    'status', ibr.status
+  );
+
+  inserted := inserted + ibr_notify_warehouse_branch(
+    ibr.requesting_branch_id,
+    'Inter-branch request approved',
+    msg,
+    ibr.id,
+    'ibr_approved',
+    meta,
+    'Inventory'::notification_category,
+    false
+  );
+
+  inserted := inserted + ibr_notify_warehouse_branch(
+    ibr.fulfilling_branch_id,
+    'Inter-branch request approved',
+    msg,
+    ibr.id,
+    'ibr_approved',
+    meta,
+    'Inventory'::notification_category,
+    false
+  );
+
+  RETURN inserted;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION notify_requesting_branch_ibr_status(
+  p_ibr_id UUID,
+  p_status TEXT,
+  p_actor TEXT DEFAULT NULL
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  ibr RECORD;
+  req_name TEXT;
+  ful_name TEXT;
+  line_count INT;
+  title TEXT;
+  msg TEXT;
+  meta JSONB;
+BEGIN
+  IF p_status NOT IN ('Scheduled', 'Loading', 'Packed', 'Ready', 'In Transit') THEN
+    RAISE EXCEPTION 'Unsupported IBR logistics status for requesting-branch notify: %', p_status;
+  END IF;
+
+  SELECT *
+  INTO ibr
+  FROM inter_branch_requests
+  WHERE id = p_ibr_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Inter-branch request not found: %', p_ibr_id;
+  END IF;
+
+  IF ibr.status IS DISTINCT FROM p_status THEN
+    RAISE EXCEPTION 'IBR % status mismatch (expected %, current: %)', ibr.ibr_number, p_status, ibr.status;
+  END IF;
+
+  SELECT name INTO req_name FROM branches WHERE id = ibr.requesting_branch_id;
+  SELECT name INTO ful_name FROM branches WHERE id = ibr.fulfilling_branch_id;
+  SELECT COUNT(*)::INT INTO line_count FROM inter_branch_request_items WHERE request_id = ibr.id;
+
+  title := CASE p_status
+    WHEN 'Scheduled' THEN 'Inter-branch shipment scheduled'
+    WHEN 'Loading' THEN 'Inter-branch shipment loading'
+    WHEN 'Packed' THEN 'Inter-branch shipment packed'
+    WHEN 'Ready' THEN 'Inter-branch shipment ready'
+    WHEN 'In Transit' THEN 'Inter-branch shipment in transit'
+    ELSE 'Inter-branch status update'
+  END;
+
+  msg := format(
+    'IBR %s is now %s%s — from %s to %s',
+    ibr.ibr_number,
+    p_status,
+    CASE WHEN p_actor IS NOT NULL AND trim(p_actor) <> '' THEN format(' (updated by %s)', p_actor) ELSE '' END,
+    COALESCE(ful_name, 'Fulfilling branch'),
+    COALESCE(req_name, 'Requesting branch')
+  );
+
+  meta := jsonb_build_object(
+    'interBranchRequestId', ibr.id,
+    'ibrNumber', ibr.ibr_number,
+    'requestingBranchId', ibr.requesting_branch_id,
+    'fulfillingBranchId', ibr.fulfilling_branch_id,
+    'requestingBranchName', req_name,
+    'fulfillingBranchName', ful_name,
+    'status', ibr.status,
+    'actor', p_actor,
+    'lineCount', line_count,
+    'scheduledDepartureDate', ibr.scheduled_departure_date
+  );
+
+  RETURN ibr_notify_warehouse_branch(
+    ibr.requesting_branch_id,
+    title,
+    msg,
+    ibr.id,
+    'ibr_' || lower(replace(p_status, ' ', '_')),
+    meta,
+    'Delivery'::notification_category,
+    false
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION notify_both_branches_ibr_delivery_recorded(
+  p_ibr_id UUID,
+  p_actor TEXT DEFAULT NULL,
+  p_new_status TEXT DEFAULT NULL
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  ibr RECORD;
+  req_name TEXT;
+  ful_name TEXT;
+  line_count INT;
+  effective_status TEXT;
+  msg TEXT;
+  meta JSONB;
+  inserted INT := 0;
+BEGIN
+  SELECT *
+  INTO ibr
+  FROM inter_branch_requests
+  WHERE id = p_ibr_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Inter-branch request not found: %', p_ibr_id;
+  END IF;
+
+  effective_status := COALESCE(NULLIF(trim(p_new_status), ''), ibr.status);
+
+  IF effective_status NOT IN ('Delivered', 'Partially Fulfilled') THEN
+    RAISE EXCEPTION 'IBR % delivery notify requires Delivered or Partially Fulfilled (current: %)', ibr.ibr_number, effective_status;
+  END IF;
+
+  SELECT name INTO req_name FROM branches WHERE id = ibr.requesting_branch_id;
+  SELECT name INTO ful_name FROM branches WHERE id = ibr.fulfilling_branch_id;
+  SELECT COUNT(*)::INT INTO line_count FROM inter_branch_request_items WHERE request_id = ibr.id;
+
+  msg := format(
+    'IBR %s delivery recorded at %s → %s%s',
+    ibr.ibr_number,
+    COALESCE(req_name, 'Requesting branch'),
+    effective_status,
+    CASE WHEN p_actor IS NOT NULL AND trim(p_actor) <> '' THEN format(' by %s', p_actor) ELSE '' END
+  );
+
+  meta := jsonb_build_object(
+    'interBranchRequestId', ibr.id,
+    'ibrNumber', ibr.ibr_number,
+    'requestingBranchId', ibr.requesting_branch_id,
+    'fulfillingBranchId', ibr.fulfilling_branch_id,
+    'requestingBranchName', req_name,
+    'fulfillingBranchName', ful_name,
+    'status', effective_status,
+    'recordedBy', p_actor,
+    'lineCount', line_count
+  );
+
+  inserted := inserted + ibr_notify_warehouse_branch(
+    ibr.requesting_branch_id,
+    'Inter-branch delivery recorded',
+    msg,
+    ibr.id,
+    'ibr_delivery_recorded',
+    meta,
+    'Delivery'::notification_category,
+    false
+  );
+
+  inserted := inserted + ibr_notify_warehouse_branch(
+    ibr.fulfilling_branch_id,
+    'Inter-branch delivery recorded',
+    msg,
+    ibr.id,
+    'ibr_delivery_recorded',
+    meta,
+    'Delivery'::notification_category,
+    false
+  );
+
+  RETURN inserted;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION notify_both_branches_and_executives_ibr_fulfilled(
+  p_ibr_id UUID,
+  p_fulfilled_by TEXT DEFAULT NULL
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  ibr RECORD;
+  req_name TEXT;
+  ful_name TEXT;
+  line_count INT;
+  msg TEXT;
+  meta JSONB;
+  recipient UUID;
+  inserted INT := 0;
+BEGIN
+  SELECT *
+  INTO ibr
+  FROM inter_branch_requests
+  WHERE id = p_ibr_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Inter-branch request not found: %', p_ibr_id;
+  END IF;
+
+  IF ibr.status IS DISTINCT FROM 'Fulfilled' THEN
+    RAISE EXCEPTION 'IBR % is not Fulfilled (current: %)', ibr.ibr_number, ibr.status;
+  END IF;
+
+  SELECT name INTO req_name FROM branches WHERE id = ibr.requesting_branch_id;
+  SELECT name INTO ful_name FROM branches WHERE id = ibr.fulfilling_branch_id;
+  SELECT COUNT(*)::INT INTO line_count FROM inter_branch_request_items WHERE request_id = ibr.id;
+
+  msg := format(
+    'IBR %s marked fulfilled and closed%s — %s ↔ %s',
+    ibr.ibr_number,
+    CASE WHEN p_fulfilled_by IS NOT NULL AND trim(p_fulfilled_by) <> '' THEN format(' by %s', p_fulfilled_by) ELSE '' END,
+    COALESCE(req_name, 'Requesting branch'),
+    COALESCE(ful_name, 'Fulfilling branch')
+  );
+
+  meta := jsonb_build_object(
+    'interBranchRequestId', ibr.id,
+    'ibrNumber', ibr.ibr_number,
+    'requestingBranchId', ibr.requesting_branch_id,
+    'fulfillingBranchId', ibr.fulfilling_branch_id,
+    'requestingBranchName', req_name,
+    'fulfillingBranchName', ful_name,
+    'fulfilledBy', p_fulfilled_by,
+    'lineCount', line_count,
+    'status', ibr.status
+  );
+
+  inserted := inserted + ibr_notify_warehouse_branch(
+    ibr.requesting_branch_id,
+    'Inter-branch request fulfilled',
+    msg,
+    ibr.id,
+    'ibr_fulfilled',
+    meta,
+    'Inventory'::notification_category,
+    false
+  );
+
+  inserted := inserted + ibr_notify_warehouse_branch(
+    ibr.fulfilling_branch_id,
+    'Inter-branch request fulfilled',
+    msg,
+    ibr.id,
+    'ibr_fulfilled',
+    meta,
+    'Inventory'::notification_category,
+    false
+  );
+
+  FOR recipient IN
+    SELECT DISTINCT e.auth_user_id
+    FROM employees e
+    WHERE e.user_role = 'Executive'::user_role
+      AND e.auth_user_id IS NOT NULL
+      AND e.status = 'active'::employee_status
+  LOOP
+    INSERT INTO notifications (
+      user_id,
+      category,
+      title,
+      message,
+      urgent,
+      action_url,
+      action_label,
+      branch_id,
+      metadata,
+      event_type
+    ) VALUES (
+      recipient,
+      'Inventory'::notification_category,
+      'Inter-branch request fulfilled',
+      msg,
+      false,
+      '/inter-branch-requests/' || ibr.id::text,
+      'View IBR',
+      ibr.requesting_branch_id,
+      meta,
+      'ibr_fulfilled'
+    );
+    inserted := inserted + 1;
+  END LOOP;
+
+  RETURN inserted;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION notify_both_branches_ibr_cancelled(
+  p_ibr_id UUID,
+  p_cancelled_by TEXT DEFAULT NULL,
+  p_note TEXT DEFAULT NULL
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  ibr RECORD;
+  req_name TEXT;
+  ful_name TEXT;
+  line_count INT;
+  msg TEXT;
+  meta JSONB;
+  inserted INT := 0;
+BEGIN
+  SELECT *
+  INTO ibr
+  FROM inter_branch_requests
+  WHERE id = p_ibr_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Inter-branch request not found: %', p_ibr_id;
+  END IF;
+
+  IF ibr.status IS DISTINCT FROM 'Cancelled' THEN
+    RAISE EXCEPTION 'IBR % is not Cancelled (current: %)', ibr.ibr_number, ibr.status;
+  END IF;
+
+  SELECT name INTO req_name FROM branches WHERE id = ibr.requesting_branch_id;
+  SELECT name INTO ful_name FROM branches WHERE id = ibr.fulfilling_branch_id;
+  SELECT COUNT(*)::INT INTO line_count FROM inter_branch_request_items WHERE request_id = ibr.id;
+
+  msg := format(
+    'IBR %s cancelled%s%s — %s → %s',
+    ibr.ibr_number,
+    CASE WHEN p_cancelled_by IS NOT NULL AND trim(p_cancelled_by) <> '' THEN format(' by %s', p_cancelled_by) ELSE '' END,
+    CASE WHEN p_note IS NOT NULL AND trim(p_note) <> '' THEN format(': %s', p_note) ELSE '' END,
+    COALESCE(req_name, 'Requesting branch'),
+    COALESCE(ful_name, 'Fulfilling branch')
+  );
+
+  meta := jsonb_build_object(
+    'interBranchRequestId', ibr.id,
+    'ibrNumber', ibr.ibr_number,
+    'requestingBranchId', ibr.requesting_branch_id,
+    'fulfillingBranchId', ibr.fulfilling_branch_id,
+    'requestingBranchName', req_name,
+    'fulfillingBranchName', ful_name,
+    'cancelledBy', p_cancelled_by,
+    'note', p_note,
+    'lineCount', line_count,
+    'status', ibr.status
+  );
+
+  inserted := inserted + ibr_notify_warehouse_branch(
+    ibr.requesting_branch_id,
+    'Inter-branch request cancelled',
+    msg,
+    ibr.id,
+    'ibr_cancelled',
+    meta,
+    'System'::notification_category,
+    false
+  );
+
+  inserted := inserted + ibr_notify_warehouse_branch(
+    ibr.fulfilling_branch_id,
+    'Inter-branch request cancelled',
+    msg,
+    ibr.id,
+    'ibr_cancelled',
+    meta,
+    'System'::notification_category,
+    false
+  );
+
+  RETURN inserted;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION resolve_ibr_submitter_auth_user_id(p_ibr_id UUID)
+RETURNS UUID
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  ibr RECORD;
+  uid UUID;
+  submitter TEXT;
+  submitter_base TEXT;
+BEGIN
+  SELECT *
+  INTO ibr
+  FROM inter_branch_requests
+  WHERE id = p_ibr_id;
+
+  IF NOT FOUND THEN
+    RETURN NULL;
+  END IF;
+
+  submitter := COALESCE(
+    (
+      SELECT l.performed_by
+      FROM inter_branch_request_logs l
+      WHERE l.inter_branch_request_id = ibr.id
+        AND l.action = 'submitted'
+      ORDER BY l.created_at DESC
+      LIMIT 1
+    ),
+    NULLIF(trim(ibr.created_by), '')
+  );
+
+  IF submitter IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  submitter_base := trim(split_part(submitter, ' (', 1));
+
+  IF position('@' IN submitter) > 0 THEN
+    SELECT u.id
+    INTO uid
+    FROM auth.users u
+    WHERE lower(u.email) = lower(trim(submitter))
+    LIMIT 1;
+
+    IF uid IS NOT NULL THEN
+      RETURN uid;
+    END IF;
+  END IF;
+
+  SELECT e.auth_user_id
+  INTO uid
+  FROM employees e
+  WHERE e.status = 'active'::employee_status
+    AND e.auth_user_id IS NOT NULL
+    AND (
+      e.employee_name = submitter
+      OR e.email = submitter
+      OR lower(trim(e.employee_name)) = lower(trim(submitter))
+      OR lower(trim(e.employee_name)) = lower(submitter_base)
+      OR lower(split_part(e.email, '@', 1)) = lower(trim(submitter))
+      OR lower(split_part(e.email, '@', 1)) = lower(submitter_base)
+    )
+  ORDER BY
+    CASE WHEN e.branch_id = ibr.requesting_branch_id THEN 0 ELSE 1 END,
+    e.updated_at DESC NULLS LAST
+  LIMIT 1;
+
+  RETURN uid;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION notify_ibr_submitter_rejected(
+  p_ibr_id UUID,
+  p_rejected_by TEXT DEFAULT NULL,
+  p_rejection_reason TEXT DEFAULT NULL
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  ibr RECORD;
+  submitter_uid UUID;
+  req_name TEXT;
+  ful_name TEXT;
+  line_count INT;
+  msg TEXT;
+  meta JSONB;
+  inserted INT := 0;
+BEGIN
+  SELECT *
+  INTO ibr
+  FROM inter_branch_requests
+  WHERE id = p_ibr_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Inter-branch request not found: %', p_ibr_id;
+  END IF;
+
+  IF ibr.status IS DISTINCT FROM 'Rejected' THEN
+    RAISE EXCEPTION 'IBR % is not Rejected (current: %)', ibr.ibr_number, ibr.status;
+  END IF;
+
+  SELECT name INTO req_name FROM branches WHERE id = ibr.requesting_branch_id;
+  SELECT name INTO ful_name FROM branches WHERE id = ibr.fulfilling_branch_id;
+  SELECT COUNT(*)::INT INTO line_count FROM inter_branch_request_items WHERE request_id = ibr.id;
+
+  msg := format(
+    'IBR %s was rejected%s%s',
+    ibr.ibr_number,
+    CASE WHEN p_rejected_by IS NOT NULL AND trim(p_rejected_by) <> '' THEN format(' by %s', p_rejected_by) ELSE '' END,
+    CASE
+      WHEN p_rejection_reason IS NOT NULL AND trim(p_rejection_reason) <> ''
+      THEN format('. Reason: %s', p_rejection_reason)
+      ELSE ''
+    END
+  );
+
+  meta := jsonb_build_object(
+    'interBranchRequestId', ibr.id,
+    'ibrNumber', ibr.ibr_number,
+    'requestingBranchId', ibr.requesting_branch_id,
+    'fulfillingBranchId', ibr.fulfilling_branch_id,
+    'requestingBranchName', req_name,
+    'fulfillingBranchName', ful_name,
+    'createdBy', ibr.created_by,
+    'rejectedBy', p_rejected_by,
+    'rejectionReason', p_rejection_reason,
+    'lineCount', line_count,
+    'status', ibr.status
+  );
+
+  submitter_uid := resolve_ibr_submitter_auth_user_id(p_ibr_id);
+
+  IF submitter_uid IS NOT NULL THEN
+    INSERT INTO notifications (
+      user_id,
+      category,
+      title,
+      message,
+      urgent,
+      action_url,
+      action_label,
+      branch_id,
+      metadata,
+      event_type
+    ) VALUES (
+      submitter_uid,
+      'Approvals'::notification_category,
+      'Inter-branch request rejected',
+      msg,
+      true,
+      '/inter-branch-requests/' || ibr.id::text,
+      'View IBR',
+      ibr.requesting_branch_id,
+      meta,
+      'ibr_rejected'
+    );
+    inserted := 1;
+  ELSE
+    inserted := ibr_notify_warehouse_branch(
+      ibr.requesting_branch_id,
+      'Inter-branch request rejected',
+      msg,
+      ibr.id,
+      'ibr_rejected',
+      meta,
+      'Approvals'::notification_category,
+      true
+    );
+  END IF;
+
+  RETURN inserted;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION ibr_notify_warehouse_branch(UUID, TEXT, TEXT, UUID, TEXT, JSONB, notification_category, BOOLEAN) TO authenticated;
+GRANT EXECUTE ON FUNCTION resolve_ibr_submitter_auth_user_id(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION notify_executives_ibr_submitted_for_approval(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION notify_both_branches_ibr_approved(UUID, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION notify_requesting_branch_ibr_status(UUID, TEXT, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION notify_both_branches_ibr_delivery_recorded(UUID, TEXT, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION notify_both_branches_and_executives_ibr_fulfilled(UUID, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION notify_both_branches_ibr_cancelled(UUID, TEXT, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION notify_ibr_submitter_rejected(UUID, TEXT, TEXT) TO authenticated;
+
+COMMENT ON FUNCTION ibr_notify_warehouse_branch(UUID, TEXT, TEXT, UUID, TEXT, JSONB, notification_category, BOOLEAN) IS
+  'Insert in-app notifications for active Warehouse staff at a branch for an IBR event.';
+COMMENT ON FUNCTION notify_executives_ibr_submitted_for_approval(UUID) IS
+  'Fan-out in-app notification to all active Executive users when an IBR is submitted for approval.';
+COMMENT ON FUNCTION notify_both_branches_ibr_approved(UUID, TEXT) IS
+  'Fan-out in-app notification to Warehouse staff at requesting and fulfilling branches when an IBR is approved.';
+COMMENT ON FUNCTION notify_requesting_branch_ibr_status(UUID, TEXT, TEXT) IS
+  'Notify requesting-branch Warehouse staff on IBR logistics milestones (Scheduled, Loading, Packed, Ready, In Transit).';
+COMMENT ON FUNCTION notify_both_branches_ibr_delivery_recorded(UUID, TEXT, TEXT) IS
+  'Notify Warehouse staff at both branches when delivery is recorded at the requesting branch.';
+COMMENT ON FUNCTION notify_both_branches_and_executives_ibr_fulfilled(UUID, TEXT) IS
+  'Notify both branches and all Executives when an IBR is marked fulfilled and closed.';
+COMMENT ON FUNCTION notify_both_branches_ibr_cancelled(UUID, TEXT, TEXT) IS
+  'Notify Warehouse staff at both branches when an IBR is cancelled.';
+COMMENT ON FUNCTION resolve_ibr_submitter_auth_user_id(UUID) IS
+  'Resolve auth.users.id for the employee who submitted an inter-branch request.';
+COMMENT ON FUNCTION notify_ibr_submitter_rejected(UUID, TEXT, TEXT) IS
+  'In-app notification to the IBR submitter (or requesting-branch warehouse fallback) when rejected.';
 
 
 -- ============================================================================

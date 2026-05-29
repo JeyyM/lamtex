@@ -296,7 +296,7 @@ const availablePVCMaterials = [
 export default function ProductFamilyPage() {
   const navigate = useNavigate();
   const { categoryName, familyId } = useParams<{ categoryName: string; familyId: string }>();
-  const { selectedBranch: globalBranch, setHideBranchSelector, branch, employeeName, role, session, addAuditLog } =
+  const { selectedBranch: globalBranch, setHideBranchSelector, branch, employeeName, employeeId, role, session, addAuditLog } =
     useAppContext();
 
   // Hide branch selector while on this page; the product's own branch drives data
@@ -1031,6 +1031,8 @@ export default function ProductFamilyPage() {
         variantId: displayVariant.id,
         quantity: qty,
         lineLabel,
+        createdByAuthUserId: session?.user?.id ?? null,
+        createdByEmployeeId: employeeId ?? null,
       });
       addAuditLog('PR draft from product', 'Production', `${prNumber} ${lineLabel} ×${qty}`);
       navigate(`/production-requests/${id}`);

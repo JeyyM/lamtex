@@ -18,7 +18,10 @@ import {
   updatePurchaseOrderProofDocument,
   uploadPurchaseOrderProofBinary,
 } from '@/src/lib/purchaseOrderProofPayments';
-import { notifyExecutivesPurchaseOrderPaymentRecorded } from '@/src/lib/notifications/notificationsData';
+import {
+  notifyExecutivesPurchaseOrderPaymentRecorded,
+  notifyExecutivesPurchaseOrderProofUploaded,
+} from '@/src/lib/notifications/notificationsData';
 import { formatPoMoney } from '@/src/lib/purchaseOrderTotals';
 import type { PoProofDocument, PoProofType } from '@/src/types/purchaseOrderProofs';
 import {
@@ -343,6 +346,20 @@ export default function PurchaseOrderDocumentsProofs({
           null,
           { count: rows.length, type: proofType, po_number: po.po_number },
         );
+      }
+
+      // Notify executives + warehouse (same client-RPC pattern as the order detail page).
+      // Payment proofs that carried an amount already fired notifyExecutivesPurchaseOrderPaymentRecorded.
+      if (!(proofType === 'payment' && paymentCash > 0)) {
+        void notifyExecutivesPurchaseOrderProofUploaded(po.id, {
+          proofType,
+          uploadedBy: actorForNotify,
+          proofCount: rows.length,
+          proofTitle: titleBase || null,
+          paymentAmount: proofType === 'payment' ? paymentCash : 0,
+        }).catch((notifyErr) => {
+          console.warn('[PO proofs] proof notification failed', notifyErr);
+        });
       }
 
       window.dispatchEvent(new Event('lamtex:notifications-refresh'));

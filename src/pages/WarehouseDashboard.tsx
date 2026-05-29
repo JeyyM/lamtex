@@ -89,6 +89,7 @@ function statusBadgeVariant(status: string): 'success' | 'warning' | 'danger' | 
       return 'info';
     case 'Completed':
     case 'Delivered':
+    case 'Received':
     case 'Partially Received':
     case 'Fulfilled':
       return 'success';

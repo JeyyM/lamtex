@@ -13,7 +13,10 @@ export type ProductionLineRow = {
 export type ProductionLineResult = {
   itemId: string;
   targetQuantity: number;
+  /** New cumulative produced-to-date (previous completed + amount added this run). */
   producedQuantity: number;
+  /** Amount added during this run. */
+  addedQuantity: number;
 };
 
 type RecordProductionModalProps = {
@@ -25,16 +28,15 @@ type RecordProductionModalProps = {
   saving?: boolean;
 };
 
-function clamp(n: number, min: number, max: number) {
-  if (Number.isNaN(n)) return min;
-  return Math.min(Math.max(n, min), max);
-}
-
 function parseQty(raw: string): number | null {
   const t = raw.trim();
   if (t === '' || t === '.') return null;
   const n = Number(t);
   return Number.isFinite(n) ? n : null;
+}
+
+function remainingFor(line: ProductionLineRow): number {
+  return Math.max(0, line.targetQuantity - (Number(line.currentCompleted) || 0));
 }
 
 export function RecordProductionModal({
@@ -45,63 +47,61 @@ export function RecordProductionModal({
   onConfirm,
   saving = false,
 }: RecordProductionModalProps) {
-  const [values, setValues] = useState<ProductionLineResult[]>([]);
+  /** Amount to add this run, keyed by item id. */
+  const [addValues, setAddValues] = useState<Record<string, number>>({});
   const [inputValues, setInputValues] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!isOpen) return;
-    const v = lines.map((line) => {
-      const target = line.targetQuantity;
-      const current = clamp(line.currentCompleted, 0, target);
-      return {
-        itemId: line.id,
-        targetQuantity: target,
-        producedQuantity: current,
-      };
-    });
-    setValues(v);
-    setInputValues(
-      Object.fromEntries(v.map((d) => [d.itemId, String(d.producedQuantity)])),
-    );
+    // Default each line's "add" amount to whatever is still remaining.
+    const adds = Object.fromEntries(lines.map((line) => [line.id, remainingFor(line)]));
+    setAddValues(adds);
+    setInputValues(Object.fromEntries(lines.map((line) => [line.id, String(remainingFor(line))])));
   }, [isOpen, lines]);
 
   if (!isOpen) return null;
 
-  const setProduced = (itemId: string, produced: number, target: number) => {
-    const p = clamp(produced, 0, target);
-    setValues((prev) =>
-      prev.map((x) => (x.itemId === itemId ? { ...x, producedQuantity: p } : x)),
-    );
-    setInputValues((iv) => ({ ...iv, [itemId]: String(p) }));
+  const setAdded = (itemId: string, added: number) => {
+    // Allow surpassing the target (buffer stock) — only floor at zero.
+    const a = Number.isNaN(added) ? 0 : Math.max(0, added);
+    setAddValues((prev) => ({ ...prev, [itemId]: a }));
+    setInputValues((iv) => ({ ...iv, [itemId]: String(a) }));
   };
 
-  const handleChange = (itemId: string, target: number, raw: string) => {
+  const handleChange = (itemId: string, raw: string) => {
     setInputValues((iv) => ({ ...iv, [itemId]: raw }));
     const n = parseQty(raw);
     if (n != null) {
-      setProduced(itemId, n, target);
+      setAddValues((prev) => ({ ...prev, [itemId]: Math.max(0, n) }));
     }
   };
 
-  const handleBlur = (itemId: string, target: number) => {
+  const handleBlur = (itemId: string) => {
     const raw = inputValues[itemId] ?? '';
     const n = parseQty(raw);
-    const p = n == null ? 0 : clamp(n, 0, target);
-    setProduced(itemId, p, target);
+    setAdded(itemId, n == null ? 0 : n);
   };
+
+  const buildResults = (): ProductionLineResult[] =>
+    lines.map((line) => {
+      const added = Math.max(0, addValues[line.id] ?? 0);
+      return {
+        itemId: line.id,
+        targetQuantity: line.targetQuantity,
+        producedQuantity: (Number(line.currentCompleted) || 0) + added,
+        addedQuantity: added,
+      };
+    });
 
   const handleConfirm = () => {
-    onConfirm(values);
+    onConfirm(buildResults());
   };
 
-  const isFull = values.every(
-    (v) => v.producedQuantity + 1e-9 >= v.targetQuantity,
-  );
-  const isPartial = values.length > 0 && !isFull;
+  const results = buildResults();
+  const isFull = results.every((v) => v.producedQuantity + 1e-9 >= v.targetQuantity);
+  const isPartial = results.length > 0 && !isFull;
 
-  const fullLines = values.filter(
-    (v) => v.producedQuantity + 1e-9 >= v.targetQuantity,
-  ).length;
+  const fullLines = results.filter((v) => v.producedQuantity + 1e-9 >= v.targetQuantity).length;
 
   const el = (
     <div
@@ -121,7 +121,7 @@ export function RecordProductionModal({
             </h2>
             <p className="text-sm text-gray-600 mt-1">{prNumber}</p>
             <p className="text-xs text-gray-500 mt-1">
-              Enter how much was produced for each line. Stays in progress if any line is under target.
+              Enter how much was produced <strong>this run</strong> — it's added to what was made before. You can exceed the target for buffer stock. Stays in progress if any line is still under target.
             </p>
           </div>
           <button
@@ -152,11 +152,14 @@ export function RecordProductionModal({
           <div className="space-y-3">
             <h3 className="font-semibold text-gray-900 mb-3">Products</h3>
             {lines.map((line) => {
-              const row = values.find((v) => v.itemId === line.id);
-              const produced = row?.producedQuantity ?? 0;
               const target = line.targetQuantity;
+              const previous = Number(line.currentCompleted) || 0;
+              const remaining = remainingFor(line);
+              const added = Math.max(0, addValues[line.id] ?? 0);
+              const produced = previous + added;
               const done = produced + 1e-9 >= target;
               const partial = produced > 0 && !done;
+              const overBuffer = produced - target;
 
               return (
                 <div
@@ -177,33 +180,38 @@ export function RecordProductionModal({
                         {partial && <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />}
                       </div>
                       <p className="text-sm text-gray-600">{line.variantLabel}</p>
+                      <p className="text-xs text-gray-500 mt-1">
+                        Already produced{' '}
+                        <span className="font-semibold text-gray-700">{previous.toLocaleString()}</span> of{' '}
+                        <span className="font-semibold text-gray-700">{target.toLocaleString()}</span>
+                      </p>
                     </div>
 
                     <div className="flex flex-col items-end">
-                      <label className="text-xs text-gray-500 mb-1">Produced</label>
+                      <label className="text-xs text-gray-500 mb-1">Add this run</label>
                       <div className="flex items-center gap-2">
                         <input
                           type="number"
                           min={0}
                           step="any"
-                          value={inputValues[line.id] ?? String(produced)}
-                          onChange={(e) => handleChange(line.id, target, e.target.value)}
-                          onBlur={() => handleBlur(line.id, target)}
+                          value={inputValues[line.id] ?? String(added)}
+                          onChange={(e) => handleChange(line.id, e.target.value)}
+                          onBlur={() => handleBlur(line.id)}
                           onWheel={(e) => e.currentTarget.blur()}
                           disabled={saving}
                           className="w-24 px-3 py-2 border-2 border-gray-300 rounded-lg text-center font-bold text-lg focus:border-emerald-500 focus:outline-none disabled:opacity-50"
                         />
                         <span className="text-gray-400 font-bold">/</span>
                         <span className="text-lg font-bold text-gray-900 w-20 text-right tabular-nums">
-                          {Number(target).toLocaleString()}
+                          {remaining.toLocaleString()}
                         </span>
                       </div>
-                      <p className="text-xs text-gray-500 mt-1 text-right max-w-[200px]">
+                      <p className="text-xs text-gray-500 mt-1 text-right max-w-[220px]">
                         {done
-                          ? 'Target met ✓'
-                          : target - produced > 0
-                            ? `${Number((target - produced).toFixed(4))} remaining`
-                            : '—'}
+                          ? overBuffer > 1e-9
+                            ? `Target met ✓ · +${Number(overBuffer.toFixed(4)).toLocaleString()} buffer`
+                            : 'Target met ✓'
+                          : `New total ${Number(produced.toFixed(4)).toLocaleString()} / ${target.toLocaleString()} · ${Number((target - produced).toFixed(4)).toLocaleString()} left`}
                       </p>
                     </div>
                   </div>

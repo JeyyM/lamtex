@@ -63,6 +63,14 @@ import {
   type OrderPaymentRecordedEmailPayload,
 } from './email/orderPaymentRecordedEmail';
 import {
+  buildOrderPaymentOverdueEmailHtml,
+  type OrderPaymentOverdueEmailPayload,
+} from './email/orderPaymentOverdueEmail';
+import {
+  buildOrderCustomerPaymentOverdueEmailHtml,
+  type OrderCustomerPaymentOverdueEmailPayload,
+} from './email/orderCustomerPaymentOverdueEmail';
+import {
   buildOrderCommissionPaidAgentEmailHtml,
   type OrderCommissionPaidAgentEmailPayload,
 } from './email/orderCommissionPaidAgentEmail';
@@ -111,40 +119,37 @@ import {
   type PurchaseOrderPaymentRecordedEmailPayload,
 } from './email/purchaseOrderPaymentRecordedEmail';
 import {
-  sampleOrderEmailPayload,
-  sampleOrderDecisionPayload,
-  sampleOrderRevisedPayload,
-  sampleOrderCancelledPayload,
-  sampleOrderLogisticsReadyPayload,
-  sampleOrderLogisticsLoadingPayload,
-  sampleOrderPackedPayload,
-  sampleOrderInTransitPayload,
-  sampleOrderCustomerInTransitPayload,
-  sampleOrderDeliveryRecordedPayload,
-  sampleOrderCustomerDeliveryRecordedPayload,
-  sampleOrderCustomerApprovedPayload,
-  sampleOrderCustomerScheduledPayload,
-  sampleOrderCustomerUnscheduledPayload,
-  sampleOrderCustomerPortalSharePayload,
-  sampleOrderScheduledPayload,
-  sampleOrderPaymentProofUploadedPayload,
-  sampleOrderPaymentRecordedPayload,
-  sampleOrderPaymentRecordedPaidInFullPayload,
-  sampleOrderCustomerPaymentRecordedPayload,
-  sampleOrderCustomerPaymentRecordedPaidInFullPayload,
-  sampleOrderPaymentProofUploadedPaidInFullPayload,
-  sampleOrderCommissionPaidAgentPayload,
-  sampleTripDriverAssignedPayload,
-  sampleProductStockAlertPayload,
-  sampleMaterialStockAlertPayload,
-} from './email/sampleOrderEmailPayload';
+  buildProductionRequestApprovalEmailHtml,
+  type ProductionRequestSubmittedEmailPayload,
+} from './email/productionRequestApprovalEmail';
 import {
-  samplePurchaseOrderSubmittedPayload,
-  samplePurchaseOrderRejectedPayload,
-  samplePurchaseOrderCancelledPayload,
-  samplePurchaseOrderAcceptedPayload,
-  samplePurchaseOrderConfirmedPayload,
-} from './email/samplePurchaseOrderEmailPayload';
+  buildProductionRequestCancelledEmailHtml,
+  type ProductionRequestCancelledEmailPayload,
+} from './email/productionRequestCancelledEmail';
+import {
+  buildProductionRequestAcceptedEmailHtml,
+  type ProductionRequestAcceptedEmailPayload,
+} from './email/productionRequestAcceptedEmail';
+import {
+  buildProductionRequestRejectedEmailHtml,
+  type ProductionRequestRejectedEmailPayload,
+} from './email/productionRequestRejectedEmail';
+import {
+  buildProductionRequestStartedEmailHtml,
+  type ProductionRequestStartedEmailPayload,
+} from './email/productionRequestStartedEmail';
+import {
+  buildProductionRequestCompletedEmailHtml,
+  type ProductionRequestCompletedEmailPayload,
+} from './email/productionRequestCompletedEmail';
+import {
+  buildProductionRequestInventoryAddedEmailHtml,
+  type ProductionRequestInventoryAddedEmailPayload,
+} from './email/productionRequestInventoryAddedEmail';
+import {
+  buildInterBranchRequestWorkflowEmailHtml,
+  type InterBranchRequestWorkflowEmailPayload,
+} from './email/interBranchRequestWorkflowEmail';
 import { emailEntityRef } from './email/emailHtmlUtils';
 import {
   orderApprovedSubject,
@@ -158,6 +163,8 @@ import {
   orderOtherProofUploadedAgentSubject,
   orderPaymentProofUploadedAgentSubject,
   orderPaymentRecordedExecutiveSubject,
+  orderPaymentOverdueSubject,
+  orderCustomerPaymentOverdueSubject,
   orderCommissionPaidAgentSubject,
   orderLogisticsReadySubject,
   orderLogisticsLoadingSubject,
@@ -178,6 +185,20 @@ import {
   purchaseOrderConfirmedSubject,
   purchaseOrderReceivedSubject,
   purchaseOrderPaymentRecordedSubject,
+  productionRequestSubmittedForApprovalSubject,
+  productionRequestCancelledSubject,
+  productionRequestAcceptedSubject,
+  productionRequestRejectedSubject,
+  productionRequestStartedSubject,
+  productionRequestCompletedSubject,
+  productionRequestInventoryAddedSubject,
+  interBranchSubmittedForApprovalSubject,
+  interBranchApprovedSubject,
+  interBranchLogisticsSubject,
+  interBranchDeliveryRecordedSubject,
+  interBranchFulfilledSubject,
+  interBranchCancelledSubject,
+  interBranchRejectedSubject,
   tripDriverAssignedSubject,
   productStockAlertSubject,
   materialStockAlertSubject,
@@ -380,6 +401,350 @@ app.post('/api/notifications/purchase-order-cancelled', async (req, res) => {
       return;
     }
     console.error('[notify-server] PO cancelled email', err);
+    res.status(502).json({ error: message });
+  }
+});
+
+app.post('/api/notifications/production-request-submitted-for-approval', async (req, res) => {
+  try {
+    const payload = req.body as ProductionRequestSubmittedEmailPayload;
+    if (!payload?.productionRequestId || !payload?.prNumber) {
+      res.status(400).json({ error: 'Missing productionRequestId or prNumber' });
+      return;
+    }
+
+    const sentTo = resolveRecipient();
+    const subject = productionRequestSubmittedForApprovalSubject(payload);
+    const html = buildProductionRequestApprovalEmailHtml(payload);
+    const { id } = await sendViaResend({
+      to: sentTo,
+      subject,
+      html,
+      entityRef: emailEntityRef(payload.productionRequestId, 'pr-submitted_for_approval'),
+    });
+    res.json({ ok: true, id, sentTo, subject });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Internal error';
+    if (message.includes('RESEND_API_KEY')) {
+      res.status(503).json({ error: message });
+      return;
+    }
+    console.error('[notify-server] PR submitted-for-approval email', err);
+    res.status(502).json({ error: message });
+  }
+});
+
+app.post('/api/notifications/production-request-cancelled', async (req, res) => {
+  try {
+    const payload = req.body as ProductionRequestCancelledEmailPayload;
+    if (!payload?.productionRequestId || !payload?.prNumber) {
+      res.status(400).json({ error: 'Missing productionRequestId or prNumber' });
+      return;
+    }
+
+    const intended = payload.submitterEmail?.trim();
+    const sentTo = resolveRecipient(intended);
+    if (intended && sentTo !== intended) {
+      console.log(`[notify-server] email override active: ${intended} → ${sentTo}`);
+    }
+    const subject = productionRequestCancelledSubject(payload);
+    const html = buildProductionRequestCancelledEmailHtml(payload);
+    const { id } = await sendViaResend({
+      to: sentTo,
+      subject,
+      html,
+      entityRef: emailEntityRef(payload.productionRequestId, 'pr-cancelled'),
+    });
+    res.json({ ok: true, id, sentTo, subject });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Internal error';
+    if (message.includes('RESEND_API_KEY')) {
+      res.status(503).json({ error: message });
+      return;
+    }
+    console.error('[notify-server] PR cancelled email', err);
+    res.status(502).json({ error: message });
+  }
+});
+
+app.post('/api/notifications/production-request-accepted', async (req, res) => {
+  try {
+    const payload = req.body as ProductionRequestAcceptedEmailPayload;
+    if (!payload?.productionRequestId || !payload?.prNumber) {
+      res.status(400).json({ error: 'Missing productionRequestId or prNumber' });
+      return;
+    }
+
+    const intended = payload.submitterEmail?.trim();
+    const sentTo = resolveRecipient(intended);
+    if (intended && sentTo !== intended) {
+      console.log(`[notify-server] email override active: ${intended} → ${sentTo}`);
+    }
+    const subject = productionRequestAcceptedSubject(payload);
+    const html = buildProductionRequestAcceptedEmailHtml(payload);
+    const { id } = await sendViaResend({
+      to: sentTo,
+      subject,
+      html,
+      entityRef: emailEntityRef(payload.productionRequestId, 'pr-accepted'),
+    });
+    res.json({ ok: true, id, sentTo, subject });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Internal error';
+    if (message.includes('RESEND_API_KEY')) {
+      res.status(503).json({ error: message });
+      return;
+    }
+    console.error('[notify-server] PR accepted email', err);
+    res.status(502).json({ error: message });
+  }
+});
+
+app.post('/api/notifications/production-request-rejected', async (req, res) => {
+  try {
+    const payload = req.body as ProductionRequestRejectedEmailPayload;
+    if (!payload?.productionRequestId || !payload?.prNumber) {
+      res.status(400).json({ error: 'Missing productionRequestId or prNumber' });
+      return;
+    }
+
+    const intended = payload.submitterEmail?.trim();
+    const sentTo = resolveRecipient(intended);
+    if (intended && sentTo !== intended) {
+      console.log(`[notify-server] email override active: ${intended} → ${sentTo}`);
+    }
+    const subject = productionRequestRejectedSubject(payload);
+    const html = buildProductionRequestRejectedEmailHtml(payload);
+    const { id } = await sendViaResend({
+      to: sentTo,
+      subject,
+      html,
+      entityRef: emailEntityRef(payload.productionRequestId, 'pr-rejected'),
+    });
+    res.json({ ok: true, id, sentTo, subject });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Internal error';
+    if (message.includes('RESEND_API_KEY')) {
+      res.status(503).json({ error: message });
+      return;
+    }
+    console.error('[notify-server] PR rejected email', err);
+    res.status(502).json({ error: message });
+  }
+});
+
+app.post('/api/notifications/production-request-started', async (req, res) => {
+  try {
+    const payload = req.body as ProductionRequestStartedEmailPayload;
+    if (!payload?.productionRequestId || !payload?.prNumber) {
+      res.status(400).json({ error: 'Missing productionRequestId or prNumber' });
+      return;
+    }
+
+    const subject = productionRequestStartedSubject(payload);
+    const html = buildProductionRequestStartedEmailHtml(payload);
+
+    const inputEmails = (payload.recipientEmails ?? [])
+      .map((e) => (typeof e === 'string' ? e.trim() : ''))
+      .filter(Boolean) as string[];
+    const targets = inputEmails.length > 0 ? inputEmails : [null];
+    const uniqueRecipients = [...new Set(targets.map((email) => resolveRecipient(email)))];
+
+    const sent: Array<{ id?: string; sentTo: string }> = [];
+    for (const sentTo of uniqueRecipients) {
+      const { id } = await sendViaResend({
+        to: sentTo,
+        subject,
+        html,
+        entityRef: emailEntityRef(payload.productionRequestId, 'pr-started'),
+      });
+      sent.push({ id, sentTo });
+    }
+
+    res.json({ ok: true, subject, sentCount: sent.length, sent });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Internal error';
+    if (message.includes('RESEND_API_KEY')) {
+      res.status(503).json({ error: message });
+      return;
+    }
+    console.error('[notify-server] PR started email', err);
+    res.status(502).json({ error: message });
+  }
+});
+
+app.post('/api/notifications/production-request-completed', async (req, res) => {
+  try {
+    const payload = req.body as ProductionRequestCompletedEmailPayload;
+    if (!payload?.productionRequestId || !payload?.prNumber) {
+      res.status(400).json({ error: 'Missing productionRequestId or prNumber' });
+      return;
+    }
+
+    const subject = productionRequestCompletedSubject(payload);
+    const html = buildProductionRequestCompletedEmailHtml(payload);
+
+    const inputEmails = (payload.recipientEmails ?? [])
+      .map((e) => (typeof e === 'string' ? e.trim() : ''))
+      .filter(Boolean) as string[];
+    const targets = inputEmails.length > 0 ? inputEmails : [null];
+    const uniqueRecipients = [...new Set(targets.map((email) => resolveRecipient(email)))];
+
+    const sent: Array<{ id?: string; sentTo: string }> = [];
+    for (const sentTo of uniqueRecipients) {
+      const { id } = await sendViaResend({
+        to: sentTo,
+        subject,
+        html,
+        entityRef: emailEntityRef(payload.productionRequestId, 'pr-completed'),
+      });
+      sent.push({ id, sentTo });
+    }
+
+    res.json({ ok: true, subject, sentCount: sent.length, sent });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Internal error';
+    if (message.includes('RESEND_API_KEY')) {
+      res.status(503).json({ error: message });
+      return;
+    }
+    console.error('[notify-server] PR completed email', err);
+    res.status(502).json({ error: message });
+  }
+});
+
+app.post('/api/notifications/production-request-inventory-added', async (req, res) => {
+  try {
+    const payload = req.body as ProductionRequestInventoryAddedEmailPayload;
+    if (!payload?.productionRequestId || !payload?.prNumber) {
+      res.status(400).json({ error: 'Missing productionRequestId or prNumber' });
+      return;
+    }
+
+    const subject = productionRequestInventoryAddedSubject(payload);
+    const html = buildProductionRequestInventoryAddedEmailHtml(payload);
+
+    const inputEmails = (payload.recipientEmails ?? [])
+      .map((e) => (typeof e === 'string' ? e.trim() : ''))
+      .filter(Boolean) as string[];
+    const targets = inputEmails.length > 0 ? inputEmails : [null];
+    const uniqueRecipients = [...new Set(targets.map((email) => resolveRecipient(email)))];
+
+    const sent: Array<{ id?: string; sentTo: string }> = [];
+    for (const sentTo of uniqueRecipients) {
+      const { id } = await sendViaResend({
+        to: sentTo,
+        subject,
+        html,
+        entityRef: emailEntityRef(payload.productionRequestId, 'pr-inventory-added'),
+      });
+      sent.push({ id, sentTo });
+    }
+
+    res.json({ ok: true, subject, sentCount: sent.length, sent });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Internal error';
+    if (message.includes('RESEND_API_KEY')) {
+      res.status(503).json({ error: message });
+      return;
+    }
+    console.error('[notify-server] PR inventory-added email', err);
+    res.status(502).json({ error: message });
+  }
+});
+
+function interBranchWorkflowEmailSubject(
+  payload: InterBranchRequestWorkflowEmailPayload,
+  audience: 'executive' | 'warehouse',
+  branchName?: string | null,
+): string {
+  const ref = {
+    ibrNumber: payload.ibrNumber,
+    requestingBranchName: payload.requestingBranchName,
+    fulfillingBranchName: payload.fulfillingBranchName,
+  };
+  switch (payload.eventType) {
+    case 'submitted_for_approval':
+      return interBranchSubmittedForApprovalSubject(ref);
+    case 'approved':
+      return interBranchApprovedSubject(ref, branchName);
+    case 'scheduled':
+    case 'loading':
+    case 'packed':
+    case 'ready':
+    case 'in_transit':
+      return interBranchLogisticsSubject(
+        { ...ref, status: payload.status },
+        branchName ?? payload.requestingBranchName,
+      );
+    case 'delivery_recorded':
+      return interBranchDeliveryRecordedSubject({ ...ref, status: payload.status }, branchName);
+    case 'fulfilled':
+      return interBranchFulfilledSubject(ref, audience, branchName);
+    case 'cancelled':
+      return interBranchCancelledSubject(ref, branchName);
+    case 'rejected':
+      return interBranchRejectedSubject(ref, branchName);
+    default:
+      return interBranchApprovedSubject(ref, branchName);
+  }
+}
+
+app.post('/api/notifications/inter-branch-workflow', async (req, res) => {
+  try {
+    const payload = req.body as InterBranchRequestWorkflowEmailPayload;
+    if (!payload?.interBranchRequestId || !payload?.ibrNumber || !payload?.eventType) {
+      res.status(400).json({ error: 'Missing interBranchRequestId, ibrNumber, or eventType' });
+      return;
+    }
+
+    const html = buildInterBranchRequestWorkflowEmailHtml(payload);
+    const groups = payload.recipientGroups ?? [];
+    const sent: Array<{ id?: string; sentTo: string; subject: string }> = [];
+
+    if (groups.length === 0) {
+      const subject = interBranchWorkflowEmailSubject(payload, 'executive');
+      const sentTo = resolveRecipient();
+      const { id } = await sendViaResend({
+        to: sentTo,
+        subject,
+        html,
+        entityRef: emailEntityRef(payload.interBranchRequestId, `ibr-${payload.eventType}`),
+      });
+      sent.push({ id, sentTo, subject });
+    } else {
+      for (const group of groups) {
+        const emails = (group.emails ?? [])
+          .map((e) => (typeof e === 'string' ? e.trim() : ''))
+          .filter(Boolean);
+        const targets = emails.length > 0 ? emails : [null];
+        const subject = interBranchWorkflowEmailSubject(payload, group.audience, group.branchName);
+        for (const email of targets) {
+          const sentTo = resolveRecipient(email);
+          const { id } = await sendViaResend({
+            to: sentTo,
+            subject,
+            html,
+            entityRef: emailEntityRef(
+              payload.interBranchRequestId,
+              `ibr-${payload.eventType}-${group.audience}-${group.branchName ?? 'na'}`,
+            ),
+          });
+          if (!sent.some((s) => s.sentTo === sentTo && s.subject === subject)) {
+            sent.push({ id, sentTo, subject });
+          }
+        }
+      }
+    }
+
+    res.json({ ok: true, sentCount: sent.length, sent });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Internal error';
+    if (message.includes('RESEND_API_KEY')) {
+      res.status(503).json({ error: message });
+      return;
+    }
+    console.error('[notify-server] IBR workflow email', err);
     res.status(502).json({ error: message });
   }
 });
@@ -1390,622 +1755,67 @@ app.post('/api/notifications/order-scheduled', async (req, res) => {
   }
 });
 
-app.get('/api/health', (_req, res) => {
-  res.json({ ok: true });
-});
-
-app.get('/api/email-test/config', (_req, res) => {
-  res.json({
-    resendConfigured: Boolean(resendKey),
-    fromEmail,
-    defaultTo: emailOverride,
-    appUrl: process.env.APP_URL ?? 'http://localhost:3000',
-    notifyServerPort: PORT,
-  });
-});
-
-app.post('/api/email-test/send', async (req, res) => {
+app.post('/api/notifications/order-payment-overdue', async (req, res) => {
   try {
-    const { to, subject, html, text } = req.body as {
-      to?: string;
-      subject?: string;
-      html?: string;
-      text?: string;
-    };
-    if (!subject?.trim()) {
-      res.status(400).json({ error: 'Subject is required' });
+    const payload = req.body as OrderPaymentOverdueEmailPayload;
+    if (!payload?.orderId || !payload?.orderNumber || !payload?.notifyTarget) {
+      res.status(400).json({ error: 'Missing orderId, orderNumber, or notifyTarget' });
       return;
     }
-    if (!html?.trim() && !text?.trim()) {
-      res.status(400).json({ error: 'HTML or plain text body is required' });
-      return;
-    }
-    const sentTo = resolveRecipient(to);
-    const bodyHtml =
-      html?.trim() ||
-      `<pre style="font-family:system-ui,sans-serif;white-space:pre-wrap;padding:24px;">${String(text).replace(/</g, '&lt;')}</pre>`;
+
+    const target = payload.notifyTarget;
+    const subject = orderPaymentOverdueSubject(payload, target);
+    const html = buildOrderPaymentOverdueEmailHtml(payload);
+    const sentTo = resolveRecipient(target === 'agent' ? payload.agentEmail : null);
     const { id } = await sendViaResend({
       to: sentTo,
-      subject: subject.trim(),
-      html: bodyHtml,
-      text: text?.trim() || undefined,
+      subject,
+      html,
+      entityRef: emailEntityRef(payload.orderId, `payment-overdue-${target}`),
     });
-    res.json({ ok: true, id, sentTo });
+    res.json({ ok: true, id, sentTo, subject, notifyTarget: target });
   } catch (err) {
-    console.error('[notify-server] email-test/send', err);
     const message = err instanceof Error ? err.message : 'Internal error';
-    res.status(message.includes('RESEND_API_KEY') ? 503 : 502).json({ error: message });
+    if (message.includes('RESEND_API_KEY')) {
+      res.status(503).json({ error: message });
+      return;
+    }
+    console.error('[notify-server] order-payment-overdue', err);
+    res.status(502).json({ error: message });
   }
 });
 
-app.post('/api/email-test/template', async (req, res) => {
+app.post('/api/notifications/order-payment-overdue-customer', async (req, res) => {
   try {
-    const { template, to } = req.body as {
-      template?:
-        | 'order_created'
-        | 'order_submitted_for_approval'
-        | 'order_approved'
-        | 'order_rejected'
-        | 'order_revised'
-        | 'order_cancelled_agent'
-        | 'order_cancelled_executive'
-        | 'order_logistics_ready'
-        | 'order_logistics_loading'
-        | 'order_packed_logistics'
-        | 'order_packed_agent'
-        | 'order_in_transit_executive'
-        | 'order_in_transit_warehouse'
-        | 'order_in_transit_agent'
-        | 'order_in_transit_customer'
-        | 'order_delivery_executive'
-        | 'order_delivery_agent'
-        | 'order_delivery_customer'
-        | 'order_customer_approved'
-        | 'order_customer_scheduled'
-        | 'order_customer_unscheduled'
-        | 'order_customer_portal_share'
-        | 'order_payment_proof_agent'
-        | 'order_payment_recorded_executive'
-        | 'order_payment_recorded_executive_paid'
-        | 'order_payment_recorded_customer'
-        | 'order_payment_recorded_customer_paid'
-        | 'order_payment_proof_agent_paid'
-        | 'order_commission_paid_agent'
-        | 'order_scheduled_executive'
-        | 'order_scheduled_warehouse'
-        | 'order_scheduled_agent'
-        | 'trip_driver_assigned'
-        | 'product_low_stock_executive'
-        | 'product_low_stock_warehouse'
-        | 'product_critical_stock_executive'
-        | 'product_critical_stock_warehouse'
-        | 'product_out_of_stock_executive'
-        | 'product_out_of_stock_warehouse'
-        | 'material_low_stock_executive'
-        | 'material_low_stock_warehouse'
-        | 'material_critical_stock_executive'
-        | 'material_critical_stock_warehouse'
-        | 'material_out_of_stock_executive'
-        | 'material_out_of_stock_warehouse'
-        | 'purchase_order_submitted_for_approval'
-        | 'purchase_order_rejected'
-        | 'purchase_order_cancelled'
-        | 'purchase_order_accepted'
-        | 'purchase_order_confirmed_executive'
-        | 'purchase_order_confirmed_warehouse'
-        | 'plain_welcome';
-      to?: string;
-    };
-    const sentTo = resolveRecipient(to);
-
-    if (template === 'plain_welcome') {
-      const { id } = await sendViaResend({
-        to: sentTo,
-        subject: 'Lamtex — Resend test email',
-        html: `<!DOCTYPE html><html><body style="font-family:system-ui,sans-serif;padding:32px;">
-          <h1 style="color:#991b1b;">Lamtex email test</h1>
-          <p>If you received this, Resend is configured correctly.</p>
-          <p style="color:#6b7280;font-size:14px;">Sent at ${new Date().toISOString()}</p>
-        </body></html>`,
-        text: 'Lamtex email test — if you received this, Resend is configured correctly.',
-      });
-      res.json({ ok: true, id, sentTo, template });
+    const payload = req.body as OrderCustomerPaymentOverdueEmailPayload;
+    if (!payload?.orderId || !payload?.orderNumber || !payload?.customerEmail?.trim()) {
+      res.status(400).json({ error: 'Missing orderId, orderNumber, or customerEmail' });
       return;
     }
 
-    if (template === 'order_created' || template === 'order_submitted_for_approval') {
-      const isApproval = template === 'order_submitted_for_approval';
-      const payload = sampleOrderEmailPayload(isApproval ? 'submitted_for_approval' : 'created');
-      const subject = isApproval
-        ? orderSubmittedForApprovalSubject(payload)
-        : orderCreatedSubject(payload);
-      const html = isApproval ? buildOrderApprovalEmailHtml(payload) : buildOrderCreatedEmailHtml(payload);
-      const { id } = await sendViaResend({ to: sentTo, subject, html });
-      res.json({ ok: true, id, sentTo, template, subject });
-      return;
-    }
-
-    if (template === 'purchase_order_submitted_for_approval') {
-      const payload = samplePurchaseOrderSubmittedPayload();
-      const subject = purchaseOrderSubmittedForApprovalSubject(payload);
-      const html = buildPurchaseOrderApprovalEmailHtml(payload);
-      const { id } = await sendViaResend({
-        to: sentTo,
-        subject,
-        html,
-        entityRef: emailEntityRef(payload.purchaseOrderId, 'po-submitted_for_approval'),
-      });
-      res.json({ ok: true, id, sentTo, template, subject });
-      return;
-    }
-
-    if (template === 'purchase_order_rejected') {
-      const payload = samplePurchaseOrderRejectedPayload();
-      const subject = purchaseOrderRejectedSubject(payload);
-      const html = buildPurchaseOrderRejectedEmailHtml(payload);
-      const { id } = await sendViaResend({
-        to: sentTo,
-        subject,
-        html,
-        entityRef: emailEntityRef(payload.purchaseOrderId, 'po-rejected'),
-      });
-      res.json({ ok: true, id, sentTo, template, subject });
-      return;
-    }
-
-    if (template === 'purchase_order_cancelled') {
-      const payload = samplePurchaseOrderCancelledPayload();
-      const subject = purchaseOrderCancelledSubject(payload);
-      const html = buildPurchaseOrderCancelledEmailHtml(payload);
-      const { id } = await sendViaResend({
-        to: sentTo,
-        subject,
-        html,
-        entityRef: emailEntityRef(payload.purchaseOrderId, 'po-cancelled'),
-      });
-      res.json({ ok: true, id, sentTo, template, subject });
-      return;
-    }
-
-    if (template === 'purchase_order_accepted') {
-      const payload = samplePurchaseOrderAcceptedPayload();
-      const subject = purchaseOrderAcceptedSubject(payload);
-      const html = buildPurchaseOrderAcceptedEmailHtml(payload);
-      const { id } = await sendViaResend({
-        to: sentTo,
-        subject,
-        html,
-        entityRef: emailEntityRef(payload.purchaseOrderId, 'po-accepted'),
-      });
-      res.json({ ok: true, id, sentTo, template, subject });
-      return;
-    }
-
-    if (template === 'purchase_order_confirmed_executive' || template === 'purchase_order_confirmed_warehouse') {
-      const audience = template === 'purchase_order_confirmed_warehouse' ? 'warehouse' : 'executive';
-      const payload = samplePurchaseOrderConfirmedPayload(audience);
-      const subject = purchaseOrderConfirmedSubject(payload, audience);
-      const html = buildPurchaseOrderConfirmedEmailHtml(payload);
-      const { id } = await sendViaResend({
-        to: sentTo,
-        subject,
-        html,
-        entityRef: emailEntityRef(payload.purchaseOrderId, `po-confirmed-${audience}`),
-      });
-      res.json({ ok: true, id, sentTo, template, subject });
-      return;
-    }
-
-    if (template === 'order_approved' || template === 'order_rejected') {
-      const decision = template === 'order_approved' ? 'approved' : 'rejected';
-      const payload = sampleOrderDecisionPayload(decision);
-      const subject =
-        decision === 'approved' ? orderApprovedSubject(payload) : orderRejectedSubject(payload);
-      const html = buildOrderDecisionEmailHtml(payload);
-      const { id } = await sendViaResend({ to: sentTo, subject, html });
-      res.json({ ok: true, id, sentTo, template, subject });
-      return;
-    }
-
-    if (template === 'order_revised') {
-      const payload = sampleOrderRevisedPayload();
-      const subject = orderRevisedSubject(payload);
-      const html = buildOrderRevisedEmailHtml(payload);
-      const { id } = await sendViaResend({ to: sentTo, subject, html });
-      res.json({ ok: true, id, sentTo, template, subject });
-      return;
-    }
-
-    if (template === 'order_cancelled_agent' || template === 'order_cancelled_executive') {
-      const notifyTarget = template === 'order_cancelled_agent' ? 'agent' : 'executive';
-      const payload = sampleOrderCancelledPayload(notifyTarget);
-      const subject = orderCancelledSubject(payload, notifyTarget);
-      const html = buildOrderCancelledEmailHtml(payload);
-      const { id } = await sendViaResend({
-        to: sentTo,
-        subject,
-        html,
-        entityRef: emailEntityRef(payload.orderId, `cancelled-${notifyTarget}`),
-      });
-      res.json({ ok: true, id, sentTo, template, subject });
-      return;
-    }
-
-    if (template === 'order_logistics_ready') {
-      const payload = sampleOrderLogisticsReadyPayload();
-      const subject = orderLogisticsReadySubject(payload);
-      const html = buildOrderLogisticsReadyEmailHtml(payload);
-      const { id } = await sendViaResend({
-        to: sentTo,
-        subject,
-        html,
-        entityRef: emailEntityRef(payload.orderId, 'logistics-ready'),
-      });
-      res.json({ ok: true, id, sentTo, template, subject });
-      return;
-    }
-
-    if (template === 'order_logistics_loading') {
-      const payload = sampleOrderLogisticsLoadingPayload();
-      const subject = orderLogisticsLoadingSubject(payload);
-      const html = buildOrderLogisticsLoadingEmailHtml(payload);
-      const { id } = await sendViaResend({
-        to: sentTo,
-        subject,
-        html,
-        entityRef: emailEntityRef(payload.orderId, 'logistics-loading'),
-      });
-      res.json({ ok: true, id, sentTo, template, subject });
-      return;
-    }
-
-    if (template === 'order_packed_logistics' || template === 'order_packed_agent') {
-      const notifyTarget = template === 'order_packed_logistics' ? 'logistics' : 'agent';
-      const payload = sampleOrderPackedPayload(notifyTarget);
-      const subject = orderPackedSubject(payload, notifyTarget);
-      const html = buildOrderPackedEmailHtml(payload);
-      const { id } = await sendViaResend({
-        to: sentTo,
-        subject,
-        html,
-        entityRef: emailEntityRef(payload.orderId, `${notifyTarget}-packed`),
-      });
-      res.json({ ok: true, id, sentTo, template, subject });
-      return;
-    }
-
-    if (
-      template === 'order_in_transit_executive' ||
-      template === 'order_in_transit_warehouse' ||
-      template === 'order_in_transit_agent'
-    ) {
-      const notifyTarget =
-        template === 'order_in_transit_warehouse'
-          ? 'warehouse'
-          : template === 'order_in_transit_agent'
-            ? 'agent'
-            : 'executive';
-      const payload = sampleOrderInTransitPayload(notifyTarget);
-      const subject = orderInTransitSubject(payload, notifyTarget);
-      const html = buildOrderInTransitEmailHtml(payload);
-      const { id } = await sendViaResend({
-        to: sentTo,
-        subject,
-        html,
-        entityRef: emailEntityRef(payload.orderId, `in-transit-${notifyTarget}`),
-      });
-      res.json({ ok: true, id, sentTo, template, subject });
-      return;
-    }
-
-    if (template === 'order_in_transit_customer') {
-      const payload = sampleOrderCustomerInTransitPayload();
-      const subject = orderCustomerInTransitSubject(payload);
-      const html = buildOrderCustomerInTransitEmailHtml(payload);
-      const { id } = await sendViaResend({
-        to: sentTo,
-        subject,
-        html,
-        entityRef: emailEntityRef(payload.orderId, 'customer-in-transit'),
-      });
-      res.json({ ok: true, id, sentTo, template, subject });
-      return;
-    }
-
-    if (template === 'order_delivery_executive' || template === 'order_delivery_agent') {
-      const notifyTarget = template === 'order_delivery_agent' ? 'agent' : 'executive';
-      const payload = sampleOrderDeliveryRecordedPayload(notifyTarget);
-      const subject = orderDeliveryRecordedSubject(payload, notifyTarget);
-      const html = buildOrderDeliveryRecordedEmailHtml(payload);
-      const { id } = await sendViaResend({
-        to: sentTo,
-        subject,
-        html,
-        entityRef: emailEntityRef(payload.orderId, `delivery-${notifyTarget}`),
-      });
-      res.json({ ok: true, id, sentTo, template, subject });
-      return;
-    }
-
-    if (template === 'order_delivery_customer') {
-      const payload = sampleOrderCustomerDeliveryRecordedPayload();
-      const subject = orderCustomerDeliveryRecordedSubject(payload);
-      const html = buildOrderCustomerDeliveryRecordedEmailHtml(payload);
-      const { id } = await sendViaResend({
-        to: sentTo,
-        subject,
-        html,
-        entityRef: emailEntityRef(payload.orderId, 'customer-delivery'),
-      });
-      res.json({ ok: true, id, sentTo, template, subject });
-      return;
-    }
-
-    if (template === 'order_customer_approved') {
-      const payload = sampleOrderCustomerApprovedPayload();
-      const subject = orderCustomerApprovedSubject(payload);
-      const html = buildOrderCustomerApprovedEmailHtml(payload);
-      const { id } = await sendViaResend({
-        to: sentTo,
-        subject,
-        html,
-        entityRef: emailEntityRef(payload.orderId, 'customer-approved'),
-      });
-      res.json({ ok: true, id, sentTo, template, subject });
-      return;
-    }
-
-    if (template === 'order_customer_scheduled') {
-      const payload = sampleOrderCustomerScheduledPayload();
-      const subject = orderCustomerScheduledSubject(payload);
-      const html = buildOrderCustomerScheduledEmailHtml(payload);
-      const { id } = await sendViaResend({
-        to: sentTo,
-        subject,
-        html,
-        entityRef: emailEntityRef(payload.orderId, 'customer-scheduled'),
-      });
-      res.json({ ok: true, id, sentTo, template, subject });
-      return;
-    }
-
-    if (template === 'order_customer_unscheduled') {
-      const payload = sampleOrderCustomerUnscheduledPayload();
-      const subject = orderCustomerUnscheduledSubject(payload);
-      const html = buildOrderCustomerUnscheduledEmailHtml(payload);
-      const { id } = await sendViaResend({
-        to: sentTo,
-        subject,
-        html,
-        entityRef: emailEntityRef(payload.orderId, 'customer-unscheduled'),
-      });
-      res.json({ ok: true, id, sentTo, template, subject });
-      return;
-    }
-
-    if (template === 'order_customer_portal_share') {
-      const payload = sampleOrderCustomerPortalSharePayload();
-      const subject = orderCustomerPortalShareSubject(payload);
-      const html = buildOrderCustomerPortalShareEmailHtml(payload);
-      const { id } = await sendViaResend({
-        to: sentTo,
-        subject,
-        html,
-        entityRef: emailEntityRef(payload.orderId, 'customer-portal-share'),
-      });
-      res.json({ ok: true, id, sentTo, template, subject });
-      return;
-    }
-
-    if (template === 'order_payment_proof_agent') {
-      const payload = sampleOrderPaymentProofUploadedPayload();
-      const subject = orderPaymentProofUploadedAgentSubject(payload);
-      const html = buildOrderDeliveryProofUploadedEmailHtml(payload);
-      const { id } = await sendViaResend({
-        to: sentTo,
-        subject,
-        html,
-        entityRef: emailEntityRef(payload.orderId, 'payment-proof-agent'),
-      });
-      res.json({ ok: true, id, sentTo, template, subject });
-      return;
-    }
-
-    if (template === 'order_payment_recorded_executive') {
-      const payload = sampleOrderPaymentRecordedPayload();
-      const subject = orderPaymentRecordedExecutiveSubject(payload);
-      const html = buildOrderPaymentRecordedEmailHtml(payload);
-      const { id } = await sendViaResend({
-        to: sentTo,
-        subject,
-        html,
-        entityRef: emailEntityRef(payload.orderId, 'payment-executive'),
-      });
-      res.json({ ok: true, id, sentTo, template, subject });
-      return;
-    }
-
-    if (template === 'order_payment_recorded_executive_paid') {
-      const payload = sampleOrderPaymentRecordedPaidInFullPayload();
-      const subject = orderPaymentRecordedExecutiveSubject(payload);
-      const html = buildOrderPaymentRecordedEmailHtml(payload);
-      const { id } = await sendViaResend({
-        to: sentTo,
-        subject,
-        html,
-        entityRef: emailEntityRef(payload.orderId, 'payment-executive-paid'),
-      });
-      res.json({ ok: true, id, sentTo, template, subject });
-      return;
-    }
-
-    if (template === 'order_payment_recorded_customer') {
-      const payload = sampleOrderCustomerPaymentRecordedPayload();
-      const subject = orderCustomerPaymentRecordedSubject(payload);
-      const html = buildOrderCustomerPaymentRecordedEmailHtml(payload);
-      const { id } = await sendViaResend({
-        to: sentTo,
-        subject,
-        html,
-        entityRef: emailEntityRef(payload.orderId, 'customer-payment'),
-      });
-      res.json({ ok: true, id, sentTo, template, subject });
-      return;
-    }
-
-    if (template === 'order_payment_recorded_customer_paid') {
-      const payload = sampleOrderCustomerPaymentRecordedPaidInFullPayload();
-      const subject = orderCustomerPaymentRecordedSubject(payload);
-      const html = buildOrderCustomerPaymentRecordedEmailHtml(payload);
-      const { id } = await sendViaResend({
-        to: sentTo,
-        subject,
-        html,
-        entityRef: emailEntityRef(payload.orderId, 'customer-payment-paid'),
-      });
-      res.json({ ok: true, id, sentTo, template, subject });
-      return;
-    }
-
-    if (template === 'order_payment_proof_agent_paid') {
-      const payload = sampleOrderPaymentProofUploadedPaidInFullPayload();
-      const subject = orderPaymentProofUploadedAgentSubject(payload);
-      const html = buildOrderDeliveryProofUploadedEmailHtml(payload);
-      const { id } = await sendViaResend({
-        to: sentTo,
-        subject,
-        html,
-        entityRef: emailEntityRef(payload.orderId, 'payment-proof-agent-paid'),
-      });
-      res.json({ ok: true, id, sentTo, template, subject });
-      return;
-    }
-
-    if (template === 'order_commission_paid_agent') {
-      const payload = sampleOrderCommissionPaidAgentPayload();
-      const subject = orderCommissionPaidAgentSubject(payload);
-      const html = buildOrderCommissionPaidAgentEmailHtml(payload);
-      const { id } = await sendViaResend({
-        to: sentTo,
-        subject,
-        html,
-        entityRef: emailEntityRef(payload.orderId, 'commission-paid-agent'),
-      });
-      res.json({ ok: true, id, sentTo, template, subject });
-      return;
-    }
-
-    if (
-      template === 'order_scheduled_executive' ||
-      template === 'order_scheduled_warehouse' ||
-      template === 'order_scheduled_agent'
-    ) {
-      const notifyTarget =
-        template === 'order_scheduled_executive'
-          ? 'executive'
-          : template === 'order_scheduled_warehouse'
-            ? 'warehouse'
-            : 'agent';
-      const payload = sampleOrderScheduledPayload(notifyTarget);
-      const subject = orderScheduledSubject(payload, notifyTarget);
-      const html = buildOrderScheduledEmailHtml(payload);
-      const { id } = await sendViaResend({
-        to: sentTo,
-        subject,
-        html,
-        entityRef: emailEntityRef(payload.orderId, `scheduled-${notifyTarget}`),
-      });
-      res.json({ ok: true, id, sentTo, template, subject });
-      return;
-    }
-
-    if (template === 'trip_driver_assigned') {
-      const payload = sampleTripDriverAssignedPayload();
-      const subject = tripDriverAssignedSubject(payload);
-      const html = buildTripDriverAssignedEmailHtml(payload);
-      const { id } = await sendViaResend({
-        to: sentTo,
-        subject,
-        html,
-        entityRef: emailEntityRef(payload.tripId, 'driver-assigned'),
-      });
-      res.json({ ok: true, id, sentTo, template, subject });
-      return;
-    }
-
-    if (
-      template === 'material_low_stock_executive' ||
-      template === 'material_low_stock_warehouse' ||
-      template === 'material_critical_stock_executive' ||
-      template === 'material_critical_stock_warehouse' ||
-      template === 'material_out_of_stock_executive' ||
-      template === 'material_out_of_stock_warehouse'
-    ) {
-      const severity = template.includes('out_of_stock')
-        ? 'out_of_stock'
-        : template.includes('critical_stock')
-          ? 'critical'
-          : 'low_stock';
-      const audience = template.endsWith('warehouse') ? 'warehouse' : 'executive';
-      const payload = sampleMaterialStockAlertPayload(severity, audience);
-      const subject = materialStockAlertSubject({
-        sku: payload.sku,
-        name: payload.name,
-        branchName: payload.branchName,
-        severity: payload.severity,
-        audience: payload.audience,
-      });
-      const html = buildMaterialStockAlertEmailHtml(payload);
-      const { id } = await sendViaResend({
-        to: sentTo,
-        subject,
-        html,
-        entityRef: emailEntityRef(payload.materialId, `material-stock-${severity}-${audience}`),
-      });
-      res.json({ ok: true, id, sentTo, template, subject });
-      return;
-    }
-
-    if (
-      template === 'product_low_stock_executive' ||
-      template === 'product_low_stock_warehouse' ||
-      template === 'product_critical_stock_executive' ||
-      template === 'product_critical_stock_warehouse' ||
-      template === 'product_out_of_stock_executive' ||
-      template === 'product_out_of_stock_warehouse'
-    ) {
-      const severity = template.includes('out_of_stock')
-        ? 'out_of_stock'
-        : template.includes('critical_stock')
-          ? 'critical'
-          : 'low_stock';
-      const audience = template.endsWith('warehouse') ? 'warehouse' : 'executive';
-      const payload = sampleProductStockAlertPayload(severity, audience);
-      const subject = productStockAlertSubject({
-        sku: payload.sku,
-        productName: payload.productName,
-        size: payload.size,
-        branchName: payload.branchName,
-        severity: payload.severity,
-        audience: payload.audience,
-      });
-      const html = buildProductStockAlertEmailHtml(payload);
-      const { id } = await sendViaResend({
-        to: sentTo,
-        subject,
-        html,
-        entityRef: emailEntityRef(payload.variantId, `stock-${severity}-${audience}`),
-      });
-      res.json({ ok: true, id, sentTo, template, subject });
-      return;
-    }
-
-    res.status(400).json({ error: 'Unknown template' });
+    const subject = orderCustomerPaymentOverdueSubject(payload);
+    const html = buildOrderCustomerPaymentOverdueEmailHtml(payload);
+    const sentTo = resolveRecipient(payload.customerEmail);
+    const { id } = await sendViaResend({
+      to: sentTo,
+      subject,
+      html,
+      entityRef: emailEntityRef(payload.orderId, 'customer-payment-overdue'),
+    });
+    res.json({ ok: true, id, sentTo, subject });
   } catch (err) {
-    console.error('[notify-server] email-test/template', err);
     const message = err instanceof Error ? err.message : 'Internal error';
-    res.status(message.includes('RESEND_API_KEY') ? 503 : 502).json({ error: message });
+    if (message.includes('RESEND_API_KEY')) {
+      res.status(503).json({ error: message });
+      return;
+    }
+    console.error('[notify-server] order-payment-overdue-customer', err);
+    res.status(502).json({ error: message });
   }
+});
+
+app.get('/api/health', (_req, res) => {
+  res.json({ ok: true });
 });
 
 app.listen(PORT, () => {

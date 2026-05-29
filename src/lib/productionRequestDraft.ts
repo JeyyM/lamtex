@@ -16,6 +16,8 @@ export async function createDraftProductionRequest(params: {
   branchId: string | null;
   actor: string;
   logRole: string;
+  createdByAuthUserId?: string | null;
+  createdByEmployeeId?: string | null;
 }): Promise<{ id: string; prNumber: string }> {
   const prNumber = `PR-${Date.now()}`;
   const { data, error: insErr } = await supabase
@@ -26,6 +28,8 @@ export async function createDraftProductionRequest(params: {
       status: 'Draft',
       request_date: new Date().toISOString().split('T')[0],
       created_by: params.actor,
+      created_by_auth_user_id: params.createdByAuthUserId ?? null,
+      created_by_employee_id: params.createdByEmployeeId ?? null,
     })
     .select('id')
     .single();
@@ -51,12 +55,16 @@ export async function createDraftProductionRequestWithInitialLine(params: {
   variantId: string;
   quantity: number;
   lineLabel: string;
+  createdByAuthUserId?: string | null;
+  createdByEmployeeId?: string | null;
 }): Promise<{ id: string; prNumber: string }> {
   const logRole = prLogRoleMap[params.roleKey] ?? 'System';
   const { id, prNumber } = await createDraftProductionRequest({
     branchId: params.branchId,
     actor: params.actor,
     logRole,
+    createdByAuthUserId: params.createdByAuthUserId,
+    createdByEmployeeId: params.createdByEmployeeId,
   });
 
   const { error: insItem } = await supabase.from('production_request_items').insert({

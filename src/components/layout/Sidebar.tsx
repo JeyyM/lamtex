@@ -19,7 +19,6 @@ import {
   ChevronRight,
   X,
   LogOut,
-  Mail,
 } from 'lucide-react';
 import { cn } from '@/src/lib/utils';
 import lamtexLogo from '../../assets/Lamtex Logo.png';
@@ -50,14 +49,6 @@ export function Sidebar() {
     { name: 'Agent Analytics', path: '/agents', icon: UserCheck, roles: ['Executive', 'Manager'] },
     { name: 'Reports', path: '/reports', icon: BarChart3, roles: ['Executive', 'Finance', 'Manager'] },
     { name: 'Settings', path: '/settings', icon: Settings, roles: ['Executive', 'Warehouse', 'Logistics', 'Agent', 'Driver', 'Finance', 'Production', 'Manager', 'Procurement'] },
-    ...(import.meta.env.DEV
-      ? [{
-          name: 'Email Testing',
-          path: '/dev/email-testing',
-          icon: Mail,
-          roles: ['Executive', 'Warehouse', 'Logistics', 'Agent', 'Driver', 'Finance', 'Production', 'Manager', 'Procurement'],
-        }]
-      : []),
   ];
 
   const filteredNav = navItems.filter(item => item.roles.includes(role));

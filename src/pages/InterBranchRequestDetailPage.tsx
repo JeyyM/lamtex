@@ -5,6 +5,7 @@ import { useAppContext } from '@/src/store/AppContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
+import { ModalPortal } from '@/src/components/ui/ModalPortal';
 import { supabase } from '@/src/lib/supabase';
 import {
   approveInterBranchRequest,
@@ -18,6 +19,25 @@ import {
   type InterBranchRequestItemDbRow,
 } from '@/src/lib/interBranchRequest';
 import { applyIbrReceiveStock, applyIbrShipStock } from '@/src/lib/interBranchStock';
+import {
+  notifyBothBranchesAndExecutivesInterBranchFulfilled,
+  notifyBothBranchesInterBranchApproved,
+  notifyBothBranchesInterBranchCancelled,
+  notifyBothBranchesInterBranchDeliveryRecorded,
+  notifyExecutivesInterBranchSubmittedForApproval,
+  notifyInterBranchSubmitterRejected,
+  notifyRequestingBranchInterBranchStatus,
+} from '@/src/lib/notifications/notificationsData';
+import {
+  createOrUpdateIbrTrip,
+  fetchDriversForBranch,
+  fetchTripsForBranch,
+  releaseIbrTrip,
+  setIbrTripStatus,
+  tripsConflictingVehicleOnDates,
+} from '@/src/lib/logisticsScheduling';
+import { fetchFleetTrucksForBranch } from '@/src/lib/fleetTrucks';
+import type { DriverOption, Trip, Vehicle } from '@/src/types/logistics';
 import { MarkIbrInTransitModal } from '@/src/components/interBranch/MarkIbrInTransitModal';
 import { RecordIbrDeliveryModal } from '@/src/components/interBranch/RecordIbrDeliveryModal';
 import type { FulfillmentData } from '@/src/components/orders/FulfillOrderModal';
@@ -960,6 +980,7 @@ export function InterBranchRequestDetailPage() {
     linked_purchase_order_id: string | null;
     linked_production_request_id: string | null;
     scheduled_departure_date: string | null;
+    linked_trip_id: string | null;
     created_at: string;
     req_br: { name: string } | null;
     ful_br: { name: string } | null;
@@ -1007,10 +1028,21 @@ export function InterBranchRequestDetailPage() {
   const [editingProductLineId, setEditingProductLineId] = useState<string | null>(null);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [pickScheduleDate, setPickScheduleDate] = useState('');
+  /** Fleet trucks at the fulfilling (shipping) branch for IBR departure scheduling. */
+  const [ibrFleetVehicles, setIbrFleetVehicles] = useState<Vehicle[]>([]);
+  const [ibrBranchDrivers, setIbrBranchDrivers] = useState<DriverOption[]>([]);
+  /** Existing trips at the fulfilling branch — used to flag truck double-booking. */
+  const [ibrBranchTrips, setIbrBranchTrips] = useState<Trip[]>([]);
+  const [pickVehicleId, setPickVehicleId] = useState('');
+  const [pickDriverId, setPickDriverId] = useState('');
+  const [scheduleMetaLoading, setScheduleMetaLoading] = useState(false);
   const [showIbrInTransitModal, setShowIbrInTransitModal] = useState(false);
   const [showIbrDeliveryModal, setShowIbrDeliveryModal] = useState(false);
   const [showCancelIbrModal, setShowCancelIbrModal] = useState(false);
   const [cancelIbrNote, setCancelIbrNote] = useState('');
+  const [showRejectIbrModal, setShowRejectIbrModal] = useState(false);
+  const [rejectIbrReason, setRejectIbrReason] = useState('');
+  const [showResubmitIbrModal, setShowResubmitIbrModal] = useState(false);
   /** False when DB has no `quantity_shipped` / `quantity_delivered` columns (migration not applied). */
   const [ibrShipmentTrackingAvailable, setIbrShipmentTrackingAvailable] = useState<boolean | null>(null);
   const [deliveryProofs, setDeliveryProofs] = useState<IbrDeliveryProofRow[]>([]);
@@ -1214,13 +1246,21 @@ export function InterBranchRequestDetailPage() {
     setLoading(true);
     setError(null);
     try {
-      const { data, error: q0 } = await supabase
+      const IBR_HEADER_BASE =
+        'ibr_number, status, notes, created_by, created_at, submitted_at, approved_by, approved_at, rejected_by, rejection_reason, linked_purchase_order_id, linked_production_request_id, scheduled_departure_date, requesting_branch_id, fulfilling_branch_id, req_br:branches!requesting_branch_id(name), ful_br:branches!fulfilling_branch_id(name)';
+      let { data, error: q0 } = await supabase
         .from('inter_branch_requests')
-        .select(
-          'ibr_number, status, notes, created_by, created_at, submitted_at, approved_by, approved_at, rejected_by, rejection_reason, linked_purchase_order_id, linked_production_request_id, scheduled_departure_date, requesting_branch_id, fulfilling_branch_id, req_br:branches!requesting_branch_id(name), ful_br:branches!fulfilling_branch_id(name)',
-        )
+        .select(`${IBR_HEADER_BASE}, linked_trip_id`)
         .eq('id', requestId)
         .single();
+      if (q0 && /linked_trip_id/i.test(q0.message ?? '')) {
+        // Migration database/inter_branch_request_trip.sql not yet applied — load without the column.
+        ({ data, error: q0 } = await supabase
+          .from('inter_branch_requests')
+          .select(IBR_HEADER_BASE)
+          .eq('id', requestId)
+          .single());
+      }
       if (q0) throw q0;
       if (!data) {
         setError('Not found');
@@ -1495,12 +1535,15 @@ export function InterBranchRequestDetailPage() {
       };
 
       const now = new Date().toISOString();
+      const actor = employeeName || session?.user?.email || 'User';
       const updatePayload: {
         status: IBRStatus;
         fulfilling_branch_id: string;
         notes: string | null;
         updated_at: string;
         submitted_at?: string;
+        rejected_by?: string | null;
+        rejection_reason?: string | null;
       } = {
         status: nextStatus,
         fulfilling_branch_id: fulfillingId,
@@ -1509,6 +1552,15 @@ export function InterBranchRequestDetailPage() {
       };
       if (ibr.status === 'Draft' && nextStatus === 'Pending' && !ibr.submitted_at) {
         updatePayload.submitted_at = now;
+      }
+      if (nextStatus === 'Pending' && ibr.status === 'Rejected') {
+        updatePayload.submitted_at = now;
+        updatePayload.rejected_by = null;
+        updatePayload.rejection_reason = null;
+      }
+      if (nextStatus === 'Rejected' && ibr.status !== 'Rejected') {
+        updatePayload.rejected_by = actor;
+        updatePayload.rejection_reason = null;
       }
       const { error: e0 } = await supabase.from('inter_branch_requests').update(updatePayload).eq('id', id);
       if (e0) throw e0;
@@ -1582,7 +1634,6 @@ export function InterBranchRequestDetailPage() {
         }
       }
 
-      const actor = employeeName || session?.user?.email || 'User';
       const { poId, prId } = await ensureInterBranchLinkedDocuments(supabase, { requestId: id, actor });
       const linkChanged = poId !== prevPo || prId !== prevPr;
       const logMetadata: Record<string, unknown> = {
@@ -1606,6 +1657,33 @@ export function InterBranchRequestDetailPage() {
       if (lineSummary) descParts.push(lineSummary);
       if (linkChanged) descParts.push('linked PO/PR updated');
       await insertIbrLog('updated', `${descParts.join('. ')}.`, oldHeader, newHeader, logMetadata);
+
+      if (nextStatus === 'Pending' && ibr.status === 'Rejected') {
+        try {
+          await notifyExecutivesInterBranchSubmittedForApproval(id);
+        } catch (notifyErr) {
+          console.warn('[IBR] Resubmit notification failed (edit mode)', notifyErr);
+        }
+      }
+
+      if (
+        (nextStatus === 'Rejected' || nextStatus === 'Cancelled') &&
+        ibr.status !== nextStatus
+      ) {
+        try {
+          await releaseIbrTrip(id, ibr.linked_trip_id ?? null);
+        } catch (tripErr) {
+          console.warn('[IBR] Could not free truck (edit mode)', tripErr);
+        }
+      }
+
+      if (nextStatus === 'Rejected' && ibr.status !== 'Rejected') {
+        try {
+          await notifyInterBranchSubmitterRejected(id, actor, null);
+        } catch (notifyErr) {
+          console.warn('[IBR] Reject notification failed (edit mode)', notifyErr);
+        }
+      }
 
       setIsEditing(false);
       setEditStatus(null);
@@ -1845,6 +1923,11 @@ export function InterBranchRequestDetailPage() {
       );
       const actor = employeeName || session?.user?.email || 'User';
       await ensureInterBranchLinkedDocuments(supabase, { requestId: id, actor });
+      try {
+        await notifyExecutivesInterBranchSubmittedForApproval(id);
+      } catch (notifyErr) {
+        console.warn('[IBR] Submit notification failed', notifyErr);
+      }
       await loadRequest(id);
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : 'Submit failed');
@@ -1865,6 +1948,11 @@ export function InterBranchRequestDetailPage() {
         { status: 'Pending' },
         { status: 'Approved', approved_by: name },
       );
+      try {
+        await notifyBothBranchesInterBranchApproved(id, name);
+      } catch (notifyErr) {
+        console.warn('[IBR] Approval notification failed', notifyErr);
+      }
       await loadRequest(id);
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : 'Approval failed');
@@ -1873,10 +1961,9 @@ export function InterBranchRequestDetailPage() {
     }
   };
 
-  const doReject = async () => {
+  const handleRejectIbr = async () => {
     if (!id || !ibr) return;
-    const reason = window.prompt('Reason for rejection?');
-    if (reason == null) return;
+    const reason = rejectIbrReason.trim();
     setSaving(true);
     try {
       const name = employeeName || session?.user?.email || 'User';
@@ -1893,11 +1980,25 @@ export function InterBranchRequestDetailPage() {
       if (e0) throw e0;
       await insertIbrLog(
         'rejected',
-        `Rejected${reason ? `: ${reason}` : ''}`,
+        reason
+          ? `Inter-branch request rejected by ${name}. Reason: ${reason}`
+          : `Inter-branch request rejected by ${name}.`,
         { status: prevStatus },
-        { status: 'Rejected', rejected_by: name },
+        { status: 'Rejected', rejected_by: name, rejection_reason: reason || null },
         reason ? { reason } : null,
       );
+      setShowRejectIbrModal(false);
+      setRejectIbrReason('');
+      try {
+        await releaseIbrTrip(id, ibr.linked_trip_id ?? null);
+      } catch (tripErr) {
+        console.warn('[IBR] Could not free truck on reject', tripErr);
+      }
+      try {
+        await notifyInterBranchSubmitterRejected(id, name, reason || null);
+      } catch (notifyErr) {
+        console.warn('[IBR] Reject notification failed', notifyErr);
+      }
       await loadRequest(id);
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : 'Reject failed');
@@ -1934,6 +2035,16 @@ export function InterBranchRequestDetailPage() {
       addAuditLog('Cancelled IBR', 'Inter-branch', note ? `${ibr.ibr_number}: ${note}` : ibr.ibr_number);
       setShowCancelIbrModal(false);
       setCancelIbrNote('');
+      try {
+        await releaseIbrTrip(id, ibr.linked_trip_id ?? null);
+      } catch (tripErr) {
+        console.warn('[IBR] Could not free truck on cancel', tripErr);
+      }
+      try {
+        await notifyBothBranchesInterBranchCancelled(id, name, note || null);
+      } catch (notifyErr) {
+        console.warn('[IBR] Cancel notification failed', notifyErr);
+      }
       await loadRequest(id);
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : 'Cancel failed');
@@ -1965,6 +2076,14 @@ export function InterBranchRequestDetailPage() {
         { status: prev },
         { status: next, scheduled_departure_date: extra?.scheduled_departure_date ?? undefined },
       );
+      if (['Scheduled', 'Loading', 'Packed', 'Ready'].includes(next)) {
+        const actor = employeeName || session?.user?.email || 'User';
+        try {
+          await notifyRequestingBranchInterBranchStatus(id, next, actor);
+        } catch (notifyErr) {
+          console.warn('[IBR] Logistics notification failed', notifyErr);
+        }
+      }
       await loadRequest(id);
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : 'Update failed');
@@ -2036,6 +2155,16 @@ export function InterBranchRequestDetailPage() {
         { shipQuantitiesByItemId, ...(shipmentLines.length ? { shipment_lines: shipmentLines } : {}) },
       );
       setShowIbrInTransitModal(false);
+      try {
+        await setIbrTripStatus(ibr.linked_trip_id ?? null, 'In Transit');
+      } catch (tripErr) {
+        console.warn('[IBR] Could not sync truck to In Transit', tripErr);
+      }
+      try {
+        await notifyRequestingBranchInterBranchStatus(id, 'In Transit', performedBy);
+      } catch (notifyErr) {
+        console.warn('[IBR] In transit notification failed', notifyErr);
+      }
       await loadRequest(id);
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : 'Update failed');
@@ -2117,6 +2246,11 @@ export function InterBranchRequestDetailPage() {
             ...(receivedLines.length ? { received_lines: receivedLines } : {}),
           },
         );
+        try {
+          await notifyBothBranchesInterBranchDeliveryRecorded(id, performedBy, newStatus);
+        } catch (notifyErr) {
+          console.warn('[IBR] Delivery recorded notification failed', notifyErr);
+        }
       }
 
       if (proofImageUrls.length > 0) {
@@ -2171,7 +2305,38 @@ export function InterBranchRequestDetailPage() {
       (ibr.scheduled_departure_date ? String(ibr.scheduled_departure_date).slice(0, 10) : '') ||
       new Date().toISOString().slice(0, 10);
     setPickScheduleDate(d);
+    setPickVehicleId('');
+    setPickDriverId('');
     setShowScheduleModal(true);
+
+    const branchName = ibr.ful_br?.name?.trim();
+    if (!branchName) return;
+    setScheduleMetaLoading(true);
+    void (async () => {
+      try {
+        const [fleet, drivers, trips] = await Promise.all([
+          fetchFleetTrucksForBranch(branchName),
+          fetchDriversForBranch(branchName),
+          fetchTripsForBranch(branchName, 'truck'),
+        ]);
+        const vehicles = fleet.vehicles ?? [];
+        const tripList = trips.trips ?? [];
+        setIbrFleetVehicles(vehicles);
+        setIbrBranchDrivers(drivers.drivers ?? []);
+        setIbrBranchTrips(tripList);
+        // Prefill from the IBR's existing trip so a reschedule keeps its truck/driver.
+        const linkedTripId = ibr.linked_trip_id ?? null;
+        const existing = linkedTripId ? tripList.find((t) => t.id === linkedTripId) : undefined;
+        if (existing) {
+          if (existing.vehicleId) setPickVehicleId(existing.vehicleId);
+          if (existing.driverId) setPickDriverId(existing.driverId);
+        }
+      } catch (e) {
+        console.warn('[IBR] Could not load fleet for scheduling', e);
+      } finally {
+        setScheduleMetaLoading(false);
+      }
+    })();
   };
 
   const confirmScheduleDeparture = async () => {
@@ -2179,6 +2344,53 @@ export function InterBranchRequestDetailPage() {
       alert('Choose a date.');
       return;
     }
+    if (!id || !ibr) return;
+
+    // If a truck is chosen, reserve it on the logistics schedule (block double-booking).
+    if (pickVehicleId) {
+      const conflicts = tripsConflictingVehicleOnDates(
+        ibrBranchTrips,
+        pickVehicleId,
+        [pickScheduleDate],
+        ibr.linked_trip_id ?? undefined,
+      );
+      if (conflicts.length > 0) {
+        const labels = conflicts.map((t) => `${t.tripNumber} (${t.status})`).join(', ');
+        alert(
+          `This truck is already booked on ${pickScheduleDate}: ${labels}. Pick another truck or date to avoid a mis-schedule.`,
+        );
+        return;
+      }
+
+      setLogisticsLoading(true);
+      try {
+        const driver = pickDriverId ? ibrBranchDrivers.find((d) => d.id === pickDriverId) : undefined;
+        const res = await createOrUpdateIbrTrip({
+          fulfillingBranchName: ibr.ful_br?.name ?? '',
+          vehicleUuid: pickVehicleId,
+          driverUuid: pickDriverId || null,
+          driverName: driver?.name ?? null,
+          scheduledDate: pickScheduleDate,
+          ibrId: id,
+          ibrNumber: ibr.ibr_number,
+          destinationLabel: ibr.req_br?.name ?? null,
+          existingTripId: ibr.linked_trip_id ?? null,
+          scheduledBy: employeeName || session?.user?.email || null,
+        });
+        if (!res.ok) {
+          alert(res.error ?? 'Could not reserve the truck.');
+          setLogisticsLoading(false);
+          return;
+        }
+      } catch (e) {
+        alert(e instanceof Error ? e.message : 'Could not reserve the truck.');
+        setLogisticsLoading(false);
+        return;
+      } finally {
+        setLogisticsLoading(false);
+      }
+    }
+
     await advanceIbrLogistics('Scheduled', { scheduled_departure_date: pickScheduleDate });
     setShowScheduleModal(false);
   };
@@ -2206,11 +2418,78 @@ export function InterBranchRequestDetailPage() {
         { status: 'Delivered' },
         { status: 'Fulfilled', fulfilled_by: name },
       );
+      try {
+        await setIbrTripStatus(ibr?.linked_trip_id ?? null, 'Complete');
+      } catch (tripErr) {
+        console.warn('[IBR] Could not complete truck trip', tripErr);
+      }
+      try {
+        await notifyBothBranchesAndExecutivesInterBranchFulfilled(id, name);
+      } catch (notifyErr) {
+        console.warn('[IBR] Fulfilled notification failed', notifyErr);
+      }
       await loadRequest(id);
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : 'Update failed');
     } finally {
       setLogisticsLoading(false);
+    }
+  };
+
+  const handleResubmitForApproval = async () => {
+    if (!id || !ibr) return;
+    if (ibr.status !== 'Rejected') return;
+    if (items.length === 0) {
+      alert('Add at least one line before resubmitting for approval.');
+      setShowResubmitIbrModal(false);
+      return;
+    }
+    setSaving(true);
+    const actor = employeeName || session?.user?.email || 'User';
+    const now = new Date().toISOString();
+    try {
+      await assertAllInterBranchItemsInBothBranches(
+        supabase,
+        buildIbrItemRows(),
+        ibr.requesting_branch_id,
+        fulfillingId,
+      );
+      const { error: e0 } = await supabase
+        .from('inter_branch_requests')
+        .update({
+          status: 'Pending',
+          rejected_by: null,
+          rejection_reason: null,
+          approved_by: null,
+          approved_at: null,
+          submitted_at: now,
+          updated_at: now,
+        })
+        .eq('id', id);
+      if (e0) throw e0;
+      await insertIbrLog(
+        'submitted',
+        `Resubmitted for approval by ${actor} after rejection. Pending manager or executive review.`,
+        {
+          status: 'Rejected',
+          rejected_by: ibr.rejected_by,
+          rejection_reason: ibr.rejection_reason,
+        },
+        { status: 'Pending', submitted_at: now },
+      );
+      addAuditLog('IBR resubmitted for approval', 'Inter-branch', ibr.ibr_number);
+      await ensureInterBranchLinkedDocuments(supabase, { requestId: id, actor });
+      setShowResubmitIbrModal(false);
+      try {
+        await notifyExecutivesInterBranchSubmittedForApproval(id);
+      } catch (notifyErr) {
+        console.warn('[IBR] Resubmit notification failed', notifyErr);
+      }
+      await loadRequest(id);
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : 'Failed to resubmit for approval');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -2281,8 +2560,6 @@ export function InterBranchRequestDetailPage() {
   const pending = ibr.status === 'Pending';
   const showLinkedDocs = !['Draft', 'Pending', 'Rejected', 'Cancelled'].includes(ibr.status);
   const boss = canBossApprove(role);
-  /** Cancelled / rejected are read-only; everything else matches order-style full edit. */
-  const canOpenEdit = !['Cancelled', 'Rejected'].includes(ibr.status);
   const canUseLogisticsUi = !['Agent', 'Driver', 'Customer'].includes(role ?? '');
   const isFulfillingBranch = !!resolvedBranchId && resolvedBranchId === ibr.fulfilling_branch_id;
   const isRequestingBranch = !!resolvedBranchId && resolvedBranchId === ibr.requesting_branch_id;
@@ -2388,10 +2665,21 @@ export function InterBranchRequestDetailPage() {
                 <Button variant="primary" onClick={() => void doApprove()} disabled={saving} className="gap-2 flex-1 min-[480px]:flex-initial sm:flex-initial">
                   <CheckCircle className="w-4 h-4" /> Approve
                 </Button>
-                <Button variant="outline" onClick={() => void doReject()} disabled={saving} className="gap-2 border-red-300 text-red-700 hover:bg-red-50 flex-1 min-[480px]:flex-initial sm:flex-initial">
+                <Button variant="outline" onClick={() => setShowRejectIbrModal(true)} disabled={saving} className="gap-2 border-red-300 text-red-700 hover:bg-red-50 flex-1 min-[480px]:flex-initial sm:flex-initial">
                   <XCircle className="w-4 h-4" /> Reject
                 </Button>
               </>
+            )}
+            {ibr.status === 'Rejected' && !isEditing && (
+              <Button
+                variant="primary"
+                onClick={() => setShowResubmitIbrModal(true)}
+                disabled={saving}
+                className="gap-2 flex-1 min-[480px]:flex-initial sm:flex-initial"
+              >
+                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                Resubmit for approval
+              </Button>
             )}
             {senderLogistics &&
               !isEditing &&
@@ -2524,7 +2812,7 @@ export function InterBranchRequestDetailPage() {
                 </Button>
               </>
             )}
-            {canOpenEdit && !isEditing && (
+            {!isEditing && (
               <Button
                 type="button"
                 variant="outline"
@@ -2580,6 +2868,74 @@ export function InterBranchRequestDetailPage() {
                   onChange={(e) => setPickScheduleDate(e.target.value)}
                 />
               </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-600" htmlFor="ibr-schedule-truck">
+                  Truck{' '}
+                  <span className="font-normal text-gray-400">
+                    ({ibr?.ful_br?.name ?? 'fulfilling branch'} fleet · optional)
+                  </span>
+                </label>
+                <select
+                  id="ibr-schedule-truck"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm disabled:bg-gray-50"
+                  value={pickVehicleId}
+                  onChange={(e) => setPickVehicleId(e.target.value)}
+                  disabled={scheduleMetaLoading}
+                >
+                  <option value="">{scheduleMetaLoading ? 'Loading trucks…' : 'No truck yet'}</option>
+                  {ibrFleetVehicles.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.vehicleName}
+                      {v.plateNumber ? ` · ${v.plateNumber}` : ''}
+                      {v.status && v.status !== 'Available' ? ` (${v.status})` : ''}
+                    </option>
+                  ))}
+                </select>
+                {!scheduleMetaLoading && ibrFleetVehicles.length === 0 && (
+                  <p className="mt-1 text-xs text-gray-500">No trucks registered for this branch.</p>
+                )}
+              </div>
+              {pickVehicleId && (
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-gray-600" htmlFor="ibr-schedule-driver">
+                    Driver <span className="font-normal text-gray-400">(optional)</span>
+                  </label>
+                  <select
+                    id="ibr-schedule-driver"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm disabled:bg-gray-50"
+                    value={pickDriverId}
+                    onChange={(e) => setPickDriverId(e.target.value)}
+                    disabled={scheduleMetaLoading}
+                  >
+                    <option value="">Unassigned</option>
+                    {ibrBranchDrivers.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {(() => {
+                if (!pickVehicleId || !pickScheduleDate) return null;
+                const conflicts = tripsConflictingVehicleOnDates(
+                  ibrBranchTrips,
+                  pickVehicleId,
+                  [pickScheduleDate],
+                  ibr?.linked_trip_id ?? undefined,
+                );
+                if (conflicts.length === 0) return null;
+                return (
+                  <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                    <span>
+                      This truck is already booked on {pickScheduleDate}:{' '}
+                      <strong>{conflicts.map((t) => t.tripNumber).join(', ')}</strong>. Choose another truck or
+                      date to avoid a mis-schedule.
+                    </span>
+                  </div>
+                );
+              })()}
               <div className="flex justify-end gap-2 pt-2">
                 <Button
                   type="button"
@@ -2623,6 +2979,126 @@ export function InterBranchRequestDetailPage() {
         submitting={logisticsLoading}
         onConfirm={handleConfirmIbrDelivery}
       />
+
+      <ModalPortal
+        open={showRejectIbrModal && !!ibr}
+        backdropClassName="bg-black/60"
+        onBackdropClick={() => {
+          if (!saving) {
+            setShowRejectIbrModal(false);
+            setRejectIbrReason('');
+          }
+        }}
+      >
+        <div
+          className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="px-6 py-5 border-b border-gray-100 flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+              <XCircle className="w-5 h-5 text-red-600" />
+            </div>
+            <div>
+              <h2 className="text-lg font-bold text-gray-900">Reject request</h2>
+              <p className="text-sm text-gray-500">{ibr?.ibr_number}</p>
+            </div>
+          </div>
+          <div className="px-6 py-5 space-y-4">
+            <p className="text-sm text-gray-700">
+              Are you sure you want to <span className="font-semibold text-red-700">reject</span> this inter-branch
+              request? It will be marked <span className="font-semibold">Rejected</span> and this action is recorded in
+              the activity log.
+            </p>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                Reason for rejection <span className="text-gray-400 font-normal">(optional)</span>
+              </label>
+              <textarea
+                rows={3}
+                value={rejectIbrReason}
+                onChange={(e) => setRejectIbrReason(e.target.value)}
+                placeholder="e.g. Wrong branch, insufficient stock at fulfilling branch, duplicate request…"
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-red-500"
+              />
+            </div>
+          </div>
+          <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                setShowRejectIbrModal(false);
+                setRejectIbrReason('');
+              }}
+              disabled={saving}
+              className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 transition-colors disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleRejectIbr()}
+              disabled={saving}
+              className="px-5 py-2 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-700 transition-colors disabled:opacity-50 flex items-center gap-2"
+            >
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <XCircle className="w-4 h-4" />}
+              Confirm rejection
+            </button>
+          </div>
+        </div>
+      </ModalPortal>
+
+      <ModalPortal
+        open={showResubmitIbrModal && !!ibr}
+        backdropClassName="bg-black/60"
+        onBackdropClick={() => {
+          if (!saving) setShowResubmitIbrModal(false);
+        }}
+      >
+        <div
+          className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="px-6 py-5 border-b border-gray-100 flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0">
+              <Send className="w-5 h-5 text-amber-700" />
+            </div>
+            <div>
+              <h2 className="text-lg font-bold text-gray-900">Resubmit for approval</h2>
+              <p className="text-sm text-gray-500">{ibr?.ibr_number}</p>
+            </div>
+          </div>
+          <div className="px-6 py-5">
+            <p className="text-sm text-gray-700">
+              This will return the inter-branch request to <span className="font-semibold">Pending</span> and notify
+              executives for review again. Previous rejection details will be cleared.
+            </p>
+            {ibr?.rejection_reason && (
+              <p className="text-sm text-red-800 mt-3 bg-red-50 border border-red-100 rounded-lg p-3">
+                <span className="font-medium">Previous rejection reason:</span> {ibr.rejection_reason}
+              </p>
+            )}
+          </div>
+          <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
+            <button
+              type="button"
+              onClick={() => setShowResubmitIbrModal(false)}
+              disabled={saving}
+              className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 transition-colors disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleResubmitForApproval()}
+              disabled={saving}
+              className="px-5 py-2 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-700 transition-colors disabled:opacity-50 flex items-center gap-2"
+            >
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+              Resubmit for approval
+            </button>
+          </div>
+        </div>
+      </ModalPortal>
 
       {showCancelIbrModal &&
         createPortal(

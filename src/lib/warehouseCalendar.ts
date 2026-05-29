@@ -113,6 +113,8 @@ function poScheduleBadgeClass(status: string): string {
   switch (status) {
     case 'Completed':
       return 'bg-green-100 text-green-800 border-green-300';
+    case 'Received':
+      return 'bg-blue-100 text-blue-800 border-blue-300';
     case 'Partially Received':
       return 'bg-amber-100 text-amber-900 border-amber-300';
     case 'Sent':

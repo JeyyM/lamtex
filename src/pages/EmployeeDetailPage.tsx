@@ -277,6 +277,7 @@ function productionRequestStatusVariant(status: string): 'success' | 'warning' |
 
 function purchaseOrderStatusVariant(status: string): 'success' | 'warning' | 'info' | 'danger' | 'neutral' | 'default' {
   if (status === 'Completed') return 'success';
+  if (status === 'Received') return 'default';
   if (status === 'Partially Received') return 'warning';
   if (status === 'Cancelled' || status === 'Rejected') return 'danger';
   if (status === 'Requested') return 'warning';

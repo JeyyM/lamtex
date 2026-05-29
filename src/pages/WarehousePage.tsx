@@ -250,6 +250,8 @@ function poScheduleBadgeClass(status: string): string {
   switch (status) {
     case 'Completed':
       return 'bg-green-100 text-green-800 border-green-300';
+    case 'Received':
+      return 'bg-blue-100 text-blue-800 border-blue-300';
     case 'Partially Received':
       return 'bg-amber-100 text-amber-900 border-amber-300';
     case 'Sent':
@@ -2695,7 +2697,7 @@ export default function WarehousePage() {
       approved: rows.filter((r) =>
         ['Accepted', 'Sent', 'Confirmed'].includes(r.status),
       ).length,
-      inProgress: rows.filter((r) => r.status === 'Partially Received').length,
+      inProgress: rows.filter((r) => r.status === 'Partially Received' || r.status === 'Received').length,
       completed: rows.filter((r) => r.status === 'Completed').length,
     };
   }, [filteredSchedulePo]);

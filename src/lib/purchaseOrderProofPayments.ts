@@ -150,7 +150,7 @@ export async function syncPurchaseOrderPaymentsFromProofs(
 ): Promise<SyncPoPaymentResult> {
   const { data: poRow, error: oErr } = await supabase
     .from('purchase_orders')
-    .select('id, total_amount, amount_paid, payment_status, payment_due_date')
+    .select('id, total_amount, amount_paid, payment_status, payment_due_date, status, actual_delivery_date')
     .eq('id', poId)
     .maybeSingle();
   if (oErr) return { ok: false, error: oErr.message };
@@ -158,7 +158,7 @@ export async function syncPurchaseOrderPaymentsFromProofs(
 
   const { data: itemRows, error: iErr } = await supabase
     .from('purchase_order_items')
-    .select('quantity_ordered, unit_price')
+    .select('quantity_ordered, quantity_received, unit_price')
     .eq('order_id', poId);
   if (iErr) return { ok: false, error: iErr.message };
 
@@ -192,6 +192,23 @@ export async function syncPurchaseOrderPaymentsFromProofs(
   };
   if (dbTotal <= 0 && totalAmount > 0) {
     poUpdate.total_amount = totalAmount;
+  }
+
+  // A PO becomes "Completed" only once it is BOTH fully received AND fully paid.
+  // When this payment clears the balance on an already fully-received PO, promote it.
+  const items = (itemRows ?? []) as { quantity_ordered?: number | string | null; quantity_received?: number | string | null }[];
+  const fullyReceived =
+    items.length > 0 && items.every((i) => num(i.quantity_received) >= num(i.quantity_ordered));
+  const currentStatus = (poRow.status as string | null) ?? '';
+  if (
+    paymentStatus === 'Paid' &&
+    fullyReceived &&
+    ['Sent', 'Confirmed', 'Partially Received', 'Received'].includes(currentStatus)
+  ) {
+    poUpdate.status = 'Completed';
+    if (!poRow.actual_delivery_date) {
+      poUpdate.actual_delivery_date = new Date().toISOString().split('T')[0];
+    }
   }
 
   const { error: ouErr } = await supabase

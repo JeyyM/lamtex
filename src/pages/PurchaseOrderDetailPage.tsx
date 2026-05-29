@@ -24,6 +24,7 @@ import { addRawMaterialInboundAggregateOnly, addRawMaterialInboundAtBranch } fro
 import {
   notifyExecutivesAndWarehousePurchaseOrderConfirmed,
   notifyExecutivesAndWarehousePurchaseOrderReceived,
+  notifyExecutivesPurchaseOrderProofUploaded,
   notifyExecutivesPurchaseOrderSubmittedForApproval,
   notifyPurchaseOrderSubmitterAccepted,
   notifyPurchaseOrderSubmitterCancelled,
@@ -65,7 +66,7 @@ import {
 
 
 // ── Types ──────────────────────────────────────────────────
-type POStatus = 'Draft' | 'Requested' | 'Rejected' | 'Accepted' | 'Sent' | 'Confirmed' | 'Partially Received' | 'Completed' | 'Cancelled';
+type POStatus = 'Draft' | 'Requested' | 'Rejected' | 'Accepted' | 'Sent' | 'Confirmed' | 'Partially Received' | 'Received' | 'Completed' | 'Cancelled';
 type PaymentStatus   = 'Unpaid' | 'Partially Paid' | 'Paid' | 'Overdue';
 const PAYMENT_METHODS = ['Cash', 'Bank Transfer', 'Check', 'Online Transfer', 'Credit Card'] as const;
 
@@ -133,8 +134,10 @@ interface PORow {
 }
 
 const STATUS_OPTIONS: POStatus[] = [
-  'Draft', 'Requested', 'Rejected', 'Accepted', 'Sent', 'Confirmed', 'Partially Received', 'Completed', 'Cancelled',
+  'Draft', 'Requested', 'Rejected', 'Accepted', 'Sent', 'Confirmed', 'Partially Received', 'Received', 'Completed', 'Cancelled',
 ];
+
+const PAYMENT_STATUS_OPTIONS: PaymentStatus[] = ['Unpaid', 'Partially Paid', 'Paid', 'Overdue'];
 
 // ── Helpers ────────────────────────────────────────────────
 const fmt = (date: string | null) =>
@@ -158,6 +161,7 @@ const materialDisplayLine = (mat: { name: string; brand?: string | null } | null
 
 const getStatusVariant = (status: POStatus): 'success' | 'warning' | 'danger' | 'neutral' | 'default' => {
   if (status === 'Completed')          return 'success';
+  if (status === 'Received')           return 'default';
   if (status === 'Partially Received') return 'warning';
   if (status === 'Cancelled' || status === 'Rejected') return 'danger';
   if (status === 'Requested')         return 'warning';
@@ -172,6 +176,7 @@ const getStatusIcon = (status: POStatus) => {
   if (status === 'Completed')          return <CheckCircle className="w-4 h-4" />;
   if (status === 'Sent')               return <Send className="w-4 h-4" />;
   if (status === 'Confirmed')          return <Truck className="w-4 h-4" />;
+  if (status === 'Received')           return <PackageCheck className="w-4 h-4" />;
   if (status === 'Partially Received') return <Package className="w-4 h-4" />;
   if (status === 'Cancelled')          return <Ban className="w-4 h-4" />;
   if (status === 'Draft')              return <FileText className="w-4 h-4" />;
@@ -263,6 +268,7 @@ export function PurchaseOrderDetailPage() {
   const [cancelPoNote, setCancelPoNote]               = useState('');
   const [cancelPoLoading, setCancelPoLoading]            = useState(false);
   const [showSubmitModal, setShowSubmitModal]          = useState(false);
+  const [showResubmitModal, setShowResubmitModal]      = useState(false);
   const [rejectionReason, setRejectionReason]         = useState('');
   const [approvalLoading, setApprovalLoading]          = useState(false);
 
@@ -474,6 +480,8 @@ export function PurchaseOrderDetailPage() {
         payment_due_date:       (editForm.payment_due_date ?? '') || null,
         payment_method:         (editForm.payment_method  ?? '') || null,
         payment_notes:          (editForm.payment_notes   ?? '') || null,
+        payment_status:         editForm.payment_status ?? po.payment_status,
+        amount_paid:            editForm.amount_paid ?? po.amount_paid,
         total_amount:           savePoTotal,
       }).eq('id', po.id);
       if (poErr) throw poErr;
@@ -755,7 +763,14 @@ export function PurchaseOrderDetailPage() {
       });
       const allFulfilled = updatedItems.every(i => i.quantity_received >= i.quantity_ordered);
       const anyReceived  = updatedItems.some(i => i.quantity_received > 0);
-      const newStatus = allFulfilled ? 'Completed' : anyReceived ? 'Partially Received' : po.status;
+      // A PO is only "Completed" once it is BOTH fully received AND fully paid.
+      // Fully received but still owing → "Received" (delivery done, payment pending).
+      const isFullyPaid = (po.payment_status ?? 'Unpaid') === 'Paid';
+      const newStatus = allFulfilled
+        ? (isFullyPaid ? 'Completed' : 'Received')
+        : anyReceived
+          ? 'Partially Received'
+          : po.status;
 
       const totalReceived = items.reduce(
         (s, it) => s + (parseFloat(receiveQtys[it.id] ?? '0') || 0),
@@ -788,7 +803,7 @@ export function PurchaseOrderDetailPage() {
         'receipt_posted',
         'Recorded delivery receipt (partial or full) and updated quantities received.',
         { status: po.status },
-        { status: allFulfilled ? 'Completed' : anyReceived ? 'Partially Received' : po.status, po_number: po.po_number },
+        { status: newStatus, po_number: po.po_number },
         {
           quantity_received_on_event: totalReceived,
           receipt_image_count: stagedReceiptUrls.length,
@@ -826,7 +841,16 @@ export function PurchaseOrderDetailPage() {
               : 'Receipt saved, but delivery proof could not be saved.',
           );
         } else if (attach.count > 0) {
-          window.dispatchEvent(new Event('lamtex:notifications-refresh'));
+          const actorForProofNotify =
+            employeeName && role ? `${employeeName} (${role})` : actorNameRecv;
+          void notifyExecutivesPurchaseOrderProofUploaded(po.id, {
+            proofType: 'delivery',
+            uploadedBy: actorForProofNotify,
+            proofCount: attach.count,
+            proofTitle: 'Delivery receipt',
+          }).catch((notifyErr) => {
+            console.warn('[PurchaseOrderDetailPage] delivery proof notify failed', notifyErr);
+          });
         }
       }
 
@@ -869,7 +893,7 @@ export function PurchaseOrderDetailPage() {
 
   // Payment summary card only after Confirm Order (Confirmed) or receiving / done
   const showPaymentSummary =
-    po && ['Confirmed', 'Partially Received', 'Completed'].includes(po.status);
+    po && ['Confirmed', 'Partially Received', 'Received', 'Completed'].includes(po.status);
 
   const canCancelPurchaseOrder =
     !!po &&
@@ -927,6 +951,66 @@ export function PurchaseOrderDetailPage() {
       await fetchPO();
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : 'Failed to submit for approval');
+    } finally {
+      setApprovalLoading(false);
+    }
+  };
+
+  const handleResubmitForApproval = async () => {
+    if (!po || po.status !== 'Rejected') return;
+    if (items.length === 0) {
+      alert('Add at least one line item before resubmitting for approval.');
+      setShowResubmitModal(false);
+      return;
+    }
+    setApprovalLoading(true);
+    const actor = employeeName || session?.user?.email || role;
+    const now = new Date().toISOString();
+    const debug = {
+      currentAuthUserId: session?.user?.id ?? null,
+      trigger: 'PurchaseOrderDetailPage.handleResubmitForApproval',
+    };
+    console.log('[PurchaseOrderDetailPage] resubmit for approval start', {
+      poId: po.id,
+      poNumber: po.po_number,
+      actor,
+      employeeId,
+      ...debug,
+    });
+    try {
+      const { error } = await supabase
+        .from('purchase_orders')
+        .update({
+          status: 'Requested',
+          submitted_by: actor,
+          submitted_at: now,
+          submitted_by_auth_user_id: session?.user?.id ?? null,
+          submitted_by_employee_id: employeeId ?? null,
+          rejected_by: null,
+          rejection_reason: null,
+          accepted_by: null,
+          accepted_at: null,
+          updated_at: now,
+        })
+        .eq('id', po.id);
+      if (error) throw error;
+      await insertPoLog(
+        'submitted',
+        `Resubmitted for approval by ${actor} after rejection. Pending manager or executive review.`,
+        { status: 'Rejected', rejected_by: po.rejected_by, rejection_reason: po.rejection_reason },
+        { status: 'Requested', submitted_by: actor, submitted_at: now },
+      );
+      setShowResubmitModal(false);
+      console.log('[PurchaseOrderDetailPage] PO updated to Requested — calling submit notify RPC');
+      try {
+        const count = await notifyExecutivesPurchaseOrderSubmittedForApproval(po.id, debug);
+        console.log('[PurchaseOrderDetailPage] resubmit notification complete', { insertedCount: count });
+      } catch (notifyErr) {
+        console.warn('[PurchaseOrderDetailPage] resubmit notification failed', notifyErr);
+      }
+      await fetchPO();
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : 'Failed to resubmit for approval');
     } finally {
       setApprovalLoading(false);
     }
@@ -1243,6 +1327,17 @@ export function PurchaseOrderDetailPage() {
                   Submit for approval
                 </Button>
               )}
+              {po.status === 'Rejected' && (
+                <Button
+                  variant="primary"
+                  onClick={() => setShowResubmitModal(true)}
+                  disabled={workflowSaving}
+                  className="gap-2"
+                >
+                  <Send className="w-4 h-4" />
+                  Resubmit for approval
+                </Button>
+              )}
               {po.status === 'Requested' && (
                 <>
                   <Button
@@ -1360,22 +1455,48 @@ export function PurchaseOrderDetailPage() {
                   </div>
                   <div>
                     <p className="text-xs text-gray-500 mb-0.5">Payment</p>
-                    <Badge variant={getPaymentVariant(po.payment_status ?? 'Unpaid')}>
-                      {po.payment_status ?? 'Unpaid'}
-                    </Badge>
+                    {isEditing ? (
+                      <select
+                        value={editForm.payment_status ?? po.payment_status ?? 'Unpaid'}
+                        onChange={e => setEditForm(f => ({ ...f, payment_status: e.target.value as PaymentStatus }))}
+                        className="border border-gray-300 rounded-lg px-2 py-1 text-sm focus:ring-2 focus:ring-indigo-500"
+                      >
+                        {PAYMENT_STATUS_OPTIONS.map(s => (
+                          <option key={s} value={s}>{s}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <Badge variant={getPaymentVariant(po.payment_status ?? 'Unpaid')}>
+                        {po.payment_status ?? 'Unpaid'}
+                      </Badge>
+                    )}
                   </div>
                   <div className="h-8 w-px bg-gray-200 hidden sm:block" />
                   <div className="hidden sm:block">
                     <p className="text-xs text-gray-500">Paid</p>
-                    <p className="text-sm font-bold text-gray-900">
-                      {formatPoMoney(po.amount_paid ?? 0, po.currency)}
-                      <span className="text-xs font-normal text-gray-400"> / {formatPoMoney(poTotalAmount, po.currency)}</span>
-                    </p>
+                    {isEditing ? (
+                      <div className="flex items-baseline gap-1">
+                        <input
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          value={editForm.amount_paid ?? po.amount_paid ?? 0}
+                          onChange={e => setEditForm(f => ({ ...f, amount_paid: parseFloat(e.target.value) || 0 }))}
+                          className="w-28 border border-gray-300 rounded-lg px-2 py-1 text-sm font-semibold focus:ring-2 focus:ring-indigo-500"
+                        />
+                        <span className="text-xs font-normal text-gray-400">/ {formatPoMoney(poTotalAmount, po.currency)}</span>
+                      </div>
+                    ) : (
+                      <p className="text-sm font-bold text-gray-900">
+                        {formatPoMoney(po.amount_paid ?? 0, po.currency)}
+                        <span className="text-xs font-normal text-gray-400"> / {formatPoMoney(poTotalAmount, po.currency)}</span>
+                      </p>
+                    )}
                   </div>
                   <div className="hidden sm:block">
                     <p className="text-xs text-gray-500">Remaining</p>
                     <p className="text-sm font-bold text-blue-700">
-                      {formatPoMoney(Math.max(0, poTotalAmount - (po.amount_paid ?? 0)), po.currency)}
+                      {formatPoMoney(Math.max(0, poTotalAmount - (editForm.amount_paid ?? po.amount_paid ?? 0)), po.currency)}
                     </p>
                   </div>
                   {po.payment_due_date && (
@@ -1395,12 +1516,12 @@ export function PurchaseOrderDetailPage() {
                 </div>
                 <div className="w-full sm:w-40">
                   <div className="flex justify-between text-xs text-gray-400 mb-1">
-                    <span>{Math.round(((po.amount_paid ?? 0) / (poTotalAmount || 1)) * 100)}% paid</span>
+                    <span>{Math.round(((editForm.amount_paid ?? po.amount_paid ?? 0) / (poTotalAmount || 1)) * 100)}% paid</span>
                   </div>
                   <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
                     <div
                       className="h-2 rounded-full bg-blue-500 transition-all"
-                      style={{ width: `${Math.min(100, ((po.amount_paid ?? 0) / (poTotalAmount || 1)) * 100)}%` }}
+                      style={{ width: `${Math.min(100, ((editForm.amount_paid ?? po.amount_paid ?? 0) / (poTotalAmount || 1)) * 100)}%` }}
                     />
                   </div>
                 </div>
@@ -2276,6 +2397,57 @@ export function PurchaseOrderDetailPage() {
               >
                 {approvalLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                 Submit for approval
+              </button>
+            </div>
+          </div>
+      </ModalPortal>
+
+      {/* ── Resubmit for approval (Rejected → Requested) ── */}
+      <ModalPortal
+        open={showResubmitModal && !!po}
+        backdropClassName="bg-black/60"
+        onBackdropClick={() => !approvalLoading && setShowResubmitModal(false)}
+      >
+          <div
+            className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="px-6 py-5 border-b border-gray-100 flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0">
+                <Send className="w-5 h-5 text-amber-700" />
+              </div>
+              <div>
+                <h2 className="text-lg font-bold text-gray-900">Resubmit for approval</h2>
+                <p className="text-sm text-gray-500">{po.po_number}</p>
+              </div>
+            </div>
+            <div className="px-6 py-5">
+              <p className="text-sm text-gray-700">
+                This will return the purchase order to <span className="font-semibold">Requested</span> and notify executives for review again. Previous rejection details will be cleared.
+              </p>
+              {po.rejection_reason && (
+                <p className="text-sm text-red-800 mt-3 bg-red-50 border border-red-100 rounded-lg p-3">
+                  <span className="font-medium">Previous rejection reason:</span> {po.rejection_reason}
+                </p>
+              )}
+            </div>
+            <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowResubmitModal(false)}
+                disabled={approvalLoading}
+                className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleResubmitForApproval}
+                disabled={approvalLoading}
+                className="px-5 py-2 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-700 transition-colors disabled:opacity-50 flex items-center gap-2"
+              >
+                {approvalLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                Resubmit for approval
               </button>
             </div>
           </div>

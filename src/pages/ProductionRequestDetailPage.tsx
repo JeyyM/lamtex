@@ -10,6 +10,15 @@ import { consumeBomForProductionLines } from '@/src/lib/bomConsumption';
 import { finishedGoodProductHref } from '@/src/lib/productRoutes';
 import { isPrExpectedOverdue } from '@/src/lib/prOverdue';
 import { addFinishedVariantUnitsAtBranch } from '@/src/lib/finishedGoodsInbound';
+import {
+  notifyExecutivesProductionRequestSubmittedForApproval,
+  notifyProductionRequestSubmitterCancelled,
+  notifyProductionRequestSubmitterAccepted,
+  notifyProductionRequestSubmitterRejected,
+  notifyWarehouseAndExecutivesProductionRequestStarted,
+  notifyWarehouseProductionRequestInventoryAdded,
+  notifyWarehouseAndExecutivesProductionRequestCompleted,
+} from '@/src/lib/notifications/notificationsData';
 import type { PRStatus } from '@/src/pages/ProductionRequestsPage';
 import {
   OrderProductSelectionModal,
@@ -84,6 +93,7 @@ interface PRHeader {
   expected_completion_date: string | null;
   notes: string | null;
   created_by: string | null;
+  submitted_by: string | null;
   accepted_by: string | null;
   accepted_at: string | null;
   rejected_by: string | null;
@@ -352,7 +362,7 @@ function workflowFieldsForPrStatus(
 export function ProductionRequestDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { role, session, employeeName, addAuditLog, branch: branchName } = useAppContext();
+  const { role, session, employeeName, employeeId, addAuditLog, branch: branchName } = useAppContext();
 
   const [pr, setPr] = useState<PRHeader | null>(null);
   const [items, setItems] = useState<PRItemRow[]>([]);
@@ -480,7 +490,7 @@ export function ProductionRequestDetailPage() {
       const { data, error: qErr } = await supabase
         .from('production_requests')
         .select(
-          'id, pr_number, branch_id, status, request_date, expected_completion_date, notes, created_by, accepted_by, accepted_at, rejected_by, rejection_reason, created_at, is_transfer_request, transfer_requesting_branch_id, inter_branch_request_id, branches:branches!branch_id(name), tr_branch:branches!transfer_requesting_branch_id(name), inter_branch:inter_branch_requests!inter_branch_request_id(id, ibr_number, status), production_request_items(id, product_id, product_variant_id, quantity, quantity_completed, product_variants(sku, size, reorder_point, products(id, name, product_categories(slug))))',
+          'id, pr_number, branch_id, status, request_date, expected_completion_date, notes, created_by, submitted_by, accepted_by, accepted_at, rejected_by, rejection_reason, created_at, is_transfer_request, transfer_requesting_branch_id, inter_branch_request_id, branches:branches!branch_id(name), tr_branch:branches!transfer_requesting_branch_id(name), inter_branch:inter_branch_requests!inter_branch_request_id(id, ibr_number, status), production_request_items(id, product_id, product_variant_id, quantity, quantity_completed, product_variants(sku, size, reorder_point, products(id, name, product_categories(slug))))',
         )
         .eq('id', id)
         .single();
@@ -576,6 +586,19 @@ export function ProductionRequestDetailPage() {
       return;
     }
     setSaving(true);
+    const submitActor = employeeName || session?.user?.email || actor;
+    const now = new Date().toISOString();
+    const debug = {
+      currentAuthUserId: session?.user?.id ?? null,
+      trigger: 'ProductionRequestDetailPage.handleSubmitForApproval',
+    };
+    console.log('[ProductionRequestDetailPage] submit for approval start', {
+      prId: id,
+      prNumber: pr.pr_number,
+      actor: submitActor,
+      employeeId,
+      ...debug,
+    });
     try {
       const today = new Date().toISOString().split('T')[0];
       const { error: u } = await supabase
@@ -585,15 +608,89 @@ export function ProductionRequestDetailPage() {
           request_date: today,
           expected_completion_date: expDate || null,
           notes: notes || null,
-          updated_at: new Date().toISOString(),
+          submitted_by: submitActor,
+          submitted_at: now,
+          submitted_by_auth_user_id: session?.user?.id ?? null,
+          submitted_by_employee_id: employeeId ?? null,
+          updated_at: now,
         })
         .eq('id', id);
       if (u) throw u;
       await insertLog('submitted', 'Submitted for approval. Pending manager or executive review.');
       addAuditLog('PR submitted for approval', 'Production', pr.pr_number);
+      console.log('[ProductionRequestDetailPage] PR updated to Requested — calling notify RPC (same pattern as POs)');
+      try {
+        const count = await notifyExecutivesProductionRequestSubmittedForApproval(id, debug);
+        console.log('[ProductionRequestDetailPage] submit notification complete', { insertedCount: count });
+      } catch (notifyErr) {
+        console.warn('[ProductionRequestDetailPage] submit notification failed', notifyErr);
+      }
       void fetchPR({ silent: true });
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : 'Failed to submit');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleResubmitForApproval = async () => {
+    if (!id || !pr) return;
+    if (pr.status !== 'Rejected') return;
+    if (items.length === 0) {
+      alert('Add at least one product line before resubmitting for approval.');
+      return;
+    }
+    setSaving(true);
+    const submitActor = employeeName || session?.user?.email || actor;
+    const now = new Date().toISOString();
+    const debug = {
+      currentAuthUserId: session?.user?.id ?? null,
+      trigger: 'ProductionRequestDetailPage.handleResubmitForApproval',
+    };
+    console.log('[ProductionRequestDetailPage] resubmit for approval start', {
+      prId: id,
+      prNumber: pr.pr_number,
+      actor: submitActor,
+      employeeId,
+      ...debug,
+    });
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      const { error: u } = await supabase
+        .from('production_requests')
+        .update({
+          status: 'Requested',
+          request_date: today,
+          expected_completion_date: expDate || null,
+          notes: notes || null,
+          submitted_by: submitActor,
+          submitted_at: now,
+          submitted_by_auth_user_id: session?.user?.id ?? null,
+          submitted_by_employee_id: employeeId ?? null,
+          rejected_by: null,
+          rejection_reason: null,
+          accepted_by: null,
+          accepted_at: null,
+          updated_at: now,
+        })
+        .eq('id', id);
+      if (u) throw u;
+      await insertLog(
+        'submitted',
+        `Resubmitted for approval after rejection. Pending manager or executive review.`,
+        { previous_rejection_reason: pr.rejection_reason },
+      );
+      addAuditLog('PR resubmitted for approval', 'Production', pr.pr_number);
+      console.log('[ProductionRequestDetailPage] PR updated to Requested — calling submit notify RPC');
+      try {
+        const count = await notifyExecutivesProductionRequestSubmittedForApproval(id, debug);
+        console.log('[ProductionRequestDetailPage] resubmit notification complete', { insertedCount: count });
+      } catch (notifyErr) {
+        console.warn('[ProductionRequestDetailPage] resubmit notification failed', notifyErr);
+      }
+      void fetchPR({ silent: true });
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : 'Failed to resubmit');
     } finally {
       setSaving(false);
     }
@@ -607,6 +704,11 @@ export function ProductionRequestDetailPage() {
       return;
     }
     setSaving(true);
+    const debug = {
+      currentAuthUserId: session?.user?.id ?? null,
+      trigger: 'ProductionRequestDetailPage.handleAccept',
+    };
+    const acceptedByForNotify = employeeName && role ? `${employeeName} (${role})` : actor;
     try {
       const now = new Date().toISOString();
       const { error: u } = await supabase
@@ -626,6 +728,12 @@ export function ProductionRequestDetailPage() {
       await insertLog('approved', `Accepted by ${actor}. Ready to schedule production.`, { status: 'Accepted', accepted_by: actor });
       addAuditLog('Accepted production request', 'Production', pr.pr_number);
       setShowAccept(false);
+      try {
+        const count = await notifyProductionRequestSubmitterAccepted(id, acceptedByForNotify, debug);
+        console.log('[ProductionRequestDetailPage] accept notification complete', { insertedCount: count });
+      } catch (notifyErr) {
+        console.warn('[ProductionRequestDetailPage] accept notification failed', notifyErr);
+      }
       void fetchPR({ silent: true });
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : 'Failed to accept');
@@ -637,13 +745,19 @@ export function ProductionRequestDetailPage() {
   const handleReject = async () => {
     if (!id || !pr) return;
     setSaving(true);
+    const reason = rejectReason.trim();
+    const debug = {
+      currentAuthUserId: session?.user?.id ?? null,
+      trigger: 'ProductionRequestDetailPage.handleReject',
+    };
+    const rejectedByForNotify = employeeName && role ? `${employeeName} (${role})` : actor;
     try {
       const { error: u } = await supabase
         .from('production_requests')
         .update({
           status: 'Rejected',
           rejected_by: actor,
-          rejection_reason: rejectReason || null,
+          rejection_reason: reason || null,
           accepted_by: null,
           accepted_at: null,
           expected_completion_date: expDate || null,
@@ -652,10 +766,16 @@ export function ProductionRequestDetailPage() {
         })
         .eq('id', id);
       if (u) throw u;
-      await insertLog('rejected', `Rejected by ${actor}. ${rejectReason || ''}`.trim(), { status: 'Rejected' });
+      await insertLog('rejected', `Rejected by ${actor}. ${reason}`.trim(), { status: 'Rejected' });
       addAuditLog('Rejected PR', 'Production', pr.pr_number);
       setShowReject(false);
       setRejectReason('');
+      try {
+        const count = await notifyProductionRequestSubmitterRejected(id, rejectedByForNotify, reason || null, debug);
+        console.log('[ProductionRequestDetailPage] reject notification complete', { insertedCount: count });
+      } catch (notifyErr) {
+        console.warn('[ProductionRequestDetailPage] reject notification failed', notifyErr);
+      }
       void fetchPR({ silent: true });
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : 'Failed to reject');
@@ -667,9 +787,23 @@ export function ProductionRequestDetailPage() {
   const handleCancelPr = async () => {
     if (!id || !pr) return;
     setSaving(true);
+    const note = cancelPrNote.trim();
+    const debug = {
+      currentAuthUserId: session?.user?.id ?? null,
+      trigger: 'ProductionRequestDetailPage.handleCancelPr',
+    };
+    const cancelledByForNotify =
+      employeeName && role ? `${employeeName} (${role})` : actor;
+
+    console.log('[ProductionRequestDetailPage] cancel PR start', {
+      prId: id,
+      actor,
+      cancelledByForNotify,
+      note,
+      ...debug,
+    });
     try {
       const now = new Date().toISOString();
-      const note = cancelPrNote.trim();
       const { error: u } = await supabase
         .from('production_requests')
         .update({
@@ -690,6 +824,18 @@ export function ProductionRequestDetailPage() {
         { status: 'Cancelled', ...(note ? { note } : {}) },
       );
       addAuditLog('Cancelled PR', 'Production', note ? `${pr.pr_number}: ${note}` : pr.pr_number);
+      console.log('[ProductionRequestDetailPage] PR updated to Cancelled — calling notify RPC');
+      try {
+        const count = await notifyProductionRequestSubmitterCancelled(
+          id,
+          cancelledByForNotify,
+          note || null,
+          debug,
+        );
+        console.log('[ProductionRequestDetailPage] cancel notification complete', { insertedCount: count });
+      } catch (notifyErr) {
+        console.warn('[ProductionRequestDetailPage] cancel notification failed', notifyErr);
+      }
       setShowCancelPr(false);
       setCancelPrNote('');
       setIsEditing(false);
@@ -716,6 +862,11 @@ export function ProductionRequestDetailPage() {
       .filter((l) => l.units > 0);
 
     setSaving(true);
+    const debug = {
+      currentAuthUserId: session?.user?.id ?? null,
+      trigger: 'ProductionRequestDetailPage.handleStartProduction',
+    };
+    const startedByForNotify = employeeName && role ? `${employeeName} (${role})` : actor;
     try {
       if (bomLines.length > 0) {
         await consumeBomForProductionLines(pr.branch_id, bomLines);
@@ -736,6 +887,12 @@ export function ProductionRequestDetailPage() {
         bomLines.length > 0 ? 'Production started; raw materials consumed per BOM (remaining planned units).' : 'Production started',
       );
       addAuditLog('PR In progress', 'Production', pr.pr_number);
+      try {
+        const count = await notifyWarehouseAndExecutivesProductionRequestStarted(id, startedByForNotify, debug);
+        console.log('[ProductionRequestDetailPage] start notification complete', { insertedCount: count });
+      } catch (notifyErr) {
+        console.warn('[ProductionRequestDetailPage] start notification failed', notifyErr);
+      }
       void fetchPR({ silent: true });
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : 'Failed to update');
@@ -776,14 +933,16 @@ export function ProductionRequestDetailPage() {
         if (iu) throw iu;
       }
 
+      let totalAdded = 0;
       const branchId = pr.branch_id;
-      if (branchId) {
-        for (const row of data) {
-          const line = items.find((i) => i.id === row.itemId);
-          if (!line?.product_variant_id) continue;
-          const prev = Number(line.quantity_completed) || 0;
-          const delta = row.producedQuantity - prev;
-          if (delta <= 0) continue;
+      for (const row of data) {
+        const line = items.find((i) => i.id === row.itemId);
+        const prev = line ? Number(line.quantity_completed) || 0 : 0;
+        const delta =
+          typeof row.addedQuantity === 'number' ? row.addedQuantity : row.producedQuantity - prev;
+        if (delta <= 0) continue;
+        totalAdded += delta;
+        if (branchId && line?.product_variant_id) {
           const pv = asOne(line.product_variants);
           const reorderPoint = Number(pv?.reorder_point) || 0;
           await addFinishedVariantUnitsAtBranch(supabase, {
@@ -810,6 +969,7 @@ export function ProductionRequestDetailPage() {
         })
         .eq('id', id);
       if (u) throw u;
+      const recordedByForNotify = employeeName && role ? `${employeeName} (${role})` : actor;
       if (allComplete) {
         await insertLog('completed', 'Marked complete: all target quantities produced.', {
           lines: data.map((d) => ({ id: d.itemId, produced: d.producedQuantity })),
@@ -822,6 +982,39 @@ export function ProductionRequestDetailPage() {
           { lines: data },
         );
         addAuditLog('PR production recorded', 'Production', `${pr.pr_number} (partial)`);
+      }
+
+      // Warehouse is notified whenever new finished stock is added (partial or complete).
+      if (totalAdded > 0) {
+        const debug = {
+          currentAuthUserId: session?.user?.id ?? null,
+          trigger: 'ProductionRequestDetailPage.handleRecordProductionConfirm (inventory added)',
+        };
+        try {
+          const count = await notifyWarehouseProductionRequestInventoryAdded(
+            id,
+            recordedByForNotify,
+            totalAdded,
+            debug,
+          );
+          console.log('[ProductionRequestDetailPage] inventory-added notification complete', { insertedCount: count });
+        } catch (notifyErr) {
+          console.warn('[ProductionRequestDetailPage] inventory-added notification failed', notifyErr);
+        }
+      }
+
+      // Warehouse + executives are notified only when the PR is fully completed.
+      if (allComplete) {
+        const debug = {
+          currentAuthUserId: session?.user?.id ?? null,
+          trigger: 'ProductionRequestDetailPage.handleRecordProductionConfirm (Completed)',
+        };
+        try {
+          const count = await notifyWarehouseAndExecutivesProductionRequestCompleted(id, recordedByForNotify, debug);
+          console.log('[ProductionRequestDetailPage] complete notification complete', { insertedCount: count });
+        } catch (notifyErr) {
+          console.warn('[ProductionRequestDetailPage] complete notification failed', notifyErr);
+        }
       }
       setShowRecordProduction(false);
       void fetchPR({ silent: true });
@@ -878,13 +1071,111 @@ export function ProductionRequestDetailPage() {
         }
       } else {
         const wf = workflowFieldsForPrStatus(newStatus, pr, actor);
-        const { error: u } = await supabase.from('production_requests').update({ ...base, ...wf }).eq('id', id);
+        const submitFields =
+          newStatus === 'Requested' && (oldStatus === 'Draft' || oldStatus === 'Rejected')
+            ? {
+                submitted_by: employeeName || session?.user?.email || actor,
+                submitted_at: new Date().toISOString(),
+                submitted_by_auth_user_id: session?.user?.id ?? null,
+                submitted_by_employee_id: employeeId ?? null,
+              }
+            : {};
+        const { error: u } = await supabase
+          .from('production_requests')
+          .update({ ...base, ...wf, ...submitFields })
+          .eq('id', id);
         if (u) throw u;
         await insertLog('updated', `Status changed from "${oldStatus}" to "${newStatus}"`, {
           from: oldStatus,
           to: newStatus,
         });
         addAuditLog('PR status changed', 'Production', `${pr.pr_number}: ${oldStatus} → ${newStatus}`);
+        if (newStatus === 'Cancelled') {
+          const debug = {
+            currentAuthUserId: session?.user?.id ?? null,
+            trigger: 'ProductionRequestDetailPage.handleSaveEdit (Cancelled)',
+          };
+          const cancelledByForNotify =
+            employeeName && role ? `${employeeName} (${role})` : actor;
+          try {
+            const count = await notifyProductionRequestSubmitterCancelled(
+              id,
+              cancelledByForNotify,
+              null,
+              debug,
+            );
+            console.log('[ProductionRequestDetailPage] cancel notification complete', { insertedCount: count });
+          } catch (notifyErr) {
+            console.warn('[ProductionRequestDetailPage] cancel notification failed', notifyErr);
+          }
+        }
+        if (newStatus === 'Requested' && (oldStatus === 'Draft' || oldStatus === 'Rejected')) {
+          const debug = {
+            currentAuthUserId: session?.user?.id ?? null,
+            trigger:
+              oldStatus === 'Rejected'
+                ? 'ProductionRequestDetailPage.handleSaveEdit (Resubmitted)'
+                : 'ProductionRequestDetailPage.handleSaveEdit (Requested)',
+          };
+          try {
+            const count = await notifyExecutivesProductionRequestSubmittedForApproval(id, debug);
+            console.log('[ProductionRequestDetailPage] submit notification complete', { insertedCount: count });
+          } catch (notifyErr) {
+            console.warn('[ProductionRequestDetailPage] submit notification failed', notifyErr);
+          }
+        }
+        if (newStatus === 'Accepted') {
+          const debug = {
+            currentAuthUserId: session?.user?.id ?? null,
+            trigger: 'ProductionRequestDetailPage.handleSaveEdit (Accepted)',
+          };
+          const acceptedByForNotify = employeeName && role ? `${employeeName} (${role})` : actor;
+          try {
+            const count = await notifyProductionRequestSubmitterAccepted(id, acceptedByForNotify, debug);
+            console.log('[ProductionRequestDetailPage] accept notification complete', { insertedCount: count });
+          } catch (notifyErr) {
+            console.warn('[ProductionRequestDetailPage] accept notification failed', notifyErr);
+          }
+        }
+        if (newStatus === 'Rejected') {
+          const debug = {
+            currentAuthUserId: session?.user?.id ?? null,
+            trigger: 'ProductionRequestDetailPage.handleSaveEdit (Rejected)',
+          };
+          const rejectedByForNotify = employeeName && role ? `${employeeName} (${role})` : actor;
+          try {
+            const count = await notifyProductionRequestSubmitterRejected(id, rejectedByForNotify, null, debug);
+            console.log('[ProductionRequestDetailPage] reject notification complete', { insertedCount: count });
+          } catch (notifyErr) {
+            console.warn('[ProductionRequestDetailPage] reject notification failed', notifyErr);
+          }
+        }
+        if (newStatus === 'In Progress' && oldStatus !== 'In Progress') {
+          const debug = {
+            currentAuthUserId: session?.user?.id ?? null,
+            trigger: 'ProductionRequestDetailPage.handleSaveEdit (In Progress)',
+          };
+          const startedByForNotify = employeeName && role ? `${employeeName} (${role})` : actor;
+          try {
+            const count = await notifyWarehouseAndExecutivesProductionRequestStarted(id, startedByForNotify, debug);
+            console.log('[ProductionRequestDetailPage] start notification complete', { insertedCount: count });
+          } catch (notifyErr) {
+            console.warn('[ProductionRequestDetailPage] start notification failed', notifyErr);
+          }
+        }
+        if (newStatus === 'Completed' && oldStatus !== 'Completed') {
+          const debug = {
+            currentAuthUserId: session?.user?.id ?? null,
+            trigger: 'ProductionRequestDetailPage.handleSaveEdit (Completed)',
+          };
+          const completedByForNotify = employeeName && role ? `${employeeName} (${role})` : actor;
+          try {
+            const count = await notifyWarehouseAndExecutivesProductionRequestCompleted(id, completedByForNotify, debug);
+            console.log('[ProductionRequestDetailPage] complete notification complete', { insertedCount: count });
+          } catch (notifyErr) {
+            console.warn('[ProductionRequestDetailPage] complete notification failed', notifyErr);
+          }
+        }
       }
       setIsEditing(false);
       setEditedStatus(null);
@@ -1231,6 +1522,17 @@ export function ProductionRequestDetailPage() {
                 >
                   {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                   Submit for approval
+                </Button>
+              )}
+              {pr.status === 'Rejected' && (
+                <Button
+                  variant="primary"
+                  className="gap-2"
+                  onClick={() => void handleResubmitForApproval()}
+                  disabled={saving}
+                >
+                  {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                  Resubmit for approval
                 </Button>
               )}
               {pr.status === 'Requested' && canApprove && (

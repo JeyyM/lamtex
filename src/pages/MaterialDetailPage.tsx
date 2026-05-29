@@ -1425,6 +1425,7 @@ export function MaterialDetailPage() {
                                 <td className="px-5 py-3 text-center align-middle">
                                   <Badge variant={
                                     po.status === 'Completed' ? 'success' :
+                                    po.status === 'Received' ? 'default' :
                                     po.status === 'Partially Received' ? 'warning' :
                                     po.status === 'Requested' ? 'warning' :
                                     po.status === 'Rejected' || po.status === 'Cancelled' ? 'danger' :
@@ -1488,6 +1489,7 @@ export function MaterialDetailPage() {
                               <div className="flex justify-center">
                                 <Badge variant={
                                   po.status === 'Completed' ? 'success' :
+                                  po.status === 'Received' ? 'default' :
                                   po.status === 'Partially Received' ? 'warning' :
                                   po.status === 'Requested' ? 'warning' :
                                   po.status === 'Rejected' || po.status === 'Cancelled' ? 'danger' :

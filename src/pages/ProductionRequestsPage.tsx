@@ -97,7 +97,7 @@ const getPRStatusIcon = (status: PRStatus) => {
 };
 
 export function ProductionRequestsPage() {
-  const { branch, employeeName, role, session, addAuditLog } = useAppContext();
+  const { branch, employeeName, role, session, employeeId, addAuditLog } = useAppContext();
   const navigate = useNavigate();
 
   const [rows, setRows] = useState<PRRow[]>([]);
@@ -335,7 +335,13 @@ export function ProductionRequestsPage() {
       }
       const actor = employeeName || session?.user?.email || 'User';
       const logRole = prLogRoleMap[role] ?? 'System';
-      const { id } = await createDraftProductionRequest({ branchId, actor, logRole });
+      const { id } = await createDraftProductionRequest({
+        branchId,
+        actor,
+        logRole,
+        createdByAuthUserId: session?.user?.id ?? null,
+        createdByEmployeeId: employeeId ?? null,
+      });
       navigate(`/production-requests/${id}`);
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : 'Failed to create request');
