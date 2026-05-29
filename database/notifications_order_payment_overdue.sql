@@ -198,7 +198,7 @@ SET search_path = public
 AS $$
 DECLARE
   o RECORD;
-  due_date DATE;
+  v_due_date DATE;
   days INT;
 BEGIN
   FOR o IN
@@ -218,17 +218,17 @@ BEGIN
         OR ord.payment_status = 'Overdue'::payment_status
       )
   LOOP
-    due_date := COALESCE(o.due_date, order_compute_due_date(o.actual_delivery, o.payment_terms));
-    IF due_date IS NULL OR due_date >= CURRENT_DATE THEN
+    v_due_date := COALESCE(o.due_date, order_compute_due_date(o.actual_delivery, o.payment_terms));
+    IF v_due_date IS NULL OR v_due_date >= CURRENT_DATE THEN
       CONTINUE;
     END IF;
 
-    days := GREATEST(0, (CURRENT_DATE - due_date)::INT);
+    days := GREATEST(0, (CURRENT_DATE - v_due_date)::INT);
 
     UPDATE orders
     SET
       payment_status = 'Overdue'::payment_status,
-      due_date = COALESCE(due_date, orders.due_date),
+      due_date = v_due_date,
       overdue_notified_at = NOW(),
       updated_at = NOW()
     WHERE id = o.id;

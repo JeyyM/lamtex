@@ -254,6 +254,36 @@ export async function fetchMaintenanceScheduledDatesForVehicle(
   return { dates: [...new Set(dates)] };
 }
 
+/** Scheduled (non-completed) maintenance dates for many vehicles — branch fleet calendar. */
+export async function fetchMaintenanceScheduledDatesForVehicles(
+  vehicleIds: string[],
+): Promise<{ byVehicle: Record<string, string[]>; error?: string }> {
+  const ids = [...new Set(vehicleIds.map((id) => id.trim()).filter(Boolean))];
+  if (!ids.length) return { byVehicle: {} };
+  const { data, error } = await supabase
+    .from('maintenance_records')
+    .select('vehicle_id, scheduled_date, status')
+    .in('vehicle_id', ids)
+    .not('scheduled_date', 'is', null);
+  if (error) return { byVehicle: {}, error: error.message };
+  const byVehicle: Record<string, string[]> = {};
+  for (const id of ids) byVehicle[id] = [];
+  for (const r of data ?? []) {
+    const row = r as { vehicle_id: string; scheduled_date: string; status?: string | null };
+    const st = String(row.status ?? '').trim().toLowerCase();
+    if (st === 'completed') continue;
+    const d = String(row.scheduled_date).slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
+    const vid = row.vehicle_id;
+    if (!byVehicle[vid]) byVehicle[vid] = [];
+    byVehicle[vid].push(d);
+  }
+  for (const id of Object.keys(byVehicle)) {
+    byVehicle[id] = [...new Set(byVehicle[id])].sort();
+  }
+  return { byVehicle };
+}
+
 /** Trucks for the branch selected in the header (`branches.name` must match). */
 export async function fetchFleetTrucksForBranch(branchName: string): Promise<{
   vehicles: Vehicle[];

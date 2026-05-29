@@ -32,7 +32,7 @@ export function ModalPortal({
 
   return createPortal(
     <div
-      className={`fixed inset-0 min-h-[100dvh] w-full ${backdropClassName} ${className}`}
+      className={`fixed inset-0 min-h-[100dvh] h-[100dvh] w-[100vw] max-w-[100vw] ${backdropClassName} ${className}`}
       style={{ zIndex }}
       onClick={onBackdropClick}
       role="presentation"

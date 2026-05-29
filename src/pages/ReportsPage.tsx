@@ -66,7 +66,6 @@ import {
 } from 'recharts';
 import {
   fetchReportsBundle,
-  exportReportsOutstanding,
   formatReportsPeso,
   formatReportsPesoFull,
   formatReportsPesoExact,
@@ -80,6 +79,13 @@ import {
   type ReportsRawMaterialConsumptionReport,
   type ReportsRawMaterialConsumptionByProductRow,
 } from '@/src/lib/reportsData';
+import {
+  downloadReportsOverviewWorkbook,
+  downloadReportsSalesWorkbook,
+  downloadReportsProductsWorkbook,
+  downloadReportsInventoryWorkbook,
+} from '@/src/lib/reportsExport';
+import { downloadAgentOverviewWorkbook } from '@/src/lib/agentAnalyticsExport';
 import { finishedGoodProductHref, productCategoryHref } from '@/src/lib/productRoutes';
 import {
   DATE_PERIOD_OPTIONS,
@@ -675,7 +681,7 @@ export function ReportsPage(): React.ReactElement {
   const [bundle, setBundle] = useState<ReportsBundle | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [exporting, setExporting] = useState(false);
+  const [exportingSection, setExportingSection] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [revenueTrendMode, setRevenueTrendMode] = useState<RevenueTrendMode>('scoped');
   const [agentCompareMode, setAgentCompareMode] = useState<AgentCompareMode>('scoped');
@@ -808,21 +814,6 @@ export function ReportsPage(): React.ReactElement {
     if (branch && branch.trim() !== '') return branch;
     return 'All branches';
   }, [bundle?.branchName, branch]);
-
-  const handleExport = useCallback(async () => {
-    if (exporting || !bundle) return;
-    setExporting(true);
-    try {
-      await exportReportsOutstanding({
-        branchName: branch,
-        periodLabel: bundle.period.displayLabel,
-      });
-    } catch (e) {
-      window.alert(e instanceof Error ? e.message : 'Export failed');
-    } finally {
-      setExporting(false);
-    }
-  }, [exporting, bundle, branch]);
 
   const reportTabs: Array<{ id: ViewMode; label: string; icon: React.ReactNode }> = [
     { id: 'overview', label: 'Overview', icon: <BarChart3 className="w-4 h-4" /> },
@@ -1614,6 +1605,35 @@ export function ReportsPage(): React.ReactElement {
     return rows.filter((r) => r.value > 0);
   })();
 
+  const activeTabLabel = reportTabs.find((t) => t.id === viewMode)?.label ?? 'Section';
+
+  const exportCurrentSection = async () => {
+    if (exportingSection) return;
+    setExportingSection(true);
+    try {
+      const common = { bundle, branchLabel, periodLabel };
+      if (viewMode === 'overview') {
+        await downloadReportsOverviewWorkbook(common);
+      } else if (viewMode === 'sales') {
+        await downloadReportsSalesWorkbook(common);
+      } else if (viewMode === 'products') {
+        await downloadReportsProductsWorkbook(common);
+      } else if (viewMode === 'inventory') {
+        await downloadReportsInventoryWorkbook(common);
+      } else if (viewMode === 'agents') {
+        await downloadAgentOverviewWorkbook({
+          bundle: agentsDisplay,
+          branchLabel: agentsScopeLabel,
+          periodLabel,
+        });
+      }
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : 'Export failed');
+    } finally {
+      setExportingSection(false);
+    }
+  };
+
   return (
     <>
     <div className="space-y-4 sm:space-y-6">
@@ -1644,9 +1664,9 @@ export function ReportsPage(): React.ReactElement {
             {refreshing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
             Refresh
           </Button>
-          <Button variant="primary" onClick={() => void handleExport()} disabled={exporting} className="gap-2">
-            {exporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-            Export AR
+          <Button variant="primary" onClick={() => void exportCurrentSection()} disabled={exportingSection} className="gap-2">
+            {exportingSection ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+            Export {activeTabLabel}
           </Button>
         </div>
       </div>

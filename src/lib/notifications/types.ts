@@ -155,6 +155,10 @@ export interface TripDriverAssignedNotifyPayload {
   orderCount: number;
   orderNumbers: string[];
   assignedBy: string | null;
+  /** Set when the trip reserves a truck for an inter-branch request shipment. */
+  interBranchRequestId?: string | null;
+  ibrNumber?: string | null;
+  destinationLabel?: string | null;
 }
 
 export interface OrderScheduledNotifyPayload extends OrderCreatedNotifyPayload {

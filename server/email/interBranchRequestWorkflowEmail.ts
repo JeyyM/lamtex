@@ -49,11 +49,14 @@ export interface InterBranchRequestWorkflowEmailPayload {
   actor?: string | null;
   note?: string | null;
   scheduledDepartureDate?: string | null;
+  tripNumber?: string | null;
+  vehicleName?: string | null;
+  driverName?: string | null;
   notes?: string | null;
   lineCount?: number | null;
   items: InterBranchRequestEmailLineItem[];
   recipientGroups?: Array<{
-    audience: 'executive' | 'warehouse';
+    audience: 'executive' | 'warehouse' | 'logistics';
     branchName?: string | null;
     emails: string[];
   }>;
@@ -130,6 +133,9 @@ export function buildInterBranchRequestWorkflowEmailHtml(p: InterBranchRequestWo
     ...(p.scheduledDepartureDate
       ? [detailRow('Planned departure', formatDate(p.scheduledDepartureDate))]
       : []),
+    ...(p.vehicleName ? [detailRow('Truck', p.vehicleName)] : []),
+    ...(p.driverName && p.driverName !== '—' ? [detailRow('Driver', p.driverName)] : []),
+    ...(p.tripNumber ? [detailRow('Trip', p.tripNumber)] : []),
   ].join('');
 
   const actorRows = [

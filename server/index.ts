@@ -195,6 +195,7 @@ import {
   interBranchSubmittedForApprovalSubject,
   interBranchApprovedSubject,
   interBranchLogisticsSubject,
+  logisticsBranchSubject,
   interBranchDeliveryRecordedSubject,
   interBranchFulfilledSubject,
   interBranchCancelledSubject,
@@ -655,7 +656,7 @@ app.post('/api/notifications/production-request-inventory-added', async (req, re
 
 function interBranchWorkflowEmailSubject(
   payload: InterBranchRequestWorkflowEmailPayload,
-  audience: 'executive' | 'warehouse',
+  audience: 'executive' | 'warehouse' | 'logistics',
   branchName?: string | null,
 ): string {
   const ref = {
@@ -663,20 +664,45 @@ function interBranchWorkflowEmailSubject(
     requestingBranchName: payload.requestingBranchName,
     fulfillingBranchName: payload.fulfillingBranchName,
   };
+  const logisticsBody = (status: string) =>
+    interBranchLogisticsSubject(
+      {
+        ...ref,
+        status,
+        vehicleName: payload.vehicleName,
+        driverName: payload.driverName,
+      },
+      branchName ?? payload.requestingBranchName,
+    );
   switch (payload.eventType) {
     case 'submitted_for_approval':
       return interBranchSubmittedForApprovalSubject(ref);
     case 'approved':
+      if (audience === 'logistics') {
+        return logisticsBranchSubject(
+          branchName ?? payload.fulfillingBranchName,
+          `${payload.ibrNumber} approved — ${payload.requestingBranchName ?? 'Branch'} → ${payload.fulfillingBranchName ?? 'Branch'}`,
+        );
+      }
       return interBranchApprovedSubject(ref, branchName);
     case 'scheduled':
     case 'loading':
     case 'packed':
     case 'ready':
     case 'in_transit':
-      return interBranchLogisticsSubject(
-        { ...ref, status: payload.status },
-        branchName ?? payload.requestingBranchName,
-      );
+      if (audience === 'logistics') {
+        const statusLabel = payload.status.trim() || 'updated';
+        const truckBit = payload.vehicleName?.trim() ? ` · ${payload.vehicleName.trim()}` : '';
+        const driverBit =
+          payload.driverName?.trim() && payload.driverName.trim() !== '—'
+            ? ` · ${payload.driverName.trim()}`
+            : '';
+        return logisticsBranchSubject(
+          branchName ?? payload.fulfillingBranchName,
+          `${payload.ibrNumber} ${statusLabel.toLowerCase()} — from ${payload.fulfillingBranchName ?? 'Branch'}${truckBit}${driverBit}`,
+        );
+      }
+      return logisticsBody(payload.status);
     case 'delivery_recorded':
       return interBranchDeliveryRecordedSubject({ ...ref, status: payload.status }, branchName);
     case 'fulfilled':

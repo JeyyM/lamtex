@@ -2976,6 +2976,7 @@ CREATE INDEX IF NOT EXISTS idx_material_batches_material ON material_batches(mat
 CREATE INDEX IF NOT EXISTS idx_material_stock_movements_material ON material_stock_movements(material_id);
 CREATE INDEX IF NOT EXISTS idx_material_stock_movements_date ON material_stock_movements(movement_date);
 CREATE INDEX IF NOT EXISTS idx_material_consumption_material ON material_consumption(material_id);
+CREATE INDEX IF NOT EXISTS idx_material_consumption_branch_date ON material_consumption(branch, consumption_date DESC);
 
 -- Customers
 CREATE INDEX IF NOT EXISTS idx_customers_status ON customers(status);
@@ -6167,7 +6168,7 @@ SET search_path = public
 AS $$
 DECLARE
   o RECORD;
-  due_date DATE;
+  v_due_date DATE;
   days INT;
 BEGIN
   FOR o IN
@@ -6187,17 +6188,17 @@ BEGIN
         OR ord.payment_status = 'Overdue'::payment_status
       )
   LOOP
-    due_date := COALESCE(o.due_date, order_compute_due_date(o.actual_delivery, o.payment_terms));
-    IF due_date IS NULL OR due_date >= CURRENT_DATE THEN
+    v_due_date := COALESCE(o.due_date, order_compute_due_date(o.actual_delivery, o.payment_terms));
+    IF v_due_date IS NULL OR v_due_date >= CURRENT_DATE THEN
       CONTINUE;
     END IF;
 
-    days := GREATEST(0, (CURRENT_DATE - due_date)::INT);
+    days := GREATEST(0, (CURRENT_DATE - v_due_date)::INT);
 
     UPDATE orders
     SET
       payment_status = 'Overdue'::payment_status,
-      due_date = COALESCE(due_date, orders.due_date),
+      due_date = v_due_date,
       overdue_notified_at = NOW(),
       updated_at = NOW()
     WHERE id = o.id;
@@ -7527,6 +7528,8 @@ DECLARE
   branch_name TEXT;
   order_count INT;
   schedule_label TEXT;
+  dest_label TEXT;
+  ibr_number TEXT;
   msg TEXT;
 BEGIN
   SELECT
@@ -7537,7 +7540,9 @@ BEGIN
     tr.driver_id,
     tr.driver_name,
     tr.order_ids,
-    tr.branch_id
+    tr.destinations,
+    tr.branch_id,
+    tr.inter_branch_request_id
   INTO t
   FROM trips tr
   WHERE tr.id = p_trip_id;
@@ -7563,20 +7568,39 @@ BEGIN
 
   SELECT name INTO branch_name FROM branches WHERE id = t.branch_id;
   order_count := COALESCE(array_length(t.order_ids, 1), 0);
+  dest_label := COALESCE(t.destinations[1], 'destination branch');
+
+  IF t.inter_branch_request_id IS NOT NULL THEN
+    SELECT ibr.ibr_number INTO ibr_number
+    FROM inter_branch_requests ibr
+    WHERE ibr.id = t.inter_branch_request_id;
+  END IF;
 
   schedule_label := COALESCE(
     to_char(t.scheduled_date, 'Mon DD, YYYY'),
     'the planned date'
   );
 
-  msg := format(
-    'You were assigned to trip %s on %s — %s order(s), vehicle %s%s',
-    t.trip_number,
-    schedule_label,
-    order_count,
-    COALESCE(t.vehicle_name, 'TBD'),
-    CASE WHEN p_assigned_by IS NOT NULL AND trim(p_assigned_by) <> '' THEN format(' (by %s)', p_assigned_by) ELSE '' END
-  );
+  IF t.inter_branch_request_id IS NOT NULL THEN
+    msg := format(
+      'You were assigned to inter-branch shipment %s on %s — delivering to %s, truck %s, driver %s%s',
+      COALESCE(ibr_number, t.trip_number),
+      schedule_label,
+      dest_label,
+      COALESCE(t.vehicle_name, 'TBD'),
+      COALESCE(NULLIF(trim(t.driver_name), ''), 'TBD'),
+      CASE WHEN p_assigned_by IS NOT NULL AND trim(p_assigned_by) <> '' THEN format(' (by %s)', p_assigned_by) ELSE '' END
+    );
+  ELSE
+    msg := format(
+      'You were assigned to trip %s on %s — %s order(s), vehicle %s%s',
+      t.trip_number,
+      schedule_label,
+      order_count,
+      COALESCE(t.vehicle_name, 'TBD'),
+      CASE WHEN p_assigned_by IS NOT NULL AND trim(p_assigned_by) <> '' THEN format(' (by %s)', p_assigned_by) ELSE '' END
+    );
+  END IF;
 
   INSERT INTO notifications (
     user_id,
@@ -7592,7 +7616,7 @@ BEGIN
   ) VALUES (
     driver.auth_user_id,
     'Delivery'::notification_category,
-    'Trip assigned to you',
+    CASE WHEN t.inter_branch_request_id IS NOT NULL THEN 'Inter-branch shipment assigned' ELSE 'Trip assigned to you' END,
     msg,
     false,
     '/',
@@ -7608,7 +7632,10 @@ BEGIN
       'orderCount', order_count,
       'orderIds', to_jsonb(COALESCE(t.order_ids, ARRAY[]::uuid[])),
       'branchName', branch_name,
-      'assignedBy', p_assigned_by
+      'assignedBy', p_assigned_by,
+      'interBranchRequestId', t.inter_branch_request_id,
+      'ibrNumber', ibr_number,
+      'destinationLabel', dest_label
     ),
     'trip_assigned_to_driver'
   );
@@ -7620,7 +7647,7 @@ $$;
 GRANT EXECUTE ON FUNCTION notify_driver_trip_assigned(UUID, TEXT) TO authenticated;
 
 COMMENT ON FUNCTION notify_driver_trip_assigned(UUID, TEXT) IS
-  'In-app notification to the assigned truck driver when they are assigned to a trip.';
+  'In-app notification to the assigned truck driver when they are assigned to a trip or inter-branch shipment.';
 
 
 -- ── 24?: Purchase order approval workflow notifications ───────────────────
@@ -9588,6 +9615,67 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION ibr_notify_logistics_branch(
+  p_branch_id UUID,
+  p_title TEXT,
+  p_message TEXT,
+  p_ibr_id UUID,
+  p_event_type TEXT,
+  p_metadata JSONB,
+  p_category notification_category DEFAULT 'Delivery'::notification_category,
+  p_urgent BOOLEAN DEFAULT false
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  recipient UUID;
+  inserted INT := 0;
+BEGIN
+  IF p_branch_id IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  FOR recipient IN
+    SELECT DISTINCT e.auth_user_id
+    FROM employees e
+    WHERE e.user_role = 'Logistics'::user_role
+      AND e.branch_id = p_branch_id
+      AND e.auth_user_id IS NOT NULL
+      AND e.status = 'active'::employee_status
+  LOOP
+    INSERT INTO notifications (
+      user_id,
+      category,
+      title,
+      message,
+      urgent,
+      action_url,
+      action_label,
+      branch_id,
+      metadata,
+      event_type
+    ) VALUES (
+      recipient,
+      p_category,
+      p_title,
+      p_message,
+      p_urgent,
+      '/inter-branch-requests/' || p_ibr_id::text,
+      'View IBR',
+      p_branch_id,
+      p_metadata,
+      p_event_type
+    );
+    inserted := inserted + 1;
+  END LOOP;
+
+  RETURN inserted;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION notify_executives_ibr_submitted_for_approval(p_ibr_id UUID)
 RETURNS INTEGER
 LANGUAGE plpgsql
@@ -9753,6 +9841,17 @@ BEGIN
     false
   );
 
+  inserted := inserted + ibr_notify_logistics_branch(
+    ibr.fulfilling_branch_id,
+    'Inter-branch request approved',
+    msg,
+    ibr.id,
+    'ibr_approved',
+    meta,
+    'Delivery'::notification_category,
+    false
+  );
+
   RETURN inserted;
 END;
 $$;
@@ -9775,6 +9874,12 @@ DECLARE
   title TEXT;
   msg TEXT;
   meta JSONB;
+  trip_vehicle TEXT;
+  trip_driver TEXT;
+  trip_number TEXT;
+  depart_label TEXT;
+  logistics_suffix TEXT;
+  inserted INT := 0;
 BEGIN
   IF p_status NOT IN ('Scheduled', 'Loading', 'Packed', 'Ready', 'In Transit') THEN
     RAISE EXCEPTION 'Unsupported IBR logistics status for requesting-branch notify: %', p_status;
@@ -9797,6 +9902,21 @@ BEGIN
   SELECT name INTO ful_name FROM branches WHERE id = ibr.fulfilling_branch_id;
   SELECT COUNT(*)::INT INTO line_count FROM inter_branch_request_items WHERE request_id = ibr.id;
 
+  trip_vehicle := NULL;
+  trip_driver := NULL;
+  trip_number := NULL;
+  IF ibr.linked_trip_id IS NOT NULL THEN
+    SELECT tr.vehicle_name, tr.driver_name, tr.trip_number
+    INTO trip_vehicle, trip_driver, trip_number
+    FROM trips tr
+    WHERE tr.id = ibr.linked_trip_id;
+  END IF;
+
+  depart_label := CASE
+    WHEN ibr.scheduled_departure_date IS NOT NULL THEN to_char(ibr.scheduled_departure_date, 'Mon DD, YYYY')
+    ELSE NULL
+  END;
+
   title := CASE p_status
     WHEN 'Scheduled' THEN 'Inter-branch shipment scheduled'
     WHEN 'Loading' THEN 'Inter-branch shipment loading'
@@ -9815,6 +9935,21 @@ BEGIN
     COALESCE(req_name, 'Requesting branch')
   );
 
+  logistics_suffix := NULL;
+  IF trip_vehicle IS NOT NULL OR trip_driver IS NOT NULL OR depart_label IS NOT NULL THEN
+    logistics_suffix := format(
+      ' Truck: %s',
+      COALESCE(NULLIF(trim(trip_vehicle), ''), 'TBD')
+    );
+    IF trip_driver IS NOT NULL AND trim(trip_driver) <> '' AND trim(trip_driver) <> '—' THEN
+      logistics_suffix := logistics_suffix || format(', driver: %s', trim(trip_driver));
+    END IF;
+    IF depart_label IS NOT NULL THEN
+      logistics_suffix := logistics_suffix || format(', departing %s', depart_label);
+    END IF;
+    msg := msg || '.' || logistics_suffix;
+  END IF;
+
   meta := jsonb_build_object(
     'interBranchRequestId', ibr.id,
     'ibrNumber', ibr.ibr_number,
@@ -9825,19 +9960,80 @@ BEGIN
     'status', ibr.status,
     'actor', p_actor,
     'lineCount', line_count,
-    'scheduledDepartureDate', ibr.scheduled_departure_date
+    'scheduledDepartureDate', ibr.scheduled_departure_date,
+    'linkedTripId', ibr.linked_trip_id,
+    'tripNumber', trip_number,
+    'vehicleName', trip_vehicle,
+    'driverName', trip_driver
   );
 
-  RETURN ibr_notify_warehouse_branch(
-    ibr.requesting_branch_id,
-    title,
-    msg,
-    ibr.id,
-    'ibr_' || lower(replace(p_status, ' ', '_')),
-    meta,
-    'Delivery'::notification_category,
-    false
-  );
+  IF p_status = 'Scheduled' THEN
+    inserted := inserted + ibr_notify_warehouse_branch(
+      ibr.requesting_branch_id,
+      title,
+      msg,
+      ibr.id,
+      'ibr_' || lower(replace(p_status, ' ', '_')),
+      meta,
+      'Delivery'::notification_category,
+      false
+    );
+  ELSIF p_status = 'Loading' THEN
+    inserted := inserted + ibr_notify_logistics_branch(
+      ibr.fulfilling_branch_id,
+      title,
+      msg,
+      ibr.id,
+      'ibr_loading',
+      meta,
+      'Delivery'::notification_category,
+      false
+    );
+    inserted := inserted + ibr_notify_warehouse_branch(
+      ibr.fulfilling_branch_id,
+      title,
+      msg,
+      ibr.id,
+      'ibr_loading',
+      meta,
+      'Delivery'::notification_category,
+      false
+    );
+  ELSIF p_status IN ('Packed', 'Ready') THEN
+    inserted := inserted + ibr_notify_logistics_branch(
+      ibr.fulfilling_branch_id,
+      title,
+      msg,
+      ibr.id,
+      'ibr_' || lower(replace(p_status, ' ', '_')),
+      meta,
+      'Delivery'::notification_category,
+      false
+    );
+  ELSIF p_status = 'In Transit' THEN
+    inserted := inserted + ibr_notify_warehouse_branch(
+      ibr.requesting_branch_id,
+      title,
+      msg,
+      ibr.id,
+      'ibr_in_transit',
+      meta,
+      'Delivery'::notification_category,
+      false
+    );
+    inserted := inserted + ibr_notify_warehouse_branch(
+      ibr.fulfilling_branch_id,
+      title,
+      msg,
+      ibr.id,
+      'ibr_in_transit',
+      meta,
+      'Delivery'::notification_category,
+      false
+    );
+  END IF;
+
+  RETURN inserted;
 END;
 $$;
 
@@ -10306,6 +10502,7 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION ibr_notify_warehouse_branch(UUID, TEXT, TEXT, UUID, TEXT, JSONB, notification_category, BOOLEAN) TO authenticated;
+GRANT EXECUTE ON FUNCTION ibr_notify_logistics_branch(UUID, TEXT, TEXT, UUID, TEXT, JSONB, notification_category, BOOLEAN) TO authenticated;
 GRANT EXECUTE ON FUNCTION resolve_ibr_submitter_auth_user_id(UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION notify_executives_ibr_submitted_for_approval(UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION notify_both_branches_ibr_approved(UUID, TEXT) TO authenticated;
@@ -10317,12 +10514,14 @@ GRANT EXECUTE ON FUNCTION notify_ibr_submitter_rejected(UUID, TEXT, TEXT) TO aut
 
 COMMENT ON FUNCTION ibr_notify_warehouse_branch(UUID, TEXT, TEXT, UUID, TEXT, JSONB, notification_category, BOOLEAN) IS
   'Insert in-app notifications for active Warehouse staff at a branch for an IBR event.';
+COMMENT ON FUNCTION ibr_notify_logistics_branch(UUID, TEXT, TEXT, UUID, TEXT, JSONB, notification_category, BOOLEAN) IS
+  'Insert in-app notifications for active Logistics staff at a branch for an IBR event.';
 COMMENT ON FUNCTION notify_executives_ibr_submitted_for_approval(UUID) IS
   'Fan-out in-app notification to all active Executive users when an IBR is submitted for approval.';
 COMMENT ON FUNCTION notify_both_branches_ibr_approved(UUID, TEXT) IS
-  'Fan-out in-app notification to Warehouse staff at requesting and fulfilling branches when an IBR is approved.';
+  'Fan-out in-app notification to Warehouse staff at both branches and Logistics at the fulfilling (sending) branch when an IBR is approved.';
 COMMENT ON FUNCTION notify_requesting_branch_ibr_status(UUID, TEXT, TEXT) IS
-  'Notify requesting-branch Warehouse staff on IBR logistics milestones (Scheduled, Loading, Packed, Ready, In Transit).';
+  'IBR logistics milestones: Scheduled → requesting warehouse; Loading → fulfilling logistics+warehouse; Packed/Ready → fulfilling logistics; In Transit → warehouse at both branches.';
 COMMENT ON FUNCTION notify_both_branches_ibr_delivery_recorded(UUID, TEXT, TEXT) IS
   'Notify Warehouse staff at both branches when delivery is recorded at the requesting branch.';
 COMMENT ON FUNCTION notify_both_branches_and_executives_ibr_fulfilled(UUID, TEXT) IS

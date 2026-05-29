@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { BarChart3, Loader2, TrendingUp, Target } from 'lucide-react';
+import { BarChart3, Download, Loader2, TrendingUp, Target } from 'lucide-react';
 import { useAppContext } from '@/src/store/AppContext';
 import { 
   AgentAnalyticsBundle,
@@ -11,6 +11,10 @@ import {
   getPeriodRange,
   quotaMonthPeriodKey,
 } from '@/src/lib/agentAnalytics';
+import {
+  downloadAgentOverviewWorkbook,
+  downloadAgentTrendsWorkbook,
+} from '@/src/lib/agentAnalyticsExport';
 import { AgentKpiStrip } from '@/src/components/agentAnalytics/AgentKpiStrip';
 import { AgentLeaderboard } from '@/src/components/agentAnalytics/AgentLeaderboard';
 import { BranchComparison } from '@/src/components/agentAnalytics/BranchComparison';
@@ -41,6 +45,7 @@ const AgentAnalyticsPage: React.FC = () => {
   const [customEnd, setCustomEnd] = useState('');
 
   const [manageQuotasOpen, setManageQuotasOpen] = useState(false);
+  const [exportingSection, setExportingSection] = useState(false);
 
   const range: PeriodRange = useMemo(() => {
     if (periodKind === 'custom') {
@@ -87,6 +92,36 @@ const AgentAnalyticsPage: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [range.start, range.end, analyticsBranchId]);
 
+  const branchLabel = analyticsBranchId
+    ? branches.find((b) => b.id === analyticsBranchId)?.name ?? 'Branch'
+    : 'All branches';
+  const activeTabLabel = TAB_ORDER.find((t) => t.id === tab)?.label ?? 'Section';
+
+  const exportCurrentSection = async () => {
+    if (exportingSection || !bundle) return;
+    setExportingSection(true);
+    try {
+      if (tab === 'overview') {
+        await downloadAgentOverviewWorkbook({
+          bundle,
+          branchLabel,
+          periodLabel: range.displayLabel,
+        });
+      } else {
+        await downloadAgentTrendsWorkbook({
+          bundle,
+          branchLabel,
+          periodLabel: range.displayLabel,
+          branchId: analyticsBranchId,
+        });
+      }
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : 'Export failed');
+    } finally {
+      setExportingSection(false);
+    }
+  };
+
   return (
     <div className="p-3 sm:p-4 md:p-6 space-y-5">
       {/* Header */}
@@ -94,6 +129,15 @@ const AgentAnalyticsPage: React.FC = () => {
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Agent Analytics</h1>
         </div>
+        <button
+          type="button"
+          onClick={() => void exportCurrentSection()}
+          disabled={exportingSection || !bundle}
+          className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 shadow-sm disabled:opacity-60"
+        >
+          {exportingSection ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+          Export {activeTabLabel}
+        </button>
       </div>
 
       {/* Tabs */}

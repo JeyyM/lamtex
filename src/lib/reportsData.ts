@@ -2645,9 +2645,9 @@ async function fetchReportsRawMaterialConsumption(
     let q = supabase
       .from('material_consumption')
       .select(
-        `id, material_id, consumption_date, quantity_consumed, total_cost, cost_per_unit,
-         product_id, product_name, remarks, branch,
-         raw_materials(id, name, unit_of_measure)`,
+        `id, material_id, material_name, unit_of_measure,
+         consumption_date, quantity_consumed, total_cost, cost_per_unit,
+         product_id, product_name, remarks, branch`,
       )
       .gte('consumption_date', from)
       .lte('consumption_date', to)
@@ -2689,14 +2689,8 @@ async function fetchReportsRawMaterialConsumption(
       const materialId = toStr(row.material_id);
       if (!materialId) continue;
 
-      let materialName = 'Unknown material';
-      let unit = 'kg';
-      const rmEmbed = row.raw_materials;
-      if (rmEmbed && typeof rmEmbed === 'object' && !Array.isArray(rmEmbed)) {
-        const rec = rmEmbed as Record<string, unknown>;
-        materialName = toStr(rec.name) ?? materialName;
-        unit = toStr(rec.unit_of_measure) ?? unit;
-      }
+      const materialName = toStr(row.material_name) ?? 'Unknown material';
+      const unit = toStr(row.unit_of_measure) ?? 'kg';
 
       const qty = toNumber(row.quantity_consumed);
       const cost = toNumber(row.total_cost) || toNumber(row.cost_per_unit) * qty;

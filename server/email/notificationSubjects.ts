@@ -11,6 +11,12 @@ export function warehouseBranchSubject(branchName: string | null | undefined, bo
   return `[Warehouse - ${name}] ${body}`;
 }
 
+/** Logistics email subject with branch name, e.g. [Logistics - Batangas] … */
+export function logisticsBranchSubject(branchName: string | null | undefined, body: string): string {
+  const name = branchName?.trim() || 'Branch';
+  return `[Logistics - ${name}] ${body}`;
+}
+
 type OrderRef = { orderNumber: string; customerName?: string | null };
 
 export function orderCreatedSubject(p: OrderRef): string {
@@ -370,8 +376,14 @@ export function orderCommissionPaidAgentSubject(
 export function tripDriverAssignedSubject(p: {
   tripNumber: string;
   scheduledDate?: string | null;
+  ibrNumber?: string | null;
+  interBranchRequestId?: string | null;
 }): string {
   const datePart = p.scheduledDate?.trim() ? ` — ${p.scheduledDate.trim()}` : '';
+  if (p.ibrNumber?.trim() || p.interBranchRequestId) {
+    const ref = p.ibrNumber?.trim() || p.tripNumber;
+    return notificationSubject('Driver', `Inter-branch ${ref} assigned to you${datePart}`);
+  }
   return notificationSubject('Driver', `Trip ${p.tripNumber} assigned to you${datePart}`);
 }
 
@@ -434,13 +446,16 @@ export function interBranchApprovedSubject(p: InterBranchRef, branchName?: strin
 }
 
 export function interBranchLogisticsSubject(
-  p: InterBranchRef & { status: string },
+  p: InterBranchRef & { status: string; vehicleName?: string | null; driverName?: string | null },
   branchName?: string | null,
 ): string {
   const statusLabel = p.status.trim() || 'updated';
+  const truckBit = p.vehicleName?.trim() ? ` · ${p.vehicleName.trim()}` : '';
+  const driverBit =
+    p.driverName?.trim() && p.driverName.trim() !== '—' ? ` · ${p.driverName.trim()}` : '';
   return warehouseBranchSubject(
     branchName ?? p.requestingBranchName,
-    `${p.ibrNumber} ${statusLabel.toLowerCase()} — from ${p.fulfillingBranchName ?? 'Branch'}`,
+    `${p.ibrNumber} ${statusLabel.toLowerCase()} — from ${p.fulfillingBranchName ?? 'Branch'}${truckBit}${driverBit}`,
   );
 }
 

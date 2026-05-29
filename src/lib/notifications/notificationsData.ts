@@ -3463,7 +3463,8 @@ export async function buildTripDriverAssignedNotifyPayload(
   const { data: trip, error } = await supabase
     .from('trips')
     .select(`
-      id, trip_number, scheduled_date, vehicle_name, driver_id, driver_name, order_ids, branch_id,
+      id, trip_number, scheduled_date, vehicle_name, driver_id, driver_name, order_ids, destinations,
+      inter_branch_request_id, branch_id,
       branches(name)
     `)
     .eq('id', tripId)
@@ -3494,6 +3495,19 @@ export async function buildTripDriverAssignedNotifyPayload(
     orderNumbers = orderIds.map((id) => byId.get(id) || id).filter(Boolean);
   }
 
+  const interBranchRequestId = (t.inter_branch_request_id as string | null)?.trim() || null;
+  const destArr = Array.isArray(t.destinations) ? (t.destinations as string[]) : [];
+  const destinationLabel = destArr[0]?.trim() || null;
+  let ibrNumber: string | null = null;
+  if (interBranchRequestId) {
+    const { data: ibrRow } = await supabase
+      .from('inter_branch_requests')
+      .select('ibr_number')
+      .eq('id', interBranchRequestId)
+      .maybeSingle();
+    ibrNumber = (ibrRow as { ibr_number?: string } | null)?.ibr_number?.trim() || null;
+  }
+
   const driverEmail = await fetchDriverEmail(driverId);
   const branchName = (t.branches as { name?: string } | null)?.name ?? null;
 
@@ -3508,6 +3522,9 @@ export async function buildTripDriverAssignedNotifyPayload(
     orderCount: orderIds.length,
     orderNumbers,
     assignedBy: opts.assignedBy ?? null,
+    interBranchRequestId,
+    ibrNumber,
+    destinationLabel,
   };
 }
 
@@ -3904,6 +3921,9 @@ type InterBranchNotifyEmailPayload = {
   actor?: string | null;
   note?: string | null;
   scheduledDepartureDate?: string | null;
+  tripNumber?: string | null;
+  vehicleName?: string | null;
+  driverName?: string | null;
   notes?: string | null;
   lineCount?: number | null;
   items: Array<{
@@ -3914,7 +3934,7 @@ type InterBranchNotifyEmailPayload = {
     quantity: number;
   }>;
   recipientGroups?: Array<{
-    audience: 'executive' | 'warehouse';
+    audience: 'executive' | 'warehouse' | 'logistics';
     branchName?: string | null;
     emails: string[];
   }>;
@@ -3944,7 +3964,7 @@ async function fetchInterBranchRequestSnapshotForNotify(ibrId: string): Promise<
     .from('inter_branch_requests')
     .select(`
       id, ibr_number, status, notes, created_by, submitted_at, approved_by, scheduled_departure_date,
-      requesting_branch_id, fulfilling_branch_id,
+      requesting_branch_id, fulfilling_branch_id, linked_trip_id,
       req_br:branches!requesting_branch_id(name),
       ful_br:branches!fulfilling_branch_id(name),
       inter_branch_request_items(
@@ -3994,6 +4014,24 @@ async function fetchInterBranchRequestSnapshotForNotify(ibrId: string): Promise<
     };
   });
 
+  let tripNumber: string | null = null;
+  let vehicleName: string | null = null;
+  let driverName: string | null = null;
+  const linkedTripId = (r.linked_trip_id as string | null)?.trim() || null;
+  if (linkedTripId) {
+    const { data: tripRow } = await supabase
+      .from('trips')
+      .select('trip_number, vehicle_name, driver_name')
+      .eq('id', linkedTripId)
+      .maybeSingle();
+    if (tripRow) {
+      const t = tripRow as { trip_number?: string | null; vehicle_name?: string | null; driver_name?: string | null };
+      tripNumber = t.trip_number?.trim() || null;
+      vehicleName = t.vehicle_name?.trim() || null;
+      driverName = t.driver_name?.trim() || null;
+    }
+  }
+
   return {
     interBranchRequestId: ibrId,
     ibrNumber: String(r.ibr_number ?? ''),
@@ -4004,6 +4042,9 @@ async function fetchInterBranchRequestSnapshotForNotify(ibrId: string): Promise<
     createdBy: (r.created_by as string | null) ?? null,
     submittedBy: (r.created_by as string | null) ?? null,
     scheduledDepartureDate: (r.scheduled_departure_date as string | null) ?? null,
+    tripNumber,
+    vehicleName,
+    driverName,
     notes: (r.notes as string | null) ?? null,
     lineCount: items.length,
     items,
@@ -4027,6 +4068,62 @@ async function fetchBothBranchWarehouseRecipientGroups(
   if (fulEmails.length) {
     groups.push({ audience: 'warehouse', branchName: fulfillingBranchName, emails: fulEmails });
   }
+  return groups;
+}
+
+async function fetchFulfillingBranchLogisticsEmailGroup(
+  fulfillingBranchId: string,
+  fulfillingBranchName: string | null,
+): Promise<NonNullable<InterBranchNotifyEmailPayload['recipientGroups']>[number] | null> {
+  const emails = await fetchBranchLogisticsEmails(fulfillingBranchId);
+  if (!emails.length) return null;
+  return { audience: 'logistics', branchName: fulfillingBranchName, emails };
+}
+
+async function buildIbrMilestoneEmailRecipientGroups(
+  status: string,
+  base: InterBranchNotifyBase,
+): Promise<NonNullable<InterBranchNotifyEmailPayload['recipientGroups']>> {
+  if (status === 'In Transit') {
+    return fetchBothBranchWarehouseRecipientGroups(
+      base.requestingBranchId,
+      base.fulfillingBranchId,
+      base.requestingBranchName,
+      base.fulfillingBranchName,
+    );
+  }
+
+  const groups: NonNullable<InterBranchNotifyEmailPayload['recipientGroups']> = [];
+
+  if (status === 'Scheduled') {
+    const emails = await fetchBranchWarehouseEmails(base.requestingBranchId);
+    if (emails.length) {
+      groups.push({ audience: 'warehouse', branchName: base.requestingBranchName, emails });
+    }
+    return groups;
+  }
+
+  if (status === 'Loading') {
+    const logisticsGroup = await fetchFulfillingBranchLogisticsEmailGroup(
+      base.fulfillingBranchId,
+      base.fulfillingBranchName,
+    );
+    if (logisticsGroup) groups.push(logisticsGroup);
+    const warehouseEmails = await fetchBranchWarehouseEmails(base.fulfillingBranchId);
+    if (warehouseEmails.length) {
+      groups.push({ audience: 'warehouse', branchName: base.fulfillingBranchName, emails: warehouseEmails });
+    }
+    return groups;
+  }
+
+  if (status === 'Packed' || status === 'Ready') {
+    const logisticsGroup = await fetchFulfillingBranchLogisticsEmailGroup(
+      base.fulfillingBranchId,
+      base.fulfillingBranchName,
+    );
+    if (logisticsGroup) groups.push(logisticsGroup);
+  }
+
   return groups;
 }
 
@@ -4159,27 +4256,34 @@ export async function notifyExecutivesInterBranchSubmittedForApproval(ibrId: str
   );
 }
 
-/** IBR approved: notify both branches + email warehouse staff at each branch. */
+/** IBR approved: notify both branches + logistics at sending branch + matching emails. */
 export async function notifyBothBranchesInterBranchApproved(ibrId: string, approvedBy: string): Promise<number> {
   return notifyInterBranchWithEmail(
     'notify_both_branches_ibr_approved',
     { p_ibr_id: ibrId, p_approved_by: approvedBy },
-    async (base) => ({
-      ...base,
-      eventType: 'approved',
-      status: 'Approved',
-      approvedBy,
-      recipientGroups: await fetchBothBranchWarehouseRecipientGroups(
+    async (base) => {
+      const warehouseGroups = await fetchBothBranchWarehouseRecipientGroups(
         base.requestingBranchId,
         base.fulfillingBranchId,
         base.requestingBranchName,
         base.fulfillingBranchName,
-      ),
-    }),
+      );
+      const logisticsGroup = await fetchFulfillingBranchLogisticsEmailGroup(
+        base.fulfillingBranchId,
+        base.fulfillingBranchName,
+      );
+      return {
+        ...base,
+        eventType: 'approved',
+        status: 'Approved',
+        approvedBy,
+        recipientGroups: [...warehouseGroups, ...(logisticsGroup ? [logisticsGroup] : [])],
+      };
+    },
   );
 }
 
-/** IBR logistics milestone: notify requesting branch warehouse + email them. */
+/** IBR logistics milestone: in-app + email per status routing rules. */
 export async function notifyRequestingBranchInterBranchStatus(
   ibrId: string,
   status: string,
@@ -4198,13 +4302,7 @@ export async function notifyRequestingBranchInterBranchStatus(
       eventType,
       status,
       actor: actor ?? null,
-      recipientGroups: [
-        {
-          audience: 'warehouse',
-          branchName: base.requestingBranchName,
-          emails: await fetchBranchWarehouseEmails(base.requestingBranchId),
-        },
-      ],
+      recipientGroups: await buildIbrMilestoneEmailRecipientGroups(status, base),
     }),
   );
 }

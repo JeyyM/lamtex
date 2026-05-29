@@ -946,9 +946,198 @@ export function tripsConflictingDriverAndDate(
       t.id !== excludeTripId &&
       t.driverId === driverUuid &&
       t.scheduledDate === dateYmd &&
-      ACTIVE_TRIP_STATUSES.includes(t.status as (typeof ACTIVE_TRIP_STATUSES)[number]) ||
-      isActiveTripStatus(t.status),
+      (ACTIVE_TRIP_STATUSES.includes(t.status as (typeof ACTIVE_TRIP_STATUSES)[number]) ||
+        isActiveTripStatus(t.status)),
   );
+}
+
+export type VehicleCalendarBooking = {
+  date: string;
+  type: 'Trip' | 'Maintenance';
+  tripNumber?: string;
+  status?: string;
+  tripKind?: 'IBR' | 'Order' | 'Trip';
+  vehicleId?: string;
+  vehicleName?: string;
+  driverId?: string | null;
+  driverName?: string;
+  /** When true, blocks or warns for the currently selected truck and/or driver. */
+  isConflict?: boolean;
+  conflictKind?: 'truck' | 'driver' | 'both';
+};
+
+export type BranchMaintenanceEntry = {
+  vehicleId: string;
+  vehicleName: string;
+  dates: string[];
+};
+
+function inferTripKind(t: Trip): 'IBR' | 'Order' | 'Trip' {
+  if (t.tripNumber.startsWith('TRIP-IBR-')) return 'IBR';
+  if (t.orders?.length) return 'Order';
+  return 'Trip';
+}
+
+function conflictKindForTrip(
+  t: Trip,
+  selectedVehicleId?: string | null,
+  selectedDriverId?: string | null,
+): 'truck' | 'driver' | 'both' | undefined {
+  const truck = Boolean(selectedVehicleId && t.vehicleId === selectedVehicleId);
+  const driver = Boolean(selectedDriverId && t.driverId && t.driverId === selectedDriverId);
+  if (truck && driver) return 'both';
+  if (truck) return 'truck';
+  if (driver) return 'driver';
+  return undefined;
+}
+
+/** Calendar markers for one vehicle — all active trip days + maintenance (multiple trips can share a date). */
+export function buildVehicleCalendarBookings(
+  trips: Trip[],
+  vehicleId: string | null | undefined,
+  maintenanceDates: string[],
+  excludeTripId?: string,
+): VehicleCalendarBooking[] {
+  const out: VehicleCalendarBooking[] = [];
+  const maintDates = new Set(maintenanceDates.map((d) => fmtDate(d)).filter(Boolean));
+
+  if (vehicleId) {
+    for (const t of trips) {
+      if (t.vehicleId !== vehicleId || !tripBlocksVehicleCalendar(t, excludeTripId)) continue;
+      for (const date of tripOccupiedDateKeys(t)) {
+        if (maintDates.has(date)) continue;
+        out.push({
+          date,
+          type: 'Trip',
+          tripNumber: t.tripNumber,
+          status: t.status,
+          tripKind: inferTripKind(t),
+          vehicleId: t.vehicleId,
+          vehicleName: t.vehicleName,
+          driverId: t.driverId,
+          driverName: t.driverName,
+          isConflict: true,
+          conflictKind: 'truck',
+        });
+      }
+    }
+  }
+  for (const date of maintDates) {
+    out.push({
+      date,
+      type: 'Maintenance',
+      vehicleId: vehicleId ?? undefined,
+      isConflict: true,
+      conflictKind: 'truck',
+    });
+  }
+  return out.sort((a, b) => a.date.localeCompare(b.date) || (a.tripNumber ?? '').localeCompare(b.tripNumber ?? ''));
+}
+
+/**
+ * Full branch fleet calendar — every active trip and maintenance day, with conflict flags
+ * for the currently selected truck and/or driver.
+ */
+export function buildBranchCalendarBookings(
+  trips: Trip[],
+  maintenanceEntries: BranchMaintenanceEntry[],
+  selectedVehicleId?: string | null,
+  selectedDriverId?: string | null,
+  excludeTripId?: string,
+): VehicleCalendarBooking[] {
+  const out: VehicleCalendarBooking[] = [];
+  const maintOnDateVehicle = new Map<string, Set<string>>();
+
+  for (const entry of maintenanceEntries) {
+    for (const raw of entry.dates) {
+      const date = fmtDate(raw);
+      if (!date) continue;
+      const isConflict = Boolean(selectedVehicleId && entry.vehicleId === selectedVehicleId);
+      out.push({
+        date,
+        type: 'Maintenance',
+        vehicleId: entry.vehicleId,
+        vehicleName: entry.vehicleName,
+        isConflict,
+        conflictKind: isConflict ? 'truck' : undefined,
+      });
+      const set = maintOnDateVehicle.get(date) ?? new Set<string>();
+      set.add(entry.vehicleId);
+      maintOnDateVehicle.set(date, set);
+    }
+  }
+
+  for (const t of trips) {
+    if (!tripBlocksVehicleCalendar(t, excludeTripId)) continue;
+    const kind = conflictKindForTrip(t, selectedVehicleId, selectedDriverId);
+    const isConflict = Boolean(kind);
+    for (const date of tripOccupiedDateKeys(t)) {
+      const blockedByOwnMaint =
+        selectedVehicleId &&
+        t.vehicleId === selectedVehicleId &&
+        maintOnDateVehicle.get(date)?.has(selectedVehicleId);
+      if (blockedByOwnMaint) continue;
+      out.push({
+        date,
+        type: 'Trip',
+        tripNumber: t.tripNumber,
+        status: t.status,
+        tripKind: inferTripKind(t),
+        vehicleId: t.vehicleId,
+        vehicleName: t.vehicleName,
+        driverId: t.driverId,
+        driverName: t.driverName,
+        isConflict,
+        conflictKind: kind,
+      });
+    }
+  }
+
+  return out.sort(
+    (a, b) =>
+      a.date.localeCompare(b.date) ||
+      Number(Boolean(b.isConflict)) - Number(Boolean(a.isConflict)) ||
+      (a.vehicleName ?? '').localeCompare(b.vehicleName ?? '') ||
+      (a.tripNumber ?? '').localeCompare(b.tripNumber ?? ''),
+  );
+}
+
+/** Active trips for a driver that occupy any of the given calendar days. */
+export function tripsForDriverOnDates(
+  trips: Trip[],
+  driverUuid: string | null | undefined,
+  dateYmds: string[],
+  excludeTripId?: string,
+): Trip[] {
+  if (!driverUuid || !dateYmds.length) return [];
+  const want = new Set(dateYmds.map((d) => fmtDate(d)).filter(Boolean));
+  if (!want.size) return [];
+  const seen = new Set<string>();
+  const conflicts: Trip[] = [];
+  for (const t of trips) {
+    if (t.id === excludeTripId || t.driverId !== driverUuid || !tripBlocksVehicleCalendar(t, excludeTripId)) {
+      continue;
+    }
+    for (const k of tripOccupiedDateKeys(t)) {
+      if (want.has(k) && !seen.has(t.id)) {
+        seen.add(t.id);
+        conflicts.push(t);
+      }
+    }
+  }
+  return conflicts;
+}
+
+/** Active trips assigned to a vehicle (for schedule lists / conflict panels). */
+export function activeTripsForVehicle(
+  trips: Trip[],
+  vehicleId: string | null | undefined,
+  excludeTripId?: string,
+): Trip[] {
+  if (!vehicleId) return [];
+  return trips
+    .filter((t) => t.vehicleId === vehicleId && tripBlocksVehicleCalendar(t, excludeTripId))
+    .sort((a, b) => a.scheduledDate.localeCompare(b.scheduledDate) || a.tripNumber.localeCompare(b.tripNumber));
 }
 
 export async function fetchDriversForBranch(branchName: string): Promise<{ drivers: DriverOption[]; error?: string }> {
@@ -1610,6 +1799,13 @@ export async function createOrUpdateIbrTrip(params: IbrTripScheduleParams): Prom
 
   // Reschedule: update the existing IBR trip in place.
   if (params.existingTripId) {
+    const { data: prevTrip } = await supabase
+      .from('trips')
+      .select('driver_id')
+      .eq('id', params.existingTripId)
+      .maybeSingle();
+    const previousDriverId = (prevTrip?.driver_id as string | null) ?? null;
+
     const { error: updErr } = await supabase
       .from('trips')
       .update({
@@ -1625,7 +1821,7 @@ export async function createOrUpdateIbrTrip(params: IbrTripScheduleParams): Prom
       })
       .eq('id', params.existingTripId);
     if (updErr) return { ok: false, error: updErr.message };
-    if (params.driverUuid) {
+    if (params.driverUuid && params.driverUuid !== previousDriverId) {
       fireDriverTripAssignedNotification(params.existingTripId, { assignedBy: params.scheduledBy ?? null });
     }
     return { ok: true, tripId: params.existingTripId };
@@ -1690,6 +1886,14 @@ export async function createOrUpdateIbrTrip(params: IbrTripScheduleParams): Prom
   return { ok: true, tripId, tripNumber };
 }
 
+/** IBR statuses that should not keep a truck reserved on the logistics calendar. */
+export const IBR_STATUSES_RELEASE_TRIP = ['Draft', 'Pending', 'Approved', 'Rejected', 'Cancelled'] as const;
+
+/** True when moving to a pre-schedule / terminal-cancel status should delete the linked trip. */
+export function shouldReleaseIbrTripForStatus(nextStatus: string): boolean {
+  return (IBR_STATUSES_RELEASE_TRIP as readonly string[]).includes(String(nextStatus ?? '').trim());
+}
+
 /** Delete the trip reserved for an IBR (truck freed). Used on cancel/reject/unschedule. */
 export async function releaseIbrTrip(ibrId: string, tripId?: string | null): Promise<void> {
   const id = ibrId.trim();
@@ -1707,7 +1911,11 @@ export async function releaseIbrTrip(ibrId: string, tripId?: string | null): Pro
   }
   await supabase
     .from('inter_branch_requests')
-    .update({ linked_trip_id: null, updated_at: new Date().toISOString() })
+    .update({
+      linked_trip_id: null,
+      scheduled_departure_date: null,
+      updated_at: new Date().toISOString(),
+    })
     .eq('id', id);
 }
 

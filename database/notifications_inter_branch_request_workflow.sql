@@ -64,6 +64,68 @@ BEGIN
 END;
 $$;
 
+-- Fan-out in-app notifications to active Logistics staff at a branch.
+CREATE OR REPLACE FUNCTION ibr_notify_logistics_branch(
+  p_branch_id UUID,
+  p_title TEXT,
+  p_message TEXT,
+  p_ibr_id UUID,
+  p_event_type TEXT,
+  p_metadata JSONB,
+  p_category notification_category DEFAULT 'Delivery'::notification_category,
+  p_urgent BOOLEAN DEFAULT false
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  recipient UUID;
+  inserted INT := 0;
+BEGIN
+  IF p_branch_id IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  FOR recipient IN
+    SELECT DISTINCT e.auth_user_id
+    FROM employees e
+    WHERE e.user_role = 'Logistics'::user_role
+      AND e.branch_id = p_branch_id
+      AND e.auth_user_id IS NOT NULL
+      AND e.status = 'active'::employee_status
+  LOOP
+    INSERT INTO notifications (
+      user_id,
+      category,
+      title,
+      message,
+      urgent,
+      action_url,
+      action_label,
+      branch_id,
+      metadata,
+      event_type
+    ) VALUES (
+      recipient,
+      p_category,
+      p_title,
+      p_message,
+      p_urgent,
+      '/inter-branch-requests/' || p_ibr_id::text,
+      'View IBR',
+      p_branch_id,
+      p_metadata,
+      p_event_type
+    );
+    inserted := inserted + 1;
+  END LOOP;
+
+  RETURN inserted;
+END;
+$$;
+
 -- Submitted for approval: notify all active executives.
 CREATE OR REPLACE FUNCTION notify_executives_ibr_submitted_for_approval(p_ibr_id UUID)
 RETURNS INTEGER
@@ -231,11 +293,22 @@ BEGIN
     false
   );
 
+  inserted := inserted + ibr_notify_logistics_branch(
+    ibr.fulfilling_branch_id,
+    'Inter-branch request approved',
+    msg,
+    ibr.id,
+    'ibr_approved',
+    meta,
+    'Delivery'::notification_category,
+    false
+  );
+
   RETURN inserted;
 END;
 $$;
 
--- Logistics status at fulfilling branch: notify requesting branch warehouse only.
+-- IBR logistics milestones — route by status (sending branch = fulfilling branch).
 CREATE OR REPLACE FUNCTION notify_requesting_branch_ibr_status(
   p_ibr_id UUID,
   p_status TEXT,
@@ -254,6 +327,12 @@ DECLARE
   title TEXT;
   msg TEXT;
   meta JSONB;
+  trip_vehicle TEXT;
+  trip_driver TEXT;
+  trip_number TEXT;
+  depart_label TEXT;
+  logistics_suffix TEXT;
+  inserted INT := 0;
 BEGIN
   IF p_status NOT IN ('Scheduled', 'Loading', 'Packed', 'Ready', 'In Transit') THEN
     RAISE EXCEPTION 'Unsupported IBR logistics status for requesting-branch notify: %', p_status;
@@ -276,6 +355,21 @@ BEGIN
   SELECT name INTO ful_name FROM branches WHERE id = ibr.fulfilling_branch_id;
   SELECT COUNT(*)::INT INTO line_count FROM inter_branch_request_items WHERE request_id = ibr.id;
 
+  trip_vehicle := NULL;
+  trip_driver := NULL;
+  trip_number := NULL;
+  IF ibr.linked_trip_id IS NOT NULL THEN
+    SELECT tr.vehicle_name, tr.driver_name, tr.trip_number
+    INTO trip_vehicle, trip_driver, trip_number
+    FROM trips tr
+    WHERE tr.id = ibr.linked_trip_id;
+  END IF;
+
+  depart_label := CASE
+    WHEN ibr.scheduled_departure_date IS NOT NULL THEN to_char(ibr.scheduled_departure_date, 'Mon DD, YYYY')
+    ELSE NULL
+  END;
+
   title := CASE p_status
     WHEN 'Scheduled' THEN 'Inter-branch shipment scheduled'
     WHEN 'Loading' THEN 'Inter-branch shipment loading'
@@ -294,6 +388,21 @@ BEGIN
     COALESCE(req_name, 'Requesting branch')
   );
 
+  logistics_suffix := NULL;
+  IF trip_vehicle IS NOT NULL OR trip_driver IS NOT NULL OR depart_label IS NOT NULL THEN
+    logistics_suffix := format(
+      ' Truck: %s',
+      COALESCE(NULLIF(trim(trip_vehicle), ''), 'TBD')
+    );
+    IF trip_driver IS NOT NULL AND trim(trip_driver) <> '' AND trim(trip_driver) <> '—' THEN
+      logistics_suffix := logistics_suffix || format(', driver: %s', trim(trip_driver));
+    END IF;
+    IF depart_label IS NOT NULL THEN
+      logistics_suffix := logistics_suffix || format(', departing %s', depart_label);
+    END IF;
+    msg := msg || '.' || logistics_suffix;
+  END IF;
+
   meta := jsonb_build_object(
     'interBranchRequestId', ibr.id,
     'ibrNumber', ibr.ibr_number,
@@ -304,19 +413,80 @@ BEGIN
     'status', ibr.status,
     'actor', p_actor,
     'lineCount', line_count,
-    'scheduledDepartureDate', ibr.scheduled_departure_date
+    'scheduledDepartureDate', ibr.scheduled_departure_date,
+    'linkedTripId', ibr.linked_trip_id,
+    'tripNumber', trip_number,
+    'vehicleName', trip_vehicle,
+    'driverName', trip_driver
   );
 
-  RETURN ibr_notify_warehouse_branch(
-    ibr.requesting_branch_id,
-    title,
-    msg,
-    ibr.id,
-    'ibr_' || lower(replace(p_status, ' ', '_')),
-    meta,
-    'Delivery'::notification_category,
-    false
-  );
+  IF p_status = 'Scheduled' THEN
+    inserted := inserted + ibr_notify_warehouse_branch(
+      ibr.requesting_branch_id,
+      title,
+      msg,
+      ibr.id,
+      'ibr_' || lower(replace(p_status, ' ', '_')),
+      meta,
+      'Delivery'::notification_category,
+      false
+    );
+  ELSIF p_status = 'Loading' THEN
+    inserted := inserted + ibr_notify_logistics_branch(
+      ibr.fulfilling_branch_id,
+      title,
+      msg,
+      ibr.id,
+      'ibr_loading',
+      meta,
+      'Delivery'::notification_category,
+      false
+    );
+    inserted := inserted + ibr_notify_warehouse_branch(
+      ibr.fulfilling_branch_id,
+      title,
+      msg,
+      ibr.id,
+      'ibr_loading',
+      meta,
+      'Delivery'::notification_category,
+      false
+    );
+  ELSIF p_status IN ('Packed', 'Ready') THEN
+    inserted := inserted + ibr_notify_logistics_branch(
+      ibr.fulfilling_branch_id,
+      title,
+      msg,
+      ibr.id,
+      'ibr_' || lower(replace(p_status, ' ', '_')),
+      meta,
+      'Delivery'::notification_category,
+      false
+    );
+  ELSIF p_status = 'In Transit' THEN
+    inserted := inserted + ibr_notify_warehouse_branch(
+      ibr.requesting_branch_id,
+      title,
+      msg,
+      ibr.id,
+      'ibr_in_transit',
+      meta,
+      'Delivery'::notification_category,
+      false
+    );
+    inserted := inserted + ibr_notify_warehouse_branch(
+      ibr.fulfilling_branch_id,
+      title,
+      msg,
+      ibr.id,
+      'ibr_in_transit',
+      meta,
+      'Delivery'::notification_category,
+      false
+    );
+  END IF;
+
+  RETURN inserted;
 END;
 $$;
 
@@ -790,6 +960,7 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION ibr_notify_warehouse_branch(UUID, TEXT, TEXT, UUID, TEXT, JSONB, notification_category, BOOLEAN) TO authenticated;
+GRANT EXECUTE ON FUNCTION ibr_notify_logistics_branch(UUID, TEXT, TEXT, UUID, TEXT, JSONB, notification_category, BOOLEAN) TO authenticated;
 GRANT EXECUTE ON FUNCTION resolve_ibr_submitter_auth_user_id(UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION notify_executives_ibr_submitted_for_approval(UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION notify_both_branches_ibr_approved(UUID, TEXT) TO authenticated;
@@ -801,12 +972,14 @@ GRANT EXECUTE ON FUNCTION notify_ibr_submitter_rejected(UUID, TEXT, TEXT) TO aut
 
 COMMENT ON FUNCTION ibr_notify_warehouse_branch(UUID, TEXT, TEXT, UUID, TEXT, JSONB, notification_category, BOOLEAN) IS
   'Insert in-app notifications for active Warehouse staff at a branch for an IBR event.';
+COMMENT ON FUNCTION ibr_notify_logistics_branch(UUID, TEXT, TEXT, UUID, TEXT, JSONB, notification_category, BOOLEAN) IS
+  'Insert in-app notifications for active Logistics staff at a branch for an IBR event.';
 COMMENT ON FUNCTION notify_executives_ibr_submitted_for_approval(UUID) IS
   'Fan-out in-app notification to all active Executive users when an IBR is submitted for approval.';
 COMMENT ON FUNCTION notify_both_branches_ibr_approved(UUID, TEXT) IS
-  'Fan-out in-app notification to Warehouse staff at requesting and fulfilling branches when an IBR is approved.';
+  'Fan-out in-app notification to Warehouse staff at both branches and Logistics at the fulfilling (sending) branch when an IBR is approved.';
 COMMENT ON FUNCTION notify_requesting_branch_ibr_status(UUID, TEXT, TEXT) IS
-  'Notify requesting-branch Warehouse staff on IBR logistics milestones (Scheduled, Loading, Packed, Ready, In Transit).';
+  'IBR logistics milestones: Scheduled → requesting warehouse; Loading → fulfilling logistics+warehouse; Packed/Ready → fulfilling logistics; In Transit → warehouse at both branches.';
 COMMENT ON FUNCTION notify_both_branches_ibr_delivery_recorded(UUID, TEXT, TEXT) IS
   'Notify Warehouse staff at both branches when delivery is recorded at the requesting branch.';
 COMMENT ON FUNCTION notify_both_branches_and_executives_ibr_fulfilled(UUID, TEXT) IS

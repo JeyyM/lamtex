@@ -342,17 +342,15 @@ export const RoutePlanningView: React.FC<RoutePlanningViewProps> = ({
   const selectedDriverConflict = driverDayActiveTrips.length > 0;
 
   const scheduleModalBookings = useMemo(() => {
-    const byDate = new Map<
-      string,
-      { date: string; type: 'Trip' | 'Maintenance'; tripNumber?: string; status?: string }
-    >();
+    const maintSet = new Set(selectedVehicleMaintDates);
+    const out: Array<{ date: string; type: 'Trip' | 'Maintenance'; tripNumber?: string; status?: string }> = [];
     for (const t of tripBookingsForVehicle) {
-      byDate.set(t.date, t);
+      if (!maintSet.has(t.date)) out.push(t);
     }
     for (const date of selectedVehicleMaintDates) {
-      byDate.set(date, { date, type: 'Maintenance' });
+      out.push({ date, type: 'Maintenance' });
     }
-    return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+    return out.sort((a, b) => a.date.localeCompare(b.date) || (a.tripNumber ?? '').localeCompare(b.tripNumber ?? ''));
   }, [tripBookingsForVehicle, selectedVehicleMaintDates]);
 
   useEffect(() => {

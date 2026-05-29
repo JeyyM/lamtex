@@ -29,15 +29,19 @@ import {
   notifyRequestingBranchInterBranchStatus,
 } from '@/src/lib/notifications/notificationsData';
 import {
+  buildBranchCalendarBookings,
+  type BranchMaintenanceEntry,
   createOrUpdateIbrTrip,
   fetchDriversForBranch,
   fetchTripsForBranch,
   releaseIbrTrip,
   setIbrTripStatus,
+  shouldReleaseIbrTripForStatus,
   tripsConflictingVehicleOnDates,
 } from '@/src/lib/logisticsScheduling';
-import { fetchFleetTrucksForBranch } from '@/src/lib/fleetTrucks';
+import { fetchFleetTrucksForBranch, fetchMaintenanceScheduledDatesForVehicles } from '@/src/lib/fleetTrucks';
 import type { DriverOption, Trip, Vehicle } from '@/src/types/logistics';
+import { TripScheduleModal } from '@/src/components/logistics/TripScheduleModal';
 import { MarkIbrInTransitModal } from '@/src/components/interBranch/MarkIbrInTransitModal';
 import { RecordIbrDeliveryModal } from '@/src/components/interBranch/RecordIbrDeliveryModal';
 import type { FulfillmentData } from '@/src/components/orders/FulfillOrderModal';
@@ -1027,7 +1031,6 @@ export function InterBranchRequestDetailPage() {
   /** `inter_branch_request_items.id` when the product modal is opened to edit that line; `null` = add. */
   const [editingProductLineId, setEditingProductLineId] = useState<string | null>(null);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
-  const [pickScheduleDate, setPickScheduleDate] = useState('');
   /** Fleet trucks at the fulfilling (shipping) branch for IBR departure scheduling. */
   const [ibrFleetVehicles, setIbrFleetVehicles] = useState<Vehicle[]>([]);
   const [ibrBranchDrivers, setIbrBranchDrivers] = useState<DriverOption[]>([]);
@@ -1035,6 +1038,8 @@ export function InterBranchRequestDetailPage() {
   const [ibrBranchTrips, setIbrBranchTrips] = useState<Trip[]>([]);
   const [pickVehicleId, setPickVehicleId] = useState('');
   const [pickDriverId, setPickDriverId] = useState('');
+  const [ibrSelectedScheduleDates, setIbrSelectedScheduleDates] = useState<string[]>([]);
+  const [ibrBranchMaintEntries, setIbrBranchMaintEntries] = useState<BranchMaintenanceEntry[]>([]);
   const [scheduleMetaLoading, setScheduleMetaLoading] = useState(false);
   const [showIbrInTransitModal, setShowIbrInTransitModal] = useState(false);
   const [showIbrDeliveryModal, setShowIbrDeliveryModal] = useState(false);
@@ -1146,6 +1151,53 @@ export function InterBranchRequestDetailPage() {
     () => branches.find((b) => b.id === fulfillingId)?.name ?? 'Fulfilling branch',
     [branches, fulfillingId],
   );
+
+  const ibrScheduleModalBookings = useMemo(
+    () =>
+      buildBranchCalendarBookings(
+        ibrBranchTrips,
+        ibrBranchMaintEntries,
+        pickVehicleId,
+        pickDriverId,
+        ibr?.linked_trip_id ?? undefined,
+      ),
+    [ibrBranchTrips, ibrBranchMaintEntries, pickVehicleId, pickDriverId, ibr?.linked_trip_id],
+  );
+
+  const ibrSelectedDateConflicts = useMemo(() => {
+    const dateHint = ibrSelectedScheduleDates[0] ?? '';
+    if (!dateHint) return [];
+    return ibrScheduleModalBookings.filter((b) => b.date === dateHint && b.isConflict === true);
+  }, [ibrScheduleModalBookings, ibrSelectedScheduleDates]);
+
+  const ibrDriversBusyOnDate = useMemo(() => {
+    const busy = new Set<string>();
+    const dateHint = ibrSelectedScheduleDates[0] ?? '';
+    if (!dateHint) return busy;
+    const activeStatuses = new Set(['Scheduled', 'Loading', 'Packed', 'Ready', 'In Transit', 'Delayed']);
+    for (const t of ibrBranchTrips) {
+      if (t.scheduledDate !== dateHint || !t.driverId) continue;
+      if (t.id === (ibr?.linked_trip_id ?? '')) continue;
+      if (activeStatuses.has(t.status)) busy.add(t.driverId);
+    }
+    return busy;
+  }, [ibrBranchTrips, ibrSelectedScheduleDates, ibr?.linked_trip_id]);
+
+  const ibrVehicleMaintDates = useMemo(() => {
+    if (!pickVehicleId) return [];
+    return ibrBranchMaintEntries.find((e) => e.vehicleId === pickVehicleId)?.dates ?? [];
+  }, [ibrBranchMaintEntries, pickVehicleId]);
+
+  const ibrPickVehicleName = useMemo(() => {
+    const v = ibrFleetVehicles.find((x) => x.id === pickVehicleId);
+    if (!v) return 'Select truck';
+    return `${v.vehicleName}${v.plateNumber ? ` · ${v.plateNumber}` : ''}`;
+  }, [ibrFleetVehicles, pickVehicleId]);
+
+  const ibrScheduleInitialDate = useMemo(() => {
+    if (ibr?.scheduled_departure_date) return String(ibr.scheduled_departure_date).slice(0, 10);
+    return new Date().toISOString().slice(0, 10);
+  }, [ibr?.scheduled_departure_date]);
 
   const ibrProductPickLock = useRef(false);
   /** Prevents mass-click on raw material Add / Apply while async validation runs. */
@@ -1667,8 +1719,9 @@ export function InterBranchRequestDetailPage() {
       }
 
       if (
-        (nextStatus === 'Rejected' || nextStatus === 'Cancelled') &&
-        ibr.status !== nextStatus
+        ibr.linked_trip_id &&
+        ibr.status !== nextStatus &&
+        shouldReleaseIbrTripForStatus(nextStatus)
       ) {
         try {
           await releaseIbrTrip(id, ibr.linked_trip_id ?? null);
@@ -2301,12 +2354,10 @@ export function InterBranchRequestDetailPage() {
 
   const openScheduleDepartureModal = () => {
     if (!ibr) return;
-    const d =
-      (ibr.scheduled_departure_date ? String(ibr.scheduled_departure_date).slice(0, 10) : '') ||
-      new Date().toISOString().slice(0, 10);
-    setPickScheduleDate(d);
     setPickVehicleId('');
     setPickDriverId('');
+    setIbrSelectedScheduleDates([]);
+    setIbrBranchMaintEntries([]);
     setShowScheduleModal(true);
 
     const branchName = ibr.ful_br?.name?.trim();
@@ -2324,7 +2375,23 @@ export function InterBranchRequestDetailPage() {
         setIbrFleetVehicles(vehicles);
         setIbrBranchDrivers(drivers.drivers ?? []);
         setIbrBranchTrips(tripList);
-        // Prefill from the IBR's existing trip so a reschedule keeps its truck/driver.
+        const vehicleIds = vehicles.map((v) => v.id).filter(Boolean);
+        if (vehicleIds.length) {
+          const { byVehicle, error: maintErr } = await fetchMaintenanceScheduledDatesForVehicles(vehicleIds);
+          if (maintErr && import.meta.env.DEV) console.warn('[IBR] fleet maintenance dates', maintErr);
+          const nameById = Object.fromEntries(vehicles.map((v) => [v.id, v.vehicleName]));
+          setIbrBranchMaintEntries(
+            Object.entries(byVehicle)
+              .map(([vehicleId, dates]) => ({
+                vehicleId,
+                vehicleName: nameById[vehicleId] ?? 'Truck',
+                dates,
+              }))
+              .filter((e) => e.dates.length > 0),
+          );
+        } else {
+          setIbrBranchMaintEntries([]);
+        }
         const linkedTripId = ibr.linked_trip_id ?? null;
         const existing = linkedTripId ? tripList.find((t) => t.id === linkedTripId) : undefined;
         if (existing) {
@@ -2339,61 +2406,73 @@ export function InterBranchRequestDetailPage() {
     })();
   };
 
-  const confirmScheduleDeparture = async () => {
+  const confirmScheduleDeparture = async (selectedDates: string[]) => {
+    const sortedDates = [...new Set(selectedDates.map((d) => d.trim().slice(0, 10)).filter(Boolean))].sort();
+    const pickScheduleDate = sortedDates[0];
     if (!pickScheduleDate) {
-      alert('Choose a date.');
+      alert('Choose a departure date on the calendar.');
+      return;
+    }
+    if (!pickVehicleId) {
+      alert('Select a truck from the fulfilling branch fleet.');
+      return;
+    }
+    if (!pickDriverId) {
+      alert('Select a driver. They will receive an in-app notification and email.');
       return;
     }
     if (!id || !ibr) return;
 
-    // If a truck is chosen, reserve it on the logistics schedule (block double-booking).
-    if (pickVehicleId) {
-      const conflicts = tripsConflictingVehicleOnDates(
-        ibrBranchTrips,
-        pickVehicleId,
-        [pickScheduleDate],
-        ibr.linked_trip_id ?? undefined,
-      );
-      if (conflicts.length > 0) {
-        const labels = conflicts.map((t) => `${t.tripNumber} (${t.status})`).join(', ');
-        alert(
-          `This truck is already booked on ${pickScheduleDate}: ${labels}. Pick another truck or date to avoid a mis-schedule.`,
-        );
-        return;
-      }
+    const maintDay = sortedDates.find((d) => ibrVehicleMaintDates.includes(d));
+    if (maintDay) {
+      alert(`This truck has maintenance scheduled on ${maintDay}. Choose another date or truck.`);
+      return;
+    }
 
-      setLogisticsLoading(true);
-      try {
-        const driver = pickDriverId ? ibrBranchDrivers.find((d) => d.id === pickDriverId) : undefined;
-        const res = await createOrUpdateIbrTrip({
-          fulfillingBranchName: ibr.ful_br?.name ?? '',
-          vehicleUuid: pickVehicleId,
-          driverUuid: pickDriverId || null,
-          driverName: driver?.name ?? null,
-          scheduledDate: pickScheduleDate,
-          ibrId: id,
-          ibrNumber: ibr.ibr_number,
-          destinationLabel: ibr.req_br?.name ?? null,
-          existingTripId: ibr.linked_trip_id ?? null,
-          scheduledBy: employeeName || session?.user?.email || null,
-        });
-        if (!res.ok) {
-          alert(res.error ?? 'Could not reserve the truck.');
-          setLogisticsLoading(false);
-          return;
-        }
-      } catch (e) {
-        alert(e instanceof Error ? e.message : 'Could not reserve the truck.');
-        setLogisticsLoading(false);
+    const conflicts = tripsConflictingVehicleOnDates(
+      ibrBranchTrips,
+      pickVehicleId,
+      sortedDates,
+      ibr.linked_trip_id ?? undefined,
+    );
+    if (conflicts.length > 0) {
+      alert('This truck is already booked on one or more of the selected days.');
+      return;
+    }
+
+    setLogisticsLoading(true);
+    try {
+      const driver = ibrBranchDrivers.find((d) => d.id === pickDriverId);
+      const res = await createOrUpdateIbrTrip({
+        fulfillingBranchName: ibr.ful_br?.name ?? '',
+        vehicleUuid: pickVehicleId,
+        driverUuid: pickDriverId,
+        driverName: driver?.name ?? null,
+        scheduledDate: pickScheduleDate,
+        ibrId: id,
+        ibrNumber: ibr.ibr_number,
+        destinationLabel: ibr.req_br?.name ?? null,
+        existingTripId: ibr.linked_trip_id ?? null,
+        scheduledBy: employeeName || session?.user?.email || null,
+      });
+      if (!res.ok) {
+        alert(res.error ?? 'Could not reserve the truck.');
         return;
-      } finally {
-        setLogisticsLoading(false);
       }
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Could not reserve the truck.');
+      return;
+    } finally {
+      setLogisticsLoading(false);
     }
 
     await advanceIbrLogistics('Scheduled', { scheduled_departure_date: pickScheduleDate });
     setShowScheduleModal(false);
   };
+
+  const handleIbrScheduleDatesChange = useCallback((dates: string[]) => {
+    setIbrSelectedScheduleDates(dates);
+  }, []);
 
   const markIbrFulfilledAfterDelivery = async () => {
     if (!id) return;
@@ -2839,127 +2918,107 @@ export function InterBranchRequestDetailPage() {
         </div>
       </div>
 
-      {showScheduleModal &&
-        createPortal(
-          <div
-            className="fixed inset-0 z-[100] flex min-h-dvh w-full items-center justify-center overflow-y-auto bg-black/50 p-4"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="ibr-schedule-departure-title"
-          >
-            <div className="my-auto w-full max-w-md space-y-4 rounded-xl bg-white p-6 shadow-xl">
-              <h2 id="ibr-schedule-departure-title" className="text-lg font-semibold text-gray-900">
-                Set departure date
-              </h2>
-              <p className="text-sm text-gray-600">
-                Choose the date the shipment is planned to leave the fulfilling branch. The request will move to{' '}
-                <strong>Scheduled</strong>
-                .
-              </p>
-              <div>
-                <label className="mb-1 block text-xs font-medium text-gray-600" htmlFor="ibr-schedule-date">
-                  Date
-                </label>
-                <input
-                  id="ibr-schedule-date"
-                  type="date"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-                  value={pickScheduleDate}
-                  onChange={(e) => setPickScheduleDate(e.target.value)}
-                />
+      {showScheduleModal && ibr && (
+        <TripScheduleModal
+          isOpen={showScheduleModal}
+          onClose={() => !logisticsLoading && setShowScheduleModal(false)}
+          onConfirm={confirmScheduleDeparture}
+          modalTitle="Schedule departure"
+          confirmLabel="Schedule departure"
+          selectionMode="single"
+          orderCount={0}
+          vehicleName={ibrPickVehicleName}
+          subtitle={`${ibr.ibr_number} · ${ibrPickVehicleName}`}
+          existingBookings={ibrScheduleModalBookings}
+          initialDate={ibrScheduleInitialDate}
+          onSelectedDatesChange={handleIbrScheduleDatesChange}
+          confirmDisabled={scheduleMetaLoading || !pickVehicleId || !pickDriverId}
+          externalSubmitting={logisticsLoading}
+          footerNote="The assigned driver receives an in-app notification and email with trip details."
+          confirmWarning={
+            ibrSelectedDateConflicts.length > 0 ? (
+              <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>
+                  <strong>
+                    {ibrSelectedDateConflicts.length} conflict
+                    {ibrSelectedDateConflicts.length !== 1 ? 's' : ''}
+                  </strong>{' '}
+                  with your truck/driver on the selected date.
+                </span>
               </div>
-              <div>
-                <label className="mb-1 block text-xs font-medium text-gray-600" htmlFor="ibr-schedule-truck">
-                  Truck{' '}
-                  <span className="font-normal text-gray-400">
-                    ({ibr?.ful_br?.name ?? 'fulfilling branch'} fleet · optional)
-                  </span>
-                </label>
-                <select
-                  id="ibr-schedule-truck"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm disabled:bg-gray-50"
-                  value={pickVehicleId}
-                  onChange={(e) => setPickVehicleId(e.target.value)}
-                  disabled={scheduleMetaLoading}
-                >
-                  <option value="">{scheduleMetaLoading ? 'Loading trucks…' : 'No truck yet'}</option>
-                  {ibrFleetVehicles.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.vehicleName}
-                      {v.plateNumber ? ` · ${v.plateNumber}` : ''}
-                      {v.status && v.status !== 'Available' ? ` (${v.status})` : ''}
-                    </option>
-                  ))}
-                </select>
-                {!scheduleMetaLoading && ibrFleetVehicles.length === 0 && (
-                  <p className="mt-1 text-xs text-gray-500">No trucks registered for this branch.</p>
-                )}
-              </div>
-              {pickVehicleId && (
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-gray-600" htmlFor="ibr-schedule-driver">
-                    Driver <span className="font-normal text-gray-400">(optional)</span>
-                  </label>
-                  <select
-                    id="ibr-schedule-driver"
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm disabled:bg-gray-50"
-                    value={pickDriverId}
-                    onChange={(e) => setPickDriverId(e.target.value)}
-                    disabled={scheduleMetaLoading}
-                  >
-                    <option value="">Unassigned</option>
-                    {ibrBranchDrivers.map((d) => (
-                      <option key={d.id} value={d.id}>
-                        {d.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+            ) : null
+          }
+        >
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-gray-600" htmlFor="ibr-schedule-truck">
+                Truck{' '}
+                <span className="font-normal text-gray-400">({ibr.ful_br?.name ?? 'fulfilling branch'} fleet)</span>
+              </label>
+              <select
+                id="ibr-schedule-truck"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm disabled:bg-gray-50"
+                value={pickVehicleId}
+                onChange={(e) => {
+                  setPickVehicleId(e.target.value);
+                  if (!e.target.value) setPickDriverId('');
+                }}
+                disabled={scheduleMetaLoading || logisticsLoading}
+              >
+                <option value="">{scheduleMetaLoading ? 'Loading trucks…' : 'Select truck…'}</option>
+                {ibrFleetVehicles.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.vehicleName}
+                    {v.plateNumber ? ` · ${v.plateNumber}` : ''}
+                    {v.status && v.status !== 'Available' ? ` (${v.status})` : ''}
+                  </option>
+                ))}
+              </select>
+              {!scheduleMetaLoading && ibrFleetVehicles.length === 0 && (
+                <p className="mt-1 text-xs text-gray-500">No trucks registered for this branch.</p>
               )}
-              {(() => {
-                if (!pickVehicleId || !pickScheduleDate) return null;
-                const conflicts = tripsConflictingVehicleOnDates(
-                  ibrBranchTrips,
-                  pickVehicleId,
-                  [pickScheduleDate],
-                  ibr?.linked_trip_id ?? undefined,
-                );
-                if (conflicts.length === 0) return null;
-                return (
-                  <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700">
-                    <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-                    <span>
-                      This truck is already booked on {pickScheduleDate}:{' '}
-                      <strong>{conflicts.map((t) => t.tripNumber).join(', ')}</strong>. Choose another truck or
-                      date to avoid a mis-schedule.
-                    </span>
-                  </div>
-                );
-              })()}
-              <div className="flex justify-end gap-2 pt-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setShowScheduleModal(false)}
-                  disabled={logisticsBusy}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="button"
-                  variant="primary"
-                  onClick={() => void confirmScheduleDeparture()}
-                  disabled={logisticsBusy}
-                  className="gap-2"
-                >
-                  {logisticsLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Calendar className="w-4 h-4" />}
-                  Confirm
-                </Button>
-              </div>
             </div>
-          </div>,
-          document.body,
-        )}
+            <div>
+              <label className="mb-1 block text-xs font-medium text-gray-600" htmlFor="ibr-schedule-driver">
+                Driver{' '}
+                <span className="font-normal text-gray-400">({ibr.ful_br?.name ?? 'fulfilling branch'})</span>
+              </label>
+              <select
+                id="ibr-schedule-driver"
+                className={`w-full rounded-lg border px-3 py-2 text-sm disabled:bg-gray-50 disabled:text-gray-400 ${
+                  ibrSelectedDateConflicts.some((c) => c.conflictKind === 'driver' || c.conflictKind === 'both')
+                    ? 'border-amber-400 bg-amber-50'
+                    : 'border-gray-300'
+                }`}
+                value={pickDriverId}
+                onChange={(e) => setPickDriverId(e.target.value)}
+                disabled={scheduleMetaLoading || logisticsLoading || !pickVehicleId}
+              >
+                <option value="">
+                  {!pickVehicleId
+                    ? 'Select a truck first…'
+                    : scheduleMetaLoading
+                      ? 'Loading drivers…'
+                      : 'Select driver…'}
+                </option>
+                {ibrBranchDrivers.map((d) => {
+                  const busy = ibrDriversBusyOnDate.has(d.id) && d.id !== pickDriverId;
+                  return (
+                    <option key={d.id} value={d.id}>
+                      {d.name}
+                      {busy ? ' (booked this day)' : ''}
+                    </option>
+                  );
+                })}
+              </select>
+              {!scheduleMetaLoading && pickVehicleId && ibrBranchDrivers.length === 0 && (
+                <p className="mt-1 text-xs text-gray-500">No truck drivers registered for this branch.</p>
+              )}
+            </div>
+          </div>
+        </TripScheduleModal>
+      )}
 
       <MarkIbrInTransitModal
         isOpen={showIbrInTransitModal && !!ibr}
