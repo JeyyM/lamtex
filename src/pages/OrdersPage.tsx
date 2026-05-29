@@ -100,15 +100,15 @@ function todayIsoLocal(): string {
   return `${t.getFullYear()}-${pad2Local(t.getMonth() + 1)}-${pad2Local(t.getDate())}`;
 }
 
-/** Period modal presets: Agent Analytics ranges + All time + Custom (same date logic). */
+/** Period modal presets: same rolling windows as the rest of the app. */
 const ORDERS_PERIOD_OPTIONS: { kind: OrdersPeriodKind; label: string }[] = [
   { kind: 'all', label: 'All time' },
-  { kind: 'day', label: '1 day' },
-  { kind: 'week', label: '1 week' },
-  { kind: 'month', label: '1 month' },
-  { kind: 'sixMonths', label: '6 months' },
+  { kind: 'day', label: 'Today' },
+  { kind: 'week', label: 'Last 7 days' },
+  { kind: 'month', label: 'Last 30 days' },
+  { kind: 'sixMonths', label: 'Last 180 days' },
   { kind: 'ytd', label: 'YTD' },
-  { kind: 'year', label: '1 year' },
+  { kind: 'year', label: 'Last 365 days' },
   { kind: 'custom', label: 'Custom range' },
 ];
 

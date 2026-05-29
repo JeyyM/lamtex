@@ -143,7 +143,8 @@ DO $$ BEGIN CREATE TYPE purchase_request_status AS ENUM ('Draft', 'Submitted', '
 DO $$ BEGIN CREATE TYPE commission_status AS ENUM ('Pending', 'Approved', 'Paid'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- ── Notification / Alert Enums ──────────────────────────────────────────────
-DO $$ BEGIN CREATE TYPE notification_category AS ENUM ('Approvals', 'Inventory', 'Delivery', 'Payment', 'System'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE notification_category AS ENUM ('Approvals', 'Inventory', 'Delivery', 'Payment', 'System', 'Message'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN ALTER TYPE notification_category ADD VALUE IF NOT EXISTS 'Message'; EXCEPTION WHEN undefined_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE alert_severity AS ENUM ('Low', 'Medium', 'High', 'Critical'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE logistics_alert_type AS ENUM ('New Order Ready', 'Warehouse Not Ready', 'Truck Unavailable', 'Delivery Failed', 'Capacity Warning', 'Executive Request'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE warehouse_alert_type AS ENUM ('Low Stock', 'Shortage Impact', 'Material Delay', 'Material Arrival', 'QA Reject', 'Transfer Request', 'Trip Loading'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
@@ -3148,6 +3149,234 @@ CREATE INDEX IF NOT EXISTS idx_notifications_category ON notifications(category)
 CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(read);
 CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id, read);
 CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at DESC);
+
+-- Realtime: bell badge + live notification drawer (postgres_changes subscription)
+ALTER TABLE public.notifications REPLICA IDENTITY FULL;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_publication_tables
+    WHERE pubname = 'supabase_realtime'
+      AND schemaname = 'public'
+      AND tablename = 'notifications'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.notifications;
+  END IF;
+EXCEPTION
+  WHEN undefined_object THEN NULL;
+END $$;
+
+-- ============================================================================
+-- CHAT SYSTEM — Messenger-style internal team chat (participant-scoped)
+-- Full migration: database/chat_system.sql. Attachments live in the public
+-- `images` bucket under `chat-attachments/`. RLS is strict (NOT the blanket
+-- authenticated policy) — chat_* tables are excluded from the Section 26 loop.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS chat_conversations (
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  type            TEXT NOT NULL DEFAULT 'direct' CHECK (type IN ('direct', 'group')),
+  name            TEXT,
+  created_by      UUID,
+  last_message_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_message_preview TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS chat_participants (
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  conversation_id UUID NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+  user_id         UUID NOT NULL,
+  role            TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('admin', 'member')),
+  last_read_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  joined_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (conversation_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  conversation_id UUID NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+  sender_id       UUID NOT NULL,
+  content         TEXT,
+  reply_to_id     UUID REFERENCES chat_messages(id) ON DELETE SET NULL,
+  attachments     JSONB NOT NULL DEFAULT '[]'::jsonb,
+  link_preview    JSONB,
+  edited          BOOLEAN NOT NULL DEFAULT FALSE,
+  edited_at       TIMESTAMPTZ,
+  deleted         BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS chat_message_reactions (
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  message_id  UUID NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+  user_id     UUID NOT NULL,
+  emoji       TEXT NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (message_id, user_id, emoji)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_participants_conversation ON chat_participants(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_chat_participants_user ON chat_participants(user_id);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation ON chat_messages(conversation_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_sender ON chat_messages(sender_id);
+CREATE INDEX IF NOT EXISTS idx_chat_message_reactions_message ON chat_message_reactions(message_id);
+CREATE INDEX IF NOT EXISTS idx_chat_conversations_last_message ON chat_conversations(last_message_at DESC);
+
+CREATE OR REPLACE FUNCTION public.is_chat_participant(p_conversation_id uuid, p_user_id uuid)
+RETURNS boolean
+LANGUAGE sql SECURITY DEFINER STABLE
+SET search_path = public
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM chat_participants
+    WHERE conversation_id = p_conversation_id AND user_id = p_user_id
+  );
+$$;
+
+ALTER TABLE chat_conversations     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE chat_participants      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE chat_messages          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE chat_message_reactions ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS chat_conv_select ON chat_conversations;
+CREATE POLICY chat_conv_select ON chat_conversations
+  FOR SELECT USING (
+    public.is_chat_participant(id, auth.uid())
+    OR created_by = auth.uid()
+  );
+DROP POLICY IF EXISTS chat_conv_insert ON chat_conversations;
+CREATE POLICY chat_conv_insert ON chat_conversations
+  FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+DROP POLICY IF EXISTS chat_conv_update ON chat_conversations;
+CREATE POLICY chat_conv_update ON chat_conversations
+  FOR UPDATE USING (public.is_chat_participant(id, auth.uid()));
+
+DROP POLICY IF EXISTS chat_part_select ON chat_participants;
+CREATE POLICY chat_part_select ON chat_participants
+  FOR SELECT USING (public.is_chat_participant(conversation_id, auth.uid()));
+DROP POLICY IF EXISTS chat_part_insert ON chat_participants;
+CREATE POLICY chat_part_insert ON chat_participants
+  FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+DROP POLICY IF EXISTS chat_part_update ON chat_participants;
+CREATE POLICY chat_part_update ON chat_participants
+  FOR UPDATE USING (user_id = auth.uid());
+DROP POLICY IF EXISTS chat_part_delete ON chat_participants;
+CREATE POLICY chat_part_delete ON chat_participants
+  FOR DELETE USING (user_id = auth.uid() OR public.is_chat_participant(conversation_id, auth.uid()));
+
+DROP POLICY IF EXISTS chat_msg_select ON chat_messages;
+CREATE POLICY chat_msg_select ON chat_messages
+  FOR SELECT USING (public.is_chat_participant(conversation_id, auth.uid()));
+DROP POLICY IF EXISTS chat_msg_insert ON chat_messages;
+CREATE POLICY chat_msg_insert ON chat_messages
+  FOR INSERT WITH CHECK (sender_id = auth.uid() AND public.is_chat_participant(conversation_id, auth.uid()));
+DROP POLICY IF EXISTS chat_msg_update ON chat_messages;
+CREATE POLICY chat_msg_update ON chat_messages
+  FOR UPDATE USING (sender_id = auth.uid());
+
+DROP POLICY IF EXISTS chat_react_select ON chat_message_reactions;
+CREATE POLICY chat_react_select ON chat_message_reactions
+  FOR SELECT USING (
+    EXISTS (SELECT 1 FROM chat_messages m
+            WHERE m.id = message_id AND public.is_chat_participant(m.conversation_id, auth.uid()))
+  );
+DROP POLICY IF EXISTS chat_react_insert ON chat_message_reactions;
+CREATE POLICY chat_react_insert ON chat_message_reactions
+  FOR INSERT WITH CHECK (user_id = auth.uid());
+DROP POLICY IF EXISTS chat_react_delete ON chat_message_reactions;
+CREATE POLICY chat_react_delete ON chat_message_reactions
+  FOR DELETE USING (user_id = auth.uid());
+
+ALTER TABLE chat_messages          REPLICA IDENTITY FULL;
+ALTER TABLE chat_message_reactions REPLICA IDENTITY FULL;
+ALTER TABLE chat_participants      REPLICA IDENTITY FULL;
+ALTER TABLE chat_conversations     REPLICA IDENTITY FULL;
+
+DO $$
+DECLARE
+  t TEXT;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['chat_messages','chat_message_reactions','chat_participants','chat_conversations']
+  LOOP
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_publication_tables
+      WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = t
+    ) THEN
+      EXECUTE format('ALTER PUBLICATION supabase_realtime ADD TABLE public.%I', t);
+    END IF;
+  END LOOP;
+EXCEPTION WHEN undefined_object THEN NULL;
+END $$;
+
+CREATE OR REPLACE FUNCTION public.trg_chat_message_after_insert()
+RETURNS TRIGGER
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  conv        chat_conversations%ROWTYPE;
+  sender_name TEXT;
+  preview     TEXT;
+  title_text  TEXT;
+  part        RECORD;
+BEGIN
+  SELECT * INTO conv FROM chat_conversations WHERE id = NEW.conversation_id;
+
+  SELECT employee_name INTO sender_name
+  FROM employees WHERE auth_user_id = NEW.sender_id LIMIT 1;
+  sender_name := COALESCE(NULLIF(TRIM(sender_name), ''), 'Someone');
+
+  IF NEW.content IS NOT NULL AND TRIM(NEW.content) <> '' THEN
+    preview := LEFT(NEW.content, 140);
+  ELSIF jsonb_array_length(NEW.attachments) > 0 THEN
+    preview := '📎 Attachment';
+  ELSE
+    preview := 'New message';
+  END IF;
+
+  UPDATE chat_conversations
+  SET last_message_at = NEW.created_at, last_message_preview = preview, updated_at = NOW()
+  WHERE id = NEW.conversation_id;
+
+  IF conv.type = 'group' THEN
+    title_text := COALESCE(NULLIF(TRIM(conv.name), ''), 'Group chat') || ' · ' || sender_name;
+  ELSE
+    title_text := sender_name;
+  END IF;
+
+  FOR part IN
+    SELECT user_id FROM chat_participants
+    WHERE conversation_id = NEW.conversation_id AND user_id <> NEW.sender_id
+  LOOP
+    INSERT INTO notifications (
+      user_id, category, title, message, urgent,
+      action_url, action_label, metadata, event_type
+    ) VALUES (
+      part.user_id, 'Message'::notification_category, title_text, preview, FALSE,
+      '/chats/' || NEW.conversation_id::text, 'Open chat',
+      jsonb_build_object('conversationId', NEW.conversation_id, 'messageId', NEW.id,
+                         'senderId', NEW.sender_id, 'senderName', sender_name),
+      'chat_message'
+    );
+  END LOOP;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS chat_message_after_insert ON chat_messages;
+CREATE TRIGGER chat_message_after_insert
+  AFTER INSERT ON chat_messages
+  FOR EACH ROW EXECUTE FUNCTION public.trg_chat_message_after_insert();
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON chat_conversations TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON chat_participants TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON chat_messages TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON chat_message_reactions TO authenticated;
+
 CREATE INDEX IF NOT EXISTS idx_logistics_alerts_type ON logistics_alerts(type);
 CREATE INDEX IF NOT EXISTS idx_warehouse_alerts_type ON warehouse_alerts(type);
 CREATE INDEX IF NOT EXISTS idx_agent_alerts_agent ON agent_alerts(agent_id);
@@ -10587,9 +10816,13 @@ BEGIN
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', tbl);
   END LOOP;
 
-  -- Create a full-access policy for any logged-in user on every public table
+  -- Create a full-access policy for any logged-in user on every public table.
+  -- EXCEPTION: chat_* tables use strict participant-scoped policies (see CHAT
+  -- SYSTEM section) and must NOT get a permissive blanket policy, or private
+  -- conversations would be readable by every authenticated user.
   FOR tbl IN
-    SELECT tablename FROM pg_tables WHERE schemaname = 'public'
+    SELECT tablename FROM pg_tables
+    WHERE schemaname = 'public' AND tablename NOT LIKE 'chat\_%'
   LOOP
     -- SELECT
     BEGIN

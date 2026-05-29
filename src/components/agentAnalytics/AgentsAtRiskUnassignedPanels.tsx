@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Link, useNavigate } from 'react-router-dom';
-import { History, Loader2, UserPlus, CheckCircle2, ArrowRight, X } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { History, Loader2, UserPlus, CheckCircle2, X } from 'lucide-react';
 import {
   AgentAnalyticsBundle,
   AgentQuotaMissHistoryRow,
@@ -17,10 +17,10 @@ interface Props {
 }
 
 /**
- * Quota miss history (completed months) + unassigned customers (Trends tab).
+ * Quota miss history (completed months) + new customers in period (Trends tab).
  */
 export function AgentsHistoryUnassignedPanels({ bundle }: Props) {
-  const navigate = useNavigate();
+  const rows = bundle.newCustomersInPeriod;
 
   return (
     <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
@@ -28,68 +28,48 @@ export function AgentsHistoryUnassignedPanels({ bundle }: Props) {
       <div className="bg-white border border-gray-200 rounded-xl">
         <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
           <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
-            <UserPlus className="w-4 h-4 text-blue-600" /> Unassigned customers
+            <UserPlus className="w-4 h-4 text-emerald-600" />
+            New customers
+            {rows.length > 0 && (
+              <span className="ml-1 inline-flex items-center justify-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">
+                {rows.length}
+              </span>
+            )}
           </h3>
-          <button
-            type="button"
-            onClick={() => navigate('/customers')}
-            className="text-xs text-blue-600 hover:text-blue-800 inline-flex items-center gap-1"
-          >
-            Manage <ArrowRight className="w-3 h-3" />
-          </button>
+          <span className="text-xs text-gray-400">Most recent in period</span>
         </div>
         <div className="p-4">
-          {bundle.summary.customersUnassigned === 0 ? (
+          {rows.length === 0 ? (
             <div className="text-center py-6 text-sm text-gray-500">
-              <CheckCircle2 className="w-8 h-8 mx-auto mb-2 text-green-500" />
-              All customers are assigned to an agent.
+              <CheckCircle2 className="w-8 h-8 mx-auto mb-2 text-gray-300" />
+              No new customers registered in this period.
             </div>
           ) : (
-            <>
-              <div className="text-sm text-gray-600 mb-3">
-                <span className="text-2xl font-bold text-blue-700 tabular-nums">
-                  {bundle.summary.customersUnassigned}
-                </span>{' '}
-                {bundle.summary.customersUnassigned === 1 ? 'customer' : 'customers'} without an owning agent
-              </div>
-              <ul className="divide-y divide-gray-100 rounded-lg border border-gray-200 max-h-56 overflow-y-auto">
-                {bundle.unassignedCustomers.map((c) => (
-                  <li key={c.id}>
-                    <Link
-                      to={`/customers/${c.id}/edit`}
-                      className="flex items-start justify-between gap-3 px-3 py-2.5 hover:bg-blue-50/60 transition-colors"
-                    >
-                      <div className="min-w-0">
-                        <p className="font-medium text-gray-900 truncate">{c.name}</p>
-                        <p className="text-xs text-gray-500 truncate">
-                          {[c.type, c.city, c.branchName].filter(Boolean).join(' · ') || 'No details'}
-                        </p>
-                      </div>
-                      <span className="shrink-0 text-xs font-medium text-blue-600">Assign</span>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-              {bundle.summary.customersUnassigned > bundle.unassignedCustomers.length && (
-                <p className="text-xs text-gray-500 mt-2">
-                  Showing {bundle.unassignedCustomers.length} of {bundle.summary.customersUnassigned}.{' '}
-                  <button
-                    type="button"
-                    onClick={() => navigate('/customers')}
-                    className="text-blue-600 hover:text-blue-800 underline"
+            <ul className="divide-y divide-gray-100 rounded-lg border border-gray-200 max-h-72 overflow-y-auto">
+              {rows.map((c) => (
+                <li key={c.id}>
+                  <Link
+                    to={`/customers/${c.id}`}
+                    className="flex items-start justify-between gap-3 px-3 py-2.5 hover:bg-emerald-50/50 transition-colors"
                   >
-                    View all customers
-                  </button>
-                </p>
-              )}
-              <button
-                type="button"
-                onClick={() => navigate('/customers')}
-                className="mt-3 w-full px-3 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700"
-              >
-                Open customers
-              </button>
-            </>
+                    <div className="min-w-0">
+                      <p className="font-medium text-gray-900 truncate">{c.name}</p>
+                      <p className="text-xs text-gray-500 truncate">
+                        {[c.assignedAgentName, c.branchName, c.type]
+                          .filter(Boolean)
+                          .join(' · ') || 'No details'}
+                      </p>
+                    </div>
+                    <span className="shrink-0 text-xs text-gray-400 whitespace-nowrap tabular-nums">
+                      {new Date(c.createdAt).toLocaleDateString('en-PH', {
+                        month: 'short',
+                        day: 'numeric',
+                      })}
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
           )}
         </div>
       </div>

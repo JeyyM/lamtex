@@ -3867,22 +3867,50 @@ export async function notifyMaterialStockAlertEmails(args: {
 export function subscribeToUserNotifications(
   userId: string,
   onChange: () => void,
+  onInsert?: () => void,
 ): () => void {
+  const notify = (eventType: string) => {
+    if (eventType === 'INSERT') onInsert?.();
+    onChange();
+  };
+
   const channel = supabase
     .channel(`notifications:${userId}`)
     .on(
       'postgres_changes',
       {
-        event: '*',
+        event: 'INSERT',
         schema: 'public',
         table: 'notifications',
         filter: `user_id=eq.${userId}`,
       },
-      () => {
-        onChange();
-      },
+      () => notify('INSERT'),
     )
-    .subscribe();
+    .on(
+      'postgres_changes',
+      {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'notifications',
+        filter: `user_id=eq.${userId}`,
+      },
+      () => notify('UPDATE'),
+    )
+    .on(
+      'postgres_changes',
+      {
+        event: 'DELETE',
+        schema: 'public',
+        table: 'notifications',
+        filter: `user_id=eq.${userId}`,
+      },
+      () => notify('DELETE'),
+    )
+    .subscribe((status, err) => {
+      if (import.meta.env.DEV) {
+        console.log('[notifications] realtime subscription', { userId, status, err: err?.message ?? null });
+      }
+    });
 
   return () => {
     void supabase.removeChannel(channel);

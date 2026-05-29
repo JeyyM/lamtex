@@ -677,8 +677,8 @@ function MovementsCard(props: {
       </CardHeader>
       <CardContent>
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <div className="lg:col-span-2 h-64">
-            <ResponsiveContainer width="100%" height="100%">
+          <div className="lg:col-span-2 h-64 min-h-0">
+            <ResponsiveContainer width="100%" height="100%" minHeight={0}>
               <BarChart data={props.trend}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
                 <XAxis dataKey="label" stroke="#9CA3AF" />

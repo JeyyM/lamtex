@@ -518,8 +518,8 @@ function TrendCard(props: { trend: AgentDashboardBundle['trend'] }) {
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="h-56">
-          <ResponsiveContainer width="100%" height="100%">
+        <div className="h-56 min-h-0">
+          <ResponsiveContainer width="100%" height="100%" minHeight={0}>
             <BarChart data={props.trend}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
               <XAxis dataKey="label" tick={{ fontSize: 12 }} />

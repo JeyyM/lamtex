@@ -1,10 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { BarChart3, Download, Loader2, TrendingUp, Target } from 'lucide-react';
+import { BarChart3, CalendarRange, Download, Loader2, RefreshCw, Target, TrendingUp, X } from 'lucide-react';
 import { useAppContext } from '@/src/store/AppContext';
-import { 
+import {
   AgentAnalyticsBundle,
   BranchOption,
-  PeriodKey,
   PeriodRange,
   fetchAgentAnalyticsBundle,
   fetchBranches,
@@ -12,9 +11,17 @@ import {
   quotaMonthPeriodKey,
 } from '@/src/lib/agentAnalytics';
 import {
+  DATE_PERIOD_OPTIONS,
+  DatePeriodKind,
+  periodTriggerLabel,
+  todayIsoLocal,
+} from '@/src/lib/datePeriodQuery';
+import {
   downloadAgentOverviewWorkbook,
   downloadAgentTrendsWorkbook,
 } from '@/src/lib/agentAnalyticsExport';
+import { Button } from '@/src/components/ui/Button';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 import { AgentKpiStrip } from '@/src/components/agentAnalytics/AgentKpiStrip';
 import { AgentLeaderboard } from '@/src/components/agentAnalytics/AgentLeaderboard';
 import { BranchComparison } from '@/src/components/agentAnalytics/BranchComparison';
@@ -40,14 +47,21 @@ const AgentAnalyticsPage: React.FC = () => {
   /** Page-local branch filter (navbar branch is hidden on /agents). */
   const [analyticsBranchId, setAnalyticsBranchId] = useState<string | null>(null);
 
-  const [periodKind, setPeriodKind] = useState<PeriodKey>('month');
+  const [periodKind, setPeriodKind] = useState<DatePeriodKind>('month');
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
+  const [periodModalOpen, setPeriodModalOpen] = useState(false);
+  const [draftPeriodKind, setDraftPeriodKind] = useState<DatePeriodKind>('month');
+  const [draftCustomStart, setDraftCustomStart] = useState('');
+  const [draftCustomEnd, setDraftCustomEnd] = useState('');
 
   const [manageQuotasOpen, setManageQuotasOpen] = useState(false);
   const [exportingSection, setExportingSection] = useState(false);
 
   const range: PeriodRange = useMemo(() => {
+    if (periodKind === 'all') {
+      return getPeriodRange('custom', { start: '2020-01-01', end: todayIsoLocal() });
+    }
     if (periodKind === 'custom') {
       if (customStart && customEnd && customStart <= customEnd) {
         return getPeriodRange('custom', { start: customStart, end: customEnd });
@@ -57,17 +71,41 @@ const AgentAnalyticsPage: React.FC = () => {
     return getPeriodRange(periodKind);
   }, [periodKind, customStart, customEnd]);
 
-  const handlePeriodKindChange = useCallback((kind: PeriodKey) => {
-    setPeriodKind(kind);
+  const maxCustomDate = useMemo(() => todayIsoLocal(), []);
+
+  const draftCustomInvalid = Boolean(
+    draftCustomStart && draftCustomEnd && draftCustomStart > draftCustomEnd,
+  );
+
+  const openPeriodModal = () => {
+    setDraftPeriodKind(periodKind);
+    setDraftCustomStart(customStart);
+    setDraftCustomEnd(customEnd);
+    setPeriodModalOpen(true);
+  };
+
+  const handleModalPresetPick = useCallback((kind: DatePeriodKind) => {
+    setDraftPeriodKind(kind);
     if (kind === 'custom') {
       const t = new Date();
-      const pad = (n: number) => String(n).padStart(2, '0');
-      const iso = `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}`;
-      const start = `${t.getFullYear()}-${pad(t.getMonth() + 1)}-01`;
-      setCustomStart(start);
-      setCustomEnd(iso);
+      const iso = todayIsoLocal();
+      const start = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-01`;
+      setDraftCustomStart((prev) => prev || customStart || start);
+      setDraftCustomEnd((prev) => prev || customEnd || iso);
+    } else {
+      setPeriodKind(kind);
+      setCustomStart('');
+      setCustomEnd('');
+      setPeriodModalOpen(false);
     }
-  }, []);
+  }, [customStart, customEnd]);
+
+  const applyModalCustomRange = () => {
+    setPeriodKind('custom');
+    setCustomStart(draftCustomStart);
+    setCustomEnd(draftCustomEnd);
+    setPeriodModalOpen(false);
+  };
 
   useEffect(() => {
     fetchBranches().then(setBranches);
@@ -89,8 +127,7 @@ const AgentAnalyticsPage: React.FC = () => {
 
   useEffect(() => {
     void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [range.start, range.end, analyticsBranchId]);
+  }, [load]);
 
   const branchLabel = analyticsBranchId
     ? branches.find((b) => b.id === analyticsBranchId)?.name ?? 'Branch'
@@ -122,22 +159,148 @@ const AgentAnalyticsPage: React.FC = () => {
     }
   };
 
+  const periodModal = (
+    <PortalModalOverlay
+      open={periodModalOpen}
+      onClose={() => setPeriodModalOpen(false)}
+      zIndex={110}
+      mobileBottomSheet
+    >
+      <div
+        className="bg-white w-full sm:max-w-lg sm:rounded-xl shadow-xl max-h-[90vh] overflow-y-auto"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="agents-period-modal-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between p-4 border-b border-gray-200 sticky top-0 bg-white z-10">
+          <h2 id="agents-period-modal-title" className="text-lg font-semibold text-gray-900">
+            Date range
+          </h2>
+          <button
+            type="button"
+            className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+            aria-label="Close"
+            onClick={() => setPeriodModalOpen(false)}
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="p-4 space-y-4">
+          <p className="text-sm text-gray-600">
+            Choose a preset or set a custom date range. All analytics metrics use this period.
+          </p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            {DATE_PERIOD_OPTIONS.map(({ kind, label }) => (
+              <button
+                key={kind}
+                type="button"
+                onClick={() => handleModalPresetPick(kind)}
+                className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
+                  draftPeriodKind === kind
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-white text-gray-800 border-gray-300 hover:bg-gray-50'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {draftPeriodKind === 'custom' && (
+            <div className="space-y-2 pt-1 border-t border-gray-100">
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="text-xs font-medium text-gray-600 w-full sm:w-auto">From</label>
+                <input
+                  type="date"
+                  value={draftCustomStart}
+                  max={maxCustomDate}
+                  onChange={(e) => setDraftCustomStart(e.target.value)}
+                  className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                />
+                <label className="text-xs font-medium text-gray-600">To</label>
+                <input
+                  type="date"
+                  value={draftCustomEnd}
+                  min={draftCustomStart || undefined}
+                  max={maxCustomDate}
+                  onChange={(e) => setDraftCustomEnd(e.target.value)}
+                  className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                />
+              </div>
+              {draftCustomInvalid && (
+                <p className="text-xs text-red-600">Start must be on or before end.</p>
+              )}
+            </div>
+          )}
+        </div>
+        <div className="flex justify-end gap-2 p-4 border-t border-gray-200 bg-gray-50">
+          <Button
+            type="button"
+            variant="outline"
+            className="border-gray-300 bg-white"
+            onClick={() => setPeriodModalOpen(false)}
+          >
+            Cancel
+          </Button>
+          {draftPeriodKind === 'custom' && (
+            <Button
+              type="button"
+              variant="primary"
+              disabled={draftCustomInvalid}
+              onClick={applyModalCustomRange}
+            >
+              Apply range
+            </Button>
+          )}
+        </div>
+      </div>
+    </PortalModalOverlay>
+  );
+
   return (
     <div className="p-3 sm:p-4 md:p-6 space-y-5">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+      <div className="flex flex-col md:flex-row md:items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Agent Analytics</h1>
+          <p className="text-sm text-gray-500 mt-1">
+            {branchLabel} · {range.displayLabel}
+          </p>
         </div>
-        <button
-          type="button"
-          onClick={() => void exportCurrentSection()}
-          disabled={exportingSection || !bundle}
-          className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 shadow-sm disabled:opacity-60"
-        >
-          {exportingSection ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-          Export {activeTabLabel}
-        </button>
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <Button
+            type="button"
+            variant="outline"
+            className="gap-2 border-gray-300 bg-white max-w-[18rem]"
+            aria-haspopup="dialog"
+            aria-expanded={periodModalOpen}
+            aria-label="Choose date range"
+            onClick={openPeriodModal}
+          >
+            <CalendarRange className="w-4 h-4 shrink-0 text-gray-600" aria-hidden />
+            <span className="truncate text-left text-sm font-normal">
+              {periodTriggerLabel(periodKind, customStart, customEnd)}
+            </span>
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => void load()}
+            disabled={loading}
+            className="gap-2"
+          >
+            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+            Refresh
+          </Button>
+          <Button
+            variant="primary"
+            onClick={() => void exportCurrentSection()}
+            disabled={exportingSection || !bundle}
+            className="gap-2"
+          >
+            {exportingSection ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+            Export {activeTabLabel}
+          </Button>
+        </div>
       </div>
 
       {/* Tabs */}
@@ -166,12 +329,6 @@ const AgentAnalyticsPage: React.FC = () => {
           branches={branches}
           branchId={analyticsBranchId}
           onBranchChange={setAnalyticsBranchId}
-          periodKind={periodKind}
-          onPeriodKindChange={handlePeriodKindChange}
-          customStart={customStart}
-          customEnd={customEnd}
-          onCustomStartChange={setCustomStart}
-          onCustomEndChange={setCustomEnd}
           headerActions={
             role === 'Executive' && tab === 'trends' ? (
               <button
@@ -186,6 +343,8 @@ const AgentAnalyticsPage: React.FC = () => {
           }
         />
       )}
+
+      {periodModal}
 
       {role === 'Executive' && branches.length > 0 && (
         <ManageBranchQuotasModal

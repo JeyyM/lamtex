@@ -70,21 +70,42 @@ export function DashQueueLink(props: {
   );
 }
 
-/** Entire table row navigates to one destination (new-tab friendly). */
+/** Entire table row navigates to one destination (Ctrl/Cmd+click opens new tab). */
 export function DashTableRowLink(props: {
   to: string;
   className?: string;
   children: React.ReactNode;
   title?: string;
 }): React.ReactElement {
+  const navigate = useNavigate();
+
+  const handleClick = (e: React.MouseEvent<HTMLTableRowElement>) => {
+    if (e.ctrlKey || e.metaKey || e.shiftKey) {
+      window.open(props.to, '_blank', 'noopener,noreferrer');
+    } else {
+      navigate(props.to);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTableRowElement>) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      navigate(props.to);
+    }
+  };
+
   return (
-    <Link
-      to={props.to}
-      title={props.title ?? 'Right-click or Ctrl+click to open in new tab'}
-      className={`table-row border-b border-gray-100 hover:bg-gray-50 cursor-pointer no-underline text-inherit transition-colors align-middle ${props.className ?? ''}`}
+    <tr
+      onClick={handleClick}
+      onKeyDown={handleKeyDown}
+      title={props.title ?? 'Ctrl+click or Cmd+click to open in new tab'}
+      className={`border-b border-gray-100 hover:bg-gray-50 cursor-pointer transition-colors align-middle ${props.className ?? ''}`}
+      tabIndex={0}
+      role="link"
+      aria-label={props.title}
     >
       {props.children}
-    </Link>
+    </tr>
   );
 }
 

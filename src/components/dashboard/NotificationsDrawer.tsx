@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { X, CheckCircle, AlertCircle, Package, DollarSign, Trash2 } from 'lucide-react';
+import { X, CheckCircle, AlertCircle, Package, DollarSign, Trash2, MessageCircle } from 'lucide-react';
 import { Button } from '@/src/components/ui/Button';
 import { ModalPortal } from '@/src/components/ui/ModalPortal';
 import type { AppNotification } from '@/src/lib/notifications/types';
@@ -39,6 +39,8 @@ export function NotificationsDrawer({
         return <AlertCircle className="w-5 h-5 text-red-500" />;
       case 'Payment':
         return <DollarSign className="w-5 h-5 text-green-500" />;
+      case 'Message':
+        return <MessageCircle className="w-5 h-5 text-red-500" />;
       default:
         return <AlertCircle className="w-5 h-5 text-gray-500" />;
     }

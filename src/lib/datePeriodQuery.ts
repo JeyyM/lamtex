@@ -4,12 +4,12 @@ export type DatePeriodKind = PeriodKey | 'all';
 
 export const DATE_PERIOD_OPTIONS: { kind: DatePeriodKind; label: string }[] = [
   { kind: 'all', label: 'All time' },
-  { kind: 'day', label: '1 day' },
-  { kind: 'week', label: '1 week' },
-  { kind: 'month', label: '1 month' },
-  { kind: 'sixMonths', label: '6 months' },
+  { kind: 'day', label: 'Today' },
+  { kind: 'week', label: 'Last 7 days' },
+  { kind: 'month', label: 'Last 30 days' },
+  { kind: 'sixMonths', label: 'Last 180 days' },
   { kind: 'ytd', label: 'YTD' },
-  { kind: 'year', label: '1 year' },
+  { kind: 'year', label: 'Last 365 days' },
   { kind: 'custom', label: 'Custom range' },
 ];
 

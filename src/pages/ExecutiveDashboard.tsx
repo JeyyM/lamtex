@@ -599,8 +599,8 @@ function FinanceSnapshotCard(props: {
             tone={m.pendingProofs > 0 ? 'warning' : 'good'}
           />
         </div>
-        <div className="h-64">
-          <ResponsiveContainer width="100%" height="100%">
+        <div className="h-64 min-h-0">
+          <ResponsiveContainer width="100%" height="100%" minHeight={0}>
             <ComposedChart data={props.revenueTrend}>
               <defs>
                 <linearGradient id="execRevenue" x1="0" y1="0" x2="0" y2="1">
@@ -678,8 +678,8 @@ function BranchBreakdownCard(props: { rows: ExecutiveDashboardBundle['branchBrea
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="h-72">
-          <ResponsiveContainer width="100%" height="100%">
+        <div className="h-72 min-h-0">
+          <ResponsiveContainer width="100%" height="100%" minHeight={0}>
             <BarChart data={data} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
               <XAxis dataKey="name" stroke="#9CA3AF" />

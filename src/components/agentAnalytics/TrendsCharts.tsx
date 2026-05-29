@@ -16,6 +16,7 @@ import {
   formatCurrencyShort,
 } from '@/src/lib/agentAnalytics';
 import { AgentsHistoryUnassignedPanels } from '@/src/components/agentAnalytics/AgentsAtRiskUnassignedPanels';
+import { NewCustomerTrendCard } from '@/src/components/agentAnalytics/NewCustomerTrendCard';
 
 interface Props {
   bundle: AgentAnalyticsBundle;
@@ -46,13 +47,22 @@ export function TrendsCharts({ bundle }: Props) {
       ? 'Branch quota steps when it changes by month; orange line is mean revenue per agent in scope.'
       : '';
 
+  const trendSpanLabel = useMemo(() => {
+    const pts = bundle.monthlyTrend;
+    if (!pts.length) return '';
+    if (pts.length === 1) return pts[0].monthLabel;
+    return `${pts[0].monthLabel} – ${pts[pts.length - 1].monthLabel}`;
+  }, [bundle.monthlyTrend]);
+
   return (
     <div className="space-y-6">
       <div className="bg-white border border-gray-200 rounded-xl p-4">
         <div className="flex flex-col gap-1 mb-3">
           <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
             <TrendingUp className="w-4 h-4 text-blue-600" />{' '}
-            {showAllBranchesTrend ? 'Branch revenue — last 12 months' : 'Quota history vs revenue — last 12 months'}
+            {showAllBranchesTrend
+              ? `Branch revenue — ${trendSpanLabel}`
+              : `Quota history vs revenue — ${trendSpanLabel}`}
           </h3>
           {trendSubtitle && <p className="text-xs text-gray-500">{trendSubtitle}</p>}
         </div>
@@ -110,6 +120,11 @@ export function TrendsCharts({ bundle }: Props) {
           </ComposedChart>
         </ResponsiveContainer>
       </div>
+
+      <NewCustomerTrendCard
+        trend={bundle.newCustomerTrend}
+        branchLines={bundle.newCustomerBranchLines}
+      />
 
       <AgentsHistoryUnassignedPanels bundle={bundle} />
     </div>

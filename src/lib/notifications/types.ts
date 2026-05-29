@@ -3,7 +3,8 @@ export type NotificationCategory =
   | 'Inventory'
   | 'Delivery'
   | 'Payment'
-  | 'System';
+  | 'System'
+  | 'Message';
 
 export interface AppNotification {
   id: string;

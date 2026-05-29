@@ -1840,6 +1840,42 @@ app.post('/api/notifications/order-payment-overdue-customer', async (req, res) =
   }
 });
 
+app.post('/api/link-preview', async (req, res) => {
+  try {
+    const url = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
+    if (!/^https?:\/\//i.test(url)) {
+      res.status(400).json({ ok: false, error: 'Invalid url' });
+      return;
+    }
+
+    const ogs = (await import('open-graph-scraper')).default;
+    const { result, error } = await ogs({
+      url,
+      timeout: 6000,
+      fetchOptions: { headers: { 'user-agent': 'Mozilla/5.0 (compatible; LamtexBot/1.0)' } },
+    });
+    if (error || !result?.success) {
+      res.json({ ok: false });
+      return;
+    }
+
+    const r = result as Record<string, any>;
+    const ogImage = r.ogImage;
+    const imageRaw = Array.isArray(ogImage) ? ogImage[0]?.url : ogImage?.url;
+    res.json({
+      ok: true,
+      url: r.ogUrl ?? r.requestUrl ?? url,
+      title: r.ogTitle ?? r.twitterTitle ?? null,
+      description: r.ogDescription ?? r.twitterDescription ?? null,
+      image: imageRaw ?? null,
+      siteName: r.ogSiteName ?? null,
+    });
+  } catch (err) {
+    console.error('[notify-server] link-preview', err);
+    res.json({ ok: false });
+  }
+});
+
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true });
 });

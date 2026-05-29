@@ -8,6 +8,25 @@ export interface ChatUser {
   lastSeen?: string;
 }
 
+export interface ChatAttachment {
+  url: string;
+  name: string;
+  /** MIME type, e.g. image/png, application/pdf */
+  type: string;
+  size: number;
+  kind: 'image' | 'file';
+  width?: number;
+  height?: number;
+}
+
+export interface ChatLinkPreview {
+  url: string;
+  title?: string;
+  description?: string;
+  image?: string;
+  siteName?: string;
+}
+
 export interface ChatMessage {
   id: string;
   chatId: string;
@@ -18,6 +37,9 @@ export interface ChatMessage {
   timestamp: string;
   edited?: boolean;
   editedAt?: string;
+  deleted?: boolean;
+  attachments?: ChatAttachment[];
+  linkPreview?: ChatLinkPreview | null;
   replyTo?: {
     messageId: string;
     senderName: string;

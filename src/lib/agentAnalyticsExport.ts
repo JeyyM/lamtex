@@ -234,6 +234,37 @@ export async function downloadAgentTrendsWorkbook(params: AgentTrendsExportParam
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Branch Revenue Trend');
   }
 
+  // New customer trend — monthly counts
+  XLSX.utils.book_append_sheet(
+    wb,
+    XLSX.utils.aoa_to_sheet([
+      ['Month', 'Period Key', 'New Customers'],
+      ...bundle.newCustomerTrend.map((pt) => [
+        pt.monthLabel,
+        pt.periodKey,
+        xlsxOptionalNumber(pt.count),
+      ]),
+    ]),
+    'New Customer Trend',
+  );
+
+  // New customers registered in the selected period
+  XLSX.utils.book_append_sheet(
+    wb,
+    XLSX.utils.aoa_to_sheet([
+      ['Customer Code', 'Customer', 'Agent', 'Branch', 'Type', 'Registered'],
+      ...bundle.newCustomersInPeriod.map((c) => [
+        c.customerCode ?? '',
+        c.name,
+        c.assignedAgentName ?? '',
+        c.branchName ?? '',
+        c.type ?? '',
+        csvDateOnlyIso(c.createdAt),
+      ]),
+    ]),
+    'New Customers',
+  );
+
   XLSX.utils.book_append_sheet(
     wb,
     XLSX.utils.aoa_to_sheet([
@@ -253,20 +284,6 @@ export async function downloadAgentTrendsWorkbook(params: AgentTrendsExportParam
       ),
     ]),
     'Quota Misses',
-  );
-
-  XLSX.utils.book_append_sheet(
-    wb,
-    XLSX.utils.aoa_to_sheet([
-      ['Customer', 'City', 'Branch', 'Type'],
-      ...bundle.unassignedCustomers.map((c) => [
-        c.name,
-        c.city ?? '',
-        c.branchName ?? '',
-        c.type ?? '',
-      ]),
-    ]),
-    'Unassigned Customers',
   );
 
   XLSX.utils.book_append_sheet(

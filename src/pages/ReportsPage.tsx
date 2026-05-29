@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { branchChartColorAt, employeeProfilePathFromAgent, agentChartColor, agentChartColorAt, type AgentLeaderboardRow, type BranchAnalyticsRow } from '@/src/lib/agentAnalytics';
 import { AgentColorSwatch } from '@/src/components/agentAnalytics/AgentColorSwatch';
+import { NewCustomerTrendCard } from '@/src/components/agentAnalytics/NewCustomerTrendCard';
 import { DashLink, DASH_LINK_CLASS } from '@/src/components/executive/executiveLinks';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
@@ -2690,6 +2691,12 @@ export function ReportsPage(): React.ReactElement {
               </CardContent>
             </Card>
           )}
+
+          <NewCustomerTrendCard
+            trend={agentsDisplay.newCustomerTrend}
+            branchLines={agentsDisplay.newCustomerBranchLines}
+            branchLabel={agentsScopeLabel}
+          />
         </div>
       )}
 

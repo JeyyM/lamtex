@@ -200,6 +200,16 @@ export interface UnassignedCustomerRow {
   type: string | null;
 }
 
+export interface RecentNewCustomerRow {
+  id: string;
+  customerCode: string | null;
+  name: string;
+  assignedAgentName: string | null;
+  branchName: string | null;
+  type: string | null;
+  createdAt: string;
+}
+
 export interface AgentAnalyticsBundle {
   summary: AnalyticsSummary;
   agents: AgentLeaderboardRow[];
@@ -215,6 +225,15 @@ export interface AgentAnalyticsBundle {
    * Used for multi-line trends. Null when a single branch is filtered.
    */
   branchRevenueTrendLines: BranchRevenueTrendLine[] | null;
+  /** Monthly new-customer acquisition counts — last 12 months, aligned with `monthlyTrend`. */
+  newCustomerTrend: NewCustomerTrendPoint[];
+  /**
+   * When `filterBranchId` is null: per-branch new-customer series for each `newCustomerTrend` month.
+   * Null when a single branch is filtered.
+   */
+  newCustomerBranchLines: BranchCustomerTrendLine[] | null;
+  /** New customers registered within the selected analytics period, sorted most-recent first. */
+  newCustomersInPeriod: RecentNewCustomerRow[];
 }
 
 /** Per-branch monthly revenue series aligned with `monthlyTrend` indices (0..11). */
@@ -222,6 +241,20 @@ export interface BranchRevenueTrendLine {
   branchId: string;
   branchName: string;
   monthlyRevenue: number[];
+}
+
+/** One month of new-customer acquisition count (aligns with `monthlyTrend` indices). */
+export interface NewCustomerTrendPoint {
+  monthLabel: string;
+  periodKey: string;
+  count: number;
+}
+
+/** Per-branch new-customer series aligned with `newCustomerTrend` indices (0..11). */
+export interface BranchCustomerTrendLine {
+  branchId: string;
+  branchName: string;
+  monthlyNewCustomers: number[];
 }
 
 /** Completed calendar month where collected revenue was below branch monthly quota. */
@@ -452,12 +485,13 @@ export function getPeriodRange(kind: PeriodKey, custom?: { start: string; end: s
   }
   if (kind === 'year') {
     const end = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-    const start = new Date(today.getFullYear(), today.getMonth() - 11, 1);
+    const start = new Date(end);
+    start.setDate(start.getDate() - 364);
     return {
       start: isoDate(start),
       end: isoDate(end),
-      periodLabel: `rolling-12m-${isoDate(end)}`,
-      displayLabel: 'Last 12 months',
+      periodLabel: `rolling-365d-${isoDate(end)}`,
+      displayLabel: 'Last 365 days',
       kind: 'year',
     };
   }
@@ -497,12 +531,13 @@ export function getPeriodRange(kind: PeriodKey, custom?: { start: string; end: s
   }
   if (kind === 'sixMonths') {
     const end = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-    const start = new Date(today.getFullYear(), today.getMonth() - 5, 1);
+    const start = new Date(end);
+    start.setDate(start.getDate() - 179);
     return {
       start: isoDate(start),
       end: isoDate(end),
-      periodLabel: `six-${today.getFullYear()}-${pad2(today.getMonth() + 1)}`,
-      displayLabel: 'Last 6 months',
+      periodLabel: `rolling-180d-${isoDate(end)}`,
+      displayLabel: 'Last 180 days',
       kind: 'sixMonths',
     };
   }
@@ -517,14 +552,15 @@ export function getPeriodRange(kind: PeriodKey, custom?: { start: string; end: s
       kind: 'ytd',
     };
   }
-  // default: calendar month
-  const s = startOfMonth(today);
-  const e = endOfMonth(today);
+  // default: last 30 days (rolling)
+  const end30 = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const start30 = new Date(end30);
+  start30.setDate(start30.getDate() - 29);
   return {
-    start: isoDate(s),
-    end: isoDate(e),
-    periodLabel: `${today.getFullYear()}-${pad2(today.getMonth() + 1)}`,
-    displayLabel: `${monthLabels[today.getMonth()]} ${today.getFullYear()}`,
+    start: isoDate(start30),
+    end: isoDate(end30),
+    periodLabel: `rolling-30d-${isoDate(end30)}`,
+    displayLabel: 'Last 30 days',
     kind: 'month',
   };
 }
@@ -1354,6 +1390,134 @@ async function fetchProofCommissionsPaidOutByPayoutPeriod(
   return map;
 }
 
+async function fetchNewCustomerTrendRaw(
+  start: string,
+  end: string,
+  branchFilter: string | null,
+): Promise<Array<{ created_at: string; branch_id: string | null }>> {
+  type Row = { created_at: string; branch_id: string | null };
+  let query = supabase
+    .from('customers')
+    .select('created_at, branch_id')
+    .gte('created_at', start)
+    .lte('created_at', end + 'T23:59:59');
+  if (branchFilter) query = query.eq('branch_id', branchFilter);
+  const { data, error } = await query;
+  if (error) {
+    console.warn('[agentAnalytics] fetchNewCustomerTrendRaw', error);
+    return [];
+  }
+  return (data ?? []) as Row[];
+}
+
+/** Lightweight daily revenue fetch — only used for short-range (≤31 day) trend charts. */
+async function fetchDailyRevenueTrend(
+  start: string,
+  end: string,
+  branchFilter: string | null,
+): Promise<Array<{ date: string; branchId: string | null; revenue: number }>> {
+  const result: Array<{ date: string; branchId: string | null; revenue: number }> = [];
+  let page = 0;
+  const pageSize = 500;
+  while (true) {
+    let query = supabase
+      .from('orders')
+      .select('order_date, total_amount, amount_paid, branch_id, payment_status, status')
+      .gte('order_date', start)
+      .lte('order_date', end)
+      .not('status', 'in', '("Cancelled","Rejected","Draft")')
+      .range(page * pageSize, page * pageSize + pageSize - 1);
+    if (branchFilter) query = query.eq('branch_id', branchFilter);
+    const { data, error } = await query;
+    if (error) break;
+    const rows = (data ?? []) as Record<string, unknown>[];
+    if (rows.length === 0) break;
+    for (const r of rows) {
+      result.push({
+        date: String(r.order_date).slice(0, 10),
+        branchId: r.branch_id ? String(r.branch_id) : null,
+        revenue: effectiveOrderCollected(r),
+      });
+    }
+    if (rows.length < pageSize) break;
+    page++;
+  }
+  return result;
+}
+
+function eachDayBetween(start: string, end: string): string[] {
+  const dates: string[] = [];
+  const s = new Date(start + 'T00:00:00');
+  const e = new Date(end + 'T00:00:00');
+  for (let d = new Date(s); d <= e; d.setDate(d.getDate() + 1)) {
+    dates.push(isoDate(new Date(d)));
+  }
+  return dates;
+}
+
+function monthSlotsBetween(
+  start: string,
+  end: string,
+): Array<{ year: number; month: number; label: string; periodKey: string }> {
+  const slots: Array<{ year: number; month: number; label: string; periodKey: string }> = [];
+  const s = new Date(start + 'T00:00:00');
+  const e = new Date(end + 'T00:00:00');
+  let d = new Date(s.getFullYear(), s.getMonth(), 1);
+  while (d <= e) {
+    const y = d.getFullYear();
+    const m = d.getMonth() + 1;
+    slots.push({
+      year: y,
+      month: m,
+      label: `${monthLabels[d.getMonth()]} '${String(y).slice(2)}`,
+      periodKey: `${y}-${pad2(m)}`,
+    });
+    d = new Date(y, d.getMonth() + 1, 1);
+  }
+  return slots;
+}
+
+async function fetchNewCustomersInPeriod(
+  start: string,
+  end: string,
+  branchFilter: string | null,
+): Promise<RecentNewCustomerRow[]> {
+  type Row = {
+    id: string;
+    customer_code: string | null;
+    name: string;
+    type: string | null;
+    created_at: string;
+    branch_id: string | null;
+    branches: { name: string } | null;
+    employees: { employee_name: string } | null;
+  };
+  let query = supabase
+    .from('customers')
+    .select(
+      'id, customer_code, name, type, created_at, branch_id, branches(name), employees!assigned_agent_id(employee_name)',
+    )
+    .gte('created_at', start)
+    .lte('created_at', end + 'T23:59:59')
+    .order('created_at', { ascending: false })
+    .limit(100);
+  if (branchFilter) query = query.eq('branch_id', branchFilter);
+  const { data, error } = await query;
+  if (error) {
+    console.warn('[agentAnalytics] fetchNewCustomersInPeriod', error);
+    return [];
+  }
+  return ((data ?? []) as unknown as Row[]).map((r) => ({
+    id: r.id,
+    customerCode: r.customer_code,
+    name: r.name,
+    type: r.type,
+    createdAt: r.created_at,
+    branchName: r.branches?.name ?? null,
+    assignedAgentName: r.employees?.employee_name?.trim() || null,
+  }));
+}
+
 async function fetchNewCustomersByAgent(start: string, end: string): Promise<Map<string, number>> {
   const map = new Map<string, number>();
   const { data, error } = await supabase
@@ -1584,13 +1748,6 @@ export async function fetchAgentAnalyticsBundle(opts: {
 
   const branchesById = new Map(branches.map((b) => [b.id, b]));
 
-  const today = new Date();
-  const trendStart = new Date(today.getFullYear(), today.getMonth() - 11, 1);
-  const trendPeriodKeys: string[] = [];
-  for (let ti = 0; ti < 12; ti++) {
-    const dKey = new Date(trendStart.getFullYear(), trendStart.getMonth() + ti, 1);
-    trendPeriodKeys.push(`${dKey.getFullYear()}-${pad2(dKey.getMonth() + 1)}`);
-  }
   let branchTargetsFlat = await fetchAllBranchSalesTargets();
   if (branchTargetsFlat.size === 0 && branches.length > 0) {
     branchTargetsFlat = buildDemoBranchTargetsFlat(branches);
@@ -1751,53 +1908,142 @@ export async function fetchAgentAnalyticsBundle(opts: {
   branchesArr.sort((a, b) => b.revenue - a.revenue);
   branchesArr.forEach((b, i) => (b.rank = i + 1));
 
-  // Trend: last 12 months — branch quota (step), collected revenue, avg revenue per agent
-  const monthlyTrend: MonthlyTrendPoint[] = [];
-  const trendRows = await fetchRevenueRows(isoDate(trendStart), isoDate(endOfMonth(today)));
-  const targetSumByPeriod = await fetchAggregateTargetsForTrend(trendStart, today, branchFilter, agents);
-  const hasBranchQuotaRows = branchTargetsFlat.size > 0;
-  const quotaSeries = branchFilter
-    ? carriedMonthlySeriesForBranch(branchFilter, trendPeriodKeys, branchNest)
-    : weightedQuotaMonthlySeries(trendPeriodKeys, agents, branchNest);
   const agentDen = agents.length;
 
-  for (let i = 0; i < 12; i++) {
-    const d = new Date(trendStart.getFullYear(), trendStart.getMonth() + i, 1);
-    const y = d.getFullYear();
-    const m = d.getMonth() + 1;
-    const pk = `${y}-${pad2(m)}`;
-    const sum = trendRows
-      .filter((r) => r.year === y && r.month === m && (!branchFilter || r.branchId === branchFilter))
-      .reduce((acc, r) => acc + r.revenue, 0);
-    const legacyAvgPerAgent =
-      agentDen > 0 ? (targetSumByPeriod.get(pk) ?? 0) / agentDen : 0;
-    let quotaMonthly = quotaSeries[i] ?? 0;
-    if (!hasBranchQuotaRows && legacyAvgPerAgent > 0) {
-      quotaMonthly = legacyAvgPerAgent;
-    }
-    monthlyTrend.push({
-      monthLabel: `${monthLabels[d.getMonth()]} '${String(y).slice(2)}`,
-      periodKey: pk,
-      revenue: sum,
-      quotaMonthly,
-      avgAgentRevenue: agentDen > 0 ? sum / agentDen : 0,
-    });
-  }
+  // Trend: respects selected range — daily granularity for ≤31 days, monthly otherwise
+  const rangeStartDate = new Date(range.start + 'T00:00:00');
+  const rangeEndDate = new Date(range.end + 'T00:00:00');
+  const rangeDays = Math.round((rangeEndDate.getTime() - rangeStartDate.getTime()) / 86400000) + 1;
+  const useDaily = rangeDays <= 31;
 
+  let monthlyTrend: MonthlyTrendPoint[];
   let branchRevenueTrendLines: BranchRevenueTrendLine[] | null = null;
-  if (!branchFilter && branchesArr.length > 0) {
-    branchRevenueTrendLines = branchesArr.map((b) => ({
-      branchId: b.branchId,
-      branchName: b.branchName,
-      monthlyRevenue: Array.from({ length: 12 }, (_, i) => {
-        const d = new Date(trendStart.getFullYear(), trendStart.getMonth() + i, 1);
-        const y = d.getFullYear();
-        const mo = d.getMonth() + 1;
-        return trendRows
-          .filter((r) => r.year === y && r.month === mo && r.branchId === b.branchId)
-          .reduce((acc, r) => acc + r.revenue, 0);
-      }),
+  let newCustomerTrend: NewCustomerTrendPoint[];
+  let newCustomerBranchLines: BranchCustomerTrendLine[] | null = null;
+
+  // New customers registered in the selected analytics period (for the panel list)
+  const newCustomersInPeriod = await fetchNewCustomersInPeriod(range.start, range.end, branchFilter);
+
+  if (useDaily) {
+    const [dailyRevRows, newCustRaw] = await Promise.all([
+      fetchDailyRevenueTrend(range.start, range.end, branchFilter),
+      fetchNewCustomerTrendRaw(range.start, range.end, branchFilter),
+    ]);
+    const dates = eachDayBetween(range.start, range.end);
+
+    monthlyTrend = dates.map((date) => {
+      const d = new Date(date + 'T00:00:00');
+      const sum = dailyRevRows
+        .filter((r) => r.date === date)
+        .reduce((acc, r) => acc + r.revenue, 0);
+      return {
+        monthLabel: d.toLocaleDateString('en-PH', { month: 'short', day: 'numeric' }),
+        periodKey: date,
+        revenue: sum,
+        quotaMonthly: 0,
+        avgAgentRevenue: agentDen > 0 ? sum / agentDen : 0,
+      };
+    });
+
+    if (!branchFilter && branchesArr.length > 0) {
+      branchRevenueTrendLines = branchesArr.map((b) => ({
+        branchId: b.branchId,
+        branchName: b.branchName,
+        monthlyRevenue: dates.map((date) =>
+          dailyRevRows
+            .filter((r) => r.date === date && r.branchId === b.branchId)
+            .reduce((acc, r) => acc + r.revenue, 0),
+        ),
+      }));
+    }
+
+    newCustomerTrend = dates.map((date) => {
+      const d = new Date(date + 'T00:00:00');
+      return {
+        monthLabel: d.toLocaleDateString('en-PH', { month: 'short', day: 'numeric' }),
+        periodKey: date,
+        count: newCustRaw.filter((r) => r.created_at.slice(0, 10) === date).length,
+      };
+    });
+
+    if (!branchFilter && branchesArr.length > 0) {
+      newCustomerBranchLines = branchesArr.map((b) => ({
+        branchId: b.branchId,
+        branchName: b.branchName,
+        monthlyNewCustomers: dates.map(
+          (date) =>
+            newCustRaw.filter(
+              (r) => r.created_at.slice(0, 10) === date && r.branch_id === b.branchId,
+            ).length,
+        ),
+      }));
+    }
+  } else {
+    const slots = monthSlotsBetween(range.start, range.end);
+    const slotKeys = slots.map((s) => s.periodKey);
+
+    const [trendRows, targetSumByPeriod, newCustRaw] = await Promise.all([
+      fetchRevenueRows(range.start, range.end),
+      fetchAggregateTargetsForTrend(rangeStartDate, rangeEndDate, branchFilter, agents),
+      fetchNewCustomerTrendRaw(range.start, range.end, branchFilter),
+    ]);
+
+    const hasBranchQuotaRows = branchTargetsFlat.size > 0;
+    const quotaSeries = branchFilter
+      ? carriedMonthlySeriesForBranch(branchFilter, slotKeys, branchNest)
+      : weightedQuotaMonthlySeries(slotKeys, agents, branchNest);
+
+    monthlyTrend = slots.map(({ year: y, month: m, label, periodKey: pk }, i) => {
+      const sum = trendRows
+        .filter((r) => r.year === y && r.month === m && (!branchFilter || r.branchId === branchFilter))
+        .reduce((acc, r) => acc + r.revenue, 0);
+      const legacyAvgPerAgent = agentDen > 0 ? (targetSumByPeriod.get(pk) ?? 0) / agentDen : 0;
+      let quotaMonthly = quotaSeries[i] ?? 0;
+      if (!hasBranchQuotaRows && legacyAvgPerAgent > 0) quotaMonthly = legacyAvgPerAgent;
+      return {
+        monthLabel: label,
+        periodKey: pk,
+        revenue: sum,
+        quotaMonthly,
+        avgAgentRevenue: agentDen > 0 ? sum / agentDen : 0,
+      };
+    });
+
+    if (!branchFilter && branchesArr.length > 0) {
+      branchRevenueTrendLines = branchesArr.map((b) => ({
+        branchId: b.branchId,
+        branchName: b.branchName,
+        monthlyRevenue: slots.map(({ year: y, month: m }) =>
+          trendRows
+            .filter((r) => r.year === y && r.month === m && r.branchId === b.branchId)
+            .reduce((acc, r) => acc + r.revenue, 0),
+        ),
+      }));
+    }
+
+    newCustomerTrend = slots.map(({ year: y, month: m, label, periodKey: pk }) => ({
+      monthLabel: label,
+      periodKey: pk,
+      count: newCustRaw.filter((r) => {
+        const dt = new Date(r.created_at);
+        return dt.getFullYear() === y && dt.getMonth() + 1 === m;
+      }).length,
     }));
+
+    if (!branchFilter && branchesArr.length > 0) {
+      newCustomerBranchLines = branchesArr.map((b) => ({
+        branchId: b.branchId,
+        branchName: b.branchName,
+        monthlyNewCustomers: slots.map(
+          ({ year: y, month: m }) =>
+            newCustRaw.filter((r) => {
+              if (r.branch_id !== b.branchId) return false;
+              const dt = new Date(r.created_at);
+              return dt.getFullYear() === y && dt.getMonth() + 1 === m;
+            }).length,
+        ),
+      }));
+    }
   }
 
   // Summary
@@ -1852,6 +2098,9 @@ export async function fetchAgentAnalyticsBundle(opts: {
     unassignedCustomers,
     filterBranchId: branchFilter,
     branchRevenueTrendLines,
+    newCustomerTrend,
+    newCustomerBranchLines,
+    newCustomersInPeriod,
   };
 }
 

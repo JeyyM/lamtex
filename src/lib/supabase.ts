@@ -13,4 +13,9 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     fetch: (input: RequestInfo | URL, init?: RequestInit) =>
       fetch(input, { ...init, cache: 'no-store' }),
   },
+  realtime: {
+    params: {
+      eventsPerSecond: 10,
+    },
+  },
 });

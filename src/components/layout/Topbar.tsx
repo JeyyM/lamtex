@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Link, useMatch } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { Bell, Menu, Settings } from 'lucide-react';
@@ -17,6 +17,11 @@ import {
   clearAllNotifications,
   subscribeToUserNotifications,
 } from '@/src/lib/notifications/notificationsData';
+import {
+  unlockNotificationAudio,
+  playNotificationSound,
+  playChatNotificationSound,
+} from '@/src/lib/notificationSound';
 
 function NotificationBadge({ count }: { count: number }) {
   if (count <= 0) return null;
@@ -48,6 +53,7 @@ export function Topbar() {
   const [isMobileSettingsOpen, setIsMobileSettingsOpen] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const prevNotificationsRef = useRef<AppNotification[]>([]);
 
   const roles: UserRole[] = ['Executive', 'Warehouse', 'Logistics', 'Agent', 'Driver'];
   const [branches, setBranches] = useState<Branch[]>([]);
@@ -109,10 +115,30 @@ export function Topbar() {
   }, [loadNotifications]);
 
   useEffect(() => {
+    const unlock = () => {
+      void unlockNotificationAudio();
+    };
+    document.addEventListener('pointerdown', unlock, { once: true });
+    document.addEventListener('keydown', unlock, { once: true });
+    return () => {
+      document.removeEventListener('pointerdown', unlock);
+      document.removeEventListener('keydown', unlock);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!userId) return;
     return subscribeToUserNotifications(userId, () => {
       void loadNotifications();
     });
+  }, [userId, loadNotifications]);
+
+  useEffect(() => {
+    if (!userId) return;
+    const poll = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void loadNotifications();
+    }, 20_000);
+    return () => clearInterval(poll);
   }, [userId, loadNotifications]);
 
   useEffect(() => {
@@ -131,6 +157,21 @@ export function Topbar() {
   }, [loadNotifications]);
 
   const unreadCount = notifications.filter((n) => !n.read).length;
+
+  useEffect(() => {
+    const prev = prevNotificationsRef.current;
+    if (prev.length > 0) {
+      const prevIds = new Set(prev.map((n) => n.id));
+      const newlyUnread = notifications.filter((n) => !n.read && !prevIds.has(n.id));
+      if (newlyUnread.length > 0) {
+        const chatOnly = newlyUnread.every(
+          (n) => n.category === 'Message' || n.eventType === 'chat_message',
+        );
+        void (chatOnly ? playChatNotificationSound() : playNotificationSound());
+      }
+    }
+    prevNotificationsRef.current = notifications;
+  }, [notifications]);
 
   const handleMarkRead = async (id: string) => {
     setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
