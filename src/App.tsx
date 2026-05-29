@@ -43,6 +43,7 @@ import { InterBranchRequestsPage } from './pages/InterBranchRequestsPage';
 import { InterBranchRequestDetailPage } from './pages/InterBranchRequestDetailPage';
 import { TruckDetailPage } from './pages/TruckDetailPage';
 import WarehousePage from './pages/WarehousePage';
+// import ForecastsPage from './pages/ForecastsPage'; // hidden for now
 import ChatsPage from './pages/ChatsPage';
 import LoginPage from './pages/LoginPage';
 import { Loader2 } from 'lucide-react';
@@ -132,6 +133,7 @@ function AppRoutes() {
             <Route path="agents" element={<AgentAnalyticsPage />} />
             <Route path="agents/:agentId" element={<AgentProfilePage />} />
             <Route path="reports" element={<ReportsPage />} />
+            {/* <Route path="forecasts" element={<ForecastsPage />} /> hidden for now */}
             <Route path="settings" element={<SettingsPage />} />
             <Route path="audit" element={<AuditLogsPage />} />
             <Route path="purchase-requests" element={<PurchaseRequestsPage />} />

@@ -48,6 +48,7 @@ export function Sidebar() {
     { name: 'Employees', path: '/employees', icon: Users, roles: ['Executive', 'Manager'] },
     { name: 'Agent Analytics', path: '/agents', icon: UserCheck, roles: ['Executive', 'Manager'] },
     { name: 'Reports', path: '/reports', icon: BarChart3, roles: ['Executive', 'Finance', 'Manager'] },
+    // { name: 'Forecasts', path: '/forecasts', icon: LineChart, roles: ['Executive', 'Finance', 'Manager'] }, // hidden for now
     { name: 'Settings', path: '/settings', icon: Settings, roles: ['Executive', 'Warehouse', 'Logistics', 'Agent', 'Driver', 'Finance', 'Production', 'Manager', 'Procurement'] },
   ];
 
