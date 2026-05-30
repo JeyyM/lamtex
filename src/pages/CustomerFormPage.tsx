@@ -19,6 +19,8 @@ import {
 } from 'lucide-react';
 import { supabase } from '@/src/lib/supabase';
 import { useAppContext } from '@/src/store/AppContext';
+import { useCustomerPermissions } from '@/src/lib/permissions/customerPermissions';
+import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
 import { CompanyMapPicker } from '@/src/components/maps/CompanyMapPicker';
 import { openGoogleMapsSearch } from '@/src/lib/maps';
 import { fetchBranchDepotPinByBranchId } from '@/src/lib/companyAddressesSettings';
@@ -90,6 +92,7 @@ export function CustomerFormPage() {
   const { id } = useParams<{ id: string }>();
   const isEditMode = !!id;
   const { branch: contextBranch } = useAppContext();
+  const customerPerms = useCustomerPermissions();
 
   const [formData, setFormData] = useState<CustomerFormData>({
     customerCode: '',
@@ -422,6 +425,10 @@ export function CustomerFormPage() {
       else navigate('/customers');
     }
   };
+
+  if (!customerPerms.pageAccess) {
+    return <ModuleAccessDenied moduleName="Customers" />;
+  }
 
   if (initialFetchLoading) {
     return (

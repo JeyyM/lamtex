@@ -39,6 +39,7 @@ export function Topbar() {
     branch,
     setBranch,
     isExecutiveUser,
+    assignableDashboardRoles,
     profileLoaded,
     isMobileMenuOpen,
     setIsMobileMenuOpen,
@@ -56,6 +57,9 @@ export function Topbar() {
   const prevNotificationsRef = useRef<AppNotification[]>([]);
 
   const roles: UserRole[] = ['Executive', 'Warehouse', 'Logistics', 'Agent', 'Driver'];
+  const hasMultiDashboardRole = !isExecutiveUser && assignableDashboardRoles.length > 1;
+  const rolePickerOptions: UserRole[] = isExecutiveUser ? roles : assignableDashboardRoles;
+  const showRolePicker = isExecutiveUser || hasMultiDashboardRole;
   const [branches, setBranches] = useState<Branch[]>([]);
 
   const userId = session?.user?.id ?? null;
@@ -264,7 +268,22 @@ export function Topbar() {
                   onChange={(e) => setRole(e.target.value as UserRole)}
                   className="text-sm bg-transparent border-none text-red-900 font-semibold focus:ring-0 py-0 pl-1 pr-6 cursor-pointer"
                 >
-                  {roles.map((r) => (
+                  {rolePickerOptions.map((r) => (
+                    <option key={r} value={r}>
+                      {r}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : hasMultiDashboardRole ? (
+              <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 rounded-lg border border-blue-100 bg-blue-50">
+                <span className="text-xs font-medium text-blue-800 uppercase tracking-wider">Role:</span>
+                <select
+                  value={role}
+                  onChange={(e) => setRole(e.target.value as UserRole)}
+                  className="text-sm bg-transparent border-none text-blue-900 font-semibold focus:ring-0 py-0 pl-1 pr-6 cursor-pointer"
+                >
+                  {rolePickerOptions.map((r) => (
                     <option key={r} value={r}>
                       {r}
                     </option>
@@ -290,7 +309,7 @@ export function Topbar() {
         </div>
 
         <div className="md:hidden flex items-center gap-2">
-          {isExecutiveUser && profileLoaded && (
+          {showRolePicker && profileLoaded && (
             <button
               className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
               onClick={() => setIsMobileSettingsOpen(!isMobileSettingsOpen)}
@@ -311,7 +330,7 @@ export function Topbar() {
         </div>
       </header>
 
-      {isMobileSettingsOpen && isExecutiveUser && profileLoaded && (
+      {isMobileSettingsOpen && showRolePicker && profileLoaded && (
         <div className="lg:hidden fixed inset-0 z-40 bg-black/50" onClick={() => setIsMobileSettingsOpen(false)}>
           <div
             className="absolute top-16 left-0 right-0 bg-white border-b border-gray-200 shadow-lg p-4 space-y-4"
@@ -335,13 +354,15 @@ export function Topbar() {
             )}
 
             <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">Simulate Role</label>
+              <label className="block text-xs font-medium text-gray-700 mb-1">
+                {isExecutiveUser ? 'Simulate Role' : 'Dashboard Role'}
+              </label>
               <select
                 value={role}
                 onChange={(e) => setRole(e.target.value as UserRole)}
                 className="w-full text-sm border-gray-300 rounded-lg shadow-sm focus:border-red-500 focus:ring-red-500 py-2 px-3"
               >
-                {roles.map((r) => (
+                {rolePickerOptions.map((r) => (
                   <option key={r} value={r}>
                     {r}
                   </option>

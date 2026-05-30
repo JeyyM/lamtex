@@ -1,4 +1,5 @@
 import { supabase } from '@/src/lib/supabase';
+import { resolveEmployeePermissionsWithRoleFallback } from './employeePermissionRoleFallback';
 import {
   ALL_PRODUCTION_REQUEST_PERMISSIONS_GRANTED,
   PRODUCTION_REQUEST_PERMISSIONS,
@@ -36,21 +37,13 @@ export function serializeProductionRequestPermissionSet(
 export async function fetchEmployeeProductionRequestPermissions(
   employeeId: string,
 ): Promise<ProductionRequestPermissionSet> {
-  const id = employeeId.trim();
-  if (!id) return { ...ALL_PRODUCTION_REQUEST_PERMISSIONS_GRANTED };
-
-  const { data, error } = await supabase
-    .from('employee_production_request_permissions')
-    .select('permissions')
-    .eq('employee_id', id)
-    .maybeSingle();
-
-  if (error) {
-    if (import.meta.env.DEV) console.warn('[employeeProductionRequestPermissions] fetch', error.message);
-    return { ...ALL_PRODUCTION_REQUEST_PERMISSIONS_GRANTED };
-  }
-  if (!data?.permissions) return { ...ALL_PRODUCTION_REQUEST_PERMISSIONS_GRANTED };
-  return normalizeProductionRequestPermissionSet(data.permissions);
+  return resolveEmployeePermissionsWithRoleFallback(
+    employeeId,
+    'employee_production_request_permissions',
+    normalizeProductionRequestPermissionSet,
+    { ...ALL_PRODUCTION_REQUEST_PERMISSIONS_GRANTED },
+    (merged) => merged.productionRequest,
+  );
 }
 
 export async function saveEmployeeProductionRequestPermissions(

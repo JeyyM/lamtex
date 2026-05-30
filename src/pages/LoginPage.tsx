@@ -124,7 +124,7 @@ export default function LoginPage() {
       <div className="w-full max-w-5xl flex flex-col lg:flex-row gap-4 items-stretch">
 
         {/* ── Quick-select panel ─────────────────────────────────────── */}
-        <div className="lg:w-72 xl:w-80 flex-shrink-0 bg-white rounded-xl shadow-lg border border-gray-200 flex flex-col overflow-hidden">
+        <div className="lg:w-72 xl:w-80 flex-shrink-0 bg-white rounded-xl shadow-lg border border-gray-200 flex flex-col overflow-hidden self-start max-h-[calc(100vh-2rem)]">
           {/* Header + branch dropdown */}
           <div className="px-4 py-3 border-b border-gray-100 bg-gray-50 space-y-2">
             <div>
@@ -142,7 +142,7 @@ export default function LoginPage() {
             </select>
           </div>
 
-          <div className="flex-1 overflow-y-auto divide-y divide-gray-100">
+          <div className="overflow-y-auto overscroll-y-contain divide-y divide-gray-100 min-h-0 max-h-72 sm:max-h-80">
             {/* Executive — always shown first */}
             <div>
               <div className="px-4 py-1.5 flex items-center gap-2 sticky top-0 bg-white z-10">

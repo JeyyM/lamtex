@@ -199,6 +199,19 @@ CREATE TABLE IF NOT EXISTS employees (
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 3a2: Multiple dashboard roles per employee
+CREATE TABLE IF NOT EXISTS employee_user_roles (
+  employee_id   UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  user_role     user_role NOT NULL,
+  is_primary    BOOLEAN NOT NULL DEFAULT false,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (employee_id, user_role)
+);
+
+CREATE INDEX IF NOT EXISTS idx_employee_user_roles_employee ON employee_user_roles(employee_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_employee_user_roles_one_primary
+  ON employee_user_roles(employee_id) WHERE is_primary;
+
 -- 3b: Personal information
 CREATE TABLE IF NOT EXISTS employee_personal_info (
   id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -978,6 +991,12 @@ CREATE TABLE IF NOT EXISTS employee_inter_branch_request_permissions (
 );
 
 CREATE TABLE IF NOT EXISTS employee_logistics_permissions (
+  employee_id   UUID PRIMARY KEY REFERENCES employees(id) ON DELETE CASCADE,
+  permissions   JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS employee_customer_permissions (
   employee_id   UUID PRIMARY KEY REFERENCES employees(id) ON DELETE CASCADE,
   permissions   JSONB NOT NULL DEFAULT '{}'::jsonb,
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -3495,6 +3514,7 @@ CREATE INDEX IF NOT EXISTS idx_employee_production_request_permissions_updated O
 CREATE INDEX IF NOT EXISTS idx_employee_purchase_order_permissions_updated ON employee_purchase_order_permissions(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_employee_inter_branch_request_permissions_updated ON employee_inter_branch_request_permissions(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_employee_logistics_permissions_updated ON employee_logistics_permissions(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_employee_customer_permissions_updated ON employee_customer_permissions(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_employee_supplier_permissions_updated ON employee_supplier_permissions(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_employee_finance_permissions_updated ON employee_finance_permissions(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_employee_employees_permissions_updated ON employee_employees_permissions(updated_at DESC);
@@ -3512,6 +3532,7 @@ ALTER TABLE employee_production_request_permissions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE employee_purchase_order_permissions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE employee_inter_branch_request_permissions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE employee_logistics_permissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE employee_customer_permissions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE employee_supplier_permissions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE employee_finance_permissions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE employee_employees_permissions ENABLE ROW LEVEL SECURITY;
@@ -3534,6 +3555,7 @@ BEGIN
     'employee_purchase_order_permissions',
     'employee_inter_branch_request_permissions',
     'employee_logistics_permissions',
+    'employee_customer_permissions',
     'employee_supplier_permissions',
     'employee_finance_permissions',
     'employee_employees_permissions',

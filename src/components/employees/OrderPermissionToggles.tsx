@@ -158,9 +158,6 @@ export function OrderPermissionSection({
             {saveSuccess && !saveError && (
               <p className="mt-4 text-sm text-green-700">Permissions saved.</p>
             )}
-            <p className="mt-4 text-xs text-gray-400">
-              Executives always have full access regardless of these settings. Hover a tile for details.
-            </p>
           </>
         )}
       </div>

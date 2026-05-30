@@ -9,17 +9,18 @@ export type WarehouseAssignmentScope = {
 
 const EMPTY_UUID = '00000000-0000-0000-0000-000000000000';
 
-export function warehouseScopeIsActive(role: UserRole, productIds: string[] | null): boolean {
-  if (executiveHasFullInventoryAccess(role)) return false;
+export function warehouseScopeIsActive(isExecutiveUser: boolean, role: UserRole, productIds: string[] | null): boolean {
+  if (executiveHasFullInventoryAccess(isExecutiveUser)) return false;
   return role === 'Warehouse' && productIds !== null;
 }
 
 export function buildWarehouseAssignmentScope(
+  isExecutiveUser: boolean,
   role: UserRole,
   productIds: string[] | null,
   materialIds: string[] | null,
 ): WarehouseAssignmentScope {
-  if (!warehouseScopeIsActive(role, productIds)) {
+  if (!warehouseScopeIsActive(isExecutiveUser, role, productIds)) {
     return { productIds: null, materialIds: null };
   }
   return {

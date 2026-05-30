@@ -413,8 +413,8 @@ export function ProductionRequestDetailPage() {
   const actor = employeeName || session?.user?.email || 'User';
   const perms = useProductionRequestPermissions();
   const ibrPerms = useInterBranchRequestPermissions();
-  const canApprove = ['Executive', 'Manager'].includes(role) && perms.approvals;
-  const canRunProduction = ['Executive', 'Manager', 'Production', 'Warehouse'].includes(role) && perms.fulfillment;
+  const canApprove = perms.approvals;
+  const canRunProduction = perms.fulfillment;
   const canCreateEdit = perms.creation;
 
   const fetchLogs = useCallback(async (requestId: string) => {

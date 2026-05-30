@@ -4,7 +4,8 @@ import { Card, CardHeader, CardTitle, CardContent } from '@/src/components/ui/Ca
 import { StatKpiCard } from '@/src/components/ui/StatKpiCard';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
-import { useAppContext } from '@/src/store/AppContext';
+import { usePurchaseOrderPermissions } from '@/src/lib/permissions/purchaseOrderPermissions';
+import { PermissionGate } from '@/src/components/permissions/PermissionGate';
 import {
   Package,
   Clock,
@@ -58,9 +59,8 @@ const isDelayed = (request: PurchaseRequest): boolean => {
 export function PurchaseRequestsPage() {
   const { materialId } = useParams();
   const navigate = useNavigate();
-  const { role } = useAppContext();
+  const poPerms = usePurchaseOrderPermissions();
   const isCreateMode = Boolean(materialId);
-  const isBoss = role === 'Executive';
 
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('All');
@@ -492,18 +492,22 @@ export function PurchaseRequestsPage() {
             Manage material procurement requests across branches
           </p>
         </div>
-        {isBoss && (
+        <PermissionGate when={poPerms.pageAccess || poPerms.creation}>
           <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
-            <Button variant="outline" className="w-full sm:w-auto">
-              <Download className="w-4 h-4 mr-2" />
-              Export
-            </Button>
-            <Button variant="primary" onClick={() => navigate('/materials')} className="w-full sm:w-auto">
-              <Plus className="w-4 h-4 mr-2" />
-              New Request
-            </Button>
+            <PermissionGate when={poPerms.pageAccess}>
+              <Button variant="outline" className="w-full sm:w-auto">
+                <Download className="w-4 h-4 mr-2" />
+                Export
+              </Button>
+            </PermissionGate>
+            <PermissionGate when={poPerms.creation}>
+              <Button variant="primary" onClick={() => navigate('/materials')} className="w-full sm:w-auto">
+                <Plus className="w-4 h-4 mr-2" />
+                New Request
+              </Button>
+            </PermissionGate>
           </div>
-        )}
+        </PermissionGate>
       </div>
 
       {/* KPI Summary Cards */}
@@ -624,9 +628,9 @@ export function PurchaseRequestsPage() {
                         )}
                       </div>
 
-                      {isBoss && (
+                      <PermissionGate when={poPerms.approvals || poPerms.creation}>
                         <div className="flex flex-wrap gap-2 pt-2 border-t border-gray-100">
-                          {request.status === PurchaseRequestStatus.PENDING_APPROVAL && (
+                          {request.status === PurchaseRequestStatus.PENDING_APPROVAL && poPerms.approvals && (
                             <>
                               <Button variant="success" size="sm" onClick={() => handleApprove(request.id)} className="flex-1 sm:flex-none">
                                 Approve
@@ -637,7 +641,7 @@ export function PurchaseRequestsPage() {
                             </>
                           )}
 
-                          {request.status === PurchaseRequestStatus.APPROVED && (
+                          {request.status === PurchaseRequestStatus.APPROVED && poPerms.creation && (
                             <>
                               <Button variant="primary" size="sm" onClick={() => handleConvertToPO(request.id)} className="flex-1 sm:flex-none">
                                 Convert to PO
@@ -648,13 +652,13 @@ export function PurchaseRequestsPage() {
                             </>
                           )}
 
-                          {request.status === PurchaseRequestStatus.ORDERED && (
+                          {request.status === PurchaseRequestStatus.ORDERED && poPerms.approvals && (
                             <Button variant="outline" size="sm" onClick={() => handleFollowUp(request.id)} className="w-full sm:w-auto">
                               Follow-Up Supplier
                             </Button>
                           )}
 
-                          {request.status === PurchaseRequestStatus.REJECTED && (
+                          {request.status === PurchaseRequestStatus.REJECTED && poPerms.approvals && (
                             <Button variant="outline" size="sm" onClick={() => handleUndoReject(request.id)} className="w-full sm:w-auto">
                               Undo Reject
                             </Button>
@@ -664,7 +668,7 @@ export function PurchaseRequestsPage() {
                             <span className="text-gray-400 text-xs">No actions</span>
                           )}
                         </div>
-                      )}
+                      </PermissionGate>
                     </div>
                   );
                 })}
@@ -682,9 +686,9 @@ export function PurchaseRequestsPage() {
                     <th className="px-6 py-3 text-left font-medium">Requested By</th>
                     <th className="px-6 py-3 text-left font-medium">Status</th>
                     <th className="px-6 py-3 text-left font-medium">Expected Arrival</th>
-                    {isBoss && (
+                    <PermissionGate when={poPerms.approvals || poPerms.creation}>
                       <th className="px-6 py-3 text-left font-medium">Actions</th>
-                    )}
+                    </PermissionGate>
                   </tr>
                 </thead>
 
@@ -745,10 +749,10 @@ export function PurchaseRequestsPage() {
                             })}
                           </div>
                         </td>
-                        {isBoss && (
+                        <PermissionGate when={poPerms.approvals || poPerms.creation}>
                           <td className="px-6 py-4">
                             <div className="flex items-center gap-2 flex-wrap">
-                              {request.status === PurchaseRequestStatus.PENDING_APPROVAL && (
+                              {request.status === PurchaseRequestStatus.PENDING_APPROVAL && poPerms.approvals && (
                                 <>
                                   <Button
                                     variant="success"
@@ -767,7 +771,7 @@ export function PurchaseRequestsPage() {
                                 </>
                               )}
 
-                              {request.status === PurchaseRequestStatus.APPROVED && (
+                              {request.status === PurchaseRequestStatus.APPROVED && poPerms.creation && (
                                 <>
                                   <Button
                                     variant="primary"
@@ -786,7 +790,7 @@ export function PurchaseRequestsPage() {
                                 </>
                               )}
 
-                              {request.status === PurchaseRequestStatus.ORDERED && (
+                              {request.status === PurchaseRequestStatus.ORDERED && poPerms.approvals && (
                                 <Button
                                   variant="outline"
                                   size="sm"
@@ -796,7 +800,7 @@ export function PurchaseRequestsPage() {
                                 </Button>
                               )}
 
-                              {request.status === PurchaseRequestStatus.REJECTED && (
+                              {request.status === PurchaseRequestStatus.REJECTED && poPerms.approvals && (
                                 <Button
                                   variant="outline"
                                   size="sm"
@@ -811,7 +815,7 @@ export function PurchaseRequestsPage() {
                               )}
                             </div>
                           </td>
-                        )}
+                        </PermissionGate>
                       </tr>
                     );
                   })}

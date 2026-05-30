@@ -1,4 +1,5 @@
 import { supabase } from '@/src/lib/supabase';
+import { resolveEmployeePermissionsWithRoleFallback } from './employeePermissionRoleFallback';
 import {
   ALL_EMPLOYEES_PERMISSIONS_GRANTED,
   EMPLOYEES_PERMISSIONS,
@@ -29,21 +30,13 @@ export function serializeEmployeesPermissionSet(permissions: EmployeesPermission
 }
 
 export async function fetchEmployeeEmployeesPermissions(employeeId: string): Promise<EmployeesPermissionSet> {
-  const id = employeeId.trim();
-  if (!id) return { ...ALL_EMPLOYEES_PERMISSIONS_GRANTED };
-
-  const { data, error } = await supabase
-    .from('employee_employees_permissions')
-    .select('permissions')
-    .eq('employee_id', id)
-    .maybeSingle();
-
-  if (error) {
-    if (import.meta.env.DEV) console.warn('[employeeEmployeesPermissions] fetch', error.message);
-    return { ...ALL_EMPLOYEES_PERMISSIONS_GRANTED };
-  }
-  if (!data?.permissions) return { ...ALL_EMPLOYEES_PERMISSIONS_GRANTED };
-  return normalizeEmployeesPermissionSet(data.permissions);
+  return resolveEmployeePermissionsWithRoleFallback(
+    employeeId,
+    'employee_employees_permissions',
+    normalizeEmployeesPermissionSet,
+    { ...ALL_EMPLOYEES_PERMISSIONS_GRANTED },
+    (merged) => merged.employees,
+  );
 }
 
 export async function saveEmployeeEmployeesPermissions(

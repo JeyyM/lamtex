@@ -878,11 +878,7 @@ export function OrdersPage() {
     addAuditLog('Uploaded Proof of Delivery', 'Order', `Uploaded delivery proof for order ${orderId}`);
   };
 
-  // Drivers use the dashboard for trips — not the orders list
-  if (role === 'Driver') {
-    return <Navigate to="/" replace />;
-  }
-
+  // Drivers without orders access use the dashboard for trips — not the orders list
   if (!perms.pageAccess) {
     return <ModuleAccessDenied moduleName="Orders" />;
   }

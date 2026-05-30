@@ -4,6 +4,8 @@ import { Topbar } from './Topbar';
 import { Outlet, useLocation } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 
+import { PermissionsLoadingShell } from '@/src/components/permissions/PermissionsLoadingShell';
+
 export function AppLayout() {
   const { isSidebarCollapsed } = useAppContext();
   const location = useLocation();
@@ -40,7 +42,9 @@ export function AppLayout() {
                 : 'max-w-full lg:max-w-[1600px] mx-auto w-full'
             }
           >
-            <Outlet />
+            <PermissionsLoadingShell>
+              <Outlet />
+            </PermissionsLoadingShell>
           </div>
         </main>
       </div>

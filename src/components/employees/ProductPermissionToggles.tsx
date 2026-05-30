@@ -3,6 +3,7 @@ import type { LucideIcon } from 'lucide-react';
 import {
   BarChart3,
   Box,
+  ClipboardList,
   Clock,
   DollarSign,
   Download,
@@ -32,6 +33,7 @@ const PERMISSION_ICONS: Record<ProductPermissionKey, LucideIcon> = {
   priceModification: Tag,
   dataAndStatistics: BarChart3,
   activityLog: Clock,
+  productionRequestsHistory: ClipboardList,
 };
 
 export interface ProductPermissionToggleGridProps {
@@ -149,9 +151,6 @@ export function ProductPermissionSection({
             {saveSuccess && !saveError && (
               <p className="mt-4 text-sm text-green-700">Permissions saved.</p>
             )}
-            <p className="mt-4 text-xs text-gray-400">
-              Executives always have full access regardless of these settings. Hover a tile for details.
-            </p>
           </>
         )}
       </div>

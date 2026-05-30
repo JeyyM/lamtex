@@ -1,4 +1,5 @@
 import { supabase } from '@/src/lib/supabase';
+import { resolveEmployeePermissionsWithRoleFallback } from './employeePermissionRoleFallback';
 import {
   ALL_INTER_BRANCH_REQUEST_PERMISSIONS_GRANTED,
   INTER_BRANCH_REQUEST_PERMISSIONS,
@@ -36,21 +37,13 @@ export function serializeInterBranchRequestPermissionSet(
 export async function fetchEmployeeInterBranchRequestPermissions(
   employeeId: string,
 ): Promise<InterBranchRequestPermissionSet> {
-  const id = employeeId.trim();
-  if (!id) return { ...ALL_INTER_BRANCH_REQUEST_PERMISSIONS_GRANTED };
-
-  const { data, error } = await supabase
-    .from('employee_inter_branch_request_permissions')
-    .select('permissions')
-    .eq('employee_id', id)
-    .maybeSingle();
-
-  if (error) {
-    if (import.meta.env.DEV) console.warn('[employeeInterBranchRequestPermissions] fetch', error.message);
-    return { ...ALL_INTER_BRANCH_REQUEST_PERMISSIONS_GRANTED };
-  }
-  if (!data?.permissions) return { ...ALL_INTER_BRANCH_REQUEST_PERMISSIONS_GRANTED };
-  return normalizeInterBranchRequestPermissionSet(data.permissions);
+  return resolveEmployeePermissionsWithRoleFallback(
+    employeeId,
+    'employee_inter_branch_request_permissions',
+    normalizeInterBranchRequestPermissionSet,
+    { ...ALL_INTER_BRANCH_REQUEST_PERMISSIONS_GRANTED },
+    (merged) => merged.interBranchRequest,
+  );
 }
 
 export async function saveEmployeeInterBranchRequestPermissions(

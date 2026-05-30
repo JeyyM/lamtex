@@ -284,7 +284,7 @@ async function downloadProductsWorkbook(
 
 export function ProductsPage() {
   const navigate = useNavigate();
-  const { branch, role, addAuditLog, warehouseScope, warehouseScopeLoading } = useAppContext();
+  const { branch, role, isExecutiveUser, addAuditLog, warehouseScope, warehouseScopeLoading } = useAppContext();
   const perms = useProductPermissions();
   const prPerms = useProductionRequestPermissions();
   const inventoryBranch = effectiveInventoryBranch(role, branch);
@@ -525,9 +525,9 @@ export function ProductsPage() {
           <Button
             variant="outline"
             className="flex-1 sm:flex-none"
-            disabled={exportingProducts || categoriesLoading || (role !== 'Executive' && !branch)}
+            disabled={exportingProducts || categoriesLoading || (!isExecutiveUser && !branch)}
             onClick={async () => {
-              if (exportingProducts || categoriesLoading || (role !== 'Executive' && !branch)) return;
+              if (exportingProducts || categoriesLoading || (!isExecutiveUser && !branch)) return;
               setExportingProducts(true);
               try {
                 const exportBranch = inventoryBranch ?? '';

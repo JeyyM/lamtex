@@ -1,4 +1,5 @@
 import { supabase } from '@/src/lib/supabase';
+import { resolveEmployeePermissionsWithRoleFallback } from './employeePermissionRoleFallback';
 import {
   ALL_ORDER_PERMISSIONS_GRANTED,
   ORDER_PERMISSIONS,
@@ -30,21 +31,13 @@ export function serializeOrderPermissionSet(permissions: OrderPermissionSet): Re
 }
 
 export async function fetchEmployeeOrderPermissions(employeeId: string): Promise<OrderPermissionSet> {
-  const id = employeeId.trim();
-  if (!id) return { ...ALL_ORDER_PERMISSIONS_GRANTED };
-
-  const { data, error } = await supabase
-    .from('employee_order_permissions')
-    .select('permissions')
-    .eq('employee_id', id)
-    .maybeSingle();
-
-  if (error) {
-    if (import.meta.env.DEV) console.warn('[employeeOrderPermissions] fetch', error.message);
-    return { ...ALL_ORDER_PERMISSIONS_GRANTED };
-  }
-  if (!data?.permissions) return { ...ALL_ORDER_PERMISSIONS_GRANTED };
-  return normalizeOrderPermissionSet(data.permissions);
+  return resolveEmployeePermissionsWithRoleFallback(
+    employeeId,
+    'employee_order_permissions',
+    normalizeOrderPermissionSet,
+    { ...ALL_ORDER_PERMISSIONS_GRANTED },
+    (merged) => merged.orders,
+  );
 }
 
 export async function saveEmployeeOrderPermissions(

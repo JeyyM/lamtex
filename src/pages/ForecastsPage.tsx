@@ -26,7 +26,6 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { useAppContext } from '@/src/store/AppContext';
 import { fetchBranches, type BranchOption } from '@/src/lib/agentAnalytics';
 import {
   fetchForecastBundle,
@@ -260,7 +259,6 @@ const LOOKBACK_OPTIONS = [
 ];
 
 export default function ForecastsPage() {
-  const { role } = useAppContext();
   const [tab, setTab] = useState<Tab>('overview');
   const [branches, setBranches] = useState<BranchOption[]>([]);
   const [branchId, setBranchId] = useState<string | null>(null);
@@ -403,10 +401,6 @@ export default function ForecastsPage() {
       ) : null}
 
       <MethodologyCard />
-
-      {role !== 'Executive' && role !== 'Manager' && (
-        <p className="text-xs text-gray-400">Viewing forecasts in {role} mode.</p>
-      )}
     </div>
   );
 }

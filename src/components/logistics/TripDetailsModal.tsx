@@ -11,6 +11,8 @@ import { MarkInTransitModal } from '@/src/components/orders/MarkInTransitModal';
 import { FulfillOrderModal, type FulfillmentData, type DeliveryProofDetails } from '@/src/components/orders/FulfillOrderModal';
 import { CancelOrderModal, type CancellationData } from '@/src/components/orders/CancelOrderModal';
 import { useAppContext } from '@/src/store/AppContext';
+import { useLogisticsPermissions } from '@/src/lib/permissions/logisticsPermissions';
+import { PermissionGate } from '@/src/components/permissions/PermissionGate';
 import type { OrderLineItem as OrdersLineItem } from '@/src/types/orders';
 import { remainingToShipForLine } from '@/src/lib/orderShipmentQuantities';
 import { reportTripDelay } from '@/src/lib/orderTripDelay';
@@ -75,6 +77,7 @@ interface TripDetailsModalProps {
 
 export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusChange, onTripStatusChange }: TripDetailsModalProps) {
   const { addAuditLog, session, employeeName, employeeId, role, branch } = useAppContext();
+  const logisticsPerms = useLogisticsPermissions();
   const [ordersData, setOrdersData] = useState<TripOrder[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
   // Per-order dispatch status (Scheduled → Loading → Packed, then in transit with qty modal)
@@ -665,12 +668,12 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
                 Report Delay
               </Button>
             )}
-            {role !== 'Driver' && (
+            <PermissionGate when={logisticsPerms.pageAccess}>
               <Button onClick={onEdit} variant="outline" size="sm" className="hidden sm:inline-flex">
                 <Edit className="w-4 h-4 mr-2" />
                 Edit Trip Info
               </Button>
-            )}
+            </PermissionGate>
             <button
               onClick={onClose}
               className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
@@ -1098,12 +1101,12 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
               <Button variant="outline" onClick={onClose} className="w-full sm:w-auto justify-center">
                 Close
               </Button>
-              {role !== 'Driver' && (
+              <PermissionGate when={logisticsPerms.pageAccess}>
                 <Button variant="primary" onClick={onEdit} className="w-full sm:w-auto justify-center">
                   <Edit className="w-4 h-4 mr-2" />
                   Edit Trip Details
                 </Button>
-              )}
+              </PermissionGate>
             </div>
           </div>
         </div>

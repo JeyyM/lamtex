@@ -172,8 +172,6 @@ type RawPickPayload = {
   imageUrl: string | null;
 };
 
-const canBossApprove = (r: string) => ['Executive', 'Manager'].includes(r as string);
-
 /** Activity log row (mirrors purchase_order_logs). */
 type IbrLogRow = {
   id: string;
@@ -2656,8 +2654,8 @@ export function InterBranchRequestDetailPage() {
   const displayStatus: IBRStatus = (isEditing ? (editStatus ?? ibr.status) : ibr.status) as IBRStatus;
   const pending = ibr.status === 'Pending';
   const showLinkedDocs = !['Draft', 'Pending', 'Rejected', 'Cancelled'].includes(ibr.status);
-  const boss = canBossApprove(role);
-  const canUseLogisticsUi = !['Agent', 'Driver', 'Customer'].includes(role ?? '');
+  const canUseLogisticsUi =
+    perms.scheduling || perms.loading || perms.delivery;
   const isFulfillingBranch = !!resolvedBranchId && resolvedBranchId === ibr.fulfilling_branch_id;
   const isRequestingBranch = !!resolvedBranchId && resolvedBranchId === ibr.requesting_branch_id;
   const senderLogistics = canUseLogisticsUi && isFulfillingBranch;
@@ -2672,7 +2670,7 @@ export function InterBranchRequestDetailPage() {
     !isEditing &&
     ibr &&
     ibrLogisticsPostApproval &&
-    (senderLogistics || (isRequestingBranch && ibrRequesterSeesLogistics) || boss || !resolvedBranchId);
+    (senderLogistics || (isRequestingBranch && ibrRequesterSeesLogistics) || !resolvedBranchId);
   const totalLineQty = items.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
   const logisticsBusy = logisticsLoading || saving;
   const ibrShipmentTrackingReady = ibrShipmentTrackingAvailable === true;
@@ -2762,7 +2760,7 @@ export function InterBranchRequestDetailPage() {
                 Submit for approval
               </Button>
             )}
-            {pending && boss && perms.approvals && (
+            {pending && perms.approvals && (
               <>
                 <Button variant="primary" onClick={() => void doApprove()} disabled={saving} className="gap-2 flex-1 min-[480px]:flex-initial sm:flex-initial">
                   <CheckCircle className="w-4 h-4" /> Approve

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
+import { useOrderPermissions } from '@/src/lib/permissions/orderPermissions';
 import { orderCatalogBranch } from '@/src/lib/inventoryAccess';
 import { Button } from '@/src/components/ui/Button';
 import { Badge } from '@/src/components/ui/Badge';
@@ -59,9 +60,10 @@ interface OrderItem {
 
 export function CreateOrderModal({ customerId: initialCustomerId, customerName: initialCustomerName, onClose, onSuccess }: CreateOrderModalProps) {
   const navigate = useNavigate();
-  const { branch, role, employeeId, employeeName, isExecutiveUser, addAuditLog } = useAppContext();
+  const { branch, employeeId, employeeName, addAuditLog } = useAppContext();
+  const orderPerms = useOrderPermissions();
+  const canPickAgent = orderPerms.agentBranchSelection;
   const catalogBranch = orderCatalogBranch(branch, branch);
-  const isExecutiveCreator = isExecutiveUser;
 
   // Customers fetched from Supabase
   const [allCustomers, setAllCustomers] = useState<{ id: string; name: string; email: string | null; phone: string | null; address: string | null; contact_person: string | null }[]>([]);
@@ -83,7 +85,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
         .select('id, name, email, phone, address, contact_person')
         .eq('branch_id', branchData.id)
         .order('name');
-      const agentsPromise = isExecutiveCreator
+      const agentsPromise = canPickAgent
         ? supabase
             .from('employees')
             .select('id, employee_name, employee_id')
@@ -97,14 +99,14 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
       setAllAgents(agents ?? []);
     };
     fetchData();
-  }, [branch, isExecutiveCreator]);
+  }, [branch, canPickAgent]);
 
   useEffect(() => {
-    if (isExecutiveCreator) return;
+    if (canPickAgent) return;
     if (!employeeId) return;
     setSelectedAgentId(employeeId);
     setSelectedAgentName(employeeName);
-  }, [isExecutiveCreator, employeeId, employeeName]);
+  }, [canPickAgent, employeeId, employeeName]);
   
   // Customer selection state
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>(initialCustomerId || '');
@@ -638,7 +640,7 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  {isExecutiveCreator ? (
+                  {canPickAgent ? (
                     <p className="text-sm text-gray-600">
                       Using topbar branch: <span className="font-semibold text-gray-900">{branch || '—'}</span>
                     </p>
@@ -654,11 +656,11 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2 text-base">
                     <User className="w-5 h-5" />
-                    {isExecutiveCreator ? 'Assign Agent' : 'Assigned Agent'}
+                    {canPickAgent ? 'Assign Agent' : 'Assigned Agent'}
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  {isExecutiveCreator ? (
+                  {canPickAgent ? (
                     <select
                       value={selectedAgentId}
                       onChange={(e) => {

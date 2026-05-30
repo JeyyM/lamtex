@@ -109,6 +109,7 @@ import { MaterialPermissionSection } from '@/src/components/employees/MaterialPe
 import { WarehousePermissionSection } from '@/src/components/employees/WarehousePermissionToggles';
 import { LogisticsPermissionSection } from '@/src/components/employees/LogisticsPermissionToggles';
 import { SupplierPermissionSection } from '@/src/components/employees/SupplierPermissionToggles';
+import { CustomerPermissionSection } from '@/src/components/employees/CustomerPermissionToggles';
 import { FinancePermissionSection } from '@/src/components/employees/FinancePermissionToggles';
 import { ProductionRequestPermissionSection } from '@/src/components/employees/ProductionRequestPermissionToggles';
 import { PurchaseOrderPermissionSection } from '@/src/components/employees/PurchaseOrderPermissionToggles';
@@ -143,6 +144,11 @@ import {
   supplierPermissionSetsEqual,
   saveEmployeeSupplierPermissions,
 } from '@/src/lib/permissions/employeeSupplierPermissions';
+import {
+  fetchEmployeeCustomerPermissions,
+  customerPermissionSetsEqual,
+  saveEmployeeCustomerPermissions,
+} from '@/src/lib/permissions/employeeCustomerPermissions';
 import {
   fetchEmployeeFinancePermissions,
   financePermissionSetsEqual,
@@ -183,6 +189,10 @@ import {
   interBranchRequestPermissionSetsEqual,
   saveEmployeeInterBranchRequestPermissions,
 } from '@/src/lib/permissions/employeeInterBranchRequestPermissions';
+import { applyDefaultPermissionsForRoles } from '@/src/lib/permissions/applyRoleDefaultPermissions';
+import { resolveEmployeeDashboardRoles } from '@/src/lib/permissions/employeeUserRoles';
+import { rolesHaveDefaultTemplates } from '@/src/lib/permissions/roleDefaultPermissions';
+import type { UserRole } from '@/src/types';
 import {
   ALL_ORDER_PERMISSIONS_GRANTED,
   type OrderPermissionSet,
@@ -207,6 +217,10 @@ import {
   ALL_SUPPLIER_PERMISSIONS_GRANTED,
   type SupplierPermissionSet,
 } from '@/src/lib/permissions/supplierPermissions';
+import {
+  ALL_CUSTOMER_PERMISSIONS_DENIED,
+  type CustomerPermissionSet,
+} from '@/src/lib/permissions/customerPermissions';
 import {
   ALL_FINANCE_PERMISSIONS_GRANTED,
   type FinancePermissionSet,
@@ -697,7 +711,7 @@ function emptyProfileState(): EmployeeFullProfile {
 export default function EmployeeDetailPage() {
   const { employeeId: routeParam } = useParams<{ employeeId: string }>();
   const navigate = useNavigate();
-  const { employeeName, session, addAuditLog, employeeId: sessionEmployeeId, refreshWarehouseScope, refreshOrderPermissions, refreshProductPermissions, refreshMaterialPermissions, refreshWarehousePermissions, refreshProductionRequestPermissions, refreshPurchaseOrderPermissions, refreshInterBranchRequestPermissions, refreshLogisticsPermissions, refreshSupplierPermissions, refreshFinancePermissions, refreshEmployeesPermissions, refreshAgentAnalyticsPermissions, refreshReportsPermissions, refreshSettingsPermissions } = useAppContext();
+  const { employeeName, session, addAuditLog, employeeId: sessionEmployeeId, refreshWarehouseScope, refreshOrderPermissions, refreshProductPermissions, refreshMaterialPermissions, refreshWarehousePermissions, refreshProductionRequestPermissions, refreshPurchaseOrderPermissions, refreshInterBranchRequestPermissions, refreshLogisticsPermissions, refreshSupplierPermissions, refreshCustomerPermissions, refreshFinancePermissions, refreshEmployeesPermissions, refreshAgentAnalyticsPermissions, refreshReportsPermissions, refreshSettingsPermissions } = useAppContext();
   const employeesModulePerms = useEmployeesPermissions();
   const [employee, setEmployee] = useState<EmployeePerfRow | null | undefined>(undefined);
   const [profile, setProfile] = useState<EmployeeFullProfile | null>(null);
@@ -885,6 +899,10 @@ export default function EmployeeDetailPage() {
   const [orderPermError, setOrderPermError] = useState<string | null>(null);
   const [orderPermSaveSuccess, setOrderPermSaveSuccess] = useState(false);
 
+  const [roleDefaultsApplying, setRoleDefaultsApplying] = useState(false);
+  const [roleDefaultsMessage, setRoleDefaultsMessage] = useState<string | null>(null);
+  const [roleDefaultsError, setRoleDefaultsError] = useState<string | null>(null);
+
   const [productPermDraft, setProductPermDraft] = useState<ProductPermissionSet>({ ...ALL_PRODUCT_PERMISSIONS_GRANTED });
   const [productPermSaved, setProductPermSaved] = useState<ProductPermissionSet>({ ...ALL_PRODUCT_PERMISSIONS_GRANTED });
   const [productPermLoading, setProductPermLoading] = useState(false);
@@ -919,6 +937,13 @@ export default function EmployeeDetailPage() {
   const [supplierPermSaving, setSupplierPermSaving] = useState(false);
   const [supplierPermError, setSupplierPermError] = useState<string | null>(null);
   const [supplierPermSaveSuccess, setSupplierPermSaveSuccess] = useState(false);
+
+  const [customerPermDraft, setCustomerPermDraft] = useState<CustomerPermissionSet>({ ...ALL_CUSTOMER_PERMISSIONS_DENIED });
+  const [customerPermSaved, setCustomerPermSaved] = useState<CustomerPermissionSet>({ ...ALL_CUSTOMER_PERMISSIONS_DENIED });
+  const [customerPermLoading, setCustomerPermLoading] = useState(false);
+  const [customerPermSaving, setCustomerPermSaving] = useState(false);
+  const [customerPermError, setCustomerPermError] = useState<string | null>(null);
+  const [customerPermSaveSuccess, setCustomerPermSaveSuccess] = useState(false);
 
   const [financePermDraft, setFinancePermDraft] = useState<FinancePermissionSet>({ ...ALL_FINANCE_PERMISSIONS_GRANTED });
   const [financePermSaved, setFinancePermSaved] = useState<FinancePermissionSet>({ ...ALL_FINANCE_PERMISSIONS_GRANTED });
@@ -2412,6 +2437,33 @@ export default function EmployeeDetailPage() {
   useEffect(() => {
     if (!employee?.id) return;
     let cancelled = false;
+    setCustomerPermLoading(true);
+    setCustomerPermError(null);
+    setCustomerPermSaveSuccess(false);
+    void (async () => {
+      try {
+        const perms = await fetchEmployeeCustomerPermissions(employee.id);
+        if (!cancelled) {
+          setCustomerPermDraft(perms);
+          setCustomerPermSaved(perms);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setCustomerPermError(e instanceof Error ? e.message : 'Failed to load permissions');
+          const fallback = { ...ALL_CUSTOMER_PERMISSIONS_DENIED };
+          setCustomerPermDraft(fallback);
+          setCustomerPermSaved(fallback);
+        }
+      } finally {
+        if (!cancelled) setCustomerPermLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [employee?.id]);
+
+  useEffect(() => {
+    if (!employee?.id) return;
+    let cancelled = false;
     setFinancePermLoading(true);
     setFinancePermError(null);
     setFinancePermSaveSuccess(false);
@@ -2625,6 +2677,120 @@ export default function EmployeeDetailPage() {
     return () => { cancelled = true; };
   }, [employee?.id]);
 
+  const reloadAllPermissionDrafts = useCallback(async (employeeId: string) => {
+    const [
+      orders,
+      products,
+      materials,
+      warehouse,
+      productionRequest,
+      purchaseOrder,
+      interBranchRequest,
+      logistics,
+      suppliers,
+      customers,
+      finance,
+      employeesPerms,
+      agentAnalytics,
+      reports,
+      settings,
+    ] = await Promise.all([
+      fetchEmployeeOrderPermissions(employeeId),
+      fetchEmployeeProductPermissions(employeeId),
+      fetchEmployeeMaterialPermissions(employeeId),
+      fetchEmployeeWarehousePermissions(employeeId),
+      fetchEmployeeProductionRequestPermissions(employeeId),
+      fetchEmployeePurchaseOrderPermissions(employeeId),
+      fetchEmployeeInterBranchRequestPermissions(employeeId),
+      fetchEmployeeLogisticsPermissions(employeeId),
+      fetchEmployeeSupplierPermissions(employeeId),
+      fetchEmployeeCustomerPermissions(employeeId),
+      fetchEmployeeFinancePermissions(employeeId),
+      fetchEmployeeEmployeesPermissions(employeeId),
+      fetchEmployeeAgentAnalyticsPermissions(employeeId),
+      fetchEmployeeReportsPermissions(employeeId),
+      fetchEmployeeSettingsPermissions(employeeId),
+    ]);
+    setOrderPermDraft(orders);
+    setOrderPermSaved(orders);
+    setProductPermDraft(products);
+    setProductPermSaved(products);
+    setMaterialPermDraft(materials);
+    setMaterialPermSaved(materials);
+    setWarehousePermDraft(warehouse);
+    setWarehousePermSaved(warehouse);
+    setProductionRequestPermDraft(productionRequest);
+    setProductionRequestPermSaved(productionRequest);
+    setPurchaseOrderPermDraft(purchaseOrder);
+    setPurchaseOrderPermSaved(purchaseOrder);
+    setInterBranchRequestPermDraft(interBranchRequest);
+    setInterBranchRequestPermSaved(interBranchRequest);
+    setLogisticsPermDraft(logistics);
+    setLogisticsPermSaved(logistics);
+    setSupplierPermDraft(suppliers);
+    setSupplierPermSaved(suppliers);
+    setCustomerPermDraft(customers);
+    setCustomerPermSaved(customers);
+    setFinancePermDraft(finance);
+    setFinancePermSaved(finance);
+    setEmployeesPermDraft(employeesPerms);
+    setEmployeesPermSaved(employeesPerms);
+    setAgentAnalyticsPermDraft(agentAnalytics);
+    setAgentAnalyticsPermSaved(agentAnalytics);
+    setReportsPermDraft(reports);
+    setReportsPermSaved(reports);
+    setSettingsPermDraft(settings);
+    setSettingsPermSaved(settings);
+  }, []);
+
+  const handleApplyRoleDefaults = async () => {
+    if (!employee) return;
+    setRoleDefaultsApplying(true);
+    setRoleDefaultsError(null);
+    setRoleDefaultsMessage(null);
+    try {
+      const legacyRole = (employee.loginAccount?.userRole as UserRole | null) ?? null;
+      const { roles } = await resolveEmployeeDashboardRoles(employee.id, legacyRole, employee.role);
+      if (roles.length === 0) {
+        throw new Error('No dashboard role found for this employee. Set a dashboard role or HR role first.');
+      }
+      if (!rolesHaveDefaultTemplates(roles)) {
+        throw new Error(`No permission template is defined for: ${roles.join(', ')}`);
+      }
+      await applyDefaultPermissionsForRoles(employee.id, roles);
+      await reloadAllPermissionDrafts(employee.id);
+      setRoleDefaultsMessage(`Applied default permissions for ${roles.join(' + ')}.`);
+      addAuditLog(
+        'Role default permissions applied',
+        'Employee',
+        `${employee.employeeName} (${employee.employeeId})`,
+      );
+      if (sessionEmployeeId === employee.id) {
+        await Promise.all([
+          refreshOrderPermissions(),
+          refreshProductPermissions(),
+          refreshMaterialPermissions(),
+          refreshWarehousePermissions(),
+          refreshProductionRequestPermissions(),
+          refreshPurchaseOrderPermissions(),
+          refreshInterBranchRequestPermissions(),
+          refreshLogisticsPermissions(),
+          refreshSupplierPermissions(),
+          refreshCustomerPermissions(),
+          refreshFinancePermissions(),
+          refreshEmployeesPermissions(),
+          refreshAgentAnalyticsPermissions(),
+          refreshReportsPermissions(),
+          refreshSettingsPermissions(),
+        ]);
+      }
+    } catch (e) {
+      setRoleDefaultsError(e instanceof Error ? e.message : 'Failed to apply role defaults');
+    } finally {
+      setRoleDefaultsApplying(false);
+    }
+  };
+
   const handleSaveOrderPermissions = async () => {
     if (!employee) return;
     setOrderPermSaving(true);
@@ -2748,6 +2914,24 @@ export default function EmployeeDetailPage() {
       setSupplierPermError(e instanceof Error ? e.message : 'Failed to save permissions');
     } finally {
       setSupplierPermSaving(false);
+    }
+  };
+
+  const handleSaveCustomerPermissions = async () => {
+    if (!employee) return;
+    setCustomerPermSaving(true);
+    setCustomerPermError(null);
+    setCustomerPermSaveSuccess(false);
+    try {
+      await saveEmployeeCustomerPermissions(employee.id, customerPermDraft);
+      setCustomerPermSaved({ ...customerPermDraft });
+      setCustomerPermSaveSuccess(true);
+      addAuditLog('Customer permissions updated', 'Employee', `${employee.employeeName} (${employee.employeeId})`);
+      if (sessionEmployeeId === employee.id) await refreshCustomerPermissions();
+    } catch (e) {
+      setCustomerPermError(e instanceof Error ? e.message : 'Failed to save permissions');
+    } finally {
+      setCustomerPermSaving(false);
     }
   };
 
@@ -6055,66 +6239,32 @@ export default function EmployeeDetailPage() {
       case 'access':
         return (
           <div className="space-y-6">
-            <EmployeesPermissionSection
-              value={employeesPermDraft}
-              savedValue={employeesPermSaved}
-              onChange={(next) => {
-                setEmployeesPermDraft(next);
-                setEmployeesPermSaveSuccess(false);
-                setEmployeesPermError(null);
-              }}
-              onSave={handleSaveEmployeesPermissions}
-              saving={employeesPermSaving}
-              loading={employeesPermLoading}
-              dirty={!employeesPermissionSetsEqual(employeesPermDraft, employeesPermSaved)}
-              saveError={employeesPermError}
-              saveSuccess={employeesPermSaveSuccess}
-            />
-            <AgentAnalyticsPermissionSection
-              value={agentAnalyticsPermDraft}
-              savedValue={agentAnalyticsPermSaved}
-              onChange={(next) => {
-                setAgentAnalyticsPermDraft(next);
-                setAgentAnalyticsPermSaveSuccess(false);
-                setAgentAnalyticsPermError(null);
-              }}
-              onSave={handleSaveAgentAnalyticsPermissions}
-              saving={agentAnalyticsPermSaving}
-              loading={agentAnalyticsPermLoading}
-              dirty={!agentAnalyticsPermissionSetsEqual(agentAnalyticsPermDraft, agentAnalyticsPermSaved)}
-              saveError={agentAnalyticsPermError}
-              saveSuccess={agentAnalyticsPermSaveSuccess}
-            />
-            <ReportsPermissionSection
-              value={reportsPermDraft}
-              savedValue={reportsPermSaved}
-              onChange={(next) => {
-                setReportsPermDraft(next);
-                setReportsPermSaveSuccess(false);
-                setReportsPermError(null);
-              }}
-              onSave={handleSaveReportsPermissions}
-              saving={reportsPermSaving}
-              loading={reportsPermLoading}
-              dirty={!reportsPermissionSetsEqual(reportsPermDraft, reportsPermSaved)}
-              saveError={reportsPermError}
-              saveSuccess={reportsPermSaveSuccess}
-            />
-            <SettingsPermissionSection
-              value={settingsPermDraft}
-              savedValue={settingsPermSaved}
-              onChange={(next) => {
-                setSettingsPermDraft(next);
-                setSettingsPermSaveSuccess(false);
-                setSettingsPermError(null);
-              }}
-              onSave={handleSaveSettingsPermissions}
-              saving={settingsPermSaving}
-              loading={settingsPermLoading}
-              dirty={!settingsPermissionSetsEqual(settingsPermDraft, settingsPermSaved)}
-              saveError={settingsPermError}
-              saveSuccess={settingsPermSaveSuccess}
-            />
+            <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 sm:px-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <p className="text-sm text-gray-600">Hover over a tile for details.</p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="shrink-0"
+                disabled={roleDefaultsApplying}
+                onClick={() => void handleApplyRoleDefaults()}
+              >
+                {roleDefaultsApplying ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                    Applying…
+                  </>
+                ) : (
+                  'Apply role defaults'
+                )}
+              </Button>
+            </div>
+            {roleDefaultsMessage && (
+              <p className="text-sm text-green-700">{roleDefaultsMessage}</p>
+            )}
+            {roleDefaultsError && (
+              <p className="text-sm text-red-600">{roleDefaultsError}</p>
+            )}
             <OrderPermissionSection
               value={orderPermDraft}
               savedValue={orderPermSaved}
@@ -6175,51 +6325,6 @@ export default function EmployeeDetailPage() {
               saveError={warehousePermError}
               saveSuccess={warehousePermSaveSuccess}
             />
-            <LogisticsPermissionSection
-              value={logisticsPermDraft}
-              savedValue={logisticsPermSaved}
-              onChange={(next) => {
-                setLogisticsPermDraft(next);
-                setLogisticsPermSaveSuccess(false);
-                setLogisticsPermError(null);
-              }}
-              onSave={handleSaveLogisticsPermissions}
-              saving={logisticsPermSaving}
-              loading={logisticsPermLoading}
-              dirty={!logisticsPermissionSetsEqual(logisticsPermDraft, logisticsPermSaved)}
-              saveError={logisticsPermError}
-              saveSuccess={logisticsPermSaveSuccess}
-            />
-            <SupplierPermissionSection
-              value={supplierPermDraft}
-              savedValue={supplierPermSaved}
-              onChange={(next) => {
-                setSupplierPermDraft(next);
-                setSupplierPermSaveSuccess(false);
-                setSupplierPermError(null);
-              }}
-              onSave={handleSaveSupplierPermissions}
-              saving={supplierPermSaving}
-              loading={supplierPermLoading}
-              dirty={!supplierPermissionSetsEqual(supplierPermDraft, supplierPermSaved)}
-              saveError={supplierPermError}
-              saveSuccess={supplierPermSaveSuccess}
-            />
-            <FinancePermissionSection
-              value={financePermDraft}
-              savedValue={financePermSaved}
-              onChange={(next) => {
-                setFinancePermDraft(next);
-                setFinancePermSaveSuccess(false);
-                setFinancePermError(null);
-              }}
-              onSave={handleSaveFinancePermissions}
-              saving={financePermSaving}
-              loading={financePermLoading}
-              dirty={!financePermissionSetsEqual(financePermDraft, financePermSaved)}
-              saveError={financePermError}
-              saveSuccess={financePermSaveSuccess}
-            />
             <ProductionRequestPermissionSection
               value={productionRequestPermDraft}
               savedValue={productionRequestPermSaved}
@@ -6264,6 +6369,126 @@ export default function EmployeeDetailPage() {
               dirty={!interBranchRequestPermissionSetsEqual(interBranchRequestPermDraft, interBranchRequestPermSaved)}
               saveError={interBranchRequestPermError}
               saveSuccess={interBranchRequestPermSaveSuccess}
+            />
+            <LogisticsPermissionSection
+              value={logisticsPermDraft}
+              savedValue={logisticsPermSaved}
+              onChange={(next) => {
+                setLogisticsPermDraft(next);
+                setLogisticsPermSaveSuccess(false);
+                setLogisticsPermError(null);
+              }}
+              onSave={handleSaveLogisticsPermissions}
+              saving={logisticsPermSaving}
+              loading={logisticsPermLoading}
+              dirty={!logisticsPermissionSetsEqual(logisticsPermDraft, logisticsPermSaved)}
+              saveError={logisticsPermError}
+              saveSuccess={logisticsPermSaveSuccess}
+            />
+            <CustomerPermissionSection
+              value={customerPermDraft}
+              savedValue={customerPermSaved}
+              onChange={(next) => {
+                setCustomerPermDraft(next);
+                setCustomerPermSaveSuccess(false);
+                setCustomerPermError(null);
+              }}
+              onSave={handleSaveCustomerPermissions}
+              saving={customerPermSaving}
+              loading={customerPermLoading}
+              dirty={!customerPermissionSetsEqual(customerPermDraft, customerPermSaved)}
+              saveError={customerPermError}
+              saveSuccess={customerPermSaveSuccess}
+            />
+            <SupplierPermissionSection
+              value={supplierPermDraft}
+              savedValue={supplierPermSaved}
+              onChange={(next) => {
+                setSupplierPermDraft(next);
+                setSupplierPermSaveSuccess(false);
+                setSupplierPermError(null);
+              }}
+              onSave={handleSaveSupplierPermissions}
+              saving={supplierPermSaving}
+              loading={supplierPermLoading}
+              dirty={!supplierPermissionSetsEqual(supplierPermDraft, supplierPermSaved)}
+              saveError={supplierPermError}
+              saveSuccess={supplierPermSaveSuccess}
+            />
+            <FinancePermissionSection
+              value={financePermDraft}
+              savedValue={financePermSaved}
+              onChange={(next) => {
+                setFinancePermDraft(next);
+                setFinancePermSaveSuccess(false);
+                setFinancePermError(null);
+              }}
+              onSave={handleSaveFinancePermissions}
+              saving={financePermSaving}
+              loading={financePermLoading}
+              dirty={!financePermissionSetsEqual(financePermDraft, financePermSaved)}
+              saveError={financePermError}
+              saveSuccess={financePermSaveSuccess}
+            />
+            <EmployeesPermissionSection
+              value={employeesPermDraft}
+              savedValue={employeesPermSaved}
+              onChange={(next) => {
+                setEmployeesPermDraft(next);
+                setEmployeesPermSaveSuccess(false);
+                setEmployeesPermError(null);
+              }}
+              onSave={handleSaveEmployeesPermissions}
+              saving={employeesPermSaving}
+              loading={employeesPermLoading}
+              dirty={!employeesPermissionSetsEqual(employeesPermDraft, employeesPermSaved)}
+              saveError={employeesPermError}
+              saveSuccess={employeesPermSaveSuccess}
+            />
+            <AgentAnalyticsPermissionSection
+              value={agentAnalyticsPermDraft}
+              savedValue={agentAnalyticsPermSaved}
+              onChange={(next) => {
+                setAgentAnalyticsPermDraft(next);
+                setAgentAnalyticsPermSaveSuccess(false);
+                setAgentAnalyticsPermError(null);
+              }}
+              onSave={handleSaveAgentAnalyticsPermissions}
+              saving={agentAnalyticsPermSaving}
+              loading={agentAnalyticsPermLoading}
+              dirty={!agentAnalyticsPermissionSetsEqual(agentAnalyticsPermDraft, agentAnalyticsPermSaved)}
+              saveError={agentAnalyticsPermError}
+              saveSuccess={agentAnalyticsPermSaveSuccess}
+            />
+            <ReportsPermissionSection
+              value={reportsPermDraft}
+              savedValue={reportsPermSaved}
+              onChange={(next) => {
+                setReportsPermDraft(next);
+                setReportsPermSaveSuccess(false);
+                setReportsPermError(null);
+              }}
+              onSave={handleSaveReportsPermissions}
+              saving={reportsPermSaving}
+              loading={reportsPermLoading}
+              dirty={!reportsPermissionSetsEqual(reportsPermDraft, reportsPermSaved)}
+              saveError={reportsPermError}
+              saveSuccess={reportsPermSaveSuccess}
+            />
+            <SettingsPermissionSection
+              value={settingsPermDraft}
+              savedValue={settingsPermSaved}
+              onChange={(next) => {
+                setSettingsPermDraft(next);
+                setSettingsPermSaveSuccess(false);
+                setSettingsPermError(null);
+              }}
+              onSave={handleSaveSettingsPermissions}
+              saving={settingsPermSaving}
+              loading={settingsPermLoading}
+              dirty={!settingsPermissionSetsEqual(settingsPermDraft, settingsPermSaved)}
+              saveError={settingsPermError}
+              saveSuccess={settingsPermSaveSuccess}
             />
           </div>
         );

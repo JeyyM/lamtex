@@ -1,46 +1,31 @@
 import React from 'react';
 import type { LucideIcon } from 'lucide-react';
-import {
-  Activity,
-  DollarSign,
-  Eye,
-  FileText,
-  Loader2,
-  PackageCheck,
-  PlusCircle,
-  ThumbsUp,
-} from 'lucide-react';
+import { Eye, Loader2 } from 'lucide-react';
 import { Button } from '@/src/components/ui/Button';
 import { cn } from '@/src/lib/utils';
 import {
-  PURCHASE_ORDER_PERMISSIONS,
-  type PurchaseOrderPermissionKey,
-  type PurchaseOrderPermissionSet,
-} from '@/src/lib/permissions/purchaseOrderPermissions';
-import { togglePurchaseOrderPermission } from '@/src/lib/permissions/employeePurchaseOrderPermissions';
+  CUSTOMER_PERMISSIONS,
+  type CustomerPermissionKey,
+  type CustomerPermissionSet,
+} from '@/src/lib/permissions/customerPermissions';
+import { toggleCustomerPermission } from '@/src/lib/permissions/employeeCustomerPermissions';
 
-const PERMISSION_ICONS: Record<PurchaseOrderPermissionKey, LucideIcon> = {
+const PERMISSION_ICONS: Record<CustomerPermissionKey, LucideIcon> = {
   pageAccess: Eye,
-  creation: PlusCircle,
-  approvals: ThumbsUp,
-  documents: FileText,
-  activityLog: Activity,
-  receiveOrders: PackageCheck,
-  recordPayments: DollarSign,
 };
 
-export function PurchaseOrderPermissionToggleGrid({
+export function CustomerPermissionToggleGrid({
   value,
   onChange,
   disabled,
 }: {
-  value: PurchaseOrderPermissionSet;
-  onChange: (next: PurchaseOrderPermissionSet) => void;
+  value: CustomerPermissionSet;
+  onChange: (next: CustomerPermissionSet) => void;
   disabled?: boolean;
 }) {
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-      {PURCHASE_ORDER_PERMISSIONS.map((def) => {
+      {CUSTOMER_PERMISSIONS.map((def) => {
         const Icon = PERMISSION_ICONS[def.key];
         const on = value[def.key];
         return (
@@ -50,17 +35,28 @@ export function PurchaseOrderPermissionToggleGrid({
             disabled={disabled}
             title={def.description}
             aria-pressed={on}
-            onClick={() => onChange(togglePurchaseOrderPermission(value, def.key))}
+            onClick={() => onChange(toggleCustomerPermission(value, def.key))}
             className={cn(
               'flex flex-col items-center justify-center gap-2 rounded-xl border-2 px-3 py-4 text-center transition-all min-h-[7.5rem]',
               'focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2',
               disabled && 'opacity-50 cursor-not-allowed',
-              on ? 'border-red-600 bg-red-50 text-red-800 shadow-sm' : 'border-gray-200 bg-gray-50 text-gray-400 hover:border-gray-300 hover:bg-gray-100',
+              on
+                ? 'border-red-600 bg-red-50 text-red-800 shadow-sm'
+                : 'border-gray-200 bg-gray-50 text-gray-400 hover:border-gray-300 hover:bg-gray-100',
             )}
           >
             <Icon className={cn('w-6 h-6', on ? 'text-red-600' : 'text-gray-400')} aria-hidden />
-            <span className={cn('text-xs font-semibold leading-tight', on ? 'text-gray-900' : 'text-gray-500')}>{def.label}</span>
-            <span className={cn('text-[10px] font-medium uppercase tracking-wide', on ? 'text-red-600' : 'text-gray-400')}>{on ? 'On' : 'Off'}</span>
+            <span className={cn('text-xs font-semibold leading-tight', on ? 'text-gray-900' : 'text-gray-500')}>
+              {def.label}
+            </span>
+            <span
+              className={cn(
+                'text-[10px] font-medium uppercase tracking-wide',
+                on ? 'text-red-600' : 'text-gray-400',
+              )}
+            >
+              {on ? 'On' : 'Off'}
+            </span>
           </button>
         );
       })}
@@ -68,9 +64,9 @@ export function PurchaseOrderPermissionToggleGrid({
   );
 }
 
-export function PurchaseOrderPermissionSection({
-  title = 'Purchase Orders',
-  description = 'Control what this employee can see and do on Purchase Order list and detail pages.',
+export function CustomerPermissionSection({
+  title = 'Customers',
+  description = 'Control access to the Customers list and customer detail pages.',
   value,
   savedValue,
   onChange,
@@ -83,9 +79,9 @@ export function PurchaseOrderPermissionSection({
 }: {
   title?: string;
   description?: string;
-  value: PurchaseOrderPermissionSet;
-  savedValue: PurchaseOrderPermissionSet;
-  onChange: (next: PurchaseOrderPermissionSet) => void;
+  value: CustomerPermissionSet;
+  savedValue: CustomerPermissionSet;
+  onChange: (next: CustomerPermissionSet) => void;
   onSave: () => void | Promise<void>;
   saving?: boolean;
   loading?: boolean;
@@ -101,16 +97,33 @@ export function PurchaseOrderPermissionSection({
           <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
           <p className="text-sm text-gray-500 mt-1">{description}</p>
         </div>
-        <Button type="button" variant="primary" size="sm" className="shrink-0" disabled={!isDirty || saving || loading} onClick={() => void onSave()}>
-          {saving ? (<><Loader2 className="w-4 h-4 animate-spin mr-2" />Saving…</>) : 'Save permissions'}
+        <Button
+          type="button"
+          variant="primary"
+          size="sm"
+          className="shrink-0"
+          disabled={!isDirty || saving || loading}
+          onClick={() => void onSave()}
+        >
+          {saving ? (
+            <>
+              <Loader2 className="w-4 h-4 animate-spin mr-2" />
+              Saving…
+            </>
+          ) : (
+            'Save permissions'
+          )}
         </Button>
       </div>
       <div className="p-4 sm:p-6">
         {loading ? (
-          <div className="flex items-center justify-center gap-2 py-12 text-sm text-gray-500"><Loader2 className="w-5 h-5 animate-spin text-red-500" />Loading permissions…</div>
+          <div className="flex items-center justify-center gap-2 py-12 text-sm text-gray-500">
+            <Loader2 className="w-5 h-5 animate-spin text-red-500" />
+            Loading permissions…
+          </div>
         ) : (
           <>
-            <PurchaseOrderPermissionToggleGrid value={value} onChange={onChange} disabled={saving} />
+            <CustomerPermissionToggleGrid value={value} onChange={onChange} disabled={saving} />
             {saveError && <p className="mt-4 text-sm text-red-600">{saveError}</p>}
             {saveSuccess && !saveError && <p className="mt-4 text-sm text-green-700">Permissions saved.</p>}
           </>

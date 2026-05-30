@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
+import { useCustomerPermissions } from '@/src/lib/permissions/customerPermissions';
+import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
@@ -136,6 +138,7 @@ export function CustomerDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { addAuditLog } = useAppContext();
+  const customerPerms = useCustomerPermissions();
 
   const [customer, setCustomer] = useState<CustomerDetail | null>(null);
   const [orders, setOrders] = useState<OrderRow[]>([]);
@@ -382,6 +385,10 @@ export function CustomerDetailPage() {
   };
 
   // ── Loading / Not Found guards ────────────────────────────────────────────
+
+  if (!customerPerms.pageAccess) {
+    return <ModuleAccessDenied moduleName="Customers" />;
+  }
 
   if (loading) {
     return (

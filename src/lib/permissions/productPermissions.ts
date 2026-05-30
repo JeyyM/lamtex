@@ -15,7 +15,8 @@ export type ProductPermissionKey =
   | 'productCreation'
   | 'priceModification'
   | 'dataAndStatistics'
-  | 'activityLog';
+  | 'activityLog'
+  | 'productionRequestsHistory';
 
 export interface ProductPermissionDef {
   key: ProductPermissionKey;
@@ -71,6 +72,11 @@ export const PRODUCT_PERMISSIONS: readonly ProductPermissionDef[] = [
     key: 'activityLog',
     label: 'Activity Log',
     description: 'See the product activity log on family pages.',
+  },
+  {
+    key: 'productionRequestsHistory',
+    label: 'Production Requests History',
+    description: 'View production request records linked to a product family.',
   },
 ] as const;
 

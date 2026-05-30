@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { BarChart3, CalendarRange, Download, Loader2, RefreshCw, Target, TrendingUp, X } from 'lucide-react';
 import { useAppContext } from '@/src/store/AppContext';
 import { useAgentAnalyticsPermissions } from '@/src/lib/permissions/agentAnalyticsPermissions';
+import { PermissionGate } from '@/src/components/permissions/PermissionGate';
 import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
 import {
   AgentAnalyticsBundle,
@@ -39,7 +40,7 @@ const TAB_ORDER: Array<{ id: Tab; label: string; icon: React.ComponentType<{ cla
 ];
 
 const AgentAnalyticsPage: React.FC = () => {
-  const { role, session, employeeName } = useAppContext();
+  const { session, employeeName } = useAppContext();
   const perms = useAgentAnalyticsPermissions();
 
   const [tab, setTab] = useState<Tab>('overview');
@@ -337,7 +338,7 @@ const AgentAnalyticsPage: React.FC = () => {
           branchId={analyticsBranchId}
           onBranchChange={setAnalyticsBranchId}
           headerActions={
-            role === 'Executive' && tab === 'trends' ? (
+            <PermissionGate when={perms.pageAccess && tab === 'trends'}>
               <button
                 type="button"
                 onClick={() => setManageQuotasOpen(true)}
@@ -346,14 +347,14 @@ const AgentAnalyticsPage: React.FC = () => {
                 <Target className="w-4 h-4 shrink-0" />
                 Manage Quotas
               </button>
-            ) : undefined
+            </PermissionGate>
           }
         />
       )}
 
       {periodModal}
 
-      {role === 'Executive' && branches.length > 0 && (
+      <PermissionGate when={perms.pageAccess && branches.length > 0}>
         <ManageBranchQuotasModal
           open={manageQuotasOpen}
           onClose={() => setManageQuotasOpen(false)}
@@ -365,7 +366,7 @@ const AgentAnalyticsPage: React.FC = () => {
             void load();
           }}
         />
-      )}
+      </PermissionGate>
 
       {/* Body */}
       {loading || !bundle ? (

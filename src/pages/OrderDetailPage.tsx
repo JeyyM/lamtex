@@ -712,10 +712,10 @@ export function OrderDetailPage() {
   }, [isEditing, branchIdForAgents, agentIdForAgentList]);
 
   useEffect(() => {
-    if (!isEditing || !editedOrder || isExecutiveUser || !employeeId) return;
+    if (!isEditing || !editedOrder || !perms.agentBranchSelection || !employeeId) return;
     if (editedOrder.agentId?.trim()) return;
     patchEditedOrder({ agentId: employeeId, agent: employeeName || editedOrder.agent });
-  }, [isEditing, editedOrder, isExecutiveUser, employeeId, employeeName]);
+  }, [isEditing, editedOrder, perms.agentBranchSelection, employeeId, employeeName]);
 
   useEffect(() => {
     if (!isEditing || !order) return;
@@ -1384,7 +1384,7 @@ export function OrderDetailPage() {
       ...order,
       items: order.items.map((item) => ({ ...item })),
     };
-    if (!isExecutiveUser && employeeId) {
+    if (!perms.agentBranchSelection && employeeId) {
       if (!next.agentId?.trim()) {
         next = { ...next, agentId: employeeId, agent: employeeName || next.agent };
       }
@@ -3404,7 +3404,7 @@ export function OrderDetailPage() {
 
   const allPaymentStatuses = ['Unbilled', 'Invoiced', 'Partially Paid', 'Paid', 'Overdue', 'On Credit'];
 
-  const canUseLogisticsUi = !['Agent', 'Driver', 'Customer'].includes(role ?? '');
+  const canUseLogisticsUi = perms.scheduling || perms.deliveries;
   const LOGISTICS_FLOW_STEPS: OrderStatus[] = [
     'Approved',
     'Scheduled',

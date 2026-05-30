@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { NavLink, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { useOrderPermissions } from '@/src/lib/permissions/orderPermissions';
@@ -10,6 +10,7 @@ import { usePurchaseOrderPermissions } from '@/src/lib/permissions/purchaseOrder
 import { useInterBranchRequestPermissions } from '@/src/lib/permissions/interBranchRequestPermissions';
 import { useLogisticsPermissions } from '@/src/lib/permissions/logisticsPermissions';
 import { useSupplierPermissions } from '@/src/lib/permissions/supplierPermissions';
+import { useCustomerPermissions } from '@/src/lib/permissions/customerPermissions';
 import { useFinancePermissions } from '@/src/lib/permissions/financePermissions';
 import { useEmployeesPermissions } from '@/src/lib/permissions/employeesPermissions';
 import { useAgentAnalyticsPermissions } from '@/src/lib/permissions/agentAnalyticsPermissions';
@@ -21,7 +22,6 @@ import {
   ShoppingCart, 
   Truck, 
   Users, 
-  FileText, 
   Settings,
   Box,
   CreditCard,
@@ -33,12 +33,16 @@ import {
   ChevronRight,
   X,
   LogOut,
+  Factory,
+  ClipboardList,
+  GitBranch,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/src/lib/utils';
 import lamtexLogo from '../../assets/Lamtex Logo.png';
 
 export function Sidebar() {
-  const { role, isSidebarCollapsed, setIsSidebarCollapsed, isMobileMenuOpen, setIsMobileMenuOpen, session, signOut } = useAppContext();
+  const { role, profileLoaded, isSidebarCollapsed, setIsSidebarCollapsed, isMobileMenuOpen, setIsMobileMenuOpen, session, signOut } = useAppContext();
   const orderPerms = useOrderPermissions();
   const productPerms = useProductPermissions();
   const materialPerms = useMaterialPermissions();
@@ -48,6 +52,7 @@ export function Sidebar() {
   const interBranchRequestPerms = useInterBranchRequestPermissions();
   const logisticsPerms = useLogisticsPermissions();
   const supplierPerms = useSupplierPermissions();
+  const customerPerms = useCustomerPermissions();
   const financePerms = useFinancePermissions();
   const employeesPerms = useEmployeesPermissions();
   const agentAnalyticsPerms = useAgentAnalyticsPermissions();
@@ -56,53 +61,107 @@ export function Sidebar() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  const navItems = [
-    { name: 'Dashboard', path: '/', icon: LayoutDashboard, roles: ['Executive', 'Warehouse', 'Logistics', 'Agent', 'Finance', 'Production', 'Manager', 'Driver'] },
-    { name: 'Orders', path: '/orders', icon: ShoppingCart, roles: ['Executive', 'Agent', 'Warehouse', 'Logistics', 'Finance', 'Manager'] },
-    { name: 'Products', path: '/products', icon: Package, roles: ['Executive', 'Warehouse', 'Agent', 'Production', 'Manager'] },
-    { name: 'Raw Materials', path: '/materials', icon: Box, roles: ['Executive', 'Warehouse', 'Production', 'Manager'] },
-    {
-      name: 'Warehouse',
-      path: '/warehouse',
-      icon: Warehouse,
-      roles: ['Executive', 'Warehouse', 'Manager'],
-      alsoActiveOn: ['/production-requests', '/purchase-orders', '/inter-branch-requests'],
-    },
-    { name: 'Logistics', path: '/logistics', icon: Truck, roles: ['Executive', 'Logistics', 'Manager'] },
-    { name: 'Chats', path: '/chats', icon: MessageCircle, roles: ['Executive', 'Warehouse', 'Logistics', 'Agent', 'Finance', 'Production', 'Manager'] },
-    { name: 'Customers', path: '/customers', icon: Users, roles: ['Executive', 'Agent', 'Manager'] },
-    { name: 'Suppliers', path: '/suppliers', icon: Truck, roles: ['Executive', 'Procurement', 'Manager'], alsoActiveOn: ['/suppliers'] },
-    { name: 'Finance', path: '/finance', icon: CreditCard, roles: ['Executive', 'Finance', 'Agent', 'Manager'] },
-    { name: 'Employees', path: '/employees', icon: Users, roles: ['Executive', 'Manager'], alsoActiveOn: ['/employees'] },
-    { name: 'Agent Analytics', path: '/agents', icon: UserCheck, roles: ['Executive', 'Manager'], alsoActiveOn: ['/agents'] },
-    { name: 'Reports', path: '/reports', icon: BarChart3, roles: ['Executive', 'Finance', 'Manager'], alsoActiveOn: ['/reports'] },
-    // { name: 'Forecasts', path: '/forecasts', icon: LineChart, roles: ['Executive', 'Finance', 'Manager'] }, // hidden for now
-    { name: 'Settings', path: '/settings', icon: Settings, roles: ['Executive', 'Warehouse', 'Logistics', 'Agent', 'Driver', 'Finance', 'Production', 'Manager', 'Procurement'], alsoActiveOn: ['/settings'] },
-  ];
+  type NavItem = {
+    name: string;
+    path: string;
+    icon: LucideIcon;
+    alsoActiveOn?: string[];
+  };
 
-  const filteredNav = navItems.filter(item => {
-    if (!item.roles.includes(role)) return false;
-    if (item.path === '/orders' && !orderPerms.pageAccess) return false;
-    if (item.path === '/products' && !productPerms.pageAccess) return false;
-    if (item.path === '/materials' && !materialPerms.pageAccess) return false;
-    if (
-      item.path === '/warehouse' &&
-      !warehousePerms.pageAccess &&
-      !productionRequestPerms.pageAccess &&
-      !purchaseOrderPerms.pageAccess &&
-      !interBranchRequestPerms.pageAccess
-    ) {
-      return false;
-    }
-    if (item.path === '/logistics' && !logisticsPerms.pageAccess) return false;
-    if (item.path === '/suppliers' && !supplierPerms.pageAccess) return false;
-    if (item.path === '/finance' && !financePerms.pageAccess) return false;
-    if (item.path === '/employees' && !employeesPerms.pageAccess) return false;
-    if (item.path === '/agents' && !agentAnalyticsPerms.pageAccess) return false;
-    if (item.path === '/reports' && !reportsPerms.pageAccess) return false;
-    if (item.path === '/settings' && !hasAnySettingsTabAccess(settingsPerms)) return false;
-    return true;
-  });
+  const filteredNav = useMemo(() => {
+    const isVisible = (path: string): boolean => {
+      switch (path) {
+        case '/':
+          return true;
+        case '/orders':
+          return orderPerms.pageAccess;
+        case '/products':
+          return productPerms.pageAccess;
+        case '/materials':
+          return materialPerms.pageAccess;
+        case '/warehouse':
+          return warehousePerms.pageAccess;
+        case '/production-requests':
+          return productionRequestPerms.pageAccess;
+        case '/purchase-orders':
+          return purchaseOrderPerms.pageAccess;
+        case '/inter-branch-requests':
+          return interBranchRequestPerms.pageAccess;
+        case '/logistics':
+          return logisticsPerms.pageAccess;
+        case '/chats':
+          return true;
+        case '/customers':
+          return customerPerms.pageAccess;
+        case '/suppliers':
+          return supplierPerms.pageAccess;
+        case '/finance':
+          return financePerms.pageAccess;
+        case '/employees':
+          return employeesPerms.pageAccess;
+        case '/agents':
+          return agentAnalyticsPerms.pageAccess;
+        case '/reports':
+          return reportsPerms.pageAccess;
+        case '/settings':
+          return hasAnySettingsTabAccess(settingsPerms);
+        default:
+          return true;
+      }
+    };
+
+    const core: NavItem[] = [
+      { name: 'Dashboard', path: '/', icon: LayoutDashboard },
+      { name: 'Orders', path: '/orders', icon: ShoppingCart },
+      { name: 'Products', path: '/products', icon: Package },
+      { name: 'Raw Materials', path: '/materials', icon: Box },
+    ].filter((item) => isVisible(item.path));
+
+    const warehouseBlock: NavItem[] = warehousePerms.pageAccess
+      ? [
+          {
+            name: 'Warehouse',
+            path: '/warehouse',
+            icon: Warehouse,
+            alsoActiveOn: ['/production-requests', '/purchase-orders', '/inter-branch-requests'],
+          },
+        ]
+      : [
+          { name: 'Production Requests', path: '/production-requests', icon: Factory },
+          { name: 'Purchase Orders', path: '/purchase-orders', icon: ClipboardList },
+          { name: 'Inter-branch Requests', path: '/inter-branch-requests', icon: GitBranch },
+        ].filter((item) => isVisible(item.path));
+
+    const tail: NavItem[] = [
+      { name: 'Logistics', path: '/logistics', icon: Truck },
+      { name: 'Chats', path: '/chats', icon: MessageCircle },
+      { name: 'Customers', path: '/customers', icon: Users },
+      { name: 'Suppliers', path: '/suppliers', icon: Truck, alsoActiveOn: ['/suppliers'] },
+      { name: 'Finance', path: '/finance', icon: CreditCard },
+      { name: 'Employees', path: '/employees', icon: Users, alsoActiveOn: ['/employees'] },
+      { name: 'Agent Analytics', path: '/agents', icon: UserCheck, alsoActiveOn: ['/agents'] },
+      { name: 'Reports', path: '/reports', icon: BarChart3, alsoActiveOn: ['/reports'] },
+      { name: 'Settings', path: '/settings', icon: Settings, alsoActiveOn: ['/settings'] },
+    ].filter((item) => isVisible(item.path));
+
+    return [...core, ...warehouseBlock, ...tail];
+  }, [
+    orderPerms.pageAccess,
+    productPerms.pageAccess,
+    materialPerms.pageAccess,
+    warehousePerms.pageAccess,
+    productionRequestPerms.pageAccess,
+    purchaseOrderPerms.pageAccess,
+    interBranchRequestPerms.pageAccess,
+    logisticsPerms.pageAccess,
+    customerPerms.pageAccess,
+    supplierPerms.pageAccess,
+    financePerms.pageAccess,
+    employeesPerms.pageAccess,
+    agentAnalyticsPerms.pageAccess,
+    reportsPerms.pageAccess,
+    settingsPerms,
+  ]);
 
   return (
     <>
@@ -168,8 +227,15 @@ export function Sidebar() {
         </div>
       
       <div className="flex-1 overflow-y-auto py-4">
-        <nav className="space-y-1 px-3">
-          {filteredNav.map((item) => (
+        <nav className="space-y-1 px-3" aria-busy={!profileLoaded}>
+          {!profileLoaded ? (
+            <div className="space-y-2 px-1 py-2" aria-hidden="true">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="h-10 rounded-lg bg-gray-100 animate-pulse" />
+              ))}
+            </div>
+          ) : (
+            filteredNav.map((item) => (
             <NavLink
               key={item.name}
               to={item.path}
@@ -195,7 +261,8 @@ export function Sidebar() {
                 isSidebarCollapsed && "lg:hidden"
               )}>{item.name}</span>
             </NavLink>
-          ))}
+            ))
+          )}
         </nav>
       </div>
 

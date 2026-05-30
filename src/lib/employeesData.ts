@@ -2,7 +2,9 @@
  * Employees + role-aware performance from Supabase.
  */
 import { supabase } from '@/src/lib/supabase';
+import type { UserRole } from '@/src/types';
 import type { EmployeeRole, EmployeeStatus } from '@/src/types/employee';
+import { isExecutiveDashboardRole } from '@/src/lib/resolveDashboardRole';
 
 export type EmployeeBase = {
   id: string;
@@ -312,6 +314,7 @@ type EmployeeRow = {
   employee_id: string;
   employee_name: string;
   role: EmployeeRole | null;
+  user_role: UserRole | null;
   department: string | null;
   branch_id: string | null;
   status: EmployeeStatus | null;
@@ -342,10 +345,17 @@ export async function fetchBranchOptions(): Promise<BranchOption[]> {
   return ((data ?? []) as BranchOption[]).filter((b) => !!b.name);
 }
 
-const EMPLOYEE_LIST_SELECT = `id, employee_id, employee_name, role, department, branch_id, status,
+const EMPLOYEE_LIST_SELECT = `id, employee_id, employee_name, role, user_role, department, branch_id, status,
        profile_photo, join_date, tenure_months, email, phone,
        branches(id, name),
        employee_compensation(commission_rate, commission_tier)`;
+
+/** Rows shown in the employees directory (excludes machine workers and executives). */
+function isEmployeeDirectoryRow(row: EmployeeRow): boolean {
+  if (row.role === ('Machine Worker' as EmployeeRole)) return false;
+  if (isExecutiveDashboardRole(row.user_role)) return false;
+  return true;
+}
 
 function isEmployeeRecordUuid(param: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
@@ -469,7 +479,7 @@ export async function fetchEmployeesWithPerformance(): Promise<EmployeePerfRow[]
     .order('employee_name');
   if (error) throw error;
   const rows = (data ?? []) as EmployeeRow[];
-  const kept = rows.filter((r) => r.role !== ('Machine Worker' as EmployeeRole));
+  const kept = rows.filter(isEmployeeDirectoryRow);
   const maps = await loadAggregateMapsForEmployeeRows(kept);
   return kept.map((row) => mapEmployeeRowToPerf(row, maps));
 }
@@ -488,7 +498,7 @@ export async function fetchEmployeeWithPerformanceByIdentifier(
   if (error) throw error;
   if (!data) return null;
   const row = data as EmployeeRow;
-  if (row.role === ('Machine Worker' as EmployeeRole)) return null;
+  if (!isEmployeeDirectoryRow(row)) return null;
   const maps = await loadAggregateMapsForEmployeeRows([row]);
   return mapEmployeeRowToPerf(row, maps);
 }

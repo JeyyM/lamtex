@@ -1,4 +1,5 @@
 import { supabase } from '@/src/lib/supabase';
+import { resolveEmployeePermissionsWithRoleFallback } from './employeePermissionRoleFallback';
 import {
   ALL_PURCHASE_ORDER_PERMISSIONS_GRANTED,
   PURCHASE_ORDER_PERMISSIONS,
@@ -36,21 +37,13 @@ export function serializePurchaseOrderPermissionSet(
 export async function fetchEmployeePurchaseOrderPermissions(
   employeeId: string,
 ): Promise<PurchaseOrderPermissionSet> {
-  const id = employeeId.trim();
-  if (!id) return { ...ALL_PURCHASE_ORDER_PERMISSIONS_GRANTED };
-
-  const { data, error } = await supabase
-    .from('employee_purchase_order_permissions')
-    .select('permissions')
-    .eq('employee_id', id)
-    .maybeSingle();
-
-  if (error) {
-    if (import.meta.env.DEV) console.warn('[employeePurchaseOrderPermissions] fetch', error.message);
-    return { ...ALL_PURCHASE_ORDER_PERMISSIONS_GRANTED };
-  }
-  if (!data?.permissions) return { ...ALL_PURCHASE_ORDER_PERMISSIONS_GRANTED };
-  return normalizePurchaseOrderPermissionSet(data.permissions);
+  return resolveEmployeePermissionsWithRoleFallback(
+    employeeId,
+    'employee_purchase_order_permissions',
+    normalizePurchaseOrderPermissionSet,
+    { ...ALL_PURCHASE_ORDER_PERMISSIONS_GRANTED },
+    (merged) => merged.purchaseOrder,
+  );
 }
 
 export async function saveEmployeePurchaseOrderPermissions(

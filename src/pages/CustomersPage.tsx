@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { useReportsPermissions } from '@/src/lib/permissions/reportsPermissions';
+import { useCustomerPermissions } from '@/src/lib/permissions/customerPermissions';
+import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { StatKpiCard } from '@/src/components/ui/StatKpiCard';
 import { Badge } from '@/src/components/ui/Badge';
@@ -227,6 +229,7 @@ type ViewMode = 'overview' | 'analytics' | 'payments' | 'products';
 
 export function CustomersPage() {
   const { branch } = useAppContext();
+  const customerPerms = useCustomerPermissions();
   const reportsPerms = useReportsPermissions();
   const navigate = useNavigate();
   const [viewMode, setViewMode] = useState<ViewMode>('overview');
@@ -301,6 +304,10 @@ export function CustomersPage() {
   };
 
   const COLORS = ['#EF4444', '#F59E0B', '#10B981', '#3B82F6', '#8B5CF6'];
+
+  if (!customerPerms.pageAccess) {
+    return <ModuleAccessDenied moduleName="Customers" />;
+  }
 
   return (
     <div className="space-y-6">

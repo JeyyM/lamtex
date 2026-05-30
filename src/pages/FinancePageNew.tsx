@@ -215,12 +215,12 @@ function parseFinanceTab(value: string | null): TabId | null {
 }
 
 export function FinancePageNew() {
-  const { role, employeeName, employeeId, branch, addAuditLog } = useAppContext();
+  const { employeeName, employeeId, employeeDashboardRole, branch, addAuditLog } = useAppContext();
   const perms = useFinancePermissions();
   const canCommissions = perms.commissions;
+  const canFinancePage = perms.pageAccess;
   const employeesPerms = useEmployeesPermissions();
-  const isExecutive = role === 'Executive';
-  const isAgent = role === 'Agent';
+  const isSalesAgentView = employeeDashboardRole === 'Agent';
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [tab, setTabState] = useState<TabId>(() => parseFinanceTab(searchParams.get('tab')) ?? 'outstanding');
@@ -300,14 +300,20 @@ export function FinancePageNew() {
       setTabState(fromUrl);
       return;
     }
-    if (isAgent && canCommissions) setTabState('commissions');
-  }, [searchParams, isAgent, canCommissions, setSearchParams]);
+    if (isSalesAgentView && canCommissions) setTabState('commissions');
+  }, [searchParams, isSalesAgentView, canCommissions, setSearchParams]);
 
   useEffect(() => {
     if (tab === 'commissions' && !canCommissions) {
       setTab('outstanding');
     }
   }, [tab, canCommissions, setTab]);
+
+  useEffect(() => {
+    if (!canFinancePage && (tab === 'outstanding' || tab === 'credit')) {
+      setTab(canCommissions ? 'commissions' : 'outstanding');
+    }
+  }, [tab, canFinancePage, canCommissions, setTab]);
 
   /** Toast auto-dismiss. */
   useEffect(() => {
@@ -356,7 +362,7 @@ export function FinancePageNew() {
     setLoading((s) => ({ ...s, commissions: true }));
     try {
       let rows = await fetchOrdersWithPaymentProofs();
-      if (isAgent && employeeId) {
+      if (isSalesAgentView && employeeId) {
         const branchId = branch?.trim() ? await resolveBranchIdByName(branch) : null;
         const pending = await fetchAgentPendingCommissions(employeeId, branchId);
         rows = mergeAgentPendingIntoCommissionOrders(rows, pending, employeeId, employeeName);
@@ -367,15 +373,15 @@ export function FinancePageNew() {
     } finally {
       setLoading((s) => ({ ...s, commissions: false }));
     }
-  }, [isAgent, employeeId, employeeName, branch]);
+  }, [isSalesAgentView, employeeId, employeeName, branch]);
 
   useEffect(() => {
     void loadMetrics();
     void loadOutstanding();
-    if (canCommissions && (isAgent || parseFinanceTab(searchParams.get('tab')) === 'commissions')) {
+    if (canCommissions && (isSalesAgentView || parseFinanceTab(searchParams.get('tab')) === 'commissions')) {
       void loadOrdersWithProofs();
     }
-  }, [isAgent, canCommissions, loadOrdersWithProofs, searchParams]);
+  }, [isSalesAgentView, canCommissions, loadOrdersWithProofs, searchParams]);
 
   useEffect(() => {
     if (tab === 'credit') void loadCredits();
@@ -652,7 +658,7 @@ export function FinancePageNew() {
     }
   };
 
-  if (!perms.pageAccess) {
+  if (!canFinancePage && !canCommissions) {
     return <ModuleAccessDenied moduleName="Finance" />;
   }
 
@@ -715,12 +721,16 @@ export function FinancePageNew() {
       {/* Tabs */}
       <div className="border-b border-gray-200 overflow-x-auto">
         <div className="flex gap-2 sm:gap-4 min-w-max">
+          {canFinancePage && (
           <TabButton active={tab === 'outstanding'} onClick={() => setTab('outstanding')} icon={<FileText className="w-4 h-4" />}>
             Outstanding Orders
           </TabButton>
+          )}
+          {canFinancePage && (
           <TabButton active={tab === 'credit'} onClick={() => setTab('credit')} icon={<CreditCard className="w-4 h-4" />}>
             Customer Credit
           </TabButton>
+          )}
           {canCommissions && (
           <TabButton
             active={tab === 'commissions'}
@@ -736,7 +746,7 @@ export function FinancePageNew() {
               </div>
               </div>
 
-      {tab === 'outstanding' && (
+      {canFinancePage && tab === 'outstanding' && (
         <Card>
           <CardHeader className="space-y-4">
             <div>
@@ -969,7 +979,7 @@ export function FinancePageNew() {
         </Card>
       )}
 
-      {tab === 'credit' && (
+      {canFinancePage && tab === 'credit' && (
         <Card>
           <CardHeader>
             <CardTitle className="text-lg">Customer credit utilization</CardTitle>
@@ -984,7 +994,7 @@ export function FinancePageNew() {
             ) : (
               <div className="space-y-3">
                 {credits.map((c) => (
-                  <CreditRowCard key={c.customerId} row={c} canEdit={isExecutive} onEdit={() => setCreditEdit(c)} />
+                  <CreditRowCard key={c.customerId} row={c} canEdit={canFinancePage} onEdit={() => setCreditEdit(c)} />
                 ))}
               </div>
             )}
@@ -1248,7 +1258,7 @@ export function FinancePageNew() {
       {commissionModalOrder && canCommissions && (
         <OrderCommissionProofsModal
           order={commissionModalOrder}
-          isExecutive={isExecutive}
+          canReleaseCommissions={canCommissions}
           releasedBy={employeeName || 'Executive'}
           onClose={() => setCommissionModalOrder(null)}
           onAudit={(message) => addAuditLog('Commission released', 'Order', message)}
@@ -1370,7 +1380,7 @@ function Stat(props: { label: string; value: string; className?: string }) {
 
 function OrderCommissionProofsModal(props: {
   order: OrderWithPaymentProofsRow;
-  isExecutive: boolean;
+  canReleaseCommissions: boolean;
   releasedBy: string;
   onClose: () => void;
   onUpdated: () => Promise<void>;
@@ -1420,7 +1430,7 @@ function OrderCommissionProofsModal(props: {
   }, [props.order.orderId]);
 
   const handleMarkAllPaid = async () => {
-    if (!props.isExecutive || commissionSummary.pendingCount === 0) return;
+    if (!props.canReleaseCommissions || commissionSummary.pendingCount === 0) return;
     if (
       !window.confirm(
         `Mark all ${commissionSummary.pendingCount} pending commission(s) as paid out (${formatPeso2(commissionSummary.pending)})?`,
@@ -1450,7 +1460,7 @@ function OrderCommissionProofsModal(props: {
   };
 
   const handleRelease = async (proof: OrderCommissionProofRow) => {
-    if (!props.isExecutive) return;
+    if (!props.canReleaseCommissions) return;
     if (!window.confirm(`Mark commission as paid for this cash payment (${formatPeso(proof.cashAmount)})?`)) return;
     setReleasingId(proof.id);
     try {
@@ -1528,7 +1538,7 @@ function OrderCommissionProofsModal(props: {
               <p className="font-semibold text-green-700 tabular-nums text-base">{formatPeso2(commissionSummary.released)}</p>
             </div>
           </div>
-          {props.isExecutive && commissionSummary.pendingCount > 0 ? (
+          {props.canReleaseCommissions && commissionSummary.pendingCount > 0 ? (
             <Button
               size="sm"
               variant="primary"
@@ -1611,7 +1621,7 @@ function OrderCommissionProofsModal(props: {
                       Commission paid {formatDateTime(proof.commissionPaidAt)}
                       {proof.commissionPaidBy ? ` by ${proof.commissionPaidBy}` : ''}
                     </p>
-                  ) : props.isExecutive ? (
+                  ) : props.canReleaseCommissions ? (
                     <Button
                       size="sm"
                       variant="primary"

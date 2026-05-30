@@ -107,7 +107,6 @@ export function LogisticsPermissionSection({
             <LogisticsPermissionToggleGrid value={value} onChange={onChange} disabled={saving} />
             {saveError && <p className="mt-4 text-sm text-red-600">{saveError}</p>}
             {saveSuccess && !saveError && <p className="mt-4 text-sm text-green-700">Permissions saved.</p>}
-            <p className="mt-4 text-xs text-gray-400">Executives always have full access regardless of these settings. Hover a tile for details.</p>
           </>
         )}
       </div>

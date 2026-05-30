@@ -4,8 +4,8 @@ import type { UserRole } from '@/src/types';
  * Executives always see the full org catalog and inventory listings.
  * Branch selector and warehouse assignment scopes do not restrict them.
  */
-export function executiveHasFullInventoryAccess(role: UserRole): boolean {
-  return role === 'Executive';
+export function executiveHasFullInventoryAccess(isExecutiveUser: boolean): boolean {
+  return isExecutiveUser;
 }
 
 /**
@@ -40,10 +40,10 @@ export function orderCatalogBranch(
  * Executives with no branch selected see aggregate totals; with a branch selected, stock reads stay branch-specific.
  */
 export function effectiveInventoryBranchId(
-  role: UserRole,
+  isExecutiveUser: boolean,
   branch: string | null | undefined,
   resolvedBranchId: string | null,
 ): string | null {
-  if (executiveHasFullInventoryAccess(role) && !branch?.trim()) return null;
+  if (executiveHasFullInventoryAccess(isExecutiveUser) && !branch?.trim()) return null;
   return resolvedBranchId;
 }

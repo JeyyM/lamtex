@@ -1,21 +1,25 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Loader2, MapPin, UserPlus, Eye, EyeOff } from 'lucide-react';
-import type { EmployeeRole } from '@/src/types/employee';
 import { fetchBranchOptions, type BranchOption } from '@/src/lib/employeesData';
 import {
   insertEmployeeDirectoryRow,
   createEmployeeAuthAccount,
   upsertEmployeeEmploymentInfo,
 } from '@/src/lib/employeeProfileMutations';
+import { applyDefaultPermissionsForRoles } from '@/src/lib/permissions/applyRoleDefaultPermissions';
+import { directoryRoleFromDashboardRole } from '@/src/lib/permissions/roleDefaultPermissions';
+import { saveEmployeeUserRoles } from '@/src/lib/permissions/employeeUserRoles';
+import {
+  DashboardRoleMultiSelect,
+  type DashboardRoleAssignment,
+} from '@/src/components/employees/DashboardRoleMultiSelect';
 import { useAppContext } from '@/src/store/AppContext';
 import { useEmployeesPermissions } from '@/src/lib/permissions/employeesPermissions';
 import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
 import { Button } from '@/src/components/ui/Button';
 
-/** Directory `employees.role` (job category in the org); job title is stored in employment `position`. */
-const DEFAULT_DIRECTORY_ROLE: EmployeeRole = 'Sales Agent';
-
+/** Directory `employees.role` follows the primary dashboard role. */
 function humanizeAuthAccountError(code: string | undefined): string {
   switch (code) {
     case 'forbidden':
@@ -58,7 +62,10 @@ export default function EmployeeNewPage() {
   const [joinDate, setJoinDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [branchId, setBranchId] = useState('');
   const [jobTitle, setJobTitle] = useState('');
-  const [dashboardRole, setDashboardRole] = useState<'Agent' | 'Logistics' | 'Warehouse' | 'Driver'>('Agent');
+  const [roleAssignment, setRoleAssignment] = useState<DashboardRoleAssignment>({
+    roles: [],
+    primaryRole: null,
+  });
 
   const [loginPassword, setLoginPassword] = useState('');
   const [loginPasswordConfirm, setLoginPasswordConfirm] = useState('');
@@ -119,16 +126,26 @@ export default function EmployeeNewPage() {
         }
       }
 
+      const primaryRole = roleAssignment.primaryRole;
+      const dashboardRoles = roleAssignment.roles;
+      if (dashboardRoles.length === 0 || !primaryRole) {
+        window.alert('Select at least one app dashboard role.');
+        return;
+      }
+
       const { id: employeeUuid } = await insertEmployeeDirectoryRow({
         employee_id: employeeId,
         employee_name: employeeName,
         email,
-        role: DEFAULT_DIRECTORY_ROLE,
+        role: directoryRoleFromDashboardRole(primaryRole),
         branch_id: branchId || null,
         join_date: joinDate,
         phone: phone || null,
-        user_role: dashboardRole,
+        user_role: primaryRole,
       });
+
+      await saveEmployeeUserRoles(employeeUuid, dashboardRoles, primaryRole);
+      await applyDefaultPermissionsForRoles(employeeUuid, dashboardRoles);
 
       await upsertEmployeeEmploymentInfo(employeeUuid, {
         employment_status: 'Full-time',
@@ -298,20 +315,12 @@ export default function EmployeeNewPage() {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">App dashboard role</label>
-            <select
-              value={dashboardRole}
-              onChange={(e) =>
-                setDashboardRole(e.target.value as 'Agent' | 'Logistics' | 'Warehouse' | 'Driver')
-              }
-              className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
-            >
-              <option value="Agent">Agent</option>
-              <option value="Logistics">Logistics</option>
-              <option value="Warehouse">Warehouse</option>
-              <option value="Driver">Driver</option>
-            </select>
-            <p className="text-xs text-gray-500 mt-1">Used after login (separate from job title).</p>
+            <label className="block text-sm font-medium text-gray-700 mb-1">App dashboard roles</label>
+            <DashboardRoleMultiSelect
+              value={roleAssignment}
+              onChange={setRoleAssignment}
+              disabled={saving}
+            />
           </div>
         </div>
 

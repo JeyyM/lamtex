@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, ReactNode } from 'react';
 import { UserRole, Branch, AuditLog } from '../types';
 import { supabase } from '@/src/lib/supabase';
 import { fetchWarehouseAssignmentIds } from '@/src/lib/warehouseAssignments';
@@ -33,6 +33,9 @@ import {
   fetchEmployeeSupplierPermissions,
 } from '@/src/lib/permissions/employeeSupplierPermissions';
 import {
+  fetchEmployeeCustomerPermissions,
+} from '@/src/lib/permissions/employeeCustomerPermissions';
+import {
   fetchEmployeeFinancePermissions,
 } from '@/src/lib/permissions/employeeFinancePermissions';
 import {
@@ -65,6 +68,10 @@ import {
 } from '@/src/lib/permissions/interBranchRequestPermissions';
 import { ALL_LOGISTICS_PERMISSIONS_GRANTED, type LogisticsPermissionSet } from '@/src/lib/permissions/logisticsPermissions';
 import { ALL_SUPPLIER_PERMISSIONS_GRANTED, type SupplierPermissionSet } from '@/src/lib/permissions/supplierPermissions';
+import {
+  ALL_CUSTOMER_PERMISSIONS_DENIED,
+  type CustomerPermissionSet,
+} from '@/src/lib/permissions/customerPermissions';
 import { ALL_FINANCE_PERMISSIONS_GRANTED, type FinancePermissionSet } from '@/src/lib/permissions/financePermissions';
 import { ALL_EMPLOYEES_PERMISSIONS_GRANTED, type EmployeesPermissionSet } from '@/src/lib/permissions/employeesPermissions';
 import {
@@ -73,6 +80,11 @@ import {
 } from '@/src/lib/permissions/agentAnalyticsPermissions';
 import { ALL_REPORTS_PERMISSIONS_GRANTED, type ReportsPermissionSet } from '@/src/lib/permissions/reportsPermissions';
 import { ALL_SETTINGS_PERMISSIONS_GRANTED, type SettingsPermissionSet } from '@/src/lib/permissions/settingsPermissions';
+import { resolveEmployeeDashboardRoles } from '@/src/lib/permissions/employeeUserRoles';
+import {
+  getStoredActiveDashboardRole,
+  setStoredActiveDashboardRole,
+} from '@/src/lib/selectedDashboardRoleStorage';
 import type { Session } from '@supabase/supabase-js';
 
 interface AppContextType {
@@ -84,6 +96,10 @@ interface AppContextType {
   isExecutiveUser: boolean;
   /** False until employee profile (role/branch) is loaded for the current session. */
   profileLoaded: boolean;
+  /** HR/dashboard role from the employee record (not affected by executive role simulation). */
+  employeeDashboardRole: UserRole | null;
+  /** Dashboard roles assigned to this employee (from employee_user_roles). */
+  assignableDashboardRoles: UserRole[];
   auditLogs: AuditLog[];
   addAuditLog: (action: string, entity: string, details: string) => void;
   isSidebarCollapsed: boolean;
@@ -123,6 +139,8 @@ interface AppContextType {
   refreshLogisticsPermissions: () => Promise<void>;
   supplierPermissions: SupplierPermissionSet | null;
   refreshSupplierPermissions: () => Promise<void>;
+  customerPermissions: CustomerPermissionSet | null;
+  refreshCustomerPermissions: () => Promise<void>;
   financePermissions: FinancePermissionSet | null;
   refreshFinancePermissions: () => Promise<void>;
   employeesPermissions: EmployeesPermissionSet | null;
@@ -143,6 +161,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [isExecutiveUser, setIsExecutiveUser] = useState(false);
   const [profileLoaded, setProfileLoaded] = useState(false);
   const [employeeRole, setEmployeeRole] = useState<UserRole | null>(null);
+  const [assignableDashboardRoles, setAssignableDashboardRoles] = useState<UserRole[]>([]);
   const [employeeBranch, setEmployeeBranch] = useState<Branch | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -165,12 +184,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     useState<InterBranchRequestPermissionSet | null>(null);
   const [logisticsPermissions, setLogisticsPermissions] = useState<LogisticsPermissionSet | null>(null);
   const [supplierPermissions, setSupplierPermissions] = useState<SupplierPermissionSet | null>(null);
+  const [customerPermissions, setCustomerPermissions] = useState<CustomerPermissionSet | null>(null);
   const [financePermissions, setFinancePermissions] = useState<FinancePermissionSet | null>(null);
   const [employeesPermissions, setEmployeesPermissions] = useState<EmployeesPermissionSet | null>(null);
   const [agentAnalyticsPermissions, setAgentAnalyticsPermissions] =
     useState<AgentAnalyticsPermissionSet | null>(null);
   const [reportsPermissions, setReportsPermissions] = useState<ReportsPermissionSet | null>(null);
   const [settingsPermissions, setSettingsPermissions] = useState<SettingsPermissionSet | null>(null);
+  /** True after the first successful profile+permissions hydration for this session. */
+  const profileHydratedRef = useRef(false);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([
     {
       id: '1',
@@ -336,6 +358,20 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }, [employeeId]);
 
+  const refreshCustomerPermissions = useCallback(async () => {
+    if (!employeeId) {
+      setCustomerPermissions(null);
+      return;
+    }
+    try {
+      const perms = await fetchEmployeeCustomerPermissions(employeeId);
+      setCustomerPermissions(perms);
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn('[customer permissions]', e);
+      setCustomerPermissions({ ...ALL_CUSTOMER_PERMISSIONS_DENIED });
+    }
+  }, [employeeId]);
+
   const refreshFinancePermissions = useCallback(async () => {
     if (!employeeId) {
       setFinancePermissions(null);
@@ -417,19 +453,27 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const setRole = useCallback(
     (next: UserRole) => {
-      if (!isExecutiveUser) return;
-      setRoleState(next);
+      if (isExecutiveUser) {
+        setRoleState(next);
+        return;
+      }
+      if (assignableDashboardRoles.length > 1 && assignableDashboardRoles.includes(next)) {
+        setRoleState(next);
+        if (employeeId) setStoredActiveDashboardRole(employeeId, next);
+      }
     },
-    [isExecutiveUser],
+    [isExecutiveUser, assignableDashboardRoles, employeeId],
   );
 
   useEffect(() => {
     if (isExecutiveUser) return;
-    if (employeeRole) setRoleState(employeeRole);
+    if (assignableDashboardRoles.length <= 1 && employeeRole) {
+      setRoleState(employeeRole);
+    }
     if (employeeBranch) {
       setBranchState(employeeBranch);
     }
-  }, [isExecutiveUser, employeeRole, employeeBranch]);
+  }, [isExecutiveUser, employeeRole, employeeBranch, assignableDashboardRoles]);
 
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
@@ -442,7 +486,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, [isExecutiveUser]);
 
   const fetchEmployeeSession = async (userId: string, email: string) => {
-    setProfileLoaded(false);
+    const showBlockingLoad = !profileHydratedRef.current;
+    if (showBlockingLoad) {
+      setProfileLoaded(false);
+    }
     const selectCols = 'id, employee_name, user_role, role, branches(name)';
 
     let row: {
@@ -474,12 +521,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       setEmployeeName(email);
       setEmployeeId(null);
       setEmployeeRole(null);
+      setAssignableDashboardRoles([]);
       setEmployeeBranch(null);
       setIsExecutiveUser(false);
       setOrderPermissions(null);
       setProductPermissions(null);
       setMaterialPermissions(null);
       setProfileLoaded(true);
+      profileHydratedRef.current = true;
       return;
     }
 
@@ -494,15 +543,24 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const effectiveRole = resolveDashboardRole(row.user_role, row.role);
     const executive = isExecutiveDashboardRole(effectiveRole);
 
+    const { roles: assignedRoles, primaryRole } = await resolveEmployeeDashboardRoles(
+      row.id,
+      row.user_role as UserRole | null,
+    );
+    const dashboardRoles =
+      assignedRoles.length > 0 ? assignedRoles : effectiveRole ? [effectiveRole] : [];
+    const primaryDashboardRole = primaryRole ?? effectiveRole;
+
     setEmployeeName(row.employee_name ?? email);
     setEmployeeId(row.id ?? null);
-    setEmployeeRole(effectiveRole);
+    setEmployeeRole(primaryDashboardRole);
+    setAssignableDashboardRoles(dashboardRoles.filter((r) => r !== 'Executive'));
     setEmployeeBranch(branchName);
     setIsExecutiveUser(executive);
 
     if (row.id) {
       try {
-        const [orderPerms, productPerms, materialPerms, whPerms, prPerms, poPerms, ibrPerms, logisticsPerms, supplierPerms, financePerms, employeesPerms, agentAnalyticsPerms, reportsPerms, settingsPerms] = await Promise.all([
+        const [orderPerms, productPerms, materialPerms, whPerms, prPerms, poPerms, ibrPerms, logisticsPerms, supplierPerms, customerPerms, financePerms, employeesPerms, agentAnalyticsPerms, reportsPerms, settingsPerms] = await Promise.all([
           fetchEmployeeOrderPermissions(row.id),
           fetchEmployeeProductPermissions(row.id),
           fetchEmployeeMaterialPermissions(row.id),
@@ -512,6 +570,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           fetchEmployeeInterBranchRequestPermissions(row.id),
           fetchEmployeeLogisticsPermissions(row.id),
           fetchEmployeeSupplierPermissions(row.id),
+          fetchEmployeeCustomerPermissions(row.id),
           fetchEmployeeFinancePermissions(row.id),
           fetchEmployeeEmployeesPermissions(row.id),
           fetchEmployeeAgentAnalyticsPermissions(row.id),
@@ -527,6 +586,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setInterBranchRequestPermissions(ibrPerms);
         setLogisticsPermissions(logisticsPerms);
         setSupplierPermissions(supplierPerms);
+        setCustomerPermissions(customerPerms);
         setFinancePermissions(financePerms);
         setEmployeesPermissions(employeesPerms);
         setAgentAnalyticsPermissions(agentAnalyticsPerms);
@@ -542,6 +602,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setInterBranchRequestPermissions({ ...ALL_INTER_BRANCH_REQUEST_PERMISSIONS_GRANTED });
         setLogisticsPermissions({ ...ALL_LOGISTICS_PERMISSIONS_GRANTED });
         setSupplierPermissions({ ...ALL_SUPPLIER_PERMISSIONS_GRANTED });
+        setCustomerPermissions({ ...ALL_CUSTOMER_PERMISSIONS_DENIED });
         setFinancePermissions({ ...ALL_FINANCE_PERMISSIONS_GRANTED });
         setEmployeesPermissions({ ...ALL_EMPLOYEES_PERMISSIONS_GRANTED });
         setAgentAnalyticsPermissions({ ...ALL_AGENT_ANALYTICS_PERMISSIONS_GRANTED });
@@ -558,6 +619,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       setInterBranchRequestPermissions(null);
       setLogisticsPermissions(null);
       setSupplierPermissions(null);
+      setCustomerPermissions(null);
       setFinancePermissions(null);
       setEmployeesPermissions(null);
       setAgentAnalyticsPermissions(null);
@@ -575,7 +637,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setSelectedBranch(branchName);
       }
     } else {
-      if (effectiveRole) setRoleState(effectiveRole);
+      let activeRole = primaryDashboardRole ?? effectiveRole;
+      if (dashboardRoles.length > 1 && row.id) {
+        const stored = getStoredActiveDashboardRole(row.id);
+        if (stored && dashboardRoles.includes(stored)) activeRole = stored;
+      }
+      if (activeRole) setRoleState(activeRole);
       if (branchName) {
         setBranchState(branchName);
         setSelectedBranch(branchName);
@@ -583,6 +650,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
 
     setProfileLoaded(true);
+    profileHydratedRef.current = true;
   };
 
   useEffect(() => {
@@ -591,9 +659,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       setSessionLoading(false);
       if (s?.user?.email && s.user.id) void fetchEmployeeSession(s.user.id, s.user.email);
       else {
+        profileHydratedRef.current = false;
         setEmployeeName('');
         setEmployeeId(null);
         setEmployeeRole(null);
+        setAssignableDashboardRoles([]);
         setEmployeeBranch(null);
         setIsExecutiveUser(false);
         setOrderPermissions(null);
@@ -605,6 +675,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setInterBranchRequestPermissions(null);
         setLogisticsPermissions(null);
         setSupplierPermissions(null);
+        setCustomerPermissions(null);
         setFinancePermissions(null);
         setEmployeesPermissions(null);
         setAgentAnalyticsPermissions(null);
@@ -614,13 +685,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
       setSession(s);
+      // getSession() handles the first hydrate; token refresh does not change employee data.
+      if (event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED') return;
       if (s?.user?.email && s.user.id) void fetchEmployeeSession(s.user.id, s.user.email);
       else {
+        profileHydratedRef.current = false;
         setEmployeeName('');
         setEmployeeId(null);
         setEmployeeRole(null);
+        setAssignableDashboardRoles([]);
         setEmployeeBranch(null);
         setIsExecutiveUser(false);
         setOrderPermissions(null);
@@ -632,6 +707,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setInterBranchRequestPermissions(null);
         setLogisticsPermissions(null);
         setSupplierPermissions(null);
+        setCustomerPermissions(null);
         setFinancePermissions(null);
         setEmployeesPermissions(null);
         setAgentAnalyticsPermissions(null);
@@ -650,9 +726,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const signOut = async () => {
     await supabase.auth.signOut();
+    profileHydratedRef.current = false;
     setSession(null);
     setEmployeeId(null);
     setEmployeeRole(null);
+    setAssignableDashboardRoles([]);
     setEmployeeBranch(null);
     setIsExecutiveUser(false);
     setProfileLoaded(false);
@@ -667,6 +745,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setInterBranchRequestPermissions(null);
     setLogisticsPermissions(null);
     setSupplierPermissions(null);
+    setCustomerPermissions(null);
     setFinancePermissions(null);
     setEmployeesPermissions(null);
     setAgentAnalyticsPermissions(null);
@@ -688,8 +767,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const warehouseScope = useMemo(
-    () => buildWarehouseAssignmentScope(role, assignedProductIds, assignedMaterialIds),
-    [role, assignedProductIds, assignedMaterialIds],
+    () => buildWarehouseAssignmentScope(isExecutiveUser, role, assignedProductIds, assignedMaterialIds),
+    [isExecutiveUser, role, assignedProductIds, assignedMaterialIds],
   );
 
   return (
@@ -701,6 +780,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setBranch,
         isExecutiveUser,
         profileLoaded,
+        employeeDashboardRole: employeeRole,
+        assignableDashboardRoles,
         auditLogs,
         addAuditLog,
         isSidebarCollapsed,
@@ -737,6 +818,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         refreshLogisticsPermissions,
         supplierPermissions,
         refreshSupplierPermissions,
+        customerPermissions,
+        refreshCustomerPermissions,
         financePermissions,
         refreshFinancePermissions,
         employeesPermissions,

@@ -38,6 +38,7 @@ import { isProductFamilyCatalogHidden, CATALOG_HIDDEN_CLASS } from '../lib/produ
 import { downloadVariantsComparisonWorkbook } from '../lib/productFamilyExport';
 import { useProductPermissions } from '../lib/permissions/productPermissions';
 import { useProductionRequestPermissions } from '../lib/permissions/productionRequestPermissions';
+import { ProductProductionRequestHistoryCard } from '../components/products/ProductProductionRequestHistoryCard';
 import { ModuleAccessDenied } from '../components/permissions/ModuleAccessDenied';
 import {
   DATE_PERIOD_OPTIONS,
@@ -347,6 +348,7 @@ export default function ProductFamilyPage() {
   const [usageChartData, setUsageChartData]     = useState<Record<string, string | number>[]>([]);
   const [usageChartLoading, setUsageChartLoading] = useState(false);
   const [productLogRows, setProductLogRows] = useState<EntityActivityLogRow[]>([]);
+  const [familyViewTab, setFamilyViewTab] = useState<'overview' | 'prHistory'>('overview');
 
   const fetchProductLogs = useCallback(async () => {
     if (!familyId) return;
@@ -362,6 +364,12 @@ export default function ProductFamilyPage() {
   useEffect(() => {
     void fetchProductLogs();
   }, [fetchProductLogs]);
+
+  useEffect(() => {
+    if (familyViewTab === 'prHistory' && !perms.productionRequestsHistory) {
+      setFamilyViewTab('overview');
+    }
+  }, [familyViewTab, perms.productionRequestsHistory]);
 
   // â”€â”€ Fetch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   useEffect(() => {
@@ -1263,6 +1271,38 @@ export default function ProductFamilyPage() {
           )}
         </div>
       </div>
+
+      <div className="border-b border-gray-200">
+        <nav className="-mb-px flex gap-6">
+          <button
+            type="button"
+            onClick={() => setFamilyViewTab('overview')}
+            className={`py-2 px-1 border-b-2 font-medium text-sm ${
+              familyViewTab === 'overview'
+                ? 'border-red-500 text-red-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            Overview
+          </button>
+          {perms.productionRequestsHistory && (
+            <button
+              type="button"
+              onClick={() => setFamilyViewTab('prHistory')}
+              className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                familyViewTab === 'prHistory'
+                  ? 'border-red-500 text-red-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              History
+            </button>
+          )}
+        </nav>
+      </div>
+
+      {familyViewTab === 'overview' && (
+      <>
 
       {/* Family Information Card */}
       <Card>
@@ -2246,6 +2286,21 @@ export default function ProductFamilyPage() {
             </div>
           </CardContent>
         </Card>
+      )}
+
+      </>
+      )}
+
+      {familyViewTab === 'prHistory' && perms.productionRequestsHistory && familyId && (
+        <ProductProductionRequestHistoryCard
+          productId={familyId}
+          active={familyViewTab === 'prHistory'}
+          canOpenDetail={prPerms.pageAccess}
+          canCreate={prPerms.creation}
+          onRequestProduction={handleRequestProduction}
+          creating={requestingProduction}
+          createDisabled={!displayVariant || displayVariant.id.startsWith('NEW-')}
+        />
       )}
 
       {/* Modals */}

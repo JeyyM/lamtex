@@ -1,4 +1,5 @@
 import { supabase } from '@/src/lib/supabase';
+import { resolveEmployeePermissionsWithRoleFallback } from './employeePermissionRoleFallback';
 import {
   ALL_PRODUCT_PERMISSIONS_GRANTED,
   PRODUCT_PERMISSIONS,
@@ -29,21 +30,13 @@ export function serializeProductPermissionSet(permissions: ProductPermissionSet)
 }
 
 export async function fetchEmployeeProductPermissions(employeeId: string): Promise<ProductPermissionSet> {
-  const id = employeeId.trim();
-  if (!id) return { ...ALL_PRODUCT_PERMISSIONS_GRANTED };
-
-  const { data, error } = await supabase
-    .from('employee_product_permissions')
-    .select('permissions')
-    .eq('employee_id', id)
-    .maybeSingle();
-
-  if (error) {
-    if (import.meta.env.DEV) console.warn('[employeeProductPermissions] fetch', error.message);
-    return { ...ALL_PRODUCT_PERMISSIONS_GRANTED };
-  }
-  if (!data?.permissions) return { ...ALL_PRODUCT_PERMISSIONS_GRANTED };
-  return normalizeProductPermissionSet(data.permissions);
+  return resolveEmployeePermissionsWithRoleFallback(
+    employeeId,
+    'employee_product_permissions',
+    normalizeProductPermissionSet,
+    { ...ALL_PRODUCT_PERMISSIONS_GRANTED },
+    (merged) => merged.products,
+  );
 }
 
 export async function saveEmployeeProductPermissions(
