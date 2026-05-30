@@ -8,11 +8,11 @@
     }
   ],
   "functions": {
-    "api/**": {
-      "maxDuration": 30
+    "api/[...path].ts": {
+      "maxDuration": 10
     },
     "api/cron/overdue-payments.ts": {
-      "maxDuration": 60
+      "maxDuration": 10
     }
   },
   "crons": [
