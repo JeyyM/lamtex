@@ -3,16 +3,15 @@
   "outputDirectory": "dist",
   "rewrites": [
     {
-      "source": "/api/(.*)",
-      "destination": "/api"
-    },
-    {
       "source": "/((?!api/).*)",
       "destination": "/index.html"
     }
   ],
   "functions": {
-    "api/index.ts": {
+    "api/health.ts": {
+      "maxDuration": 10
+    },
+    "api/[...path].ts": {
       "maxDuration": 10,
       "includeFiles": "lib/vercel-api.cjs"
     },

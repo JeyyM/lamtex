@@ -1901,7 +1901,8 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
-app.use('/api', (_req, res) => {
+app.use((_req, res) => {
+  if (res.headersSent) return;
   console.warn('[notify-server] unmatched route', _req.method, _req.url);
   res.status(404).json({ error: 'Not found', method: _req.method, path: _req.url });
 });

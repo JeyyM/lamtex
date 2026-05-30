@@ -12,6 +12,5 @@ export default defineConfig({
   sourcemap: false,
   minify: false,
   bundle: true,
-  noExternal: [/.*/],
   outExtension: () => ({ js: '.cjs' }),
 });
