@@ -1,12 +1,24 @@
 {
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
   "rewrites": [
-    {
-      "source": "/api/(.*)",
-      "destination": "/api"
-    },
     {
       "source": "/((?!api/).*)",
       "destination": "/index.html"
+    }
+  ],
+  "functions": {
+    "api/**": {
+      "maxDuration": 30
+    },
+    "api/cron/overdue-payments.ts": {
+      "maxDuration": 60
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/overdue-payments",
+      "schedule": "0 6 * * *"
     }
   ]
 }
