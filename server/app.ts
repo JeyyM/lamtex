@@ -209,6 +209,22 @@ import { readEnv } from './env';
 const app = express();
 app.use(express.json({ limit: '1mb' }));
 
+/** Restore full /api/... path when Vercel rewrites to /api. */
+app.use((req, _res, next) => {
+  if (!process.env.VERCEL) {
+    next();
+    return;
+  }
+  const forwarded =
+    req.headers['x-vercel-forwarded-url'] ??
+    req.headers['x-forwarded-uri'] ??
+    req.headers['x-invoke-path'];
+  if (typeof forwarded === 'string' && forwarded.startsWith('/api')) {
+    req.url = forwarded;
+  }
+  next();
+});
+
 const resendKey = readEnv('RESEND_API_KEY');
 const fromEmail = readEnv('RESEND_FROM_EMAIL', 'onboarding@resend.dev')!;
 /** Until launch: all notification emails go here instead of DB emails. */
