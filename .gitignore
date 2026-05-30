@@ -2,8 +2,7 @@ node_modules/
 build/
 dist/
 coverage/
-api/index.cjs
-api/index.js
+lib/vercel-api.cjs
 .DS_Store
 *.log
 .env*

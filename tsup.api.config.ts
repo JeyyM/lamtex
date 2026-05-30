@@ -1,12 +1,12 @@
 import { defineConfig } from 'tsup';
 
-/** Bundle Express API for Vercel (avoids ESM / type:module runtime crashes). */
+/** Bundle Express API for Vercel (CJS output loaded by api/index.ts). */
 export default defineConfig({
-  entry: { index: 'server/vercel-handler.ts' },
+  entry: { 'vercel-api': 'server/vercel-handler.ts' },
   format: ['cjs'],
   platform: 'node',
   target: 'node20',
-  outDir: 'api',
+  outDir: 'lib',
   clean: false,
   splitting: false,
   sourcemap: false,
