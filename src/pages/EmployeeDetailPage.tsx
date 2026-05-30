@@ -192,6 +192,14 @@ import {
 import { applyDefaultPermissionsForRoles } from '@/src/lib/permissions/applyRoleDefaultPermissions';
 import { resolveEmployeeDashboardRoles } from '@/src/lib/permissions/employeeUserRoles';
 import { rolesHaveDefaultTemplates } from '@/src/lib/permissions/roleDefaultPermissions';
+import {
+  employeeHasAgentDetailTabs,
+  employeeHasTripHistoryDetailTabs,
+  employeeHasWarehouseDetailTabs,
+  employeeUsesDriverTripHistoryView,
+  filterEmployeeDetailTabs,
+  isEmployeeDetailTabVisible,
+} from '@/src/lib/employeeDetailTabs';
 import type { UserRole } from '@/src/types';
 import {
   ALL_ORDER_PERMISSIONS_GRANTED,
@@ -267,10 +275,6 @@ function isWarehouseManager(emp: EmployeePerfRow): emp is WarehouseManagerPerf {
 }
 function isTruckDriver(emp: EmployeePerfRow): emp is TruckDriverPerf {
   return emp.role === 'Truck Driver';
-}
-
-function showTripHistoryTab(emp: EmployeePerfRow): boolean {
-  return isLogisticsManager(emp) || isTruckDriver(emp);
 }
 
 function formatPeso(value: number | null | undefined): string {
@@ -627,11 +631,11 @@ const DETAIL_TABS: { id: DetailTab; label: string; icon: React.ComponentType<{ c
   { id: 'trips', label: 'Trip History', icon: Truck },
   { id: 'requests', label: 'PO & PR', icon: ClipboardList },
   { id: 'catalog', label: 'Catalog access', icon: Package },
-  { id: 'access', label: 'Access', icon: Shield },
   { id: 'skills', label: 'Skills & Training', icon: GraduationCap },
   { id: 'documents', label: 'Documents', icon: Folder },
   { id: 'assets', label: 'Assets', icon: Package },
   { id: 'activity', label: 'Activity', icon: ActivityLineIcon },
+  { id: 'access', label: 'Access', icon: Shield },
 ];
 
 const EMPLOYEE_DOCS_STORAGE_ROOT = 'employee-documents';
@@ -714,6 +718,7 @@ export default function EmployeeDetailPage() {
   const { employeeName, session, addAuditLog, employeeId: sessionEmployeeId, refreshWarehouseScope, refreshOrderPermissions, refreshProductPermissions, refreshMaterialPermissions, refreshWarehousePermissions, refreshProductionRequestPermissions, refreshPurchaseOrderPermissions, refreshInterBranchRequestPermissions, refreshLogisticsPermissions, refreshSupplierPermissions, refreshCustomerPermissions, refreshFinancePermissions, refreshEmployeesPermissions, refreshAgentAnalyticsPermissions, refreshReportsPermissions, refreshSettingsPermissions } = useAppContext();
   const employeesModulePerms = useEmployeesPermissions();
   const [employee, setEmployee] = useState<EmployeePerfRow | null | undefined>(undefined);
+  const [employeeDashboardRoles, setEmployeeDashboardRoles] = useState<UserRole[]>([]);
   const [profile, setProfile] = useState<EmployeeFullProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1004,6 +1009,7 @@ export default function EmployeeDetailPage() {
   useEffect(() => {
     if (!routeParam) {
       setEmployee(null);
+      setEmployeeDashboardRoles([]);
       setProfile(null);
       setLoading(false);
       return;
@@ -1013,19 +1019,29 @@ export default function EmployeeDetailPage() {
       try {
         setLoading(true);
         setError(null);
+        setEmployeeDashboardRoles([]);
         const emp = await fetchEmployeeWithPerformanceByIdentifier(routeParam);
         if (cancelled) return;
         setEmployee(emp);
         if (emp) {
           const prof = await fetchEmployeeFullProfile(emp.id);
-          if (!cancelled) setProfile(prof);
+          if (cancelled) return;
+          setProfile(prof);
+          const legacyRole =
+            (prof?.loginAccount?.userRole as UserRole | null | undefined) ??
+            (emp.loginAccount?.userRole as UserRole | null | undefined) ??
+            null;
+          const { roles } = await resolveEmployeeDashboardRoles(emp.id, legacyRole, emp.role);
+          if (!cancelled) setEmployeeDashboardRoles(roles);
         } else {
           setProfile(null);
+          setEmployeeDashboardRoles([]);
         }
       } catch (e) {
         if (!cancelled) {
           setError(e instanceof Error ? e.message : 'Failed to load employee');
           setEmployee(null);
+          setEmployeeDashboardRoles([]);
           setProfile(null);
         }
       } finally {
@@ -1850,15 +1866,8 @@ export default function EmployeeDetailPage() {
   };
 
   const visibleTabs = useMemo(
-    () =>
-      DETAIL_TABS.filter(t => {
-        if (t.id === 'orders') return employee != null && isSalesAgent(employee);
-        if (t.id === 'trips') return employee != null && showTripHistoryTab(employee);
-        if (t.id === 'requests') return employee != null && isWarehouseManager(employee);
-        if (t.id === 'catalog') return employee != null && isWarehouseManager(employee);
-        return true;
-      }),
-    [employee],
+    () => filterEmployeeDetailTabs(DETAIL_TABS, employeeDashboardRoles),
+    [employeeDashboardRoles],
   );
 
   useEffect(() => {
@@ -1890,7 +1899,7 @@ export default function EmployeeDetailPage() {
     setTripHistoryStatusFilter('');
     setTripHistorySortKey('date');
     setTripHistorySortDir('desc');
-    setTripHistoryPeriodKind(employee?.role === 'Truck Driver' ? 'all' : 'month');
+    setTripHistoryPeriodKind(employeeUsesDriverTripHistoryView(employeeDashboardRoles) ? 'all' : 'month');
     setTripHistoryPeriodModalOpen(false);
     setTripDetailOpen(false);
     setTripDetailTrip(null);
@@ -1916,7 +1925,7 @@ export default function EmployeeDetailPage() {
     setCatalogSection('products');
     setCatalogProductCategoryId('');
     setCatalogMaterialCategoryId('');
-  }, [employee?.id, employee?.role]);
+  }, [employee?.id, employeeDashboardRoles]);
 
   useEffect(() => {
     setWarehousePrPage(1);
@@ -1974,22 +1983,13 @@ export default function EmployeeDetailPage() {
   }, [agentOrdersPeriodModalOpen]);
 
   useEffect(() => {
-    if (employee && tab === 'orders' && !isSalesAgent(employee)) {
+    if (!isEmployeeDetailTabVisible(tab, employeeDashboardRoles)) {
       setTab('overview');
     }
-    if (employee && tab === 'trips' && !showTripHistoryTab(employee)) {
-      setTab('overview');
-    }
-    if (employee && tab === 'requests' && !isWarehouseManager(employee)) {
-      setTab('overview');
-    }
-    if (employee && tab === 'catalog' && !isWarehouseManager(employee)) {
-      setTab('overview');
-    }
-  }, [employee, tab]);
+  }, [tab, employeeDashboardRoles]);
 
   useEffect(() => {
-    if (!employee || tab !== 'orders' || !isSalesAgent(employee)) return;
+    if (!employee || tab !== 'orders' || !employeeHasAgentDetailTabs(employeeDashboardRoles)) return;
     let cancelled = false;
     (async () => {
       setAgentOrdersLoading(true);
@@ -2012,17 +2012,17 @@ export default function EmployeeDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [employee, tab]);
+  }, [employee, tab, employeeDashboardRoles]);
 
   useEffect(() => {
-    if (!employee || tab !== 'trips' || !showTripHistoryTab(employee)) return;
+    if (!employee || tab !== 'trips' || !employeeHasTripHistoryDetailTabs(employeeDashboardRoles)) return;
     let cancelled = false;
     (async () => {
       setTripHistoryLoading(true);
       setTripHistoryError(null);
       try {
         const branchName = employee.branchName?.trim();
-        if (isTruckDriver(employee)) {
+        if (employeeUsesDriverTripHistoryView(employeeDashboardRoles)) {
           const { records, error } = await fetchDriverTripHistory({
             driverId: employee.id,
             driverName: employee.employeeName,
@@ -2067,10 +2067,10 @@ export default function EmployeeDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [employee, tab]);
+  }, [employee, tab, employeeDashboardRoles]);
 
   useEffect(() => {
-    if (!employee || tab !== 'requests' || !isWarehouseManager(employee)) return;
+    if (!employee || tab !== 'requests' || !employeeHasWarehouseDetailTabs(employeeDashboardRoles)) return;
     let cancelled = false;
     (async () => {
       setWarehouseRequestsLoading(true);
@@ -2096,10 +2096,10 @@ export default function EmployeeDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [employee, tab]);
+  }, [employee, tab, employeeDashboardRoles]);
 
   useEffect(() => {
-    if (!employee || tab !== 'catalog' || !isWarehouseManager(employee)) return;
+    if (!employee || tab !== 'catalog' || !employeeHasWarehouseDetailTabs(employeeDashboardRoles)) return;
     let cancelled = false;
     (async () => {
       setCatalogLoading(true);
@@ -2129,7 +2129,7 @@ export default function EmployeeDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [employee, tab]);
+  }, [employee, tab, employeeDashboardRoles]);
 
   const catalogProductGroups = useMemo(() => {
     const groups = new Map<string, { categoryId: string; categoryName: string; items: WarehouseCatalogProduct[] }>();
@@ -4706,7 +4706,7 @@ export default function EmployeeDetailPage() {
         );
 
       case 'trips': {
-        const driverTripView = isTruckDriver(employee);
+        const driverTripView = employeeUsesDriverTripHistoryView(employeeDashboardRoles);
         return (
           <div className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
             <div className="p-4 border-b border-gray-100 space-y-3">
