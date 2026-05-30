@@ -23,6 +23,9 @@ import AddCategoryModal, { CategoryFormData } from '@/src/components/products/Ad
 import { supabase } from '@/src/lib/supabase';
 import { isCategoryCatalogHidden, CATALOG_HIDDEN_CLASS } from '@/src/lib/productCatalogVisibility';
 import { computeStockStatus } from '@/src/lib/stockStatus';
+import { useProductPermissions } from '@/src/lib/permissions/productPermissions';
+import { useProductionRequestPermissions } from '@/src/lib/permissions/productionRequestPermissions';
+import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
 
 // Local fallback images per category slug
 import hdpePipeImg     from '@/src/assets/product-images/HDPE Pipe.webp';
@@ -282,6 +285,8 @@ async function downloadProductsWorkbook(
 export function ProductsPage() {
   const navigate = useNavigate();
   const { branch, role, addAuditLog, warehouseScope, warehouseScopeLoading } = useAppContext();
+  const perms = useProductPermissions();
+  const prPerms = useProductionRequestPermissions();
   const inventoryBranch = effectiveInventoryBranch(role, branch);
   const scopedProductIds = scopedProductIdList(warehouseScope);
 
@@ -490,6 +495,10 @@ export function ProductsPage() {
     }
   };
 
+  if (!perms.pageAccess) {
+    return <ModuleAccessDenied moduleName="Products" />;
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -501,6 +510,7 @@ export function ProductsPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2 justify-end w-full md:w-auto">
+          {prPerms.pageAccess && (
           <Button
             type="button"
             variant="outline"
@@ -510,6 +520,8 @@ export function ProductsPage() {
             <Factory className="w-4 h-4 mr-2" />
             Production requests
           </Button>
+          )}
+          {perms.exportAccess && (
           <Button
             variant="outline"
             className="flex-1 sm:flex-none"
@@ -544,6 +556,7 @@ export function ProductsPage() {
             )}
             {exportingProducts ? 'Exporting…' : 'Export'}
           </Button>
+          )}
         </div>
       </div>
 
@@ -556,7 +569,7 @@ export function ProductsPage() {
           icon={<Package />}
           loading={summaryLoading}
           sub={
-            !summaryLoading && summaryStats.lowStockCount > 0
+            perms.stockAccess && !summaryLoading && summaryStats.lowStockCount > 0
               ? `${summaryStats.lowStockCount} low / critical stock`
               : undefined
           }
@@ -568,20 +581,24 @@ export function ProductsPage() {
           icon={<Box />}
           loading={summaryLoading}
         />
-        <StatKpiCard
-          label="Low / Out of Stock"
-          value={summaryLoading ? '…' : String(summaryStats.lowStockCount)}
-          tone="amber"
-          icon={<AlertTriangle />}
-          loading={summaryLoading}
-        />
-        <StatKpiCard
-          label="Revenue YTD"
-          value={summaryLoading ? '…' : `₱${(summaryStats.totalRevenue / 1_000_000).toFixed(1)}M`}
-          tone="violet"
-          icon={<DollarSign />}
-          loading={summaryLoading}
-        />
+        {perms.stockAccess && (
+          <StatKpiCard
+            label="Low / Out of Stock"
+            value={summaryLoading ? '…' : String(summaryStats.lowStockCount)}
+            tone="amber"
+            icon={<AlertTriangle />}
+            loading={summaryLoading}
+          />
+        )}
+        {perms.paymentData && (
+          <StatKpiCard
+            label="Revenue YTD"
+            value={summaryLoading ? '…' : `₱${(summaryStats.totalRevenue / 1_000_000).toFixed(1)}M`}
+            tone="violet"
+            icon={<DollarSign />}
+            loading={summaryLoading}
+          />
+        )}
       </div>
 
       {/* Search */}
@@ -605,10 +622,12 @@ export function ProductsPage() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle className="text-xl">Browse by Category</CardTitle>
+            {perms.categoryCreation && (
             <Button variant="primary" onClick={() => { setEditingCategory(null); setIsEditMode(false); setShowAddCategoryModal(true); }}>
               <Plus className="w-4 h-4 mr-2" />
               Add Category
             </Button>
+            )}
           </div>
         </CardHeader>
         <CardContent>
@@ -636,6 +655,7 @@ export function ProductsPage() {
                         : 'border-gray-200 hover:border-red-500'
                     }`}
                   >
+                    {perms.categoryCreation && (
                     <button
                       onClick={(e) => handleEditCategory(cat, e)}
                       className="absolute top-2 right-2 z-10 p-2.5 bg-white hover:bg-red-600 text-gray-700 hover:text-white rounded-lg shadow-lg border border-gray-300 group-hover:border-red-600 transition-all duration-200 hover:scale-110"
@@ -643,6 +663,7 @@ export function ProductsPage() {
                     >
                       <Edit className="w-4 h-4" />
                     </button>
+                    )}
                     <Link
                       to={`/products/category/${cat.slug}`}
                       className="w-full text-left block"
@@ -668,7 +689,7 @@ export function ProductsPage() {
                         <p className="text-sm text-gray-500 mt-1">
                           {stats.count} {stats.count === 1 ? 'product family' : 'product families'}
                         </p>
-                        {stats.lowStock > 0 && (
+                        {perms.stockAccess && stats.lowStock > 0 && (
                           <p className="text-xs text-orange-600 font-medium mt-1.5 flex items-center gap-1">
                             <AlertTriangle className="w-3 h-3" />
                             {stats.lowStock} low / critical stock

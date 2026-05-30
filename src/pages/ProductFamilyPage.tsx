@@ -36,6 +36,9 @@ import type { EntityActivityLogRow } from '../components/domain/EntityActivityLo
 import { EntityActivityLogCard } from '../components/domain/EntityActivityLogCard';
 import { isProductFamilyCatalogHidden, CATALOG_HIDDEN_CLASS } from '../lib/productCatalogVisibility';
 import { downloadVariantsComparisonWorkbook } from '../lib/productFamilyExport';
+import { useProductPermissions } from '../lib/permissions/productPermissions';
+import { useProductionRequestPermissions } from '../lib/permissions/productionRequestPermissions';
+import { ModuleAccessDenied } from '../components/permissions/ModuleAccessDenied';
 import {
   DATE_PERIOD_OPTIONS,
   avgDailyUsage as periodAvgDailyUsage,
@@ -298,6 +301,8 @@ export default function ProductFamilyPage() {
   const { categoryName, familyId } = useParams<{ categoryName: string; familyId: string }>();
   const { selectedBranch: globalBranch, setHideBranchSelector, branch, employeeName, employeeId, role, session, addAuditLog } =
     useAppContext();
+  const perms = useProductPermissions();
+  const prPerms = useProductionRequestPermissions();
 
   // Hide branch selector while on this page; the product's own branch drives data
   useEffect(() => {
@@ -405,6 +410,8 @@ export default function ProductFamilyPage() {
     () => resolveDatePeriodQuery(comparisonPeriodKind, comparisonCustomStart, comparisonCustomEnd),
     [comparisonPeriodKind, comparisonCustomStart, comparisonCustomEnd],
   );
+
+  const ytdQueryDates = useMemo(() => resolveDatePeriodQuery('ytd', '', ''), []);
 
   const comparisonPeriodLabel = comparisonQueryDates.displayLabel;
 
@@ -669,6 +676,7 @@ export default function ProductFamilyPage() {
   // â”€â”€ Edit handlers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const handleEditClick = () => {
     if (!selectedVariant) return;
+    if (!(perms.productCreation || perms.priceModification || perms.stockAccess)) return;
     setIsEditingVariant(true);
     setEditedVariant({ ...selectedVariant });
   };
@@ -680,11 +688,19 @@ export default function ProductFamilyPage() {
 
   const handleSaveEdit = async () => {
     if (!editedVariant || !familyId) return;
+    const isNew = editedVariant.id.startsWith('NEW-');
+    if (isNew && !perms.productCreation) {
+      window.alert('You do not have permission to create variants.');
+      return;
+    }
+    if (!isNew && !perms.productCreation && !perms.priceModification && !perms.stockAccess) {
+      window.alert('You do not have permission to save changes.');
+      return;
+    }
     const actorName = employeeName || session?.user?.email || 'User';
     const actorRole = mapAppRoleToLogRole(role);
     const savedSku = editedVariant.sku;
     setSaving(true);
-    const isNew = editedVariant.id.startsWith('NEW-');
     const prevSnap = !isNew ? variants.find(v => v.id === editedVariant.id) : null;
 
     // The "stock" textbox shown to the user is branch-scoped when a branch is
@@ -1077,6 +1093,11 @@ export default function ProductFamilyPage() {
     };
   }, [variants, comparisonSales]);
 
+  const canEditProductFields = Boolean(isEditingVariant && perms.productCreation);
+  const canEditPrices = Boolean(isEditingVariant && (perms.productCreation || perms.priceModification));
+  const canEditStockFields = Boolean(isEditingVariant && (perms.productCreation || perms.stockAccess));
+  const canOpenVariantEdit = perms.productCreation || perms.priceModification || perms.stockAccess;
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64 gap-3 text-gray-500">
@@ -1084,6 +1105,10 @@ export default function ProductFamilyPage() {
         <span>Loading product data...</span>
       </div>
     );
+  }
+
+  if (!perms.pageAccess) {
+    return <ModuleAccessDenied moduleName="Products" />;
   }
 
   if (!displayVariant && !isEditingVariant) {
@@ -1157,20 +1182,14 @@ export default function ProductFamilyPage() {
     : 'Products';
 
   const stockPercentage = (displayVariant.stock / Math.max(displayVariant.reorderPoint, 1)) * 100;
-  const selectedPeriodMetrics = variantPeriodMetrics(displayVariant.id);
-  const avgDailyUsage = Math.max(selectedPeriodMetrics.avgDaily, 0.1);
-  const daysOfCover     = Math.floor(displayVariant.stock / avgDailyUsage);
+  const ytdAvgMonthly = periodAvgMonthlyUsage(displayVariant.unitsSold, ytdQueryDates.from, ytdQueryDates.to);
+  const ytdAvgDaily = periodAvgDailyUsage(displayVariant.unitsSold, ytdQueryDates.from, ytdQueryDates.to);
   const margin          = ((displayVariant.price - displayVariant.cost) / Math.max(displayVariant.price, 1)) * 100;
 
   const getStockColor = () => {
     if (displayVariant.status === 'Critical') return 'red';
     if (displayVariant.status === 'Low Stock') return 'orange';
     return 'green';
-  };
-  const getDaysOfCoverColor = () => {
-    if (daysOfCover < 7)  return 'text-red-600';
-    if (daysOfCover < 14) return 'text-orange-600';
-    return 'text-green-600';
   };
 
   const categoryActive = product?.product_categories?.is_active !== false;
@@ -1211,11 +1230,14 @@ export default function ProductFamilyPage() {
             </>
           ) : (
             <>
+              {canOpenVariantEdit && (
               <Button variant="outline" onClick={handleEditClick} className="flex-1 sm:flex-none">
                 <Edit className="w-4 h-4 mr-2" />
                 <span className="hidden sm:inline">Edit {displayVariant.variantName}</span>
                 <span className="sm:hidden">Edit</span>
               </Button>
+              )}
+              {prPerms.creation && (
               <Button
                 variant="primary"
                 className="flex-1 sm:flex-none"
@@ -1236,6 +1258,7 @@ export default function ProductFamilyPage() {
                   </>
                 )}
               </Button>
+              )}
             </>
           )}
         </div>
@@ -1392,7 +1415,7 @@ export default function ProductFamilyPage() {
           <CardContent className="space-y-3">
             <div>
               <p className="text-xs text-gray-500 uppercase mb-1">SKU</p>
-              {isEditingVariant ? (
+              {canEditProductFields ? (
                 <input type="text" value={editedVariant!.sku} onChange={e => handleInputChange('sku', e.target.value)} className="w-full border rounded px-3 py-1.5 font-mono text-sm" />
               ) : (
                 <p className="font-mono text-sm text-gray-900">{displayVariant.sku}</p>
@@ -1400,15 +1423,16 @@ export default function ProductFamilyPage() {
             </div>
             <div>
               <p className="text-xs text-gray-500 uppercase mb-1">Size / Name</p>
-              {isEditingVariant ? (
+              {canEditProductFields ? (
                 <input type="text" value={editedVariant!.size} onChange={e => setEditedVariant(prev => prev ? { ...prev, size: e.target.value, variantName: e.target.value } : null)} className="w-full border rounded px-3 py-1.5 text-sm font-semibold" />
               ) : (
                 <p className="text-sm font-semibold text-gray-900">{displayVariant.size}</p>
               )}
             </div>
+            {perms.stockAccess && (
             <div>
               <p className="text-xs text-gray-500 uppercase mb-1">Stock Status</p>
-              {isEditingVariant ? (
+              {canEditStockFields ? (
                 <select value={editedVariant!.status} onChange={e => handleInputChange('status', e.target.value)} className="w-full border rounded px-3 py-1.5 text-sm">
                   <option value="In Stock">In Stock</option>
                   <option value="Low Stock">Low Stock</option>
@@ -1420,28 +1444,35 @@ export default function ProductFamilyPage() {
                 </Badge>
               )}
             </div>
+            )}
             <div>
-              <p className="text-xs text-gray-500 uppercase mb-1">Catalog</p>
-              {isEditingVariant ? (
-                <div className="flex justify-end">
-                  <input
-                    type="checkbox"
-                    checked={!editedVariant!.isHidden}
-                    onChange={(e) => handleInputChange('isHidden', !e.target.checked)}
-                    className="h-4 w-4 shrink-0 rounded border-gray-300 text-red-600 focus:ring-red-500 m-0"
-                    aria-label="Visible in catalog"
-                  />
-                </div>
-              ) : displayVariant.isHidden ? (
-                <Badge variant="secondary" size="sm">Hidden</Badge>
-              ) : (
-                <Badge variant="success" size="sm">Visible</Badge>
-              )}
+              <div className="flex items-center justify-between gap-3 min-h-[2rem]">
+                <p className="text-xs text-gray-500 uppercase">Catalog Visibility</p>
+                {canEditProductFields ? (
+                  <label className="inline-flex items-center gap-2 cursor-pointer shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={!editedVariant!.isHidden}
+                      onChange={(e) => handleInputChange('isHidden', !e.target.checked)}
+                      className="h-4 w-4 rounded border-gray-300 text-red-600 focus:ring-red-500"
+                      aria-label="Catalog visibility"
+                    />
+                    <span className="text-xs font-medium text-gray-700">
+                      {!editedVariant!.isHidden ? 'Visible' : 'Hidden'}
+                    </span>
+                  </label>
+                ) : displayVariant.isHidden ? (
+                  <Badge variant="secondary" size="sm">Hidden</Badge>
+                ) : (
+                  <Badge variant="success" size="sm">Visible</Badge>
+                )}
+              </div>
             </div>
           </CardContent>
         </Card>
 
         {/* Stock Levels */}
+        {perms.stockAccess && (
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
@@ -1461,7 +1492,7 @@ export default function ProductFamilyPage() {
             <div>
               <div className="flex items-center justify-between mb-2">
                 <p className="text-xs text-gray-500 uppercase">Current Stock</p>
-                {isEditingVariant ? (
+                {canEditStockFields ? (
                   <input type="number" value={editedVariant!.stock} onChange={e => handleInputChange('stock', parseInt(e.target.value))} onWheel={e => (e.target as HTMLInputElement).blur()} className="border rounded px-3 py-1 text-lg font-bold w-32 text-right" />
                 ) : (
                   <p className="text-lg font-bold text-gray-900">{displayVariant.stock.toLocaleString()} units</p>
@@ -1472,16 +1503,12 @@ export default function ProductFamilyPage() {
               </div>
               <div className="flex items-center justify-between">
                 <p className="text-xs text-gray-500">Reorder Point:</p>
-                {isEditingVariant ? (
+                {canEditStockFields ? (
                   <input type="number" value={editedVariant!.reorderPoint} onChange={e => handleInputChange('reorderPoint', parseInt(e.target.value))} onWheel={e => (e.target as HTMLInputElement).blur()} className="border rounded px-2 py-1 text-xs w-24 text-right" />
                 ) : (
                   <p className="text-xs text-gray-500">{displayVariant.reorderPoint} units</p>
                 )}
               </div>
-            </div>
-            <div>
-              <p className="text-xs text-gray-500 uppercase mb-1">Days of Cover</p>
-              <p className={`text-lg font-bold ${getDaysOfCoverColor()}`}>{daysOfCover} days</p>
             </div>
             {(displayVariant.status === 'Critical' || displayVariant.status === 'Low Stock') && (
               <div className={`flex items-start gap-2 p-3 rounded-lg ${displayVariant.status === 'Critical' ? 'bg-red-50 border border-red-200' : 'bg-orange-50 border border-orange-200'}`}>
@@ -1493,14 +1520,16 @@ export default function ProductFamilyPage() {
             )}
           </CardContent>
         </Card>
+        )}
 
         {/* Pricing */}
+        {perms.paymentData && (
         <Card>
           <CardHeader><CardTitle className="text-base">Pricing</CardTitle></CardHeader>
           <CardContent className="space-y-3">
             <div>
               <p className="text-xs text-gray-500 uppercase mb-1">Selling Price</p>
-              {isEditingVariant ? (
+              {canEditPrices ? (
                 <input type="number" value={editedVariant!.price} onChange={e => handleInputChange('price', parseFloat(e.target.value))} onWheel={e => (e.target as HTMLInputElement).blur()} className="border rounded px-3 py-1.5 text-2xl font-bold w-full" />
               ) : (
                 <>
@@ -1511,7 +1540,7 @@ export default function ProductFamilyPage() {
             </div>
             <div>
               <p className="text-xs text-gray-500 uppercase mb-1">Production Cost</p>
-              {isEditingVariant ? (
+              {canEditPrices ? (
                 <input type="number" value={editedVariant!.cost} onChange={e => handleInputChange('cost', parseFloat(e.target.value))} onWheel={e => (e.target as HTMLInputElement).blur()} className="border rounded px-3 py-1.5 text-lg font-semibold w-full" />
               ) : (
                 <p className="text-lg font-semibold text-gray-600">₱{displayVariant.cost.toLocaleString()}</p>
@@ -1523,6 +1552,7 @@ export default function ProductFamilyPage() {
             </div>
           </CardContent>
         </Card>
+        )}
 
         {/* Trucking load — per inventory unit (same unit as stock qty) */}
         <Card>
@@ -1735,52 +1765,42 @@ export default function ProductFamilyPage() {
         </Card>
 
         {/* Usage & Performance */}
+        {perms.paymentData && (
         <Card>
           <CardHeader>
             <CardTitle className="text-base flex items-center gap-2">
               <TrendingUp className="w-4 h-4 text-green-600" />Usage & Performance
             </CardTitle>
-            {!isEditingVariant && (
-              <p className="text-xs text-gray-500 mt-1">Period: {comparisonPeriodLabel}</p>
-            )}
+            <p className="text-xs text-gray-500 mt-1">Year to date (computed)</p>
           </CardHeader>
           <CardContent className="space-y-3">
             <div>
-              <p className="text-xs text-gray-500 uppercase mb-1">
-                {isEditingVariant ? 'Monthly Usage (manual)' : 'Avg monthly usage'}
+              <p className="text-xs text-gray-500 uppercase mb-1">Avg monthly usage</p>
+              <p className="text-lg font-semibold text-gray-900">
+                {ytdAvgMonthly.toLocaleString(undefined, { maximumFractionDigits: 1 })} units
               </p>
-              {isEditingVariant ? (
-                <input type="number" value={editedVariant!.monthlyUsage} onChange={e => handleInputChange('monthlyUsage', parseInt(e.target.value))} onWheel={e => (e.target as HTMLInputElement).blur()} className="w-full border rounded px-3 py-1.5 text-lg font-semibold" />
-              ) : (
-                <p className="text-lg font-semibold text-gray-900">
-                  {comparisonSalesLoading ? '…' : selectedPeriodMetrics.avgMonthly.toLocaleString()} units
-                </p>
-              )}
             </div>
             <div>
               <p className="text-xs text-gray-500 uppercase mb-1">Avg. daily usage</p>
               <p className="text-sm font-medium text-gray-600">
-                {comparisonSalesLoading ? '…' : `${selectedPeriodMetrics.avgDaily.toFixed(1)} units/day`}
+                {ytdAvgDaily.toFixed(1)} units/day
               </p>
             </div>
             <div>
-              <p className="text-xs text-gray-500 uppercase mb-1">Units sold</p>
-              <div className="flex items-center gap-2">
-                <p className="text-lg font-bold text-green-600">
-                  {comparisonSalesLoading ? '…' : selectedPeriodMetrics.units.toLocaleString()}
-                </p>
-              </div>
+              <p className="text-xs text-gray-500 uppercase mb-1">Units sold (YTD)</p>
+              <p className="text-lg font-bold text-green-600">
+                {displayVariant.unitsSold.toLocaleString()}
+              </p>
             </div>
             <div>
-              <p className="text-xs text-gray-500 uppercase mb-1">Revenue</p>
+              <p className="text-xs text-gray-500 uppercase mb-1">Revenue (YTD)</p>
               <p className="text-lg font-bold text-green-600">
-                {comparisonSalesLoading
-                  ? '…'
-                  : `₱${selectedPeriodMetrics.revenue.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+                ₱{displayVariant.revenueYtd.toLocaleString(undefined, { maximumFractionDigits: 0 })}
               </p>
             </div>
           </CardContent>
         </Card>
+        )}
 
         {/* Production Info */}
         <Card>
@@ -1792,7 +1812,7 @@ export default function ProductFamilyPage() {
           <CardContent className="space-y-3">
             <div>
               <p className="text-xs text-gray-500 uppercase mb-1">Lead Time</p>
-              {isEditingVariant ? (
+              {canEditProductFields ? (
                 <div className="flex items-center gap-2">
                   <input
                     type="number"
@@ -1808,8 +1828,8 @@ export default function ProductFamilyPage() {
               )}
             </div>
             <div>
-              <p className="text-xs text-gray-500 uppercase mb-1">Min. Order Qty</p>
-              {isEditingVariant ? (
+              <p className="text-xs text-gray-500 uppercase mb-1">Min. Production Qty</p>
+              {canEditProductFields ? (
                 <div className="flex items-center gap-2">
                   <input
                     type="number"
@@ -1910,6 +1930,7 @@ export default function ProductFamilyPage() {
       </div>
 
       {/* All Variants Comparison */}
+      {perms.dataAndStatistics && (
       <Card>
         <CardHeader>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1929,6 +1950,7 @@ export default function ProductFamilyPage() {
                   {periodTriggerLabel(comparisonPeriodKind, comparisonCustomStart, comparisonCustomEnd)}
                 </span>
               </Button>
+              {perms.exportAccess && (
               <Button
                 type="button"
                 variant="outline"
@@ -1979,6 +2001,7 @@ export default function ProductFamilyPage() {
                 )}
                 {exportingComparison ? 'Exporting…' : 'Export'}
               </Button>
+              )}
               {(['table', 'chart'] as const).map(v => (
                 <button
                   key={v}
@@ -2196,14 +2219,17 @@ export default function ProductFamilyPage() {
           )}
         </CardContent>
       </Card>
+      )}
 
+      {perms.activityLog && (
       <EntityActivityLogCard
         logs={productLogRows}
         emptyHint="No activity recorded yet. Image changes, variant saves, stock adjustments, and status roll-ups appear here."
       />
+      )}
 
       {/* Delete Variant Section */}
-      {isEditingVariant && selectedVariant && !selectedVariant.id.startsWith('NEW-') && (
+      {isEditingVariant && perms.productCreation && selectedVariant && !selectedVariant.id.startsWith('NEW-') && (
         <Card className="border-red-200 bg-red-50">
           <CardContent className="py-6">
             <div className="flex items-start justify-between">

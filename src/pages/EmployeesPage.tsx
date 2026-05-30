@@ -17,6 +17,8 @@ import {
   type EmployeePerfRow,
 } from '@/src/lib/employeesData';
 import { useAppContext } from '@/src/store/AppContext';
+import { useEmployeesPermissions } from '@/src/lib/permissions/employeesPermissions';
+import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
 
 const SUPPORTED_ROLES: EmployeeRole[] = [
   'Sales Agent',
@@ -47,6 +49,7 @@ function directoryCardDisplayName(emp: EmployeePerfRow): string {
 
 const EmployeesPage: React.FC = () => {
   const { branch: navbarBranch, addAuditLog } = useAppContext();
+  const perms = useEmployeesPermissions();
 
   const [employees, setEmployees] = useState<EmployeePerfRow[]>([]);
   const [branches, setBranches] = useState<BranchOption[]>([]);
@@ -267,6 +270,10 @@ const EmployeesPage: React.FC = () => {
         return null;
     }
   };
+
+  if (!perms.pageAccess) {
+    return <ModuleAccessDenied moduleName="Employees" />;
+  }
 
   return (
     <div className="p-3 sm:p-4 md:p-6 space-y-6">

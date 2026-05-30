@@ -62,6 +62,8 @@ import {
   getDispatchVehicleColor,
   dispatchTableStatusBadgeVariant,
 } from '@/src/lib/dispatchQueueUi';
+import { useLogisticsPermissions } from '@/src/lib/permissions/logisticsPermissions';
+import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
 
 const TRUCK_STATUS_OPTIONS: Vehicle['status'][] = [
   'Available',
@@ -79,6 +81,7 @@ type TabMode = 'overview' | 'trips' | 'maintenance';
 export function TruckDetailPage() {
   const { vehicleId } = useParams<{ vehicleId: string }>();
   const navigate = useNavigate();
+  const perms = useLogisticsPermissions();
   const [activeTab, setActiveTab] = useState<TabMode>('overview');
   const [tripSearchQuery, setTripSearchQuery] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('All');
@@ -394,6 +397,10 @@ export function TruckDetailPage() {
         </div>
       </div>
     );
+  }
+
+  if (!perms.pageAccess) {
+    return <ModuleAccessDenied moduleName="Logistics" />;
   }
 
   const kmSinceLastMaintenance = Math.max(0, displayTotalDistanceKm - truck.mileageAtLastMaintenance);

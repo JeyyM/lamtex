@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
+import { useReportsPermissions } from '@/src/lib/permissions/reportsPermissions';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { StatKpiCard } from '@/src/components/ui/StatKpiCard';
 import { Badge } from '@/src/components/ui/Badge';
@@ -284,6 +285,7 @@ type StatusFilter = 'All' | 'Paid' | 'Partial' | 'Pending' | 'Overdue';
 
 export function FinancePage() {
   const { branch } = useAppContext();
+  const reportsPerms = useReportsPermissions();
   const navigate = useNavigate();
   const [viewMode, setViewMode] = useState<ViewMode>('invoices');
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
@@ -413,10 +415,12 @@ export function FinancePage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
+          {reportsPerms.pageAccess && (
           <Button variant="outline" onClick={() => navigate('/reports')}>
             <BarChart3 className="w-4 h-4 mr-2" />
             Financial Reports
           </Button>
+          )}
           <Button variant="primary">
             <Plus className="w-4 h-4 mr-2" />
             Create Invoice

@@ -13,19 +13,6 @@ function xlsxOptionalNumber(v: number | string | null | undefined): number | '' 
   return Number.isFinite(n) ? n : '';
 }
 
-function computeDaysOfCover(totalStock: number, monthlyConsumption: number): number {
-  const consumption = Number(monthlyConsumption) || 0;
-  const stock = Number(totalStock) || 0;
-  const avgDailyUsage = consumption > 0 ? consumption / 30 : 0;
-  if (avgDailyUsage <= 0) return Infinity;
-  return stock / avgDailyUsage;
-}
-
-function formatDaysOfCover(days: number): string {
-  if (!Number.isFinite(days)) return 'No consumption data';
-  return days.toFixed(1);
-}
-
 export interface MaterialCategoryExportRow {
   category_name: string;
   material_name: string;
@@ -45,7 +32,6 @@ export interface RawMaterialExportRow {
   cost_per_unit: number;
   inventory_value: number;
   monthly_consumption: number;
-  days_of_cover: string;
   status: string;
 }
 
@@ -136,7 +122,6 @@ export async function fetchRawMaterialsCatalogForExport(branchName: string): Pro
     const costPerUnit = Number(m.cost_per_unit) || 0;
     const reorderPoint = Number(m.reorder_point) || 0;
     const monthlyConsumption = Number(m.monthly_consumption) || 0;
-    const daysLabel = formatDaysOfCover(computeDaysOfCover(totalStock, monthlyConsumption));
 
     materials.push({
       sku: String(m.sku ?? ''),
@@ -150,7 +135,6 @@ export async function fetchRawMaterialsCatalogForExport(branchName: string): Pro
       cost_per_unit: costPerUnit,
       inventory_value: totalStock * costPerUnit,
       monthly_consumption: monthlyConsumption,
-      days_of_cover: daysLabel,
       status: String(m.status ?? ''),
     });
   }
@@ -225,7 +209,6 @@ export async function fetchMaterialCategoryForExport(categoryId: string): Promis
     const costPerUnit = Number(m.cost_per_unit) || 0;
     const reorderPoint = Number(m.reorder_point) || 0;
     const monthlyConsumption = Number(m.monthly_consumption) || 0;
-    const daysLabel = formatDaysOfCover(computeDaysOfCover(totalStock, monthlyConsumption));
 
     materials.push({
       sku: String(m.sku ?? ''),
@@ -239,7 +222,6 @@ export async function fetchMaterialCategoryForExport(categoryId: string): Promis
       cost_per_unit: costPerUnit,
       inventory_value: totalStock * costPerUnit,
       monthly_consumption: monthlyConsumption,
-      days_of_cover: daysLabel,
       status: String(m.status ?? ''),
     });
   }
@@ -292,7 +274,6 @@ function buildRawMaterialsWorkbook(
         'Cost/Unit',
         'Inventory Value',
         'Monthly Consumption',
-        'Days of Cover',
         'Status',
       ],
       ...materials.map((m) => [
@@ -307,7 +288,6 @@ function buildRawMaterialsWorkbook(
         xlsxOptionalNumber(m.cost_per_unit),
         xlsxOptionalNumber(m.inventory_value),
         xlsxOptionalNumber(m.monthly_consumption),
-        m.days_of_cover,
         m.status,
       ]),
     ]),

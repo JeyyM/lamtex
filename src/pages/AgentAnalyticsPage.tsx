@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { BarChart3, CalendarRange, Download, Loader2, RefreshCw, Target, TrendingUp, X } from 'lucide-react';
 import { useAppContext } from '@/src/store/AppContext';
+import { useAgentAnalyticsPermissions } from '@/src/lib/permissions/agentAnalyticsPermissions';
+import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
 import {
   AgentAnalyticsBundle,
   BranchOption,
@@ -38,6 +40,7 @@ const TAB_ORDER: Array<{ id: Tab; label: string; icon: React.ComponentType<{ cla
 
 const AgentAnalyticsPage: React.FC = () => {
   const { role, session, employeeName } = useAppContext();
+  const perms = useAgentAnalyticsPermissions();
 
   const [tab, setTab] = useState<Tab>('overview');
   const [branches, setBranches] = useState<BranchOption[]>([]);
@@ -256,6 +259,10 @@ const AgentAnalyticsPage: React.FC = () => {
       </div>
     </PortalModalOverlay>
   );
+
+  if (!perms.pageAccess) {
+    return <ModuleAccessDenied moduleName="Agent Analytics" />;
+  }
 
   return (
     <div className="p-3 sm:p-4 md:p-6 space-y-5">

@@ -35,7 +35,7 @@ import {
   shouldReleaseOrderFromTrips,
   tryCompleteTripsForDeliveredOrder,
 } from '@/src/lib/logisticsScheduling';
-import { OrderDetail, OrderStatus, OrderLineItem, OrderLog, ProofDocument, OrderUrgency, DeliveryType } from '@/src/types/orders';
+import { OrderDetail, OrderStatus, OrderLineItem, OrderLog, ProofDocument, OrderUrgency, DeliveryType, PaymentTerms } from '@/src/types/orders';
 import { PaymentLink } from '@/src/types/payments';
 import { PaymentLinkModal } from '@/src/components/payments/PaymentLinkModal';
 import { OrderCustomerPortalCard } from '@/src/components/orders/OrderCustomerPortalCard';
@@ -113,8 +113,11 @@ import {
   tryExtractStoragePathFromPublicUrl,
 } from '@/src/lib/orderProofPayments';
 import { orderStatusBadgeVariant, paymentStatusBadgeVariant } from '@/src/lib/orderStatusBadges';
+import { useOrderPermissions } from '@/src/lib/permissions/orderPermissions';
+import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
 import { deriveOrderDueDateForPersistence, parseProofNotes } from '@/src/lib/financeData';
 import { cumulativeShippedForLine, remainingToShipForLine } from '@/src/lib/orderShipmentQuantities';
+import { ACTIVITY_LOG_PAGE_SIZE, TablePagination } from '@/src/components/ui/TablePagination';
 
 /** Local proof uploads: images + common business documents (allowlist). */
 const ORDER_PROOF_UPLOAD_EXT =
@@ -122,6 +125,15 @@ const ORDER_PROOF_UPLOAD_EXT =
 
 const ORDER_URGENCY_OPTIONS: OrderUrgency[] = ['Low', 'Medium', 'High', 'Critical'];
 const ORDER_DELIVERY_TYPE_OPTIONS: DeliveryType[] = ['Truck', 'Ship'];
+const ORDER_PAYMENT_TERMS_OPTIONS: PaymentTerms[] = [
+  'COD',
+  '15 Days',
+  '30 Days',
+  '45 Days',
+  '60 Days',
+  '90 Days',
+  'Custom',
+];
 
 function parseOrderUrgency(v: unknown): OrderUrgency {
   if (v === 'Low' || v === 'Medium' || v === 'High' || v === 'Critical') return v;
@@ -147,6 +159,8 @@ export function OrderDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { branch, addAuditLog, role, session, employeeName, employeeId, isExecutiveUser, setHideBranchSelector, setBranch } = useAppContext();
+  const perms = useOrderPermissions();
+  const [activityLogPage, setActivityLogPage] = useState(1);
   const [isEditing, setIsEditing] = useState(false);
   const [editedOrder, setEditedOrder] = useState<OrderDetail | null>(null);
 
@@ -306,6 +320,20 @@ export function OrderDetailPage() {
       return { ...prev, ...next };
     });
   };
+
+  const activityLogTotalPages = Math.max(1, Math.ceil(orderLogs.length / ACTIVITY_LOG_PAGE_SIZE));
+  const pagedOrderLogs = useMemo(() => {
+    const start = (activityLogPage - 1) * ACTIVITY_LOG_PAGE_SIZE;
+    return orderLogs.slice(start, start + ACTIVITY_LOG_PAGE_SIZE);
+  }, [orderLogs, activityLogPage]);
+
+  useEffect(() => {
+    setActivityLogPage(1);
+  }, [orderLogs.length, id]);
+
+  useEffect(() => {
+    if (activityLogPage > activityLogTotalPages) setActivityLogPage(activityLogTotalPages);
+  }, [activityLogPage, activityLogTotalPages]);
 
   const shipCheckBranchName = useMemo(() => {
     if (!isEditing || !editedOrder) return '';
@@ -587,20 +615,11 @@ export function OrderDetailPage() {
     let cancelled = false;
     setCustomersLoading(true);
     void (async () => {
-      let branchUuid: string | null =
-        typeof editedOrder?.branchId === 'string' && editedOrder.branchId.trim() !== ''
-          ? editedOrder.branchId.trim()
-          : typeof order?.branchId === 'string' && order.branchId.trim() !== ''
-            ? order.branchId.trim()
-            : null;
-      if (!branchUuid) {
-        const b = (branch ?? '').trim();
-        if (b) {
-          const { data: bd } = await supabase.from('branches').select('id').eq('name', b).maybeSingle();
-          branchUuid = bd?.id ?? null;
-        }
-      }
-      if (!branchUuid) {
+      const agentUuid =
+        typeof editedOrder?.agentId === 'string' && editedOrder.agentId.trim() !== ''
+          ? editedOrder.agentId.trim()
+          : null;
+      if (!agentUuid) {
         if (!cancelled) {
           setCustomerList([]);
           setCustomersLoading(false);
@@ -611,7 +630,7 @@ export function OrderDetailPage() {
         .from('customers')
         .select('id, name, contact_person')
         .eq('status', 'Active')
-        .eq('branch_id', branchUuid)
+        .eq('assigned_agent_id', agentUuid)
         .order('name')
         .limit(500);
       if (!cancelled) {
@@ -633,7 +652,7 @@ export function OrderDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [isEditing, editedOrder?.branchId, order?.branchId, branch]);
+  }, [isEditing, editedOrder?.agentId]);
 
   useEffect(() => {
     if (!isEditing) return;
@@ -1314,6 +1333,10 @@ export function OrderDetailPage() {
         <span>Loading order...</span>
       </div>
     );
+  }
+
+  if (!perms.pageAccess) {
+    return <ModuleAccessDenied moduleName="Orders" />;
   }
 
   if (!order) {
@@ -2965,7 +2988,7 @@ export function OrderDetailPage() {
   };
 
   const handleReleaseProofCommission = async (proof: ProofDocument) => {
-    if (!isExecutiveUser || !id || !order) return;
+    if (!perms.commissionRelease || !id || !order) return;
     const cash = proof.paymentCashAmount ?? 0;
     if (
       !window.confirm(
@@ -2996,7 +3019,7 @@ export function OrderDetailPage() {
   };
 
   const handleReleaseAllPendingCommissions = async () => {
-    if (!isExecutiveUser || !id || !order) return;
+    if (!perms.commissionRelease || !id || !order) return;
     const pending = proofs.filter((p) => proofNeedsCommissionRelease(p) && !p.commissionPaidAt);
     if (pending.length === 0) return;
     const pendingTotal = pending.reduce(
@@ -3503,22 +3526,26 @@ export function OrderDetailPage() {
             <>
               {order.status === 'Pending' && (
                 <>
-                  <button
-                    type="button"
-                    onClick={() => setShowApproveModal(true)}
-                    className="inline-flex min-h-[2.5rem] shrink-0 items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-slate-800 sm:px-5"
-                  >
-                    <CheckCircle2 className="h-4 w-4 shrink-0" />
-                    Accept
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowRejectModal(true)}
-                    className="inline-flex min-h-[2.5rem] shrink-0 items-center justify-center gap-2 rounded-lg border-2 border-red-600 bg-white px-4 py-2 text-sm font-semibold text-red-600 transition-colors hover:bg-red-50 sm:px-5"
-                  >
-                    <XCircle className="h-4 w-4 shrink-0" />
-                    Reject
-                  </button>
+                  {perms.approvals && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setShowApproveModal(true)}
+                        className="inline-flex min-h-[2.5rem] shrink-0 items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-slate-800 sm:px-5"
+                      >
+                        <CheckCircle2 className="h-4 w-4 shrink-0" />
+                        Accept
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowRejectModal(true)}
+                        className="inline-flex min-h-[2.5rem] shrink-0 items-center justify-center gap-2 rounded-lg border-2 border-red-600 bg-white px-4 py-2 text-sm font-semibold text-red-600 transition-colors hover:bg-red-50 sm:px-5"
+                      >
+                        <XCircle className="h-4 w-4 shrink-0" />
+                        Reject
+                      </button>
+                    </>
+                  )}
                   <button
                     type="button"
                     onClick={handleEdit}
@@ -3535,7 +3562,7 @@ export function OrderDetailPage() {
                   Edit Order
                 </Button>
               )}
-              {order.status === 'Draft' && (
+              {order.status === 'Draft' && perms.creation && (
                 <Button
                   variant="primary"
                   onClick={() => void handleSubmitForApproval()}
@@ -3546,7 +3573,7 @@ export function OrderDetailPage() {
                   Submit for approval
                 </Button>
               )}
-              {showScheduleAction && (
+              {showScheduleAction && perms.scheduling && (
                 <Button
                   variant="primary"
                   className="gap-2"
@@ -3573,7 +3600,7 @@ export function OrderDetailPage() {
                   {order.deliveryType === 'Ship' ? 'Schedule shipment' : 'Plan route'}
                 </Button>
               )}
-              {logisticsReplacesFulfill && order.status === 'Scheduled' && (
+              {logisticsReplacesFulfill && order.status === 'Scheduled' && perms.scheduling && (
                 <Button
                   variant="primary"
                   className="gap-2"
@@ -3584,7 +3611,7 @@ export function OrderDetailPage() {
                   Mark Loading
                 </Button>
               )}
-              {logisticsReplacesFulfill && order.status === 'Loading' && (
+              {logisticsReplacesFulfill && order.status === 'Loading' && perms.scheduling && (
                 <Button
                   variant="primary"
                   className="gap-2"
@@ -3598,7 +3625,7 @@ export function OrderDetailPage() {
                   Mark Packed
                 </Button>
               )}
-              {logisticsReplacesFulfill && (order.status === 'Packed' || order.status === 'Ready') && (
+              {logisticsReplacesFulfill && (order.status === 'Packed' || order.status === 'Ready') && perms.scheduling && (
                 <Button
                   variant="primary"
                   className="gap-2"
@@ -3620,7 +3647,7 @@ export function OrderDetailPage() {
                   Mark in transit
                 </Button>
               )}
-              {logisticsReplacesFulfill && order.status === 'In Transit' && (
+              {logisticsReplacesFulfill && order.status === 'In Transit' && perms.deliveries && (
                 <Button
                   variant="primary"
                   className="gap-2 bg-emerald-600 hover:bg-emerald-700"
@@ -3631,19 +3658,19 @@ export function OrderDetailPage() {
                   Record delivery
                 </Button>
               )}
-              {showLegacyFulfillButton && (
+              {showLegacyFulfillButton && perms.deliveries && (
                 <Button variant="primary" onClick={() => setShowFulfillModal(true)} className="gap-2">
                   <Package className="w-4 h-4" />
                   Fulfill Order
                 </Button>
               )}
-              {order.status === 'Rejected' && (
+              {order.status === 'Rejected' && perms.creation && (
                 <Button variant="primary" onClick={() => void handleResubmit()} className="gap-2" disabled={approvalLoading}>
                   {approvalLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                   Resubmit
                 </Button>
               )}
-              {!['Cancelled', 'Rejected', 'Delivered'].includes(order.status) && (
+              {!['Cancelled', 'Rejected', 'Delivered'].includes(order.status) && perms.cancellation && (
                 <button
                   type="button"
                   onClick={() => setShowCancelModal(true)}
@@ -3703,27 +3730,29 @@ export function OrderDetailPage() {
               <p className="mt-0.5 text-xs text-red-700">Reason: {order.rejectionReason}</p>
             )}
           </div>
-          <button
-            type="button"
-            onClick={async () => {
-              if (!id) return;
-              await supabase
-                .from('orders')
-                .update({ status: 'Pending', approved_by: null, approved_date: null, rejected_by: null, rejection_reason: null })
-                .eq('id', id);
-              setOrder({
-                ...order,
-                status: 'Pending',
-                approvedBy: undefined,
-                approvedDate: undefined,
-                rejectedBy: undefined,
-                rejectionReason: undefined,
-              });
-            }}
-            className="shrink-0 text-xs text-gray-500 underline hover:text-gray-700"
-          >
-            Undo
-          </button>
+          {perms.approvals && (
+            <button
+              type="button"
+              onClick={async () => {
+                if (!id) return;
+                await supabase
+                  .from('orders')
+                  .update({ status: 'Pending', approved_by: null, approved_date: null, rejected_by: null, rejection_reason: null })
+                  .eq('id', id);
+                setOrder({
+                  ...order,
+                  status: 'Pending',
+                  approvedBy: undefined,
+                  approvedDate: undefined,
+                  rejectedBy: undefined,
+                  rejectionReason: undefined,
+                });
+              }}
+              className="shrink-0 text-xs text-gray-500 underline hover:text-gray-700"
+            >
+              Undo
+            </button>
+          )}
         </div>
       )}
 
@@ -3768,9 +3797,16 @@ export function OrderDetailPage() {
                   onChange={(e) => handleStatusChange(e.target.value as OrderStatus)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
                 >
-                  {allStatuses.map(status => (
-                    <option key={status} value={status}>{status}</option>
-                  ))}
+                  {allStatuses
+                    .filter(
+                      (status) =>
+                        perms.approvals ||
+                        status === displayOrder.status ||
+                        (status !== 'Approved' && status !== 'Rejected'),
+                    )
+                    .map(status => (
+                      <option key={status} value={status}>{status}</option>
+                    ))}
                 </select>
               ) : (
                 <Badge variant={getStatusBadgeVariant(displayOrder.status)} className="text-base px-4 py-2">
@@ -3803,37 +3839,43 @@ export function OrderDetailPage() {
                 </Badge>
               )}
             </div>
-            <div>
-              <p className="text-sm text-gray-500 mb-2">Payment Status</p>
-              {isEditing ? (
-                <select
-                  value={displayOrder.paymentStatus}
-                  onChange={(e) => handlePaymentStatusChange(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
-                >
-                  {allPaymentStatuses.map(status => (
-                    <option key={status} value={status}>{status}</option>
-                  ))}
-                </select>
-              ) : (
-                <Badge variant={getPaymentBadgeVariant(displayOrder.paymentStatus)} className="text-base px-4 py-2">
-                  {displayOrder.paymentStatus}
-                </Badge>
-              )}
-            </div>
-            <div>
-              <p className="text-sm text-gray-500 mb-2">Total Amount</p>
-              <p className="text-2xl font-bold text-gray-900">₱{displayOrder.totalAmount.toLocaleString()}</p>
-              {displayOrder.discountPercent > 0 && (
-                <p className="text-sm text-gray-500">-{displayOrder.discountPercent.toFixed(1)}% discount</p>
-              )}
-            </div>
-            <div>
-              <p className="text-sm text-gray-500 mb-2">Balance Due</p>
-              <p className="text-2xl font-bold text-gray-900">
-                ₱{(paymentSummary?.balanceDue ?? displayOrder.balanceDue).toLocaleString()}
-              </p>
-            </div>
+            {perms.payment && (
+              <div>
+                <p className="text-sm text-gray-500 mb-2">Payment Status</p>
+                {isEditing ? (
+                  <select
+                    value={displayOrder.paymentStatus}
+                    onChange={(e) => handlePaymentStatusChange(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
+                  >
+                    {allPaymentStatuses.map(status => (
+                      <option key={status} value={status}>{status}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <Badge variant={getPaymentBadgeVariant(displayOrder.paymentStatus)} className="text-base px-4 py-2">
+                    {displayOrder.paymentStatus}
+                  </Badge>
+                )}
+              </div>
+            )}
+            {perms.payment && (
+              <div>
+                <p className="text-sm text-gray-500 mb-2">Total Amount</p>
+                <p className="text-2xl font-bold text-gray-900">₱{displayOrder.totalAmount.toLocaleString()}</p>
+                {displayOrder.discountPercent > 0 && (
+                  <p className="text-sm text-gray-500">-{displayOrder.discountPercent.toFixed(1)}% discount</p>
+                )}
+              </div>
+            )}
+            {perms.payment && (
+              <div>
+                <p className="text-sm text-gray-500 mb-2">Balance Due</p>
+                <p className="text-2xl font-bold text-gray-900">
+                  ₱{(paymentSummary?.balanceDue ?? displayOrder.balanceDue).toLocaleString()}
+                </p>
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -3869,7 +3911,7 @@ export function OrderDetailPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {isEditing && editedOrder ? (
+            {isEditing && editedOrder && perms.customerSetup ? (
               <div className="space-y-3">
                 <div className="relative" ref={customerSearchRef}>
                   <label className="text-xs text-gray-500" htmlFor="order-customer-search">
@@ -3880,14 +3922,22 @@ export function OrderDetailPage() {
                     <input
                       id="order-customer-search"
                       type="search"
-                      placeholder={customersLoading ? 'Loading customers…' : 'Search by name or contact…'}
+                      placeholder={
+                        !editedOrder.agentId?.trim()
+                          ? 'Select an agent first…'
+                          : customersLoading
+                            ? 'Loading customers…'
+                            : 'Search by name or contact…'
+                      }
                       value={customerSearchQuery}
                       onChange={(e) => {
                         setCustomerSearchQuery(e.target.value);
                         setShowCustomerDropdown(true);
                       }}
-                      onFocus={() => setShowCustomerDropdown(true)}
-                      disabled={customersLoading}
+                      onFocus={() => {
+                        if (editedOrder.agentId?.trim()) setShowCustomerDropdown(true);
+                      }}
+                      disabled={customersLoading || !editedOrder.agentId?.trim()}
                       className="w-full pl-9 pr-9 py-2 border border-gray-300 rounded-lg text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none bg-white disabled:bg-gray-50 disabled:text-gray-500"
                       autoComplete="off"
                     />
@@ -3926,7 +3976,11 @@ export function OrderDetailPage() {
                         ))
                       ) : (
                         <div className="px-3 py-6 text-center text-sm text-gray-500">
-                          {customerList.length === 0 ? 'No active customers for this branch' : 'No customers match your search'}
+                          {!editedOrder.agentId?.trim()
+                            ? 'Select an agent to see their customers'
+                            : customerList.length === 0
+                              ? 'No active customers assigned to this agent'
+                              : 'No customers match your search'}
                         </div>
                       )}
                     </div>
@@ -3958,9 +4012,14 @@ export function OrderDetailPage() {
                   </div>
                 )}
 
-                {!customersLoading && customerList.length === 0 && (
+                {!customersLoading && !editedOrder.agentId?.trim() && (
                   <p className="text-xs text-amber-700">
-                    No active customers for this branch. Set branch in Agent &amp; Branch or add customers for this branch in Customers.
+                    Choose an agent in Agent &amp; Branch before selecting a customer.
+                  </p>
+                )}
+                {!customersLoading && editedOrder.agentId?.trim() && customerList.length === 0 && (
+                  <p className="text-xs text-amber-700">
+                    No active customers are assigned to this agent. Assign customers on the Customers page or under this agent&apos;s profile.
                   </p>
                 )}
                 <div className="pt-1">
@@ -4039,13 +4098,22 @@ export function OrderDetailPage() {
           </CardHeader>
           <CardContent>
             <div className="space-y-3 text-sm">
-              <div className="flex justify-between">
+              <div className="flex flex-col gap-1 sm:flex-row sm:justify-between sm:items-center">
                 <span className="text-gray-600">Order Date:</span>
-                <span className="font-medium text-gray-900">{isEditing && editedOrder ? editedOrder.orderDate : order.orderDate}</span>
+                {isEditing && editedOrder ? (
+                  <input
+                    type="date"
+                    className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm font-medium text-gray-900 w-full sm:w-auto max-w-[12rem]"
+                    value={editedOrder.orderDate ? editedOrder.orderDate.slice(0, 10) : ''}
+                    onChange={(e) => patchEditedOrder({ orderDate: e.target.value })}
+                  />
+                ) : (
+                  <span className="font-medium text-gray-900">{order.orderDate || '—'}</span>
+                )}
               </div>
               <div className="flex flex-col gap-1 sm:flex-row sm:justify-between sm:items-center">
                 <span className="text-gray-600">Required Date:</span>
-                {isEditing && editedOrder ? (
+                {isEditing && editedOrder && perms.deliveries ? (
                   <input
                     type="date"
                     className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm font-medium text-gray-900 w-full sm:w-auto max-w-[12rem]"
@@ -4084,7 +4152,7 @@ export function OrderDetailPage() {
               )}
               <div className="flex flex-col gap-1 sm:flex-row sm:justify-between sm:items-center">
                 <span className="text-gray-600">Delivery Type:</span>
-                {isEditing && editedOrder ? (
+                {isEditing && editedOrder && perms.deliveries ? (
                   branchHasShips === false ? (
                     <span className="font-medium text-gray-900">Truck</span>
                   ) : (
@@ -4112,9 +4180,23 @@ export function OrderDetailPage() {
                   Ship delivery is unavailable — this branch has no shipping containers in fleet.
                 </p>
               )}
-              <div className="flex justify-between">
+              <div className="flex flex-col gap-1 sm:flex-row sm:justify-between sm:items-center">
                 <span className="text-gray-600">Payment Terms:</span>
-                <span className="font-medium text-gray-900">{order.paymentTerms}</span>
+                {isEditing && editedOrder && perms.payment ? (
+                  <select
+                    className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm font-medium text-gray-900 w-full sm:w-auto max-w-[12rem] bg-white"
+                    value={editedOrder.paymentTerms ?? 'COD'}
+                    onChange={(e) => patchEditedOrder({ paymentTerms: e.target.value as PaymentTerms })}
+                  >
+                    {ORDER_PAYMENT_TERMS_OPTIONS.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <span className="font-medium text-gray-900">{order.paymentTerms}</span>
+                )}
               </div>
             </div>
           </CardContent>
@@ -4131,7 +4213,7 @@ export function OrderDetailPage() {
           <CardContent>
             {isEditing && editedOrder ? (
               <div className="space-y-3 text-sm">
-                {isExecutiveUser ? (
+                {perms.agentBranchSelection ? (
                   <>
                     <div className="space-y-1">
                       <label className="text-xs text-gray-500">Branch</label>
@@ -4170,7 +4252,11 @@ export function OrderDetailPage() {
                           patchEditedOrder({
                             agentId: v,
                             agent: a?.employee_name ?? '',
+                            customerId: '',
+                            customer: '',
                           });
+                          setCustomerSearchQuery('');
+                          setShowCustomerDropdown(Boolean(v));
                         }}
                       >
                         <option value="">— No agent assigned —</option>
@@ -4220,7 +4306,7 @@ export function OrderDetailPage() {
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>Order Items</CardTitle>
-          {isEditing && (
+          {isEditing && perms.creation && (
             <Button variant="outline" size="sm" onClick={handleAddProduct} className="gap-2">
               <Plus className="w-4 h-4" />
               Add Product
@@ -4252,24 +4338,26 @@ export function OrderDetailPage() {
                             {item.productName}
                           </span>
                           <Badge variant="default" className="text-xs">{item.variantDescription}</Badge>
-                          {item.negotiatedPrice && item.originalPrice && item.negotiatedPrice < item.originalPrice && (
+                          {perms.payment && item.negotiatedPrice && item.originalPrice && item.negotiatedPrice < item.originalPrice && (
                             <Badge variant="danger" className="text-xs">Negotiated</Badge>
                           )}
                         </div>
-                        <div className="flex items-center gap-2 mt-2 flex-wrap">
-                          <div className="text-xs text-gray-500">
-                            Base: ₱{(item.originalPrice ?? item.unitPrice).toLocaleString()}/unit
+                        {perms.payment && (
+                          <div className="flex items-center gap-2 mt-2 flex-wrap">
+                            <div className="text-xs text-gray-500">
+                              Base: ₱{(item.originalPrice ?? item.unitPrice).toLocaleString()}/unit
+                            </div>
+                            {item.negotiatedPrice && item.negotiatedPrice !== (item.originalPrice ?? item.unitPrice) && (
+                              <>
+                                <div className="text-xs text-gray-400">•</div>
+                                <div className="text-xs text-red-600 font-medium">
+                                  Custom: ₱{item.negotiatedPrice.toLocaleString()}/unit
+                                </div>
+                              </>
+                            )}
                           </div>
-                          {item.negotiatedPrice && item.negotiatedPrice !== (item.originalPrice ?? item.unitPrice) && (
-                            <>
-                              <div className="text-xs text-gray-400">•</div>
-                              <div className="text-xs text-red-600 font-medium">
-                                Custom: ₱{item.negotiatedPrice.toLocaleString()}/unit
-                              </div>
-                            </>
-                          )}
-                        </div>
-                        {item.discountsBreakdown && item.discountsBreakdown.length > 0 && (
+                        )}
+                        {perms.payment && item.discountsBreakdown && item.discountsBreakdown.length > 0 && (
                           <div className="flex items-center gap-1 mt-1 flex-wrap">
                             <span className="text-xs text-gray-500">Discounts:</span>
                             {item.discountsBreakdown.map((d, i) => (
@@ -4280,37 +4368,48 @@ export function OrderDetailPage() {
                           </div>
                         )}
                         <div className="text-xs text-gray-500 mt-1">
-                          Qty: {item.quantity} × ₱{item.quantity > 0
-                            ? (item.lineTotal / item.quantity).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-                            : '0.00'}/unit
+                          Qty: {item.quantity}
+                          {perms.payment && (
+                            <>
+                              {' '}× ₱{item.quantity > 0
+                                ? (item.lineTotal / item.quantity).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                                : '0.00'}/unit
+                            </>
+                          )}
                         </div>
                         <div className="flex items-center gap-1.5 mt-1.5" onClick={(e) => e.stopPropagation()}>
                           <span className="text-xs text-gray-500">Delivered:</span>
-                          <input
-                            type="number"
-                            min={0}
-                            max={item.quantity}
-                            value={deliveredDrafts[item.id] ?? (item.quantityDelivered ?? 0)}
-                            onChange={(e) => setDeliveredDrafts((p) => ({ ...p, [item.id]: e.target.value }))}
-                            onBlur={(e) => saveDelivered(item.id, e.target.value, item.quantity)}
-                            onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-                            className="w-16 text-xs border border-gray-300 rounded px-1.5 py-0.5 focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-                          />
+                          {perms.deliveries ? (
+                            <input
+                              type="number"
+                              min={0}
+                              max={item.quantity}
+                              value={deliveredDrafts[item.id] ?? (item.quantityDelivered ?? 0)}
+                              onChange={(e) => setDeliveredDrafts((p) => ({ ...p, [item.id]: e.target.value }))}
+                              onBlur={(e) => saveDelivered(item.id, e.target.value, item.quantity)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                              className="w-16 text-xs border border-gray-300 rounded px-1.5 py-0.5 focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                            />
+                          ) : (
+                            <span className="text-xs font-medium text-gray-900">{item.quantityDelivered ?? 0}</span>
+                          )}
                           <span className="text-xs text-gray-400">/ {item.quantity}</span>
                         </div>
                       </div>
 
-                      <div className="w-32 text-right flex-shrink-0">
-                        <div className="text-sm text-gray-600 font-medium mb-1">Total</div>
-                        {effectiveDiscountPct(item) > 0 && (
-                          <div className="text-xs text-gray-400 line-through mb-0.5">
-                            ₱{(item.unitPrice * item.quantity).toLocaleString()}
+                      {perms.payment && (
+                        <div className="w-32 text-right flex-shrink-0">
+                          <div className="text-sm text-gray-600 font-medium mb-1">Total</div>
+                          {effectiveDiscountPct(item) > 0 && (
+                            <div className="text-xs text-gray-400 line-through mb-0.5">
+                              ₱{(item.unitPrice * item.quantity).toLocaleString()}
+                            </div>
+                          )}
+                          <div className="font-semibold text-gray-900 text-lg">
+                            ₱{item.lineTotal.toLocaleString()}
                           </div>
-                        )}
-                        <div className="font-semibold text-gray-900 text-lg">
-                          ₱{item.lineTotal.toLocaleString()}
                         </div>
-                      </div>
+                      )}
 
                       <button
                         type="button"
@@ -4323,7 +4422,7 @@ export function OrderDetailPage() {
                   ))}
 
                   {/* Savings + Total summary */}
-                  {(() => {
+                  {perms.payment && (() => {
                     const totalOriginal = displayOrder.items.reduce((s, i) => s + (i.unitPrice * i.quantity), 0);
                     const totalFinal = displayOrder.items.reduce((s, i) => s + i.lineTotal, 0);
                     const savings = totalOriginal - totalFinal;
@@ -4392,27 +4491,33 @@ export function OrderDetailPage() {
                           <span className="text-xs font-normal text-gray-400"> / {item.quantity}</span>
                         </div>
                       </div>
-                      <div>
-                        <div className="text-xs text-gray-500">Unit Price</div>
-                        <div className="font-medium text-gray-900">₱{item.unitPrice}</div>
-                      </div>
-                      <div>
-                        <div className="text-xs text-gray-500">Discount</div>
-                        <div className="font-medium text-gray-900">{effectiveDiscountPct(item) > 0 ? `${effectiveDiscountPct(item).toFixed(1)}%` : '-'}</div>
-                      </div>
-                      <div>
-                        <div className="text-xs text-gray-500">Line Total</div>
-                        <div className="font-semibold text-gray-900">₱{item.lineTotal.toLocaleString()}</div>
-                      </div>
+                      {perms.payment && (
+                        <>
+                          <div>
+                            <div className="text-xs text-gray-500">Unit Price</div>
+                            <div className="font-medium text-gray-900">₱{item.unitPrice}</div>
+                          </div>
+                          <div>
+                            <div className="text-xs text-gray-500">Discount</div>
+                            <div className="font-medium text-gray-900">{effectiveDiscountPct(item) > 0 ? `${effectiveDiscountPct(item).toFixed(1)}%` : '-'}</div>
+                          </div>
+                          <div>
+                            <div className="text-xs text-gray-500">Line Total</div>
+                            <div className="font-semibold text-gray-900">₱{item.lineTotal.toLocaleString()}</div>
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
                 ))}
-                <div className="p-4 bg-gray-50 border-t-2 border-gray-200">
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-gray-700">Subtotal:</span>
-                    <span className="font-bold text-gray-900 text-lg">₱{displayOrder.totalAmount.toLocaleString()}</span>
+                {perms.payment && (
+                  <div className="p-4 bg-gray-50 border-t-2 border-gray-200">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-gray-700">Subtotal:</span>
+                      <span className="font-bold text-gray-900 text-lg">₱{displayOrder.totalAmount.toLocaleString()}</span>
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
 
               {/* Desktop Table View */}
@@ -4424,10 +4529,14 @@ export function OrderDetailPage() {
                       <th className="px-6 py-3 text-left font-medium">Product</th>
                       <th className="px-6 py-3 text-center font-medium">Qty</th>
                       <th className="px-6 py-3 text-center font-medium">Delivered</th>
-                      <th className="px-6 py-3 text-right font-medium">List Price</th>
-                      <th className="px-6 py-3 text-right font-medium">Final Price</th>
-                      <th className="px-6 py-3 text-center font-medium">Discount</th>
-                      <th className="px-6 py-3 text-right font-medium">Total</th>
+                      {perms.payment && (
+                        <>
+                          <th className="px-6 py-3 text-right font-medium">List Price</th>
+                          <th className="px-6 py-3 text-right font-medium">Final Price</th>
+                          <th className="px-6 py-3 text-center font-medium">Discount</th>
+                          <th className="px-6 py-3 text-right font-medium">Total</th>
+                        </>
+                      )}
                       <th className="px-6 py-3 text-center font-medium">Stock</th>
                     </tr>
                   </thead>
@@ -4447,23 +4556,27 @@ export function OrderDetailPage() {
                           <span className="font-medium text-gray-900">{item.quantityDelivered ?? 0}</span>
                           <span className="text-xs text-gray-400"> / {item.quantity}</span>
                         </td>
-                        <td className="px-6 py-4 text-right">
-                          {item.originalPrice && item.negotiatedPrice && item.originalPrice !== item.negotiatedPrice ? (
-                            <div>
-                              <div className="line-through text-gray-400 text-xs">₱{item.originalPrice}</div>
-                              <div className="text-gray-900">₱{item.unitPrice}</div>
-                            </div>
-                          ) : (
-                            <div className="text-gray-900">₱{item.unitPrice}</div>
-                          )}
-                        </td>
-                        <td className="px-6 py-4 text-right font-medium text-gray-900">₱{item.unitPrice}</td>
-                        <td className="px-6 py-4 text-center">
-                          {effectiveDiscountPct(item) > 0 ? `${effectiveDiscountPct(item).toFixed(1)}%` : '-'}
-                        </td>
-                        <td className="px-6 py-4 text-right font-medium text-gray-900">
-                          ₱{item.lineTotal.toLocaleString()}
-                        </td>
+                        {perms.payment && (
+                          <>
+                            <td className="px-6 py-4 text-right">
+                              {item.originalPrice && item.negotiatedPrice && item.originalPrice !== item.negotiatedPrice ? (
+                                <div>
+                                  <div className="line-through text-gray-400 text-xs">₱{item.originalPrice}</div>
+                                  <div className="text-gray-900">₱{item.unitPrice}</div>
+                                </div>
+                              ) : (
+                                <div className="text-gray-900">₱{item.unitPrice}</div>
+                              )}
+                            </td>
+                            <td className="px-6 py-4 text-right font-medium text-gray-900">₱{item.unitPrice}</td>
+                            <td className="px-6 py-4 text-center">
+                              {effectiveDiscountPct(item) > 0 ? `${effectiveDiscountPct(item).toFixed(1)}%` : '-'}
+                            </td>
+                            <td className="px-6 py-4 text-right font-medium text-gray-900">
+                              ₱{item.lineTotal.toLocaleString()}
+                            </td>
+                          </>
+                        )}
                         <td className="px-6 py-4 text-center">
                           <Badge variant={item.stockHint === 'Available' ? 'success' : 'warning'}>
                             {item.stockHint}
@@ -4473,20 +4586,22 @@ export function OrderDetailPage() {
                     ))}
                     {displayOrder.items.length === 0 && (
                       <tr>
-                        <td colSpan={9} className="px-6 py-12 text-center text-gray-500">
+                        <td colSpan={perms.payment ? 9 : 5} className="px-6 py-12 text-center text-gray-500">
                           <Package className="w-12 h-12 mx-auto mb-3 text-gray-300" />
                           <p className="font-medium">No items in this order</p>
                         </td>
                       </tr>
                     )}
                   </tbody>
-                  <tfoot className="bg-gray-50 border-t border-gray-200">
-                    <tr>
-                      <td colSpan={7} className="px-6 py-4 text-right font-semibold text-gray-700">Subtotal:</td>
-                      <td className="px-6 py-4 text-right font-bold text-gray-900">₱{displayOrder.totalAmount.toLocaleString()}</td>
-                      <td></td>
-                    </tr>
-                  </tfoot>
+                  {perms.payment && (
+                    <tfoot className="bg-gray-50 border-t border-gray-200">
+                      <tr>
+                        <td colSpan={7} className="px-6 py-4 text-right font-semibold text-gray-700">Subtotal:</td>
+                        <td className="px-6 py-4 text-right font-bold text-gray-900">₱{displayOrder.totalAmount.toLocaleString()}</td>
+                        <td></td>
+                      </tr>
+                    </tfoot>
+                  )}
                 </table>
               </div>
             </>
@@ -4553,7 +4668,7 @@ export function OrderDetailPage() {
           )}
 
       {/* Payment Information */}
-      {(order.invoiceId || order.invoiceDate) && (
+      {perms.payment && (order.invoiceId || order.invoiceDate) && (
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -4601,7 +4716,7 @@ export function OrderDetailPage() {
       {/* Invoice & Proof Management */}
       <Card>
         <CardContent className="pt-6">
-          {id && (
+          {id && perms.orderSummary && (
             <div className="mb-6">
               <OrderCustomerPortalCard orderUuid={id} customerEmail={customerEmail} />
             </div>
@@ -4613,16 +4728,18 @@ export function OrderDetailPage() {
               Documents & Proofs
             </h3>
             <div className="flex gap-2 flex-wrap">
-              <Button variant="outline" size="sm" onClick={openProofDocumentModal} className="gap-2 flex-1 sm:flex-none">
-                <Upload className="w-4 h-4" />
-                <span className="hidden sm:inline">Upload Proof</span>
-                <span className="sm:hidden">Upload</span>
-              </Button>
+              {perms.documents && (
+                <Button variant="outline" size="sm" onClick={openProofDocumentModal} className="gap-2 flex-1 sm:flex-none">
+                  <Upload className="w-4 h-4" />
+                  <span className="hidden sm:inline">Upload Proof</span>
+                  <span className="sm:hidden">Upload</span>
+                </Button>
+              )}
             </div>
           </div>
 
           {/* Payment Links Status */}
-          {paymentLinks.length > 0 && (
+          {perms.payment && paymentLinks.length > 0 && (
             <div className="mb-6">
               <h4 className="text-sm font-semibold text-gray-700 mb-3">Payment Links</h4>
               <div className="space-y-2">
@@ -4691,6 +4808,7 @@ export function OrderDetailPage() {
             </div>
           )}
           
+          {perms.documents && (
           <div className="flex flex-wrap gap-2 mb-4 border-b border-gray-200 pb-3">
             {(['delivery', 'payment', 'other'] as const).map((tab) => (
               <button
@@ -4710,15 +4828,16 @@ export function OrderDetailPage() {
               </button>
             ))}
           </div>
+          )}
 
           {/* Proofs List */}
-          {documentProofsFiltered.length > 0 ? (
+          {perms.documents && (documentProofsFiltered.length > 0 ? (
             <div className="space-y-3">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
                 <h4 className="text-sm font-semibold text-gray-700">
                   Uploaded — {documentsProofTab === 'delivery' ? 'Delivery' : documentsProofTab === 'payment' ? 'Payment' : 'Other'}
                 </h4>
-                {documentsProofTab === 'payment' && isExecutiveUser && pendingCommissionProofs.length > 0 ? (
+                {documentsProofTab === 'payment' && perms.commissionRelease && pendingCommissionProofs.length > 0 ? (
                   <Button
                     size="sm"
                     variant="primary"
@@ -4759,6 +4878,7 @@ export function OrderDetailPage() {
                           {proof.type === 'delivery' ? 'Delivery' : proof.type === 'payment' ? 'Payment' : 'Other'}
                         </Badge>
                         {proof.type === 'payment' &&
+                          perms.commissionRelease &&
                           proofRequiresCommissionPayout({
                             id: proof.id,
                             type: proof.type,
@@ -4802,7 +4922,7 @@ export function OrderDetailPage() {
                             : ''}
                         </p>
                       ) : null}
-                      {proof.type === 'payment' && proofNeedsCommissionRelease(proof) ? (
+                      {proof.type === 'payment' && perms.commissionRelease && proofNeedsCommissionRelease(proof) ? (
                         <p className="text-xs text-blue-700 mt-1.5">
                           Cash ₱{(proof.paymentCashAmount ?? 0).toLocaleString()} · Commission ₱
                           {computeProofCommissionForClientType(
@@ -4811,7 +4931,7 @@ export function OrderDetailPage() {
                           ).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </p>
                       ) : null}
-                      {proof.type === 'payment' && proof.commissionPaidAt ? (
+                      {proof.type === 'payment' && perms.commissionRelease && proof.commissionPaidAt ? (
                         <p className="text-xs text-green-700 mt-1.5 flex items-center gap-1">
                           <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" />
                           Commission paid{' '}
@@ -4826,10 +4946,10 @@ export function OrderDetailPage() {
                         </p>
                       ) : null}
                       {proof.type === 'payment' &&
+                      perms.commissionRelease &&
                       proofNeedsCommissionRelease(proof) &&
-                      !proof.commissionPaidAt &&
-                      !isExecutiveUser ? (
-                        <p className="text-xs text-amber-700 mt-1.5">Commission pending executive release</p>
+                      !proof.commissionPaidAt ? (
+                        <p className="text-xs text-amber-700 mt-1.5">Commission pending release</p>
                       ) : null}
                       {proof.notes && (
                         <p className="text-xs text-gray-600 mt-2 pr-1 whitespace-pre-wrap border-t border-gray-200/80 pt-2">
@@ -4840,7 +4960,7 @@ export function OrderDetailPage() {
                   </div>
                   <div className="flex flex-wrap items-center gap-2 sm:gap-3 justify-end sm:justify-start flex-shrink-0">
                     {proof.type === 'payment' &&
-                    isExecutiveUser &&
+                    perms.commissionRelease &&
                     proofNeedsCommissionRelease(proof) &&
                     !proof.commissionPaidAt ? (
                       <Button
@@ -4883,11 +5003,12 @@ export function OrderDetailPage() {
               No {documentsProofTab === 'delivery' ? 'delivery' : documentsProofTab === 'payment' ? 'payment' : 'other'}{' '}
               documents yet.
             </p>
-          )}
+          ))}
         </CardContent>
       </Card>
 
       {/* Order Activity Log — IBR-style timeline */}
+      {perms.activityLog && (
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -4895,16 +5016,16 @@ export function OrderDetailPage() {
             Activity log
           </CardTitle>
         </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
+        <CardContent className="p-0">
+          <div className="space-y-3 p-6 pb-3">
             {orderLogs.length === 0 ? (
               <p className="text-sm text-gray-500 text-center py-8">
                 No activity recorded yet. Edits, approvals, logistics steps, delivery, proofs, and payments will appear
                 here.
               </p>
             ) : (
-              orderLogs.map((log, index) => {
-                const isLast = index === orderLogs.length - 1;
+              pagedOrderLogs.map((log, index) => {
+                const isLast = index === pagedOrderLogs.length - 1;
 
                 const getActionIcon = () => {
                   switch (log.action) {
@@ -5035,8 +5156,17 @@ export function OrderDetailPage() {
               })
             )}
           </div>
+          {orderLogs.length > ACTIVITY_LOG_PAGE_SIZE && (
+            <TablePagination
+              page={activityLogPage}
+              pageSize={ACTIVITY_LOG_PAGE_SIZE}
+              total={orderLogs.length}
+              onPageChange={setActivityLogPage}
+            />
+          )}
         </CardContent>
       </Card>
+      )}
 
       {/* Product Selector Modal — same e-commerce style as CreateOrderModal */}
       {showProductModal && (
@@ -5203,37 +5333,39 @@ export function OrderDetailPage() {
                       : <Package className="w-32 h-32 text-gray-300" />
                     }
                   </div>
-                  <div className="bg-gray-50 rounded-lg p-4">
-                    <div className="text-sm text-gray-600 mb-2">Price per unit</div>
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="text-lg font-bold text-gray-900 flex-shrink-0">₱</span>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        autoComplete="off"
-                        value={variantPriceInput}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          if (v === '') {
-                            setVariantPriceInput('');
-                            return;
-                          }
-                          if (/^\d*\.?\d*$/.test(v)) setVariantPriceInput(v);
-                        }}
-                        onBlur={() => {
-                          setVariantPriceInput((prev) => {
-                            const t = prev.trim();
-                            if (t === '') return '';
-                            if (t.endsWith('.')) return t.slice(0, -1) || '';
-                            return prev;
-                          });
-                        }}
-                        onWheel={(e) => e.preventDefault()}
-                        className="min-w-0 w-full text-xl font-bold text-gray-900 bg-white px-3 py-2 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
-                      />
+                  {perms.payment && (
+                    <div className="bg-gray-50 rounded-lg p-4">
+                      <div className="text-sm text-gray-600 mb-2">Price per unit</div>
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-lg font-bold text-gray-900 flex-shrink-0">₱</span>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          autoComplete="off"
+                          value={variantPriceInput}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            if (v === '') {
+                              setVariantPriceInput('');
+                              return;
+                            }
+                            if (/^\d*\.?\d*$/.test(v)) setVariantPriceInput(v);
+                          }}
+                          onBlur={() => {
+                            setVariantPriceInput((prev) => {
+                              const t = prev.trim();
+                              if (t === '') return '';
+                              if (t.endsWith('.')) return t.slice(0, -1) || '';
+                              return prev;
+                            });
+                          }}
+                          onWheel={(e) => e.preventDefault()}
+                          className="min-w-0 w-full text-xl font-bold text-gray-900 bg-white px-3 py-2 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                        />
+                      </div>
+                      <p className="text-xs text-gray-500 mt-2">Base price: ₱{selectedVariant.unit_price.toLocaleString()}</p>
                     </div>
-                    <p className="text-xs text-gray-500 mt-2">Base price: ₱{selectedVariant.unit_price.toLocaleString()}</p>
-                  </div>
+                  )}
                 </div>
 
                 {/* Right: Details */}
@@ -5258,7 +5390,9 @@ export function OrderDetailPage() {
                           onClick={() => { setSelectedVariant(v); setVariantQtyInput('1'); setVariantPriceInput(String(v.unit_price)); }}
                           className={`px-4 py-3 border-2 rounded-lg font-medium transition-all text-left ${v.id === selectedVariant.id ? 'border-red-600 bg-red-50 text-red-700' : 'border-gray-200 hover:border-gray-300 text-gray-700'}`}>
                           <div className="font-semibold">{v.size}</div>
-                          <div className="text-sm font-bold mt-1">₱{v.unit_price.toLocaleString()}</div>
+                          {perms.payment && (
+                            <div className="text-sm font-bold mt-1">₱{v.unit_price.toLocaleString()}</div>
+                          )}
                           <div className="text-xs text-gray-500 mt-1">Stock: {v.stock}</div>
                         </button>
                       ))}
@@ -5322,6 +5456,7 @@ export function OrderDetailPage() {
                   </div>
 
                   {/* Discounts */}
+                  {perms.payment && (
                   <div>
                     <div className="flex items-center justify-between mb-3">
                       <label className="block text-sm font-semibold text-gray-900">Discounts</label>
@@ -5359,8 +5494,10 @@ export function OrderDetailPage() {
                       <p className="text-sm text-gray-500 italic">No discounts applied</p>
                     )}
                   </div>
+                  )}
 
                   {/* Subtotal */}
+                  {perms.payment && (
                   <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-2">
                     <div className="flex items-center justify-between">
                       <span className="text-sm font-medium text-blue-900">Subtotal</span>
@@ -5393,6 +5530,7 @@ export function OrderDetailPage() {
                       );
                     })()}
                   </div>
+                  )}
 
                   <button type="button" onClick={handleAddToOrder}
                     className="w-full py-4 bg-red-600 text-white text-lg font-semibold rounded-lg hover:bg-red-700 transition-colors flex items-center justify-center gap-2">
@@ -5407,7 +5545,7 @@ export function OrderDetailPage() {
       )}
 
       {/* ── Approve Confirmation Modal ─────────────────────────────── */}
-      {showApproveModal && (
+      {showApproveModal && perms.approvals && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => !approvalLoading && setShowApproveModal(false)}>
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden" onClick={(e) => e.stopPropagation()}>
             <div className="px-6 py-5 border-b border-gray-100 flex items-center gap-3">
@@ -5452,7 +5590,7 @@ export function OrderDetailPage() {
       )}
 
       {/* ── Reject Confirmation Modal ──────────────────────────────── */}
-      {showRejectModal && (
+      {showRejectModal && perms.approvals && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => { if (!approvalLoading) { setShowRejectModal(false); setRejectionReason(''); } }}>
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden" onClick={(e) => e.stopPropagation()}>
             <div className="px-6 py-5 border-b border-gray-100 flex items-center gap-3">

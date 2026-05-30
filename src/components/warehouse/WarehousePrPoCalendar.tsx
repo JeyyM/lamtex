@@ -23,6 +23,8 @@ import {
   type WarehouseCalendarEvent,
   type WarehouseCalendarTab,
 } from '@/src/lib/warehouseCalendar';
+import { useProductionRequestPermissions } from '@/src/lib/permissions/productionRequestPermissions';
+import { usePurchaseOrderPermissions } from '@/src/lib/permissions/purchaseOrderPermissions';
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -32,6 +34,8 @@ interface Props {
 }
 
 export function WarehousePrPoCalendar({ branchId, branchLabel }: Props): React.ReactElement {
+  const prPerms = useProductionRequestPermissions();
+  const poPerms = usePurchaseOrderPermissions();
   const now = new Date();
   const [tab, setTab] = useState<WarehouseCalendarTab>('production');
   const [year, setYear] = useState(() => now.getFullYear());
@@ -89,6 +93,9 @@ export function WarehousePrPoCalendar({ branchId, branchLabel }: Props): React.R
 
   const selectedEvents = selectedKey ? (eventsByDate[selectedKey] ?? []) : [];
   const viewAllHref = tab === 'production' ? '/production-requests' : '/purchase-orders';
+  const showViewAll = tab === 'production' ? prPerms.pageAccess : poPerms.pageAccess;
+  const canOpenEvent = (ev: WarehouseCalendarEvent) =>
+    ev.recordRoute === 'production' ? prPerms.pageAccess : poPerms.pageAccess;
 
   return (
     <Card>
@@ -102,12 +109,14 @@ export function WarehousePrPoCalendar({ branchId, branchLabel }: Props): React.R
                 <span className="text-sm font-normal text-gray-500">· {branchLabel}</span>
               )}
             </CardTitle>
+            {showViewAll && (
             <DashHeaderLink
               to={viewAllHref}
               className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm shrink-0"
             >
               Open {tab === 'production' ? 'PRs' : 'POs'} <ArrowRight className="w-4 h-4" />
             </DashHeaderLink>
+            )}
           </div>
 
           <div className="flex bg-gray-100 rounded-lg p-1 w-full sm:w-auto">
@@ -333,12 +342,14 @@ export function WarehousePrPoCalendar({ branchId, branchLabel }: Props): React.R
                                 {ev.status}
                               </span>
                             </div>
+                            {canOpenEvent(ev) && (
                             <Link
                               to={warehouseCalendarEventHref(ev)}
                               className="shrink-0 text-sm font-medium text-blue-700 hover:underline"
                             >
                               Open
                             </Link>
+                            )}
                           </li>
                         ))}
                       </ul>

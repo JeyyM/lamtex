@@ -9,6 +9,8 @@ import {
   upsertEmployeeEmploymentInfo,
 } from '@/src/lib/employeeProfileMutations';
 import { useAppContext } from '@/src/store/AppContext';
+import { useEmployeesPermissions } from '@/src/lib/permissions/employeesPermissions';
+import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
 import { Button } from '@/src/components/ui/Button';
 
 /** Directory `employees.role` (job category in the org); job title is stored in employment `position`. */
@@ -44,6 +46,7 @@ export default function EmployeeNewPage() {
   const paramBranchId = searchParams.get('branchId')?.trim() || '';
 
   const { branch: navbarBranch, addAuditLog } = useAppContext();
+  const perms = useEmployeesPermissions();
 
   const [branches, setBranches] = useState<BranchOption[]>([]);
   const [loadingBranches, setLoadingBranches] = useState(true);
@@ -170,6 +173,10 @@ export default function EmployeeNewPage() {
       setSaving(false);
     }
   };
+
+  if (!perms.pageAccess) {
+    return <ModuleAccessDenied moduleName="Employees" />;
+  }
 
   return (
     <div className="p-3 sm:p-6 max-w-2xl mx-auto space-y-6">

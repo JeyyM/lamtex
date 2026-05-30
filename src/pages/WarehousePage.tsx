@@ -31,6 +31,11 @@ import { deriveOrderDueDateForPersistence } from '@/src/lib/financeData';
 import { attachOrderDeliveryProofsAndNotify } from '@/src/lib/notifications/notificationsData';
 import { deductVariantBranchStock } from '@/src/lib/productVariantStock';
 import { useAppContext } from '@/src/store/AppContext';
+import { useWarehousePermissions } from '@/src/lib/permissions/warehousePermissions';
+import { useProductionRequestPermissions } from '@/src/lib/permissions/productionRequestPermissions';
+import { usePurchaseOrderPermissions } from '@/src/lib/permissions/purchaseOrderPermissions';
+import { useInterBranchRequestPermissions } from '@/src/lib/permissions/interBranchRequestPermissions';
+import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
 import { scopedMaterialIdList, scopedProductIdList } from '@/src/lib/warehouseScope';
 import { effectiveInventoryBranch } from '@/src/lib/inventoryAccess';
 import { computeStockStatus } from '@/src/lib/stockStatus';
@@ -741,9 +746,42 @@ function stockComputeToUi(computed: string): StockStatus {
   return 'healthy';
 }
 
+function WarehouseScheduleRecordLink({
+  canOpen,
+  to,
+  className,
+  children,
+}: {
+  canOpen: boolean;
+  to: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  if (!canOpen) {
+    return <div className={className}>{children}</div>;
+  }
+  return (
+    <Link to={to} className={className}>
+      {children}
+    </Link>
+  );
+}
+
 export default function WarehousePage() {
   const navigate = useNavigate();
   const { branch, addAuditLog, session, employeeName, employeeId, role, warehouseScope } = useAppContext();
+  const warehousePerms = useWarehousePermissions();
+  const productionRequestPerms = useProductionRequestPermissions();
+  const purchaseOrderPerms = usePurchaseOrderPermissions();
+  const interBranchRequestPerms = useInterBranchRequestPermissions();
+  const canOpenWarehouseRecord = useCallback(
+    (route: 'production' | 'purchase' | 'interbranch') => {
+      if (route === 'production') return productionRequestPerms.pageAccess;
+      if (route === 'purchase') return purchaseOrderPerms.pageAccess;
+      return interBranchRequestPerms.pageAccess;
+    },
+    [productionRequestPerms.pageAccess, purchaseOrderPerms.pageAccess, interBranchRequestPerms.pageAccess],
+  );
   const scopedProductIds = scopedProductIdList(warehouseScope);
   const scopedMaterialIds = scopedMaterialIdList(warehouseScope);
   const [activeTab, setActiveTab] = useState<TabType>('inventory');
@@ -2928,6 +2966,12 @@ export default function WarehousePage() {
 
   const warehouseHeaderNavLinkClass =
     'inline-flex items-center justify-center gap-2 font-medium transition-colors rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 h-8 px-3 text-xs';
+  const canOpenPrScheduleLinks = productionRequestPerms.pageAccess;
+  const canOpenPoScheduleLinks = purchaseOrderPerms.pageAccess;
+
+  if (!warehousePerms.pageAccess) {
+    return <ModuleAccessDenied moduleName="Warehouse" />;
+  }
 
   return (
     <div className="min-h-screen bg-gray-50 w-full max-w-full overflow-x-hidden">
@@ -2940,18 +2984,24 @@ export default function WarehousePage() {
               <p className="text-sm text-gray-600 mt-1">Track inventory, manage requests, and coordinate logistics</p>
             </div>
             <div className="flex flex-wrap gap-2 justify-end md:shrink-0">
+              {(productionRequestPerms.pageAccess || productionRequestPerms.creation) && (
               <Link to="/production-requests" className={warehouseHeaderNavLinkClass}>
                 <Factory className="h-4 w-4" />
                 Production requests
               </Link>
+              )}
+              {(purchaseOrderPerms.pageAccess || purchaseOrderPerms.creation) && (
               <Link to="/purchase-orders" className={warehouseHeaderNavLinkClass}>
                 <ShoppingCart className="h-4 w-4" />
                 Purchase orders
               </Link>
+              )}
+              {(interBranchRequestPerms.pageAccess || interBranchRequestPerms.creation) && (
               <Link to="/inter-branch-requests" className={warehouseHeaderNavLinkClass}>
                 <GitBranch className="h-4 w-4" />
                 Inter-Branch
               </Link>
+              )}
             </div>
           </div>
         </div>
@@ -3844,37 +3894,37 @@ export default function WarehousePage() {
                         pagedSchedulePr.map((row) => (
                           <tr key={row.rowKey} className="hover:bg-gray-50">
                           <td className="px-3 py-3 text-sm text-gray-900">
-                            <Link to={`/production-requests/${row.prId}`} className="block">
+                            <WarehouseScheduleRecordLink canOpen={canOpenPrScheduleLinks} to={`/production-requests/${row.prId}`} className="block">
                                 <div className="font-medium text-blue-700 hover:text-blue-900 hover:underline">{row.productName}</div>
                                 <div className="text-xs text-gray-500">{row.productSku || '—'}</div>
-                            </Link>
+                            </WarehouseScheduleRecordLink>
                           </td>
                           <td className="px-3 py-3 whitespace-nowrap text-sm">
-                            <Link to={`/production-requests/${row.prId}`} className="block">
+                            <WarehouseScheduleRecordLink canOpen={canOpenPrScheduleLinks} to={`/production-requests/${row.prId}`} className="block">
                               <span className="font-semibold text-gray-900">{row.quantity}</span>
                               <span className="text-gray-500"> {row.unit}</span>
-                            </Link>
+                            </WarehouseScheduleRecordLink>
                           </td>
                           <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">
-                            <Link to={`/production-requests/${row.prId}`} className="block">
+                            <WarehouseScheduleRecordLink canOpen={canOpenPrScheduleLinks} to={`/production-requests/${row.prId}`} className="block">
                               <div className="flex items-center gap-1">
                                 <Clock className="w-4 h-4 text-gray-400" />
                                 {row.requestDateFmt}
                               </div>
-                            </Link>
+                            </WarehouseScheduleRecordLink>
                           </td>
                           <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">
-                            <Link to={`/production-requests/${row.prId}`} className="block">{row.expectedCompletionFmt}</Link>
+                            <WarehouseScheduleRecordLink canOpen={canOpenPrScheduleLinks} to={`/production-requests/${row.prId}`} className="block">{row.expectedCompletionFmt}</WarehouseScheduleRecordLink>
                           </td>
                           <td className="px-3 py-3 whitespace-nowrap">
-                            <Link to={`/production-requests/${row.prId}`} className="block">
+                            <WarehouseScheduleRecordLink canOpen={canOpenPrScheduleLinks} to={`/production-requests/${row.prId}`} className="block">
                               <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${prScheduleBadgeClass(row.status)}`}>
                                 {row.status}
                               </span>
-                            </Link>
+                            </WarehouseScheduleRecordLink>
                           </td>
                           <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">
-                            <Link to={`/production-requests/${row.prId}`} className="block">{row.requestedBy}</Link>
+                            <WarehouseScheduleRecordLink canOpen={canOpenPrScheduleLinks} to={`/production-requests/${row.prId}`} className="block">{row.requestedBy}</WarehouseScheduleRecordLink>
                           </td>
                         </tr>
                         ))
@@ -3888,7 +3938,12 @@ export default function WarehousePage() {
                     <div className="p-8 text-center text-sm text-gray-500">No production lines match your filters.</div>
                   ) : (
                     pagedSchedulePr.map((row) => (
-                      <Link key={row.rowKey} to={`/production-requests/${row.prId}`} className="block p-4 space-y-3 hover:bg-gray-50">
+                      <WarehouseScheduleRecordLink
+                        key={row.rowKey}
+                        canOpen={canOpenPrScheduleLinks}
+                        to={`/production-requests/${row.prId}`}
+                        className="block p-4 space-y-3 hover:bg-gray-50"
+                      >
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
                           <p className="font-medium text-gray-900 break-words">{row.productName}</p>
@@ -3918,7 +3973,7 @@ export default function WarehousePage() {
                           <p className="text-gray-900">{row.requestedBy}</p>
                         </div>
                       </div>
-                      </Link>
+                      </WarehouseScheduleRecordLink>
                     ))
                   )}
                     </div>
@@ -4026,43 +4081,43 @@ export default function WarehousePage() {
                         pagedSchedulePo.map((row) => (
                           <tr key={row.rowKey} className="hover:bg-gray-50">
                           <td className="px-3 py-3 text-sm text-gray-900">
-                            <Link to={`/purchase-orders/${row.poId}`} className="block">
+                            <WarehouseScheduleRecordLink canOpen={canOpenPoScheduleLinks} to={`/purchase-orders/${row.poId}`} className="block">
                               <div className="font-medium text-blue-700 hover:text-blue-900 hover:underline">{row.materialName}</div>
                               <div className="text-xs text-gray-500">{row.materialCode}</div>
-                            </Link>
+                            </WarehouseScheduleRecordLink>
                           </td>
                           <td className="px-3 py-3 whitespace-nowrap text-sm">
-                            <Link to={`/purchase-orders/${row.poId}`} className="block">
+                            <WarehouseScheduleRecordLink canOpen={canOpenPoScheduleLinks} to={`/purchase-orders/${row.poId}`} className="block">
                               <span className="font-semibold text-gray-900">{row.quantity}</span>
                               <span className="text-gray-500"> {row.unit}</span>
-                            </Link>
+                            </WarehouseScheduleRecordLink>
                           </td>
                           <td className="px-3 py-3 text-sm text-gray-600">
-                            <Link to={`/purchase-orders/${row.poId}`} className="block">{row.supplier}</Link>
+                            <WarehouseScheduleRecordLink canOpen={canOpenPoScheduleLinks} to={`/purchase-orders/${row.poId}`} className="block">{row.supplier}</WarehouseScheduleRecordLink>
                           </td>
                           <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">
-                            <Link to={`/purchase-orders/${row.poId}`} className="block">
+                            <WarehouseScheduleRecordLink canOpen={canOpenPoScheduleLinks} to={`/purchase-orders/${row.poId}`} className="block">
                               <div className="flex items-center gap-1">
                                 <Clock className="w-4 h-4 text-gray-400" />
                                 {row.requestedDeliveryFmt}
                               </div>
-                            </Link>
+                            </WarehouseScheduleRecordLink>
                           </td>
                           <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">
-                            <Link to={`/purchase-orders/${row.poId}`} className="block">{row.estimatedArrivalFmt}</Link>
+                            <WarehouseScheduleRecordLink canOpen={canOpenPoScheduleLinks} to={`/purchase-orders/${row.poId}`} className="block">{row.estimatedArrivalFmt}</WarehouseScheduleRecordLink>
                           </td>
                           <td className="px-3 py-3 whitespace-nowrap">
-                            <Link to={`/purchase-orders/${row.poId}`} className="block">
+                            <WarehouseScheduleRecordLink canOpen={canOpenPoScheduleLinks} to={`/purchase-orders/${row.poId}`} className="block">
                               <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${poScheduleBadgeClass(row.status)}`}>
                                 {row.status}
                               </span>
-                            </Link>
+                            </WarehouseScheduleRecordLink>
                           </td>
                           <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">
-                            <Link to={`/purchase-orders/${row.poId}`} className="block">{row.requestedBy}</Link>
+                            <WarehouseScheduleRecordLink canOpen={canOpenPoScheduleLinks} to={`/purchase-orders/${row.poId}`} className="block">{row.requestedBy}</WarehouseScheduleRecordLink>
                           </td>
                           <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">
-                            <Link to={`/purchase-orders/${row.poId}`} className="block">{fmtScheduleDate(row.orderDateIso)}</Link>
+                            <WarehouseScheduleRecordLink canOpen={canOpenPoScheduleLinks} to={`/purchase-orders/${row.poId}`} className="block">{fmtScheduleDate(row.orderDateIso)}</WarehouseScheduleRecordLink>
                           </td>
                         </tr>
                         ))
@@ -4076,7 +4131,12 @@ export default function WarehousePage() {
                     <div className="p-8 text-center text-sm text-gray-500">No purchase lines match your filters.</div>
                   ) : (
                     pagedSchedulePo.map((row) => (
-                      <Link key={row.rowKey} to={`/purchase-orders/${row.poId}`} className="block p-4 space-y-3 hover:bg-gray-50">
+                      <WarehouseScheduleRecordLink
+                        key={row.rowKey}
+                        canOpen={canOpenPoScheduleLinks}
+                        to={`/purchase-orders/${row.poId}`}
+                        className="block p-4 space-y-3 hover:bg-gray-50"
+                      >
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
                           <p className="font-medium text-gray-900 break-words">{row.materialName}</p>
@@ -4114,7 +4174,7 @@ export default function WarehousePage() {
                           <p className="text-gray-900">{row.requestedBy}</p>
                         </div>
                       </div>
-                      </Link>
+                      </WarehouseScheduleRecordLink>
                     ))
                   )}
                 </div>
@@ -5752,6 +5812,7 @@ export default function WarehousePage() {
                               {ev.status}
                             </span>
                           </div>
+                          {canOpenWarehouseRecord(ev.recordRoute) ? (
                           <Link
                             to={
                               ev.recordRoute === 'production'
@@ -5765,6 +5826,7 @@ export default function WarehousePage() {
                           >
                             Open
                           </Link>
+                          ) : null}
                         </li>
                       ))}
                     </ul>
@@ -5891,6 +5953,7 @@ export default function WarehousePage() {
                 >
                   Close
                 </button>
+                {canOpenWarehouseRecord(ev.recordRoute) ? (
                 <Link
                   to={
                     ev.recordRoute === 'production'
@@ -5904,6 +5967,7 @@ export default function WarehousePage() {
                 >
                   {stripCalendarPrimaryCtaLabel(ev)}
                 </Link>
+                ) : null}
               </div>
                   </div>
                 ))

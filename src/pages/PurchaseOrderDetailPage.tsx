@@ -14,10 +14,13 @@ import {
 } from '@/src/lib/purchaseOrderTotals';
 import { poLogCardHeadline, PoActivityLogHumanDetails } from '@/src/components/purchaseOrders/PoActivityLogHuman';
 import { useAppContext } from '@/src/store/AppContext';
+import { usePurchaseOrderPermissions } from '@/src/lib/permissions/purchaseOrderPermissions';
+import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { ModalPortal } from '@/src/components/ui/ModalPortal';
+import { ACTIVITY_LOG_PAGE_SIZE, TablePagination } from '@/src/components/ui/TablePagination';
 import { supabase } from '@/src/lib/supabase';
 import { insertRawMaterialLog } from '@/src/lib/domainActivityLog';
 import { addRawMaterialInboundAggregateOnly, addRawMaterialInboundAtBranch } from '@/src/lib/rawMaterialInbound';
@@ -199,6 +202,7 @@ export function PurchaseOrderDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { branch, role, session, employeeName, employeeId, addAuditLog } = useAppContext();
+  const perms = usePurchaseOrderPermissions();
 
   const [po, setPO]               = useState<PORow | null>(null);
   const [items, setItems]         = useState<POItemRow[]>([]);
@@ -249,6 +253,7 @@ export function PurchaseOrderDetailPage() {
 
   // ── Activity log ───────────────────────────────────────
   const [poLogs, setPoLogs]                    = useState<POLogRow[]>([]);
+  const [poLogPage, setPoLogPage]              = useState(1);
 
   // ── Proof upload trigger (Record Payment opens payment proof modal) ──
   const [proofUploadTrigger, setProofUploadTrigger] = useState<PoProofUploadTrigger>(null);
@@ -431,6 +436,15 @@ export function PurchaseOrderDetailPage() {
     })();
     return () => { cancelled = true; };
   }, [materialIdsKey]);
+
+  useEffect(() => {
+    setPoLogPage(1);
+  }, [poLogs]);
+
+  const pagedPoLogs = useMemo(
+    () => poLogs.slice((poLogPage - 1) * ACTIVITY_LOG_PAGE_SIZE, poLogPage * ACTIVITY_LOG_PAGE_SIZE),
+    [poLogs, poLogPage],
+  );
 
   const selectedSupplierIdForFilter = (editForm.supplier_id ?? po?.supplier_id) ?? null;
   const suppliersForSelect = useMemo(() => {
@@ -889,7 +903,7 @@ export function PurchaseOrderDetailPage() {
 
   // Proof uploads — broader than receive; still block draft / approval / cancelled
   const canUploadPoProofs =
-    !!po && !['Draft', 'Requested', 'Rejected', 'Cancelled'].includes(po.status);
+    !!po && !['Draft', 'Requested', 'Rejected', 'Cancelled'].includes(po.status) && perms.documents;
 
   // Payment summary card only after Confirm Order (Confirmed) or receiving / done
   const showPaymentSummary =
@@ -1277,6 +1291,10 @@ export function PurchaseOrderDetailPage() {
     );
   }
 
+  if (!perms.pageAccess) {
+    return <ModuleAccessDenied moduleName="Purchase Orders" />;
+  }
+
   // ── Render ────────────────────────────────────────────────
   return (
     <div className="space-y-6 p-3 sm:p-4 md:p-6">
@@ -1301,7 +1319,7 @@ export function PurchaseOrderDetailPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {isEditing ? (
+          {isEditing && perms.creation ? (
             <>
               <Button
                 variant="primary"
@@ -1316,7 +1334,7 @@ export function PurchaseOrderDetailPage() {
             </>
           ) : (
             <>
-              {po.status === 'Draft' && (
+              {po.status === 'Draft' && perms.creation && (
                 <Button
                   variant="primary"
                   onClick={() => setShowSubmitModal(true)}
@@ -1327,7 +1345,7 @@ export function PurchaseOrderDetailPage() {
                   Submit for approval
                 </Button>
               )}
-              {po.status === 'Rejected' && (
+              {po.status === 'Rejected' && perms.creation && (
                 <Button
                   variant="primary"
                   onClick={() => setShowResubmitModal(true)}
@@ -1338,7 +1356,7 @@ export function PurchaseOrderDetailPage() {
                   Resubmit for approval
                 </Button>
               )}
-              {po.status === 'Requested' && (
+              {po.status === 'Requested' && perms.approvals && (
                 <>
                   <Button
                     variant="primary"
@@ -1359,7 +1377,7 @@ export function PurchaseOrderDetailPage() {
                   </Button>
                 </>
               )}
-              {po.status === 'Accepted' && (
+              {po.status === 'Accepted' && perms.approvals && (
                 <Button
                   variant="primary"
                   onClick={handleConfirmOrder}
@@ -1372,7 +1390,7 @@ export function PurchaseOrderDetailPage() {
                   Confirm Order
                 </Button>
               )}
-              {canReceiveOrRecordPayment && (
+              {canReceiveOrRecordPayment && perms.receiveOrders && (
                 <Button
                   variant="outline"
                   onClick={handleStartReceive}
@@ -1381,7 +1399,7 @@ export function PurchaseOrderDetailPage() {
                   <PackageCheck className="w-4 h-4" /> Receive
                 </Button>
               )}
-              {canReceiveOrRecordPayment && showPaymentSummary && (po.payment_status ?? 'Unpaid') !== 'Paid' && (
+              {canReceiveOrRecordPayment && showPaymentSummary && (po.payment_status ?? 'Unpaid') !== 'Paid' && perms.recordPayments && (
                 <Button
                   variant="outline"
                   onClick={handleOpenPayment}
@@ -1390,7 +1408,7 @@ export function PurchaseOrderDetailPage() {
                   <CreditCard className="w-4 h-4" /> Record Payment
                 </Button>
               )}
-              {canCancelPurchaseOrder && (
+              {canCancelPurchaseOrder && perms.creation && (
                 <Button
                   type="button"
                   variant="outline"
@@ -1401,9 +1419,11 @@ export function PurchaseOrderDetailPage() {
                   Cancel order
                 </Button>
               )}
+              {perms.creation && (
               <Button variant="outline" onClick={handleStartEdit} className="gap-2">
                 <Edit className="w-4 h-4" /> Edit
               </Button>
+              )}
             </>
           )}
         </div>
@@ -1974,7 +1994,7 @@ export function PurchaseOrderDetailPage() {
       </div>
 
       {/* ── Documents & Proofs (same pattern as customer orders) ── */}
-      {po && (
+      {po && perms.documents && (
         <PurchaseOrderDocumentsProofs
           po={{
             id: po.id,
@@ -1996,6 +2016,7 @@ export function PurchaseOrderDetailPage() {
       )}
 
       {/* Activity log (same account / role pattern as customer orders) */}
+      {perms.activityLog && (
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
@@ -2003,16 +2024,16 @@ export function PurchaseOrderDetailPage() {
             Activity log
           </CardTitle>
         </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
+        <CardContent className="p-0">
+          <div className="space-y-3 p-6 pb-3">
             {poLogs.length === 0 ? (
               <p className="text-sm text-gray-500 text-center py-8">
                 No activity recorded yet. Saves, approvals, supplier confirmation, receipts, proof photos, and payments will
                 appear here.
               </p>
             ) : (
-              poLogs.map((log, index) => {
-                const isLast = index === poLogs.length - 1;
+              pagedPoLogs.map((log, index) => {
+                const isLast = index === pagedPoLogs.length - 1;
                 const getActionIcon = () => {
                   switch (log.action) {
                     case 'requested':
@@ -2120,8 +2141,17 @@ export function PurchaseOrderDetailPage() {
               })
             )}
           </div>
+          {poLogs.length > ACTIVITY_LOG_PAGE_SIZE && (
+            <TablePagination
+              page={poLogPage}
+              pageSize={ACTIVITY_LOG_PAGE_SIZE}
+              total={poLogs.length}
+              onPageChange={setPoLogPage}
+            />
+          )}
         </CardContent>
       </Card>
+      )}
 
       {/* Material picker modal */}
       <RawMaterialPickerModal

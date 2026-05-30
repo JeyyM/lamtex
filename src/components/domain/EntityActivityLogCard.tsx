@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Clock,
   User,
@@ -13,6 +13,7 @@ import {
   ClipboardList,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
+import { ACTIVITY_LOG_PAGE_SIZE, TablePagination } from '@/src/components/ui/TablePagination';
 import { entityLogCardHeadline, EntityActivityLogHumanDetails } from '@/src/components/domain/EntityActivityLogHuman';
 
 export type EntityActivityLogRow = {
@@ -115,6 +116,20 @@ export function EntityActivityLogCard({
   logs: EntityActivityLogRow[];
   emptyHint?: string;
 }) {
+  const [page, setPage] = useState(1);
+
+  useEffect(() => {
+    setPage(1);
+  }, [logs]);
+
+  const totalPages = Math.max(1, Math.ceil(logs.length / ACTIVITY_LOG_PAGE_SIZE));
+  const safePage = Math.min(Math.max(1, page), totalPages);
+
+  const visibleLogs = useMemo(
+    () => logs.slice((safePage - 1) * ACTIVITY_LOG_PAGE_SIZE, safePage * ACTIVITY_LOG_PAGE_SIZE),
+    [logs, safePage],
+  );
+
   return (
     <Card>
       <CardHeader>
@@ -123,13 +138,13 @@ export function EntityActivityLogCard({
           {title}
         </CardTitle>
       </CardHeader>
-      <CardContent>
-        <div className="space-y-3">
+      <CardContent className="p-0">
+        <div className="space-y-3 p-6 pb-3">
           {logs.length === 0 ? (
             <p className="text-sm text-gray-500 text-center py-8">{emptyHint}</p>
           ) : (
-            logs.map((log, index) => {
-              const isLast = index === logs.length - 1;
+            visibleLogs.map((log, index) => {
+              const isLast = index === visibleLogs.length - 1;
               const t = new Date(log.created_at);
               const timeStr = t.toLocaleString('en-PH', {
                 year: 'numeric',
@@ -174,6 +189,14 @@ export function EntityActivityLogCard({
             })
           )}
         </div>
+        {logs.length > ACTIVITY_LOG_PAGE_SIZE && (
+          <TablePagination
+            page={safePage}
+            pageSize={ACTIVITY_LOG_PAGE_SIZE}
+            total={logs.length}
+            onPageChange={setPage}
+          />
+        )}
       </CardContent>
     </Card>
   );

@@ -3,6 +3,9 @@ import { Button } from '@/src/components/ui/Button';
 
 export const TABLE_PAGE_SIZE = 20;
 
+/** Standard page size for entity timeline activity logs. */
+export const ACTIVITY_LOG_PAGE_SIZE = 10;
+
 type TablePaginationProps = {
   page: number;
   pageSize?: number;

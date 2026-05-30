@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
+import { useSupplierPermissions } from '@/src/lib/permissions/supplierPermissions';
+import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { StatKpiCard } from '@/src/components/ui/StatKpiCard';
 import { Badge } from '@/src/components/ui/Badge';
@@ -42,6 +44,7 @@ type ViewMode = 'overview' | 'spending';
 
 export function SuppliersPage() {
   const { branch, addAuditLog } = useAppContext();
+  const perms = useSupplierPermissions();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const legacyOpenSupplierId = searchParams.get('supplier');
@@ -300,6 +303,10 @@ export function SuppliersPage() {
   };
 
   const COLORS = ['#EF4444', '#F59E0B', '#10B981', '#3B82F6', '#8B5CF6'];
+
+  if (!perms.pageAccess) {
+    return <ModuleAccessDenied moduleName="Suppliers" />;
+  }
 
   // ── Loading / Error ────────────────────────────────────
   if (loading) {
@@ -711,17 +718,24 @@ export function SuppliersPage() {
               </p>
             </CardHeader>
             <CardContent className="min-w-0">
-              <div className="w-full min-w-0 max-w-full">
-                <table className="w-full max-w-full table-auto border-collapse">
+              <div className="w-full min-w-0 max-w-full overflow-x-auto">
+                <table className="w-full min-w-[640px] table-fixed border-collapse">
+                  <colgroup>
+                    <col className="w-[32%]" />
+                    <col className="w-[16%]" />
+                    <col className="w-[12%]" />
+                    <col className="w-[14%]" />
+                    <col className="w-[14%]" />
+                    <col className="w-[12%]" />
+                  </colgroup>
                   <thead className="bg-gray-50 border-b border-gray-200">
                     <tr>
-                      <th className="px-3 py-3 align-middle min-w-0 text-left text-xs font-medium text-gray-500 uppercase">Supplier</th>
-                      <th className="w-0 px-3 py-3 align-middle text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Type</th>
-                      <th className="w-0 px-3 py-3 align-middle text-center text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Status</th>
-                      <th className="w-0 px-1.5 sm:px-2 py-3 align-middle text-right text-xs font-medium text-gray-500 uppercase whitespace-nowrap">YTD</th>
-                      <th className="w-0 px-1.5 sm:px-2 py-3 align-middle text-right text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Lifetime</th>
-                      <th className="w-0 px-1.5 sm:px-2 py-3 align-middle text-right text-xs font-medium text-gray-500 uppercase whitespace-nowrap">POs</th>
-                      <th className="w-0 px-2 sm:px-3 py-3 align-middle text-right text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Avg order</th>
+                      <th className="px-3 py-3 align-middle text-left text-xs font-medium text-gray-500 uppercase">Supplier</th>
+                      <th className="px-3 py-3 align-middle text-left text-xs font-medium text-gray-500 uppercase">Type</th>
+                      <th className="px-3 py-3 align-middle text-center text-xs font-medium text-gray-500 uppercase">Status</th>
+                      <th className="px-3 py-3 align-middle text-right text-xs font-medium text-gray-500 uppercase">YTD</th>
+                      <th className="px-3 py-3 align-middle text-right text-xs font-medium text-gray-500 uppercase">Lifetime</th>
+                      <th className="px-3 py-3 align-middle text-right text-xs font-medium text-gray-500 uppercase">Avg order</th>
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
@@ -741,25 +755,19 @@ export function SuppliersPage() {
                               {s.preferred_supplier && <Badge variant="success" className="text-xs flex-shrink-0">Preferred</Badge>}
                             </div>
                           </td>
-                          <td className="w-0 px-3 py-3 align-middle text-sm text-gray-600 whitespace-nowrap" title={s.type}>
+                          <td className="px-3 py-3 align-middle text-sm text-gray-600 truncate" title={s.type}>
                             {s.type}
                           </td>
-                          <td className="w-0 px-3 py-3 align-middle text-center whitespace-nowrap">
+                          <td className="px-3 py-3 align-middle text-center whitespace-nowrap">
                             <Badge variant={getStatusColor(s.status)}>{s.status}</Badge>
                           </td>
-                          <td className="w-0 px-1.5 sm:px-2 py-3 align-middle whitespace-nowrap text-right text-sm font-bold text-blue-600 tabular-nums">
+                          <td className="px-3 py-3 align-middle whitespace-nowrap text-right text-sm font-bold text-blue-600 tabular-nums">
                             {formatCurrency(sp.ytd)}
                           </td>
-                          <td className="w-0 px-1.5 sm:px-2 py-3 align-middle whitespace-nowrap text-right text-sm font-medium text-gray-900 tabular-nums">
+                          <td className="px-3 py-3 align-middle whitespace-nowrap text-right text-sm font-medium text-gray-900 tabular-nums">
                             {formatCurrency(sp.lifetime)}
                           </td>
-                          <td className="w-0 px-1.5 sm:px-2 py-3 align-middle text-right text-sm text-gray-900 tabular-nums">
-                            {sp.orderCount}
-                            {sp.fromPO && sp.ytdOrderCount > 0 && sp.ytdOrderCount !== sp.orderCount && (
-                              <span className="block text-[10px] text-gray-400 leading-tight">{sp.ytdOrderCount} in {ytdLabelYear}</span>
-                            )}
-                          </td>
-                          <td className="w-0 px-2 sm:px-3 py-3 align-middle whitespace-nowrap text-right text-sm font-medium text-green-600 tabular-nums">
+                          <td className="px-3 py-3 align-middle whitespace-nowrap text-right text-sm font-medium text-green-600 tabular-nums">
                             {sp.avgOrder > 0 ? formatCurrency(sp.avgOrder) : '—'}
                           </td>
                         </tr>
@@ -771,21 +779,15 @@ export function SuppliersPage() {
                       <td className="px-3 py-3 align-middle text-gray-800" colSpan={3}>
                         Total ({tableRows.length} suppliers in view)
                       </td>
-                      <td className="w-0 px-1.5 sm:px-2 py-3 align-middle text-right text-sm text-blue-700 tabular-nums whitespace-nowrap">
+                      <td className="px-3 py-3 align-middle text-right text-sm text-blue-700 tabular-nums whitespace-nowrap">
                         {formatCurrency(sumYtd)}
                       </td>
-                      <td className="w-0 px-1.5 sm:px-2 py-3 align-middle text-right text-sm text-gray-900 tabular-nums whitespace-nowrap">
+                      <td className="px-3 py-3 align-middle text-right text-sm text-gray-900 tabular-nums whitespace-nowrap">
                         {formatCurrency(sumLifetime)}
                       </td>
-                      <td className="w-0 px-1.5 sm:px-2 py-3 align-middle text-right text-sm text-gray-900 tabular-nums whitespace-nowrap">
-                        {sumOrders}
-                      </td>
-                      <td className="w-0 px-2 sm:px-3 py-3 align-middle min-w-0 text-right text-[11px] sm:text-xs text-gray-500 font-normal leading-snug break-words max-w-[12rem] sm:max-w-[14rem]">
+                      <td className="px-3 py-3 align-middle text-right text-xs text-gray-500 font-normal tabular-nums whitespace-nowrap">
                         {sumOrders > 0 ? (
-                          <>
-                            <span className="block font-medium text-gray-600">Blended avg</span>
-                            <span className="text-gray-500">≈ {formatCurrency(sumLifetime / sumOrders)} · all rows</span>
-                          </>
+                          <>≈ {formatCurrency(sumLifetime / sumOrders)}</>
                         ) : (
                           '—'
                         )}

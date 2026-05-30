@@ -239,6 +239,57 @@ export async function setMaterialTotalStockDirect(
   ).catch((err) => console.warn('[material-stock-notify] total stock notify failed', err));
 }
 
+/** Overwrite stock from the material edit form (branch-scoped or org-wide). */
+export async function overwriteMaterialStock(
+  params: {
+    materialId: string;
+    branchName: string | null | undefined;
+    newQuantity: number;
+    previousQuantity: number;
+    reorderPoint: number;
+    triggeredBy?: string | null;
+  },
+  client: SupabaseClient = defaultSupabase,
+): Promise<number> {
+  const qty = Math.max(0, params.newQuantity);
+  let resolvedBranchId: string | null = null;
+  const branchName = params.branchName?.trim();
+  if (branchName) {
+    const { data: branchRow } = await client
+      .from('branches')
+      .select('id')
+      .eq('name', branchName)
+      .maybeSingle();
+    resolvedBranchId = branchRow?.id ?? null;
+  }
+
+  if (resolvedBranchId) {
+    const result = await setMaterialBranchQuantity(
+      {
+        materialId: params.materialId,
+        branchId: resolvedBranchId,
+        quantity: qty,
+        reorderPoint: params.reorderPoint,
+        triggeredBy: params.triggeredBy ?? null,
+      },
+      client,
+    );
+    return result.totalStock;
+  }
+
+  await setMaterialTotalStockDirect(
+    {
+      materialId: params.materialId,
+      totalStock: qty,
+      previousTotalStock: params.previousQuantity,
+      reorderPoint: params.reorderPoint,
+      triggeredBy: params.triggeredBy ?? null,
+    },
+    client,
+  );
+  return qty;
+}
+
 /** Shipment / BOM / IBR: deduct branch stock and notify on threshold cross. */
 export async function deductMaterialBranchStock(
   params: {

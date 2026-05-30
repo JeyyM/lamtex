@@ -89,7 +89,7 @@ const FIELD_LABELS: Record<string, string> = {
   last_purchase_price: 'Last purchase price',
   size: 'Variant size',
   lead_time_days: 'Lead time',
-  min_order_qty: 'Minimum order quantity',
+  min_order_qty: 'Minimum production quantity',
   bom_line_count: 'BOM line count',
   spec_count: 'Specification rows',
 };

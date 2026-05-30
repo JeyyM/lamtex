@@ -34,6 +34,9 @@ import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { StatKpiCard } from '@/src/components/ui/StatKpiCard';
 import { useAppContext } from '@/src/store/AppContext';
+import { useFinancePermissions } from '@/src/lib/permissions/financePermissions';
+import { useEmployeesPermissions } from '@/src/lib/permissions/employeesPermissions';
+import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
 import { resolveBranchIdByName } from '@/src/lib/branchCompanySettings';
 import {
   fetchAgentPendingCommissions,
@@ -213,6 +216,9 @@ function parseFinanceTab(value: string | null): TabId | null {
 
 export function FinancePageNew() {
   const { role, employeeName, employeeId, branch, addAuditLog } = useAppContext();
+  const perms = useFinancePermissions();
+  const canCommissions = perms.commissions;
+  const employeesPerms = useEmployeesPermissions();
   const isExecutive = role === 'Executive';
   const isAgent = role === 'Agent';
   const [searchParams, setSearchParams] = useSearchParams();
@@ -259,6 +265,9 @@ export function FinancePageNew() {
 
   const setTab = useCallback(
     (next: TabId) => {
+      if (next === 'commissions' && !canCommissions) {
+        next = 'outstanding';
+      }
       setTabState(next);
       setSearchParams(
         (prev) => {
@@ -270,17 +279,35 @@ export function FinancePageNew() {
         { replace: true },
       );
     },
-    [setSearchParams],
+    [canCommissions, setSearchParams],
   );
 
   useEffect(() => {
     const fromUrl = parseFinanceTab(searchParams.get('tab'));
+    if (fromUrl === 'commissions' && !canCommissions) {
+      setTabState('outstanding');
+      setSearchParams(
+        (prev) => {
+          const params = new URLSearchParams(prev);
+          params.delete('tab');
+          return params;
+        },
+        { replace: true },
+      );
+      return;
+    }
     if (fromUrl) {
       setTabState(fromUrl);
       return;
     }
-    if (isAgent) setTabState('commissions');
-  }, [searchParams, isAgent]);
+    if (isAgent && canCommissions) setTabState('commissions');
+  }, [searchParams, isAgent, canCommissions, setSearchParams]);
+
+  useEffect(() => {
+    if (tab === 'commissions' && !canCommissions) {
+      setTab('outstanding');
+    }
+  }, [tab, canCommissions, setTab]);
 
   /** Toast auto-dismiss. */
   useEffect(() => {
@@ -345,18 +372,18 @@ export function FinancePageNew() {
   useEffect(() => {
     void loadMetrics();
     void loadOutstanding();
-    if (isAgent || parseFinanceTab(searchParams.get('tab')) === 'commissions') {
+    if (canCommissions && (isAgent || parseFinanceTab(searchParams.get('tab')) === 'commissions')) {
       void loadOrdersWithProofs();
     }
-  }, [isAgent, loadOrdersWithProofs, searchParams]);
+  }, [isAgent, canCommissions, loadOrdersWithProofs, searchParams]);
 
   useEffect(() => {
     if (tab === 'credit') void loadCredits();
-    if (tab === 'commissions') {
+    if (tab === 'commissions' && canCommissions) {
       void loadOrdersWithProofs();
       void loadMetrics();
     }
-  }, [tab, loadOrdersWithProofs]);
+  }, [tab, canCommissions, loadOrdersWithProofs]);
 
   const handleSort = (key: string) => {
     if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -625,6 +652,10 @@ export function FinancePageNew() {
     }
   };
 
+  if (!perms.pageAccess) {
+    return <ModuleAccessDenied moduleName="Finance" />;
+  }
+
   return (
     <div className="p-3 sm:p-4 md:p-6 space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -637,7 +668,7 @@ export function FinancePageNew() {
       </div>
 
       {/* KPIs */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+      <div className={`grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 ${canCommissions ? 'lg:grid-cols-4' : 'lg:grid-cols-2'}`}>
         <StatKpiCard
           label="Total Outstanding"
           value={formatPeso(metrics?.totalOutstanding)}
@@ -654,6 +685,8 @@ export function FinancePageNew() {
           tone="rose"
           loading={loading.metrics}
         />
+        {canCommissions && (
+        <>
         <StatKpiCard
           label="Commissions Paid Out"
           value={formatPeso(metrics?.commissionsPaidOut)}
@@ -675,6 +708,8 @@ export function FinancePageNew() {
           loading={loading.metrics}
           onClick={() => setTab('commissions')}
         />
+        </>
+        )}
       </div>
 
       {/* Tabs */}
@@ -686,6 +721,7 @@ export function FinancePageNew() {
           <TabButton active={tab === 'credit'} onClick={() => setTab('credit')} icon={<CreditCard className="w-4 h-4" />}>
             Customer Credit
           </TabButton>
+          {canCommissions && (
           <TabButton
             active={tab === 'commissions'}
             onClick={() => setTab('commissions')}
@@ -696,6 +732,7 @@ export function FinancePageNew() {
           >
             Commission Release
           </TabButton>
+          )}
               </div>
               </div>
 
@@ -854,7 +891,7 @@ export function FinancePageNew() {
                             {rowOverlay({})}
                           </td>
                           <td className="relative py-3 px-3 align-top hidden md:table-cell">
-                            {row.agentId && row.agentName ? (
+                            {row.agentId && row.agentName && employeesPerms.pageAccess ? (
                               <Link
                                 to={`/employees/${row.agentId}`}
                                 title={FINANCE_LINK_TITLE}
@@ -955,7 +992,7 @@ export function FinancePageNew() {
         </Card>
       )}
 
-      {tab === 'commissions' && (
+      {tab === 'commissions' && canCommissions && (
         <Card>
           <CardHeader>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1057,7 +1094,7 @@ export function FinancePageNew() {
                             <span className="text-gray-800">{row.customerName ?? '—'}</span>
                           </td>
                         )}
-                        {row.agentId && row.agentName ? (
+                        {row.agentId && row.agentName && employeesPerms.pageAccess ? (
                           <FinanceTableCellLink
                             to={`/employees/${row.agentId}`}
                             ariaLabel={`Open agent ${row.agentName}`}
@@ -1208,7 +1245,7 @@ export function FinancePageNew() {
           </div>
       </PortalModalOverlay>
 
-      {commissionModalOrder && (
+      {commissionModalOrder && canCommissions && (
         <OrderCommissionProofsModal
           order={commissionModalOrder}
           isExecutive={isExecutive}
@@ -1339,6 +1376,7 @@ function OrderCommissionProofsModal(props: {
   onUpdated: () => Promise<void>;
   onAudit?: (message: string) => void;
 }) {
+  const employeesPerms = useEmployeesPermissions();
   const [proofs, setProofs] = useState<OrderCommissionProofRow[]>([]);
   const [clientType, setClientType] = useState<'Office' | 'Personal'>('Office');
   const [commissionPercentLabel, setCommissionPercentLabel] = useState('0.5%');
@@ -1464,7 +1502,7 @@ function OrderCommissionProofsModal(props: {
         </div>
         <p className="text-gray-600 text-xs">
           Agent:{' '}
-          {props.order.agentId && props.order.agentName ? (
+          {props.order.agentId && props.order.agentName && employeesPerms.pageAccess ? (
             <FinanceLink to={`/employees/${props.order.agentId}`} className="text-xs">
               {props.order.agentName}
             </FinanceLink>

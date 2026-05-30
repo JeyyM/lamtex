@@ -13,6 +13,8 @@ import {
 import { supabase } from '../lib/supabase';
 import { insertProductLog, mapAppRoleToLogRole } from '../lib/domainActivityLog';
 import { isCategoryCatalogHidden, isProductFamilyCatalogHidden, CATALOG_HIDDEN_CLASS } from '../lib/productCatalogVisibility';
+import { useProductPermissions } from '../lib/permissions/productPermissions';
+import { ModuleAccessDenied } from '../components/permissions/ModuleAccessDenied';
 import { scopedProductIdList } from '../lib/warehouseScope';
 import { effectiveInventoryBranch } from '../lib/inventoryAccess';
 import { computeStockStatus } from '../lib/stockStatus';
@@ -302,6 +304,7 @@ export default function ProductCategoryPage() {
   const navigate = useNavigate();
   const { categoryName } = useParams<{ categoryName: string }>();
   const { branch, setHideBranchSelector, employeeName, role, session, addAuditLog, warehouseScope } = useAppContext();
+  const perms = useProductPermissions();
   const inventoryBranch = effectiveInventoryBranch(role, branch);
   const scopedProductIds = scopedProductIdList(warehouseScope);
 
@@ -524,6 +527,10 @@ export default function ProductCategoryPage() {
   }
 
   // ── Render ──
+  if (!perms.pageAccess) {
+    return <ModuleAccessDenied moduleName="Products" />;
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -536,13 +543,14 @@ export default function ProductCategoryPage() {
             <h1 className="text-xl md:text-2xl font-bold text-gray-900 truncate">{categoryTitle}</h1>
             <p className="text-xs md:text-sm text-gray-500 mt-1 truncate">
               {loading ? '...' : `${filteredProducts.length} product families`}
-              {' · '}₱{(totalRevenue / 1_000_000).toFixed(2)}M revenue
+              {perms.paymentData ? ` · ₱${(totalRevenue / 1_000_000).toFixed(2)}M revenue` : ''}
               {branch ? ` · ${branch}` : ''}
               {categoryHidden ? ' · Hidden category' : ''}
             </p>
           </div>
         </div>
         <div className="flex flex-wrap gap-2 justify-end w-full md:w-auto flex-shrink-0">
+          {perms.exportAccess && (
           <Button
             variant="outline"
             className="flex-1 sm:flex-none"
@@ -579,6 +587,8 @@ export default function ProductCategoryPage() {
             )}
             {exportingCategory ? 'Exporting…' : 'Export'}
           </Button>
+          )}
+          {perms.productCreation && (
           <Button
             variant="primary"
             onClick={() => { setEditingProduct(null); setIsEditMode(false); setShowAddProductModal(true); }}
@@ -588,6 +598,7 @@ export default function ProductCategoryPage() {
             <span className="hidden sm:inline">Add Product Family</span>
             <span className="sm:hidden">Add Family</span>
           </Button>
+          )}
         </div>
       </div>
 
@@ -600,6 +611,7 @@ export default function ProductCategoryPage() {
           icon={<Package />}
           loading={loading}
         />
+        {perms.stockAccess && (
         <StatKpiCard
           label="Low Stock"
           value={loading ? '…' : String(lowStockCount)}
@@ -607,6 +619,8 @@ export default function ProductCategoryPage() {
           icon={<AlertTriangle />}
           loading={loading}
         />
+        )}
+        {perms.paymentData && (
         <StatKpiCard
           label="Category Revenue"
           value={loading ? '…' : `₱${(totalRevenue / 1_000_000).toFixed(2)}M`}
@@ -614,6 +628,7 @@ export default function ProductCategoryPage() {
           icon={<DollarSign />}
           loading={loading}
         />
+        )}
       </div>
 
       {/* Filters */}
@@ -675,6 +690,7 @@ export default function ProductCategoryPage() {
             const derivedStatus = familyDerivedStatus.get(p.id) ?? p.status;
             return (
             <div key={p.id} className={`group relative ${familyHidden ? CATALOG_HIDDEN_CLASS : ''}`}>
+              {perms.productCreation && (
               <button
                 onClick={(e) => handleEditProduct(p, e)}
                 className="absolute top-2 right-2 z-10 p-2.5 bg-white hover:bg-red-600 text-gray-700 hover:text-white rounded-lg shadow-lg border border-gray-300 group-hover:border-red-600 transition-all duration-200 hover:scale-110"
@@ -682,6 +698,7 @@ export default function ProductCategoryPage() {
               >
                 <Edit className="w-4 h-4" />
               </button>
+              )}
 
               <Card className="hover:shadow-xl transition-all duration-200 border-2 hover:border-red-500 h-full">
                 <Link to={`/products/category/${categoryName}/family/${p.id}`} className="block h-full">
@@ -720,17 +737,22 @@ export default function ProductCategoryPage() {
                         <span className="text-gray-600">Variants:</span>
                         <span className="font-bold text-gray-900">{p.total_variants}</span>
                       </div>
+                      {perms.stockAccess && (
                       <div className="flex items-center justify-between text-sm">
                         <span className="text-gray-600">Total Stock:</span>
                         <span className={`font-bold ${p.total_stock < 200 ? 'text-orange-600' : 'text-gray-900'}`}>
                           {(p.total_stock ?? 0).toLocaleString()} units
                         </span>
                       </div>
+                      )}
+                      {perms.paymentData && (
                       <div className="flex items-center justify-between text-sm">
                         <span className="text-gray-600">Avg. Price:</span>
                         <span className="font-semibold text-gray-900">₱{(Number(p.avg_price) || 0).toLocaleString()}</span>
                       </div>
+                      )}
                     </div>
+                    {perms.paymentData && (
                     <div className="pt-3 border-t space-y-2">
                       <div className="flex items-center justify-between text-sm">
                         <span className="text-gray-600">Units Sold YTD:</span>
@@ -746,7 +768,8 @@ export default function ProductCategoryPage() {
                         </span>
                       </div>
                     </div>
-                    {['Low Stock', 'Critical', 'Out of Stock'].includes(derivedStatus) && (
+                    )}
+                    {perms.stockAccess && ['Low Stock', 'Critical', 'Out of Stock'].includes(derivedStatus) && (
                       <div className={`flex items-start gap-2 p-3 rounded-lg border ${derivedStatus === 'Critical' || derivedStatus === 'Out of Stock' ? 'bg-red-50 border-red-200' : 'bg-orange-50 border-orange-200'}`}>
                         <AlertTriangle className={`w-4 h-4 flex-shrink-0 mt-0.5 ${derivedStatus === 'Critical' || derivedStatus === 'Out of Stock' ? 'text-red-600' : 'text-orange-600'}`} />
                         <div className={`text-xs ${derivedStatus === 'Critical' || derivedStatus === 'Out of Stock' ? 'text-red-700' : 'text-orange-700'}`}>

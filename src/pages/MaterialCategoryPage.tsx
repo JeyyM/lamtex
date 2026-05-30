@@ -34,6 +34,9 @@ import {
   downloadMaterialCategoryWorkbook,
   fetchMaterialCategoryForExport,
 } from '../lib/rawMaterialsExport';
+import { useMaterialPermissions } from '../lib/permissions/materialPermissions';
+import { ModuleAccessDenied } from '../components/permissions/ModuleAccessDenied';
+import { overwriteMaterialStock } from '../lib/rawMaterialStock';
 
 // ── Supabase row shape ───────────────────────────────────────────────────────
 interface MaterialStockRow {
@@ -69,6 +72,7 @@ export default function MaterialCategoryPage() {
   const navigate = useNavigate();
   const { categoryName } = useParams<{ categoryName: string }>();
   const { selectedBranch, employeeName, role, session, addAuditLog, warehouseScope } = useAppContext();
+  const perms = useMaterialPermissions();
   const scopedMaterialIds = scopedMaterialIdList(warehouseScope);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'stock' | 'usage'>('name');
@@ -149,6 +153,7 @@ export default function MaterialCategoryPage() {
       unitOfMeasure: m.unit_of_measure,
       costPerUnit: m.cost_per_unit,
       reorderPoint: m.reorder_point,
+      currentStock: getMaterialStockForBranch(m, selectedBranch),
       specifications: Array.isArray(m.specifications) ? m.specifications : [],
     });
     setEditingMaterialId(m.id);
@@ -185,6 +190,36 @@ export default function MaterialCategoryPage() {
           })
           .eq('id', editingMaterialId);
         if (error) throw error;
+
+        const prevStock = oldRow
+          ? (selectedBranch ? getMaterialStockForBranch(oldRow, selectedBranch) : Number(oldRow.total_stock) || 0)
+          : 0;
+        if (
+          perms.stockAccess &&
+          formData.currentStock != null &&
+          Number(formData.currentStock) !== prevStock
+        ) {
+          const persistedTotal = await overwriteMaterialStock({
+            materialId: editingMaterialId,
+            branchName: selectedBranch,
+            newQuantity: Number(formData.currentStock),
+            previousQuantity: prevStock,
+            reorderPoint: formData.reorderPoint,
+            triggeredBy: `Stock overwritten by ${actorName}${selectedBranch ? ` (branch ${selectedBranch})` : ''}`,
+          });
+          void insertRawMaterialLog(supabase, {
+            rawMaterialId: editingMaterialId,
+            action: 'stock_adjusted',
+            description: `Stock set to ${Number(formData.currentStock)} ${formData.unitOfMeasure} — ${formData.sku.trim().toUpperCase()}${
+              selectedBranch ? ` (branch ${selectedBranch})` : ''
+            }`,
+            performedBy: actorName,
+            performedByRole: actorRole,
+            oldValue: { total_stock: prevStock, branch: selectedBranch ?? null },
+            newValue: { total_stock: Number(formData.currentStock), branch: selectedBranch ?? null },
+            metadata: { branch_context: selectedBranch ?? null, aggregate_total: persistedTotal, overwrite: true },
+          });
+        }
 
         // Re-fire alerts if the reorder point moved — stock may now be below it.
         if (oldRow && Number(oldRow.reorder_point) !== Number(formData.reorderPoint)) {
@@ -449,6 +484,10 @@ export default function MaterialCategoryPage() {
     return 'In Stock';
   };
 
+  if (!perms.pageAccess) {
+    return <ModuleAccessDenied moduleName="Raw Materials" />;
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -460,11 +499,13 @@ export default function MaterialCategoryPage() {
           <div className="min-w-0">
             <h1 className="text-xl md:text-2xl font-bold text-gray-900 truncate">{categoryTitle}</h1>
             <p className="text-sm text-gray-500 mt-1 truncate">
-              {filteredMaterials.length} materials • ₱{(totalValue / 1000000).toFixed(2)}M total value
+              {filteredMaterials.length} materials
+              {perms.paymentData ? ` · ₱${(totalValue / 1000000).toFixed(2)}M total value` : ''}
             </p>
           </div>
         </div>
         <div className="flex gap-2 flex-wrap">
+          {perms.exportAccess && (
           <Button
             variant="outline"
             className="flex-1 sm:flex-none"
@@ -499,6 +540,8 @@ export default function MaterialCategoryPage() {
             )}
             {exportingCategory ? 'Exporting…' : 'Export'}
           </Button>
+          )}
+          {perms.materialCreation && (
           <Button
             variant="primary"
             className="flex-1 sm:flex-none"
@@ -516,6 +559,7 @@ export default function MaterialCategoryPage() {
             <span className="hidden sm:inline">Add Material</span>
             <span className="sm:hidden">Add</span>
           </Button>
+          )}
         </div>
       </div>
 
@@ -544,8 +588,12 @@ export default function MaterialCategoryPage() {
           {/* Summary Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 md:gap-4">
             <StatKpiCard label="Total Items" value={String(filteredMaterials.length)} tone="blue" icon={<Package />} />
+            {perms.stockAccess && (
             <StatKpiCard label="Low Stock Items" value={String(lowStockCount)} tone="amber" icon={<AlertTriangle />} />
+            )}
+            {perms.paymentData && (
             <StatKpiCard label="Category Value" value={`₱${(totalValue / 1000000).toFixed(2)}M`} tone="emerald" icon={<TrendingUp />} />
+            )}
           </div>
 
           {/* Filters */}
@@ -589,7 +637,7 @@ export default function MaterialCategoryPage() {
                 <p className="text-sm text-gray-500 mb-4">
                   {searchQuery ? 'Try adjusting your search' : 'Add the first material to this category'}
                 </p>
-                {!searchQuery && (
+                {!searchQuery && perms.materialCreation && (
                   <button
                     onClick={() => {
                       setIsEditMode(false);
@@ -609,13 +657,10 @@ export default function MaterialCategoryPage() {
                 const stockPct = getStockPercentage(m);
                 const statusLabel = getStatusLabel(m);
                 const statusVariant = getStatusBadge(m);
-                const daysOfCover = m.monthly_consumption > 0
-                  ? (m.total_stock / (m.monthly_consumption / 30))
-                  : Infinity;
 
                 return (
                   <div key={m.id} className="group relative">
-                    {/* Edit Button */}
+                    {perms.materialCreation && (
                     <button
                       onClick={(e) => { e.stopPropagation(); handleEditMaterial(m); }}
                       className="absolute top-2 right-2 z-10 p-2.5 bg-white hover:bg-red-600 text-gray-700 hover:text-white rounded-lg shadow-lg border border-gray-300 group-hover:border-red-600 transition-all duration-200 hover:scale-110"
@@ -623,10 +668,11 @@ export default function MaterialCategoryPage() {
                     >
                       <Edit className="w-4 h-4" />
                     </button>
+                    )}
 
                     <Link to={`/materials/category/${categoryName}/details/${m.id}`} className="block">
                     <Card
-                      className="group-hover:shadow-xl transition-all duration-200 border-2 group-hover:border-red-500 cursor-pointer"
+                      className="overflow-hidden group-hover:shadow-xl transition-all duration-200 border-2 group-hover:border-red-500 cursor-pointer"
                     >
                       <CardContent className="p-0">
                         {/* Image */}
@@ -655,7 +701,7 @@ export default function MaterialCategoryPage() {
                             </p>
                           </div>
 
-                          {/* Stock bar */}
+                          {perms.stockAccess && (
                           <div>
                             <div className="flex items-center justify-between mb-2">
                               <span className="text-sm font-medium text-gray-700">
@@ -678,18 +724,15 @@ export default function MaterialCategoryPage() {
                               </span>
                             </div>
                           </div>
+                          )}
 
+                          {perms.stockAccess && (
+                          <>
                           {/* Usage */}
                           <div className="pt-3 border-t space-y-2">
                             <div className="flex items-center justify-between text-sm">
                               <span className="text-gray-600">Monthly Usage:</span>
                               <span className="font-medium text-gray-900">{m.monthly_consumption.toLocaleString()} {m.unit_of_measure}</span>
-                            </div>
-                            <div className="flex items-center justify-between text-sm">
-                              <span className="text-gray-600">Days of Cover:</span>
-                              <span className={`font-bold ${daysOfCover < 7 ? 'text-red-600' : daysOfCover < 14 ? 'text-yellow-600' : 'text-green-600'}`}>
-                                {daysOfCover === Infinity ? '∞' : `${daysOfCover.toFixed(1)} days`}
-                              </span>
                             </div>
                           </div>
 
@@ -706,9 +749,12 @@ export default function MaterialCategoryPage() {
                               <p className="text-xs text-yellow-700"><span className="font-semibold">Low Stock.</span> Consider reordering soon.</p>
                             </div>
                           )}
+                          </>
+                          )}
 
-                          {/* Price & Actions */}
+                          {(perms.paymentData || perms.stockAccess) && (
                           <div className="pt-4 border-t space-y-3">
+                            {perms.paymentData && (
                             <div className="flex items-center justify-between">
                               <div>
                                 <div className="text-xs text-gray-500">Cost per Unit</div>
@@ -719,6 +765,8 @@ export default function MaterialCategoryPage() {
                                 <div className="text-lg font-semibold text-gray-900">₱{((m.total_stock * m.cost_per_unit) / 1000).toFixed(0)}K</div>
                               </div>
                             </div>
+                            )}
+                            {perms.stockAccess && (
                             <Button
                               variant="outline"
                               size="sm"
@@ -728,7 +776,9 @@ export default function MaterialCategoryPage() {
                               <Edit3 className="w-4 h-4" />
                               Adjust Stock
                             </Button>
+                            )}
                           </div>
+                          )}
                         </div>
                       </CardContent>
                     </Card>
@@ -751,6 +801,8 @@ export default function MaterialCategoryPage() {
           categoryName={categoryTitle}
           initialData={editingMaterial}
           isEditMode={isEditMode}
+          showStockOverwrite={isEditMode && perms.stockAccess}
+          showCostFields={perms.materialCreation || !isEditMode}
         />
       )}
 

@@ -56,6 +56,12 @@ import {
 } from '@/src/components/executive/executiveLinks';
 import { finishedGoodProductHref } from '@/src/lib/productRoutes';
 import { AgentColorSwatch } from '@/src/components/agentAnalytics/AgentColorSwatch';
+import { useProductionRequestPermissions } from '@/src/lib/permissions/productionRequestPermissions';
+import { usePurchaseOrderPermissions } from '@/src/lib/permissions/purchaseOrderPermissions';
+import { useInterBranchRequestPermissions } from '@/src/lib/permissions/interBranchRequestPermissions';
+import { useFinancePermissions } from '@/src/lib/permissions/financePermissions';
+import { useEmployeesPermissions } from '@/src/lib/permissions/employeesPermissions';
+import { useAgentAnalyticsPermissions } from '@/src/lib/permissions/agentAnalyticsPermissions';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -83,6 +89,10 @@ function daysUntil(iso: string | null): number | null {
 
 export function ExecutiveDashboard(): React.ReactElement {
   const { branch } = useAppContext();
+  const prPerms = useProductionRequestPermissions();
+  const poPerms = usePurchaseOrderPermissions();
+  const ibrPerms = useInterBranchRequestPermissions();
+  const financePerms = useFinancePermissions();
 
   const [bundle, setBundle] = useState<ExecutiveDashboardBundle | null>(null);
   const [loading, setLoading] = useState(true);
@@ -178,7 +188,9 @@ export function ExecutiveDashboard(): React.ReactElement {
       </div>
 
       {/* KPI STRIP */}
-      <ExecutiveKpiStrip kpis={bundle.kpis} />
+      <ExecutiveKpiStrip
+        kpis={bundle.kpis.filter((k) => k.id !== 'kpi-commissions' || financePerms.commissions)}
+      />
 
       {/* APPROVAL QUEUE — PENDING ORDERS */}
       <PendingOrdersCard
@@ -187,24 +199,34 @@ export function ExecutiveDashboard(): React.ReactElement {
       />
 
       {/* PROCUREMENT / IBR QUEUES */}
+      {(prPerms.pageAccess || poPerms.pageAccess || ibrPerms.pageAccess) && (
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {prPerms.pageAccess && (
         <PendingPRsCard
           rows={bundle.approvals.pendingProductionRequests}
           count={bundle.approvals.pendingProductionRequestCount}
         />
+        )}
+        {poPerms.pageAccess && (
         <PendingPOsCard
           rows={bundle.approvals.pendingPurchaseOrders}
           count={bundle.approvals.pendingPurchaseOrderCount}
           totalValue={bundle.approvals.pendingPurchaseOrderValue}
         />
+        )}
+        {ibrPerms.pageAccess && (
         <PendingIBRsCard
           rows={bundle.approvals.pendingInterBranchRequests}
           count={bundle.approvals.pendingInterBranchRequestCount}
         />
+        )}
       </div>
+      )}
 
       {/* FINANCE SNAPSHOT */}
+      {financePerms.pageAccess && (
       <FinanceSnapshotCard metrics={bundle.finance} revenueTrend={bundle.revenueTrend} />
+      )}
 
       {/* BRANCH BREAKDOWN — only meaningful when looking org-wide or 1+ branches exist */}
       {bundle.branchBreakdown.length > 1 && <BranchBreakdownCard rows={bundle.branchBreakdown} />}
@@ -558,6 +580,7 @@ function FinanceSnapshotCard(props: {
   metrics: ExecutiveDashboardBundle['finance'];
   revenueTrend: ExecutiveDashboardBundle['revenueTrend'];
 }) {
+  const financePerms = useFinancePermissions();
   const m = props.metrics;
   return (
     <Card>
@@ -595,7 +618,11 @@ function FinanceSnapshotCard(props: {
           <FinanceTile
             label="Pending proofs"
             value={String(m.pendingProofs)}
-            subtitle={`${formatExecutivePeso(m.pendingCommissions)} commission to release`}
+            subtitle={
+              financePerms.commissions
+                ? `${formatExecutivePeso(m.pendingCommissions)} commission to release`
+                : `${m.pendingProofs} awaiting review`
+            }
             tone={m.pendingProofs > 0 ? 'warning' : 'good'}
           />
         </div>
@@ -1021,6 +1048,8 @@ function TopCustomersCard(props: {
 function TopAgentsCard(props: {
   rows: ExecutiveDashboardBundle['topAgents'];
 }) {
+  const employeesPerms = useEmployeesPermissions();
+  const agentAnalyticsPerms = useAgentAnalyticsPermissions();
   return (
     <Card>
       <CardHeader>
@@ -1028,9 +1057,11 @@ function TopAgentsCard(props: {
           <CardTitle className="text-base flex items-center gap-2">
             <Clock className="w-4 h-4 text-blue-600" /> Top agents (MTD)
           </CardTitle>
+          {agentAnalyticsPerms.pageAccess && (
           <DashHeaderLink to="/agents">
             Analytics <ArrowRight className="w-4 h-4" />
           </DashHeaderLink>
+          )}
         </div>
       </CardHeader>
       <CardContent>
@@ -1043,6 +1074,7 @@ function TopAgentsCard(props: {
                 <div className="min-w-0 flex-1 flex items-center gap-2">
                   <AgentColorSwatch agentId={a.agentId} title={a.agentName} />
                   <div className="min-w-0 flex-1">
+                    {employeesPerms.pageAccess ? (
                     <DashLink
                       to={`/employees/${a.agentId}`}
                       className={`${DASH_LINK_CLASS} text-sm block truncate`}
@@ -1050,6 +1082,11 @@ function TopAgentsCard(props: {
                     >
                       {a.agentName}
                     </DashLink>
+                    ) : (
+                    <span className="text-sm text-gray-900 block truncate" title={a.agentName}>
+                      {a.agentName}
+                    </span>
+                    )}
                     <p className="text-xs text-gray-500 truncate">
                       {a.branchName ?? '—'} · {a.orderCountMTD.toLocaleString()} orders
                     </p>

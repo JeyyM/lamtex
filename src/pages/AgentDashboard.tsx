@@ -5,6 +5,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Ca
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { createDraftOrder } from '@/src/lib/createDraftOrder';
+import { useOrderPermissions } from '@/src/lib/permissions/orderPermissions';
+import { useFinancePermissions } from '@/src/lib/permissions/financePermissions';
 import { AgentPersonalKpiStrip } from '@/src/components/agent/AgentPersonalKpiStrip';
 import {
   DashQueueLink,
@@ -73,6 +75,8 @@ const DASH_LINK_MONO =
 export function AgentDashboard(): React.ReactElement {
   const navigate = useNavigate();
   const { branch, employeeId, employeeName, role, session, addAuditLog } = useAppContext();
+  const orderPerms = useOrderPermissions();
+  const financePerms = useFinancePermissions();
   const [bundle, setBundle] = useState<AgentDashboardBundle | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -198,6 +202,7 @@ export function AgentDashboard(): React.ReactElement {
           <DashHeaderLink to="/customers">
             <Users className="w-4 h-4" /> My customers
           </DashHeaderLink>
+          {orderPerms.creation && (
           <Button
             variant="primary"
             className="gap-2"
@@ -207,6 +212,7 @@ export function AgentDashboard(): React.ReactElement {
             {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShoppingCart className="w-4 h-4" />}
             Create order
           </Button>
+          )}
         </div>
       </div>
 
@@ -240,13 +246,15 @@ export function AgentDashboard(): React.ReactElement {
           icon={<AlertTriangle className="w-5 h-5 text-red-600" />}
           rows={bundle.overdueOrders}
           emptyText="No overdue orders — collections are current."
-          viewAllHref="/finance"
+          viewAllHref={financePerms.pageAccess ? '/finance' : undefined}
           viewAllLabel="Collections"
           badgeCount={bundle.overdueOrderCount}
           badgeVariant="danger"
         />
         <CustomersAtRiskCard rows={bundle.customersAtRisk} />
+        {financePerms.commissions && (
         <PendingCommissionsCard rows={bundle.pendingCommissions} />
+        )}
       </div>
 
       {bundle.trend.some((p) => p.revenue > 0 || p.target > 0) && (
@@ -315,7 +323,7 @@ function OrdersCard(props: {
   icon: React.ReactNode;
   rows: AgentDashboardOrderRow[];
   emptyText: string;
-  viewAllHref: string;
+  viewAllHref?: string;
   viewAllLabel?: string;
   badgeCount?: number;
   badgeVariant?: 'warning' | 'danger' | 'default';
@@ -331,12 +339,14 @@ function OrdersCard(props: {
               <Badge variant={props.badgeVariant ?? 'warning'}>{props.badgeCount}</Badge>
             )}
           </CardTitle>
+          {props.viewAllHref && (
           <DashHeaderLink
             to={props.viewAllHref}
             className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm"
           >
             {props.viewAllLabel ?? 'Orders'} <ArrowRight className="w-4 h-4" />
           </DashHeaderLink>
+          )}
         </div>
       </CardHeader>
       <CardContent>
@@ -381,6 +391,7 @@ function OrdersCard(props: {
 }
 
 function CustomersAtRiskCard(props: { rows: AgentDashboardCustomerRow[] }) {
+  const financePerms = useFinancePermissions();
   return (
     <Card className={props.rows.length > 0 ? 'border-amber-200' : undefined}>
       <CardHeader>
@@ -390,12 +401,14 @@ function CustomersAtRiskCard(props: { rows: AgentDashboardCustomerRow[] }) {
             Customers at risk
             {props.rows.length > 0 && <Badge variant="warning">{props.rows.length}</Badge>}
           </CardTitle>
+          {financePerms.pageAccess && (
           <DashHeaderLink
             to="/finance"
             className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm"
           >
             Collections <ArrowRight className="w-4 h-4" />
           </DashHeaderLink>
+          )}
         </div>
       </CardHeader>
       <CardContent>
@@ -440,6 +453,7 @@ function CustomersAtRiskCard(props: { rows: AgentDashboardCustomerRow[] }) {
 }
 
 function PendingCommissionsCard(props: { rows: AgentDashboardPendingCommissionRow[] }) {
+  const financePerms = useFinancePermissions();
   const total = props.rows.reduce((s, r) => s + r.commissionAmount, 0);
 
   return (
@@ -451,12 +465,14 @@ function PendingCommissionsCard(props: { rows: AgentDashboardPendingCommissionRo
             Pending commissions
             {props.rows.length > 0 && <Badge variant="warning">{props.rows.length}</Badge>}
           </CardTitle>
+          {financePerms.pageAccess && financePerms.commissions && (
           <DashHeaderLink
             to="/finance?tab=commissions"
             className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm"
           >
             Invoices &amp; payments <ArrowRight className="w-4 h-4" />
           </DashHeaderLink>
+          )}
         </div>
         {props.rows.length > 0 && (
           <p className="text-xs text-gray-500 mt-1">

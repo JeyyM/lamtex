@@ -30,14 +30,6 @@ function inDateRange(dateStr: string | null | undefined, from: string, to: strin
   return true;
 }
 
-function computeDaysOfCover(totalStock: number, monthlyConsumption: number): string {
-  const consumption = Number(monthlyConsumption) || 0;
-  const stock = Number(totalStock) || 0;
-  const avgDailyUsage = consumption > 0 ? consumption / 30 : 0;
-  if (avgDailyUsage <= 0) return 'No consumption data';
-  return (stock / avgDailyUsage).toFixed(1);
-}
-
 export interface MaterialDetailExportData {
   materialName: string;
   sku: string;
@@ -227,7 +219,6 @@ export async function fetchMaterialDetailForExport(
     ['Cost/Unit', costPerUnit],
     ['Inventory Value', totalStock * costPerUnit],
     ['Monthly Consumption', monthlyConsumption],
-    ['Days of Cover', computeDaysOfCover(totalStock, monthlyConsumption)],
     ['Status', String(matData.status ?? '')],
     ['Created', csvDateOnlyIso(matData.created_at as string | null)],
   ];

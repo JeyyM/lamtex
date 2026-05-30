@@ -10,6 +10,10 @@ interface AddMaterialModalProps {
   initialData?: MaterialFormData;
   isEditMode?: boolean;
   categoryName?: string;
+  /** When true (edit mode + stock permission), show a field to fully overwrite current stock. */
+  showStockOverwrite?: boolean;
+  /** When false, hide cost per unit field (payment permission). */
+  showCostFields?: boolean;
 }
 
 export interface MaterialFormData {
@@ -23,6 +27,8 @@ export interface MaterialFormData {
   unitOfMeasure: string;
   costPerUnit: number;
   reorderPoint: number;
+  /** Set when overwriting stock from the edit form. */
+  currentStock?: number;
   specifications: { label: string; value: string }[];
 }
 
@@ -33,7 +39,9 @@ const AddMaterialModal: React.FC<AddMaterialModalProps> = ({
   onDelete,
   initialData,
   isEditMode = false,
-  categoryName = ''
+  categoryName = '',
+  showStockOverwrite = false,
+  showCostFields = true,
 }) => {
   const [formData, setFormData] = useState<MaterialFormData>({
     name: '',
@@ -64,6 +72,7 @@ const AddMaterialModal: React.FC<AddMaterialModalProps> = ({
         unitOfMeasure: 'kg',
         costPerUnit: 0,
         reorderPoint: 0,
+        currentStock: undefined,
         specifications: [],
       });
     }
@@ -109,7 +118,7 @@ const AddMaterialModal: React.FC<AddMaterialModalProps> = ({
       newErrors.description = 'Description must be at least 10 characters';
     }
 
-    if (formData.costPerUnit <= 0) {
+    if (showCostFields && formData.costPerUnit <= 0) {
       newErrors.costPerUnit = 'Cost per unit must be greater than 0';
     }
 
@@ -304,7 +313,7 @@ const AddMaterialModal: React.FC<AddMaterialModalProps> = ({
             </div>
 
             {/* Unit of Measure & Cost per Unit */}
-            <div className="grid grid-cols-2 gap-4">
+            <div className={`grid gap-4 ${showCostFields ? 'grid-cols-2' : 'grid-cols-1'}`}>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Unit of Measure <span className="text-red-600">*</span>
@@ -323,6 +332,7 @@ const AddMaterialModal: React.FC<AddMaterialModalProps> = ({
                 </select>
               </div>
 
+              {showCostFields && (
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Cost per Unit <span className="text-red-600">*</span>
@@ -347,6 +357,7 @@ const AddMaterialModal: React.FC<AddMaterialModalProps> = ({
                   <p className="text-sm text-red-600 mt-1">{errors.costPerUnit}</p>
                 )}
               </div>
+              )}
             </div>
 
             {/* Reorder Point */}
@@ -373,6 +384,28 @@ const AddMaterialModal: React.FC<AddMaterialModalProps> = ({
                 <p className="text-sm text-red-600 mt-1">{errors.reorderPoint}</p>
               )}
             </div>
+
+            {isEditMode && showStockOverwrite && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Current Stock
+                </label>
+                <input
+                  type="number"
+                  value={formData.currentStock ?? ''}
+                  onChange={(e) =>
+                    handleInputChange('currentStock', parseFloat(e.target.value) || 0)
+                  }
+                  placeholder="0"
+                  min="0"
+                  step="any"
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 transition-all"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Fully overwrites the current stock level for this material (branch-specific when a branch is selected on the detail page).
+                </p>
+              </div>
+            )}
 
             {/* Specifications */}
             <div>

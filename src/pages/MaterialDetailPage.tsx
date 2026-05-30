@@ -18,9 +18,13 @@ import {
 import { computePersistedStockStatus } from '@/src/lib/stockStatus';
 import {
   notifyMaterialReorderPointChange,
+  overwriteMaterialStock,
   setMaterialBranchQuantity,
   setMaterialTotalStockDirect,
 } from '@/src/lib/rawMaterialStock';
+import { useMaterialPermissions } from '@/src/lib/permissions/materialPermissions';
+import { usePurchaseOrderPermissions } from '@/src/lib/permissions/purchaseOrderPermissions';
+import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
 import {
   Package,
   ArrowLeft,
@@ -211,6 +215,8 @@ export function MaterialDetailPage() {
   const { id, categoryName } = useParams<{ id: string; categoryName: string }>();
   const navigate = useNavigate();
   const { selectedBranch, employeeName, role, session, addAuditLog } = useAppContext();
+  const perms = useMaterialPermissions();
+  const poPerms = usePurchaseOrderPermissions();
   const [activeTab, setActiveTab] = useState<'overview' | 'history' | 'analytics'>('overview');
 
   // PO creation
@@ -536,12 +542,7 @@ export function MaterialDetailPage() {
     const total = consumptionMonthlySeries.reduce((s, r) => s + (Number(r.qty) || 0), 0);
     const n = consumptionMonthlySeries.length;
     const avgMonthly = n > 0 ? total / n : 0;
-    const daily = avgMonthly / 30;
-    const stock = Number(material.total_stock) || 0;
-    const reorder = Number(material.reorder_point) || 0;
-    const daysUntilReorder =
-      daily > 0 ? Math.max(0, Math.floor((stock - reorder) / daily)) : null;
-    return { avgMonthly, yearlyProjection: avgMonthly * 12, daysUntilReorder };
+    return { avgMonthly, yearlyProjection: avgMonthly * 12 };
   }, [material, consumptionMonthlySeries]);
 
   /** Monthly unit price: PO line averages when present; else catalog cost from activity log (material_updated / cost_synced_from_po). */
@@ -699,6 +700,11 @@ export function MaterialDetailPage() {
     setHistoryTablePage(1);
   }, [id, poHistory.length, headerPoHistoryStatusFilter]);
 
+  useEffect(() => {
+    if (activeTab === 'history' && !perms.purchaseOrdersHistory) setActiveTab('overview');
+    if (activeTab === 'analytics' && !perms.analyticsAccess) setActiveTab('overview');
+  }, [activeTab, perms.purchaseOrdersHistory, perms.analyticsAccess]);
+
   const handleCreatePO = async () => {
     if (!material) return;
     setCreatingPO(true);
@@ -734,6 +740,10 @@ export function MaterialDetailPage() {
         <Loader2 className="w-8 h-8 animate-spin text-red-500" />
       </div>
     );
+  }
+
+  if (!perms.pageAccess) {
+    return <ModuleAccessDenied moduleName="Raw Materials" />;
   }
 
   if (error || !material) {
@@ -781,8 +791,6 @@ export function MaterialDetailPage() {
   };
 
   const currentStock = getStockForBranch();
-  const avgDailyUsage = hasMonthlyConsumptionData ? monthlyConsumptionValue / 30 : 0;
-  const daysOfCover = avgDailyUsage > 0 ? currentStock / avgDailyUsage : Infinity;
 
   // Prepare chart data — dynamic from material_stock rows
   const stockByBranchData = material.material_stock.map(s => ({
@@ -901,6 +909,33 @@ export function MaterialDetailPage() {
         .eq('id', material.id);
       if (error) throw error;
 
+      if (
+        perms.stockAccess &&
+        formData.currentStock != null &&
+        Number(formData.currentStock) !== currentStock
+      ) {
+        const persistedTotal = await overwriteMaterialStock({
+          materialId: material.id,
+          branchName: selectedBranch,
+          newQuantity: Number(formData.currentStock),
+          previousQuantity: currentStock,
+          reorderPoint: formData.reorderPoint,
+          triggeredBy: `Stock overwritten by ${actorName}${selectedBranch ? ` (branch ${selectedBranch})` : ''}`,
+        });
+        void insertRawMaterialLog(supabase, {
+          rawMaterialId: material.id,
+          action: 'stock_adjusted',
+          description: `Stock set to ${Number(formData.currentStock)} ${material.unit_of_measure} — ${material.sku}${
+            selectedBranch ? ` (branch ${selectedBranch})` : ''
+          }`,
+          performedBy: actorName,
+          performedByRole: actorRole,
+          oldValue: { total_stock: currentStock, branch: selectedBranch ?? null },
+          newValue: { total_stock: Number(formData.currentStock), branch: selectedBranch ?? null },
+          metadata: { branch_context: selectedBranch ?? null, aggregate_total: persistedTotal, overwrite: true },
+        });
+      }
+
       // A reorder-point change can flip stock from "above" to "below" the
       // threshold without moving the quantity, so notify in that case too.
       if (prevReorderPoint !== formData.reorderPoint) {
@@ -971,22 +1006,28 @@ export function MaterialDetailPage() {
           </div>
         </div>
         <div className="flex gap-2 flex-wrap">
+          {poPerms.creation && (
           <Button variant="outline" onClick={handleCreatePO} disabled={creatingPO} className="flex-1 sm:flex-none gap-0">
             {creatingPO
               ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /><span className="hidden sm:inline">Creating…</span><span className="sm:hidden">…</span></>
               : <><ShoppingCart className="w-4 h-4 mr-2" /><span className="hidden sm:inline">Create PO</span><span className="sm:hidden">PO</span></>
             }
           </Button>
+          )}
+          {perms.materialCreation && (
           <Button variant="outline" onClick={() => setShowEditModal(true)} className="flex-1 sm:flex-none">
             <Edit className="w-4 h-4 mr-2" />
             <span className="hidden sm:inline">Edit Material</span>
             <span className="sm:hidden">Edit</span>
           </Button>
+          )}
+          {perms.stockAccess && (
           <Button variant="primary" onClick={handleOpenAdjustment} className="flex-1 sm:flex-none">
             <Edit3 className="w-4 h-4 mr-2" />
             <span className="hidden sm:inline">Adjust Stock</span>
             <span className="sm:hidden">Adjust</span>
           </Button>
+          )}
         </div>
       </div>
 
@@ -1022,16 +1063,19 @@ export function MaterialDetailPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <StatKpiCard
               label={selectedBranch ? `Stock (${selectedBranch})` : 'Total Stock'}
-              value={`${currentStock.toLocaleString()} ${material.unit_of_measure}`}
+              value={perms.stockAccess ? `${currentStock.toLocaleString()} ${material.unit_of_measure}` : '—'}
               tone="blue"
               icon={<Box />}
             />
+            {perms.paymentData && (
             <StatKpiCard
               label="Inventory Value"
               value={`₱${((currentStock * material.cost_per_unit) / 1000).toFixed(0)}K`}
               tone="emerald"
               icon={<DollarSign />}
             />
+            )}
+            {perms.analyticsAccess && (
             <StatKpiCard
               label="Monthly Consumption"
               value={
@@ -1042,12 +1086,15 @@ export function MaterialDetailPage() {
               tone="violet"
               icon={<TrendingUp />}
             />
+            )}
+            {perms.stockAccess && (
             <StatKpiCard
               label="Reorder Point"
               value={material.reorder_point.toLocaleString()}
               tone={currentStock <= material.reorder_point ? 'amber' : 'teal'}
               icon={<AlertTriangle />}
             />
+            )}
           </div>
         </div>
 
@@ -1107,6 +1154,7 @@ export function MaterialDetailPage() {
           >
             Overview
           </button>
+          {perms.purchaseOrdersHistory && (
           <button
             onClick={() => setActiveTab('history')}
             className={`py-2 px-1 border-b-2 font-medium text-sm ${
@@ -1117,6 +1165,8 @@ export function MaterialDetailPage() {
           >
             History
           </button>
+          )}
+          {perms.analyticsAccess && (
           <button
             onClick={() => setActiveTab('analytics')}
             className={`py-2 px-1 border-b-2 font-medium text-sm ${
@@ -1127,7 +1177,9 @@ export function MaterialDetailPage() {
           >
             Analytics
           </button>
+          )}
         </nav>
+        {perms.exportAccess && (
         <div className="flex flex-wrap items-center gap-2 pb-2 sm:pb-0">
           <Button
             type="button"
@@ -1179,6 +1231,7 @@ export function MaterialDetailPage() {
             {exportingMaterial ? 'Exporting…' : 'Export'}
           </Button>
         </div>
+        )}
       </div>
 
       {/* Tab Content - Overview */}
@@ -1207,6 +1260,7 @@ export function MaterialDetailPage() {
           </Card>
 
           {/* Pricing Info */}
+          {perms.paymentData && (
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Pricing Information</CardTitle>
@@ -1232,8 +1286,10 @@ export function MaterialDetailPage() {
               </div>
             </CardContent>
           </Card>
+          )}
 
           {/* Usage Info */}
+          {perms.stockAccess && (
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Usage Tracking</CardTitle>
@@ -1267,6 +1323,7 @@ export function MaterialDetailPage() {
               </div>
             </CardContent>
           </Card>
+          )}
           </div>
 
           <Card className="border-indigo-100 bg-gradient-to-b from-indigo-50/40 to-white">
@@ -1304,7 +1361,7 @@ export function MaterialDetailPage() {
       )}
 
       {/* Tab Content - History */}
-      {activeTab === 'history' && (
+      {activeTab === 'history' && perms.purchaseOrdersHistory && (
         <div className="space-y-4">
           <Card>
             <CardHeader>
@@ -1316,12 +1373,14 @@ export function MaterialDetailPage() {
                     ({historyRowsMatchingFilters.length})
                   </span>
                 </CardTitle>
+                {poPerms.creation && (
                 <Button variant="primary" onClick={handleCreatePO} disabled={creatingPO} className="gap-2">
                   {creatingPO
                     ? <><Loader2 className="w-4 h-4 animate-spin" /> Creating…</>
                     : <><ShoppingCart className="w-4 h-4" /> Create PO</>
                   }
                 </Button>
+                )}
               </div>
               {!historyLoading && poHistory.length > 0 && (
                 <div className="md:hidden mt-3">
@@ -1349,10 +1408,12 @@ export function MaterialDetailPage() {
                   <ShoppingCart className="w-12 h-12 text-gray-300 mb-4" />
                   <p className="text-gray-500 text-sm font-medium">No purchase orders yet for this material</p>
                   <p className="text-gray-400 text-xs mt-1">Create a PO to track procurement history</p>
+                  {poPerms.creation && (
                   <Button variant="outline" onClick={handleCreatePO} disabled={creatingPO} className="mt-4 gap-2">
                     {creatingPO ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShoppingCart className="w-4 h-4" />}
                     Create First PO
                   </Button>
+                  )}
                 </div>
               ) : (
                 <>
@@ -1417,8 +1478,8 @@ export function MaterialDetailPage() {
                             return (
                               <tr
                                 key={row.id}
-                                className="hover:bg-gray-50 cursor-pointer"
-                                onClick={() => navigate(`/purchase-orders/${po.id}`)}
+                                className={poPerms.pageAccess ? 'hover:bg-gray-50 cursor-pointer' : undefined}
+                                onClick={poPerms.pageAccess ? () => navigate(`/purchase-orders/${po.id}`) : undefined}
                               >
                                 <td className="px-5 py-3 font-mono text-xs text-indigo-600 font-semibold">{po.po_number}</td>
                                 <td className="px-5 py-3 text-gray-900">{po.suppliers?.name ?? '—'}</td>
@@ -1478,8 +1539,8 @@ export function MaterialDetailPage() {
                         return (
                           <div
                             key={row.id}
-                            className="p-4 space-y-3 cursor-pointer hover:bg-gray-50"
-                            onClick={() => navigate(`/purchase-orders/${po.id}`)}
+                            className={poPerms.pageAccess ? 'p-4 space-y-3 cursor-pointer hover:bg-gray-50' : 'p-4 space-y-3'}
+                            onClick={poPerms.pageAccess ? () => navigate(`/purchase-orders/${po.id}`) : undefined}
                           >
                             <div className="space-y-2">
                               <div className="min-w-0">
@@ -1539,7 +1600,7 @@ export function MaterialDetailPage() {
       )}
 
       {/* Tab Content - Analytics */}
-      {activeTab === 'analytics' && (
+      {activeTab === 'analytics' && perms.analyticsAccess && (
         <div className="space-y-6">
           {/* Usage history: BOM consumption (material_consumption) only */}
           <Card>
@@ -1692,14 +1753,6 @@ export function MaterialDetailPage() {
                         : '—'}
                     </span>
                   </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-gray-500">Days Until Reorder</span>
-                    <span className={`text-lg font-bold ${analyticsConsumptionFromBom && analyticsConsumptionFromBom.daysUntilReorder != null ? 'text-orange-600' : 'text-gray-400 font-normal'}`}>
-                      {analyticsConsumptionFromBom && analyticsConsumptionFromBom.daysUntilReorder != null
-                        ? `${analyticsConsumptionFromBom.daysUntilReorder} days`
-                        : '—'}
-                    </span>
-                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -1806,8 +1859,11 @@ export function MaterialDetailPage() {
           unitOfMeasure: material.unit_of_measure,
           costPerUnit: material.cost_per_unit,
           reorderPoint: material.reorder_point,
+          currentStock,
           specifications: Array.isArray(material.specifications) ? material.specifications : [],
         }}
+        showStockOverwrite={perms.stockAccess}
+        showCostFields={perms.materialCreation}
       />
 
       {/* Stock Adjustment Modal */}

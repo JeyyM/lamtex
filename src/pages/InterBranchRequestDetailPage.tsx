@@ -2,10 +2,15 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
+import { useInterBranchRequestPermissions } from '@/src/lib/permissions/interBranchRequestPermissions';
+import { useProductionRequestPermissions } from '@/src/lib/permissions/productionRequestPermissions';
+import { usePurchaseOrderPermissions } from '@/src/lib/permissions/purchaseOrderPermissions';
+import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { ModalPortal } from '@/src/components/ui/ModalPortal';
+import { ACTIVITY_LOG_PAGE_SIZE, TablePagination } from '@/src/components/ui/TablePagination';
 import { supabase } from '@/src/lib/supabase';
 import {
   approveInterBranchRequest,
@@ -947,6 +952,9 @@ export function InterBranchRequestDetailPage() {
   const { id: routeId } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { branch, employeeName, session, role, addAuditLog } = useAppContext();
+  const perms = useInterBranchRequestPermissions();
+  const prPerms = useProductionRequestPermissions();
+  const poPerms = usePurchaseOrderPermissions();
 
   const [resolvedBranchId, setResolvedBranchId] = useState<string | null>(null);
   const [logisticsLoading, setLogisticsLoading] = useState(false);
@@ -1052,6 +1060,7 @@ export function InterBranchRequestDetailPage() {
   const [ibrShipmentTrackingAvailable, setIbrShipmentTrackingAvailable] = useState<boolean | null>(null);
   const [deliveryProofs, setDeliveryProofs] = useState<IbrDeliveryProofRow[]>([]);
   const [ibrLogs, setIbrLogs] = useState<IbrLogRow[]>([]);
+  const [ibrLogPage, setIbrLogPage] = useState(1);
 
   const loadRefs = useCallback(async () => {
     const { data: br } = await supabase.from('branches').select('id, name').eq('is_active', true).order('name');
@@ -2584,6 +2593,15 @@ export function InterBranchRequestDetailPage() {
     setEditStatus(ibr.status);
   };
 
+  useEffect(() => {
+    setIbrLogPage(1);
+  }, [ibrLogs]);
+
+  const pagedIbrLogs = useMemo(
+    () => ibrLogs.slice((ibrLogPage - 1) * ACTIVITY_LOG_PAGE_SIZE, ibrLogPage * ACTIVITY_LOG_PAGE_SIZE),
+    [ibrLogs, ibrLogPage],
+  );
+
   if (loading && !ibr && routeId === 'new') {
     return (
       <div className="flex items-center justify-center h-96">
@@ -2661,7 +2679,12 @@ export function InterBranchRequestDetailPage() {
   const canCancelIbr =
     canUseLogisticsUi &&
     !isEditing &&
-    !['Cancelled', 'Rejected', 'Completed', 'Fulfilled'].includes(ibr.status);
+    !['Cancelled', 'Rejected', 'Completed', 'Fulfilled'].includes(ibr.status) &&
+    perms.creation;
+
+  if (!perms.pageAccess) {
+    return <ModuleAccessDenied moduleName="Inter-branch Requests" />;
+  }
 
   return (
     <div className="space-y-6 p-3 sm:p-4 md:p-6">
@@ -2733,13 +2756,13 @@ export function InterBranchRequestDetailPage() {
           </div>
         </div>
         <div className="flex min-h-[2.75rem] w-full min-w-0 flex-wrap items-center justify-end gap-2 self-center sm:flex-1 sm:justify-end md:gap-3">
-            {draft && !isEditing && (
+            {draft && !isEditing && perms.creation && (
               <Button variant="primary" onClick={() => void submit()} disabled={saving} className="gap-2 flex-1 min-[480px]:flex-initial sm:flex-initial">
                 {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                 Submit for approval
               </Button>
             )}
-            {pending && boss && (
+            {pending && boss && perms.approvals && (
               <>
                 <Button variant="primary" onClick={() => void doApprove()} disabled={saving} className="gap-2 flex-1 min-[480px]:flex-initial sm:flex-initial">
                   <CheckCircle className="w-4 h-4" /> Approve
@@ -2749,7 +2772,7 @@ export function InterBranchRequestDetailPage() {
                 </Button>
               </>
             )}
-            {ibr.status === 'Rejected' && !isEditing && (
+            {ibr.status === 'Rejected' && !isEditing && perms.creation && (
               <Button
                 variant="primary"
                 onClick={() => setShowResubmitIbrModal(true)}
@@ -2762,6 +2785,7 @@ export function InterBranchRequestDetailPage() {
             )}
             {senderLogistics &&
               !isEditing &&
+              perms.scheduling &&
               (ibr.status === 'Approved' ||
                 (ibr.status === 'Partially Fulfilled' && hasRemainingToShip)) && (
               <Button
@@ -2774,7 +2798,7 @@ export function InterBranchRequestDetailPage() {
                 Schedule
               </Button>
             )}
-            {senderLogistics && ibr.status === 'Scheduled' && !isEditing && (
+            {senderLogistics && ibr.status === 'Scheduled' && !isEditing && perms.loading && (
               <Button
                 variant="primary"
                 className="gap-2 flex-1 min-[480px]:flex-initial sm:flex-initial"
@@ -2785,7 +2809,7 @@ export function InterBranchRequestDetailPage() {
                 Mark Loading
               </Button>
             )}
-            {senderLogistics && ibr.status === 'Loading' && !isEditing && (
+            {senderLogistics && ibr.status === 'Loading' && !isEditing && perms.loading && (
               <Button
                 variant="primary"
                 className="gap-2 flex-1 min-[480px]:flex-initial sm:flex-initial"
@@ -2796,7 +2820,7 @@ export function InterBranchRequestDetailPage() {
                 Mark Packed
               </Button>
             )}
-            {senderLogistics && ibr.status === 'Packed' && !isEditing && (
+            {senderLogistics && ibr.status === 'Packed' && !isEditing && perms.loading && (
               <Button
                 variant="primary"
                 className="gap-2 flex-1 min-[480px]:flex-initial sm:flex-initial"
@@ -2807,7 +2831,7 @@ export function InterBranchRequestDetailPage() {
                 Mark Ready
               </Button>
             )}
-            {senderLogistics && ibr.status === 'Ready' && !isEditing && (
+            {senderLogistics && ibr.status === 'Ready' && !isEditing && perms.scheduling && (
               <Button
                 variant="primary"
                 className="gap-2 flex-1 min-[480px]:flex-initial sm:flex-initial"
@@ -2828,7 +2852,7 @@ export function InterBranchRequestDetailPage() {
                 Mark in transit
               </Button>
             )}
-            {senderLogistics && ibr.status === 'In Transit' && !isEditing && hasRemainingToShip && (
+            {senderLogistics && ibr.status === 'In Transit' && !isEditing && hasRemainingToShip && perms.scheduling && (
               <Button
                 variant="primary"
                 className="gap-2 flex-1 min-[480px]:flex-initial sm:flex-initial"
@@ -2841,6 +2865,7 @@ export function InterBranchRequestDetailPage() {
             )}
             {canUseLogisticsUi &&
               isRequestingBranch &&
+              perms.delivery &&
               (ibr.status === 'In Transit' || ibr.status === 'Partially Fulfilled') &&
               !isEditing && (
               <Button
@@ -2869,7 +2894,7 @@ export function InterBranchRequestDetailPage() {
                 Record delivery
               </Button>
             )}
-            {canUseLogisticsUi && isRequestingBranch && ibr.status === 'Delivered' && !isEditing && (
+            {canUseLogisticsUi && isRequestingBranch && ibr.status === 'Delivered' && !isEditing && perms.delivery && (
               <Button
                 variant="primary"
                 onClick={() => void markIbrFulfilledAfterDelivery()}
@@ -2880,7 +2905,7 @@ export function InterBranchRequestDetailPage() {
                 Mark fulfilled
               </Button>
             )}
-            {isEditing && (
+            {isEditing && perms.creation && (
               <>
                 <Button variant="outline" onClick={handleCancelEdit} disabled={saving} className="gap-1 flex-1 min-[480px]:flex-initial sm:flex-initial">
                   Cancel
@@ -2891,7 +2916,7 @@ export function InterBranchRequestDetailPage() {
                 </Button>
               </>
             )}
-            {!isEditing && (
+            {!isEditing && perms.creation && (
               <Button
                 type="button"
                 variant="outline"
@@ -3639,6 +3664,7 @@ export function InterBranchRequestDetailPage() {
             </CardContent>
           </Card>
 
+          {perms.documents && (
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
@@ -3684,7 +3710,9 @@ export function InterBranchRequestDetailPage() {
               )}
             </CardContent>
           </Card>
+          )}
 
+          {perms.activityLog && (
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
@@ -3692,16 +3720,16 @@ export function InterBranchRequestDetailPage() {
                 Activity log
               </CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
+            <CardContent className="p-0">
+              <div className="space-y-3 p-6 pb-3">
                 {ibrLogs.length === 0 ? (
                   <p className="text-sm text-gray-500 text-center py-8">
                     No activity recorded yet. Creating a request, saving changes, submit, approval, logistics, delivery, and
                     proofs will appear here.
                   </p>
                 ) : (
-                  ibrLogs.map((log, index) => {
-                    const isLast = index === ibrLogs.length - 1;
+                  pagedIbrLogs.map((log, index) => {
+                    const isLast = index === pagedIbrLogs.length - 1;
                     const getActionIcon = () => {
                       switch (log.action) {
                         case 'created':
@@ -3804,8 +3832,17 @@ export function InterBranchRequestDetailPage() {
                   })
                 )}
               </div>
+              {ibrLogs.length > ACTIVITY_LOG_PAGE_SIZE && (
+                <TablePagination
+                  page={ibrLogPage}
+                  pageSize={ACTIVITY_LOG_PAGE_SIZE}
+                  total={ibrLogs.length}
+                  onPageChange={setIbrLogPage}
+                />
+              )}
             </CardContent>
           </Card>
+          )}
         </div>
       </div>
 
@@ -3815,12 +3852,12 @@ export function InterBranchRequestDetailPage() {
             <CardTitle>Linked documents</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-2 text-sm">
-            {ibr.linked_purchase_order_id && (
+            {ibr.linked_purchase_order_id && poPerms.pageAccess && (
               <Button variant="outline" onClick={() => navigate(`/purchase-orders/${ibr.linked_purchase_order_id}`)}>
                 Open PO
               </Button>
             )}
-            {ibr.linked_production_request_id && (
+            {ibr.linked_production_request_id && prPerms.pageAccess && (
               <Button variant="outline" onClick={() => navigate(`/production-requests/${ibr.linked_production_request_id}`)}>
                 Open PR
               </Button>

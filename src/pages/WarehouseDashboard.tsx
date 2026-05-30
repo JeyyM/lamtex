@@ -5,6 +5,8 @@ import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { WarehouseKpiStrip } from '@/src/components/warehouse/WarehouseKpiStrip';
 import { WarehousePrPoCalendar } from '@/src/components/warehouse/WarehousePrPoCalendar';
+import { usePurchaseOrderPermissions } from '@/src/lib/permissions/purchaseOrderPermissions';
+import { useInterBranchRequestPermissions } from '@/src/lib/permissions/interBranchRequestPermissions';
 import {
   DashTableRowLink,
   DashHeaderLink,
@@ -110,6 +112,8 @@ export function WarehouseDashboard(): React.ReactElement {
     assignedMaterialIds,
     warehouseScopeLoading,
   } = useAppContext();
+  const poPerms = usePurchaseOrderPermissions();
+  const ibrPerms = useInterBranchRequestPermissions();
 
   const scopeProductKey = assignedProductIds?.join('|') ?? '';
   const scopeMaterialKey = assignedMaterialIds?.join('|') ?? '';
@@ -235,16 +239,20 @@ export function WarehouseDashboard(): React.ReactElement {
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {poPerms.pageAccess && (
         <IncomingPOsCard
           rows={bundle.incomingPurchaseOrders}
           count={bundle.incomingPurchaseOrderCount}
           totalValue={bundle.incomingPurchaseOrderValue}
         />
+        )}
         <OrdersToFulfillCard
           rows={bundle.ordersAwaitingFulfillment}
           count={bundle.ordersAwaitingFulfillmentCount}
         />
+        {ibrPerms.pageAccess && (
         <IBRsCard rows={bundle.ibrsToFulfill} count={bundle.ibrsToFulfillCount} />
+        )}
       </div>
 
       <WarehousePrPoCalendar branchId={bundle.branchId} branchLabel={branchLabel} />

@@ -24,6 +24,9 @@ import {
   fetchProductionRequestLinesForExport,
   type ProductionRequestHeaderExportRow,
 } from '@/src/lib/productionRequestsExport';
+import { useProductionRequestPermissions } from '@/src/lib/permissions/productionRequestPermissions';
+import { useInterBranchRequestPermissions } from '@/src/lib/permissions/interBranchRequestPermissions';
+import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
 import {
   Search,
   Plus,
@@ -98,6 +101,8 @@ const getPRStatusIcon = (status: PRStatus) => {
 
 export function ProductionRequestsPage() {
   const { branch, employeeName, role, session, employeeId, addAuditLog } = useAppContext();
+  const perms = useProductionRequestPermissions();
+  const ibrPerms = useInterBranchRequestPermissions();
   const navigate = useNavigate();
 
   const [rows, setRows] = useState<PRRow[]>([]);
@@ -377,6 +382,10 @@ export function ProductionRequestsPage() {
     );
   }
 
+  if (!perms.pageAccess) {
+    return <ModuleAccessDenied moduleName="Production Requests" />;
+  }
+
   return (
     <div className="space-y-4 sm:space-y-6 p-3 sm:p-4 md:p-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -384,6 +393,7 @@ export function ProductionRequestsPage() {
           <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Production Requests</h1>
         </div>
         <div className="flex flex-col sm:flex-row flex-wrap gap-2 w-full sm:w-auto">
+          {ibrPerms.pageAccess && (
           <Button
             type="button"
             variant="outline"
@@ -392,6 +402,8 @@ export function ProductionRequestsPage() {
           >
             <ArrowRightLeft className="w-4 h-4" /> Inter-branch
           </Button>
+          )}
+          {perms.creation && (
           <Button variant="primary" onClick={() => void handleNewPR()} disabled={creating} className="w-full sm:w-auto gap-2">
             {creating ? (
               <>
@@ -403,6 +415,7 @@ export function ProductionRequestsPage() {
               </>
             )}
           </Button>
+          )}
         </div>
       </div>
 

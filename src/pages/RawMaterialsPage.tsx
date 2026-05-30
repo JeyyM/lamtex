@@ -33,6 +33,10 @@ import {
   downloadRawMaterialsWorkbook,
   fetchRawMaterialsCatalogForExport,
 } from '@/src/lib/rawMaterialsExport';
+import { useMaterialPermissions } from '@/src/lib/permissions/materialPermissions';
+import { usePurchaseOrderPermissions } from '@/src/lib/permissions/purchaseOrderPermissions';
+import { useSupplierPermissions } from '@/src/lib/permissions/supplierPermissions';
+import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
 
 // Import raw material images (local fallbacks)
 import whitePelletsImg from '@/src/assets/raw-materials/White Pellets.webp';
@@ -76,6 +80,9 @@ export function RawMaterialsPage() {
   const [categoryFilter, setCategoryFilter] = useState<string>('All');
   const [riskFilter, setRiskFilter] = useState<string>('All');
   const { role, branch, addAuditLog, warehouseScope, warehouseScopeLoading } = useAppContext();
+  const perms = useMaterialPermissions();
+  const poPerms = usePurchaseOrderPermissions();
+  const supplierPerms = useSupplierPermissions();
   const inventoryBranch = effectiveInventoryBranch(role, branch);
   const scopedMaterialIds = scopedMaterialIdList(warehouseScope);
   
@@ -116,9 +123,8 @@ export function RawMaterialsPage() {
     name: string;
     total_stock: number;
     reorder_point: number;
-    monthly_consumption: number;
     status: string;
-    daysOfCover: number;
+    alertLevel: 'critical' | 'warning';
   }
   const [dbAlertMaterials, setDbAlertMaterials] = useState<AlertMaterial[]>([]);
   const [alertsLoading, setAlertsLoading] = useState(true);
@@ -234,7 +240,7 @@ export function RawMaterialsPage() {
 
     let q = supabase
       .from('raw_materials')
-      .select('id, name, total_stock, reorder_point, monthly_consumption, status')
+      .select('id, name, total_stock, reorder_point, status')
       .in('category_id', branchCategoryIds);
     if (scopedMaterialIds) q = q.in('id', scopedMaterialIds);
     const { data, error } = await q;
@@ -244,23 +250,26 @@ export function RawMaterialsPage() {
       return;
     }
 
-    const withDays: AlertMaterial[] = data.map(m => {
+    const withAlerts: AlertMaterial[] = [];
+    for (const m of data) {
       const stock = Number(m.total_stock) || 0;
-      const consumption = Number(m.monthly_consumption) || 0;
-      const avgDailyUsage = consumption > 0 ? consumption / 30 : 0;
-      const daysOfCover = avgDailyUsage > 0 ? stock / avgDailyUsage : Infinity;
-      return {
+      const reorder = Number(m.reorder_point) || 0;
+      if (reorder <= 0) continue;
+      let alertLevel: 'critical' | 'warning' | null = null;
+      if (stock <= reorder * 0.5) alertLevel = 'critical';
+      else if (stock <= reorder) alertLevel = 'warning';
+      if (!alertLevel) continue;
+      withAlerts.push({
         id: m.id,
         name: m.name,
         total_stock: stock,
-        reorder_point: Number(m.reorder_point) || 0,
-        monthly_consumption: consumption,
+        reorder_point: reorder,
         status: m.status ?? '',
-        daysOfCover,
-      };
-    });
+        alertLevel,
+      });
+    }
 
-    setDbAlertMaterials(withDays);
+    setDbAlertMaterials(withAlerts);
     setAlertsLoading(false);
   };
 
@@ -484,17 +493,17 @@ export function RawMaterialsPage() {
     return matchesRisk;
   });
 
-  // KPI: Estimated Stock-Out Count — from live DB data
-  const estimatedStockOutCount = dbAlertMaterials.filter(m => m.daysOfCover <= 30).length;
-
-  // Derive Alerts from live DB data
   const criticalAlerts = [...dbAlertMaterials]
-    .filter(m => m.daysOfCover <= 30)
-    .sort((a, b) => a.daysOfCover - b.daysOfCover);
+    .filter(m => m.alertLevel === 'critical')
+    .sort((a, b) => a.total_stock - b.total_stock);
 
   const warningAlerts = [...dbAlertMaterials]
-    .filter(m => m.daysOfCover > 30 && m.daysOfCover <= 90)
-    .sort((a, b) => a.daysOfCover - b.daysOfCover);
+    .filter(m => m.alertLevel === 'warning')
+    .sort((a, b) => a.total_stock - b.total_stock);
+
+  if (!perms.pageAccess) {
+    return <ModuleAccessDenied moduleName="Raw Materials" />;
+  }
 
   return (
     <div className="space-y-6">
@@ -507,12 +516,13 @@ export function RawMaterialsPage() {
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
+          {perms.exportAccess && (
           <Button
             variant="outline"
             className="flex-1 sm:flex-none"
-            disabled={exportingMaterials || categoriesLoading || !branch}
+            disabled={exportingMaterials || categoriesLoading || !branch || !perms.exportAccess}
             onClick={async () => {
-              if (exportingMaterials || categoriesLoading || !branch) return;
+              if (exportingMaterials || categoriesLoading || !branch || !perms.exportAccess) return;
               setExportingMaterials(true);
               try {
                 const exported = await fetchRawMaterialsCatalogForExport(branch);
@@ -540,18 +550,23 @@ export function RawMaterialsPage() {
             )}
             {exportingMaterials ? 'Exporting…' : 'Export'}
           </Button>
+          )}
 
+          {poPerms.pageAccess && (
           <Button variant="outline" onClick={() => navigate('/purchase-orders')} className="flex-1 sm:flex-none">
             <ShoppingCart className="w-4 h-4 mr-2" />
             <span className="hidden sm:inline">Purchase Orders</span>
             <span className="sm:hidden">Orders</span>
           </Button>
+          )}
 
+          {supplierPerms.pageAccess && (
           <Button variant="outline" onClick={() => navigate('/suppliers')} className="flex-1 sm:flex-none">
             <Users className="w-4 h-4 mr-2" />
             <span className="hidden sm:inline">Suppliers</span>
             <span className="sm:hidden">Suppliers</span>
           </Button>
+          )}
         </div>
       </div>
 
@@ -564,6 +579,7 @@ export function RawMaterialsPage() {
           icon={<Package />}
           loading={summaryLoading}
         />
+        {perms.paymentData && (
         <StatKpiCard
           label="Total Inventory Value"
           value={
@@ -577,6 +593,9 @@ export function RawMaterialsPage() {
           icon={<DollarSign />}
           loading={summaryLoading}
         />
+        )}
+        {perms.stockAccess && (
+        <>
         <StatKpiCard
           label="Low Stock Items"
           value={summaryLoading ? '…' : String(summaryStats.lowStockCount)}
@@ -591,17 +610,19 @@ export function RawMaterialsPage() {
           icon={<TrendingDown />}
           loading={summaryLoading}
         />
+        </>
+        )}
       </div>
 
           {/* Stock Alerts */}
-          {alertsLoading ? (
+          {perms.stockAccess && alertsLoading ? (
             <Card className="border-l-4 border-l-orange-500 shadow-sm">
               <CardContent className="p-6 flex items-center gap-3 text-gray-500">
                 <Loader2 className="w-5 h-5 animate-spin text-orange-500" />
                 <span className="text-sm">Loading stock alerts…</span>
               </CardContent>
             </Card>
-          ) : (criticalAlerts.length > 0 || warningAlerts.length > 0) && (
+          ) : perms.stockAccess && (criticalAlerts.length > 0 || warningAlerts.length > 0) && (
             <Card className="border-l-4 border-l-orange-500 shadow-sm">
               <CardHeader className={stockAlertsExpanded ? 'pb-3' : 'pb-6'}>
                 <button
@@ -648,7 +669,7 @@ export function RawMaterialsPage() {
                                   {m.name}
                                 </p>
                                 <p className="text-xs text-red-600 font-medium mt-1">
-                                  ⚠ {isFinite(m.daysOfCover) ? `${m.daysOfCover.toFixed(1)} days remaining` : `${m.total_stock} units · no consumption data`}
+                                  ⚠ {m.total_stock.toLocaleString()} in stock · reorder at {m.reorder_point.toLocaleString()}
                                 </p>
                               </div>
                               <Link
@@ -687,7 +708,7 @@ export function RawMaterialsPage() {
                                   {m.name}
                                 </p>
                                 <p className="text-xs text-yellow-600 font-medium mt-1">
-                                  {isFinite(m.daysOfCover) ? `${m.daysOfCover.toFixed(1)} days remaining` : `${m.total_stock} units · no consumption data`}
+                                  {m.total_stock.toLocaleString()} in stock · reorder at {m.reorder_point.toLocaleString()}
                                 </p>
                               </div>
                               <Link
@@ -715,6 +736,7 @@ export function RawMaterialsPage() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle className="text-xl">Browse by Category</CardTitle>
+            {perms.categoryCreation && (
             <Button 
               variant="primary"
               onClick={() => {
@@ -726,6 +748,7 @@ export function RawMaterialsPage() {
               <Plus className="w-4 h-4 mr-2" />
               Add Category
             </Button>
+            )}
           </div>
         </CardHeader>
         <CardContent>
@@ -762,6 +785,7 @@ export function RawMaterialsPage() {
                   className="group relative overflow-hidden border-2 border-gray-200 rounded-lg hover:border-red-500 hover:shadow-lg transition-all duration-200"
                 >
                   {/* Edit Button - Top Right - Always visible, more prominent on hover */}
+                  {perms.categoryCreation && (
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
@@ -772,6 +796,7 @@ export function RawMaterialsPage() {
                   >
                     <Edit className="w-4 h-4" />
                   </button>
+                  )}
 
                   {/* Category Card - Clickable Area */}
                   <Link
@@ -799,7 +824,7 @@ export function RawMaterialsPage() {
                         <p className="text-sm text-gray-500 shrink-0">
                           {categoryCount} {categoryCount === 1 ? 'item' : 'items'}
                         </p>
-                        {lowStockCount > 0 && (
+                        {lowStockCount > 0 && perms.stockAccess && (
                           <Badge variant="warning" size="sm" className="whitespace-nowrap shrink-0">
                             {lowStockCount} low stock
                           </Badge>

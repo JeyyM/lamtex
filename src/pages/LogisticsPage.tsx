@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
+import { useLogisticsPermissions } from '@/src/lib/permissions/logisticsPermissions';
+import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { StatKpiCard } from '@/src/components/ui/StatKpiCard';
 import { Badge } from '@/src/components/ui/Badge';
@@ -129,6 +131,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 
 export function LogisticsPage() {
   const { branch, employeeName } = useAppContext();
+  const perms = useLogisticsPermissions();
   const { search } = useLocation();
   const initialParams = useMemo(() => parseLogisticsSearch(search), []);
   const [transportType, setTransportType] = useState<TransportType>(() =>
@@ -744,6 +747,10 @@ export function LogisticsPage() {
 
   const showTransportToggle = Boolean(branch?.trim());
   const truckModeAvailable = modeAvailability?.truck ?? false;
+
+  if (!perms.pageAccess) {
+    return <ModuleAccessDenied moduleName="Logistics" />;
+  }
 
   return (
     <div className="space-y-6 w-full max-w-full overflow-x-hidden">

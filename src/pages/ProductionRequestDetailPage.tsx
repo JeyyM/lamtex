@@ -2,9 +2,13 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
+import { useProductionRequestPermissions } from '@/src/lib/permissions/productionRequestPermissions';
+import { useInterBranchRequestPermissions } from '@/src/lib/permissions/interBranchRequestPermissions';
+import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
+import { ACTIVITY_LOG_PAGE_SIZE, TablePagination } from '@/src/components/ui/TablePagination';
 import { supabase } from '@/src/lib/supabase';
 import { consumeBomForProductionLines } from '@/src/lib/bomConsumption';
 import { finishedGoodProductHref } from '@/src/lib/productRoutes';
@@ -367,6 +371,7 @@ export function ProductionRequestDetailPage() {
   const [pr, setPr] = useState<PRHeader | null>(null);
   const [items, setItems] = useState<PRItemRow[]>([]);
   const [logs, setLogs] = useState<LogRow[]>([]);
+  const [prLogPage, setPrLogPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -406,8 +411,11 @@ export function ProductionRequestDetailPage() {
   const prProductPickLock = useRef(false);
 
   const actor = employeeName || session?.user?.email || 'User';
-  const canApprove = ['Executive', 'Manager'].includes(role);
-  const canRunProduction = ['Executive', 'Manager', 'Production', 'Warehouse'].includes(role);
+  const perms = useProductionRequestPermissions();
+  const ibrPerms = useInterBranchRequestPermissions();
+  const canApprove = ['Executive', 'Manager'].includes(role) && perms.approvals;
+  const canRunProduction = ['Executive', 'Manager', 'Production', 'Warehouse'].includes(role) && perms.fulfillment;
+  const canCreateEdit = perms.creation;
 
   const fetchLogs = useCallback(async (requestId: string) => {
     const { data, error: e } = await supabase
@@ -1417,6 +1425,15 @@ export function ProductionRequestDetailPage() {
     (expDate && expDate.length > 0 ? expDate : pr?.expected_completion_date) ?? null;
   const expDateFieldShowsOverdue = pr ? isPrExpectedOverdue(expForDue, pr.status) : false;
 
+  useEffect(() => {
+    setPrLogPage(1);
+  }, [logs]);
+
+  const pagedPrLogs = useMemo(
+    () => logs.slice((prLogPage - 1) * ACTIVITY_LOG_PAGE_SIZE, prLogPage * ACTIVITY_LOG_PAGE_SIZE),
+    [logs, prLogPage],
+  );
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-96">
@@ -1450,6 +1467,10 @@ export function ProductionRequestDetailPage() {
     );
   }
 
+  if (!perms.pageAccess) {
+    return <ModuleAccessDenied moduleName="Production Requests" />;
+  }
+
   return (
     <div className="space-y-6 p-3 sm:p-4 md:p-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -1470,7 +1491,7 @@ export function ProductionRequestDetailPage() {
               <div className="flex flex-wrap items-center gap-2 min-w-0">
                 <h1 className="text-xl sm:text-2xl font-bold text-gray-900 truncate">{pr.pr_number}</h1>
                 {(pr.inter_branch_request_id || pr.is_transfer_request) && (
-                  pr.inter_branch?.id ? (
+                  pr.inter_branch?.id && ibrPerms.pageAccess ? (
                     <Button
                       type="button"
                       variant="outline"
@@ -1496,7 +1517,7 @@ export function ProductionRequestDetailPage() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {isEditing ? (
+          {isEditing && canCreateEdit ? (
             <>
               <Button variant="outline" onClick={handleCancelEdit} disabled={saving} className="gap-1">
                 Cancel
@@ -1513,7 +1534,7 @@ export function ProductionRequestDetailPage() {
             </>
           ) : (
             <>
-              {pr.status === 'Draft' && (
+              {pr.status === 'Draft' && canCreateEdit && (
                 <Button
                   variant="primary"
                   className="gap-2"
@@ -1524,7 +1545,7 @@ export function ProductionRequestDetailPage() {
                   Submit for approval
                 </Button>
               )}
-              {pr.status === 'Rejected' && (
+              {pr.status === 'Rejected' && canCreateEdit && (
                 <Button
                   variant="primary"
                   className="gap-2"
@@ -1580,7 +1601,7 @@ export function ProductionRequestDetailPage() {
                   Mark complete
                 </Button>
               )}
-              {['Draft', 'Requested', 'Accepted', 'In Progress'].includes(pr.status) && (
+              {['Draft', 'Requested', 'Accepted', 'In Progress'].includes(pr.status) && canCreateEdit && (
                 <Button
                   type="button"
                   variant="outline"
@@ -1592,16 +1613,18 @@ export function ProductionRequestDetailPage() {
                   Cancel request
                 </Button>
               )}
+              {canCreateEdit && (
               <Button variant="outline" onClick={handleEdit} className="gap-2" disabled={saving}>
                 <Edit className="w-4 h-4" />
                 Edit request
               </Button>
+              )}
             </>
           )}
         </div>
       </div>
 
-      {isEditing && (
+      {isEditing && canCreateEdit && (
         <div className="bg-amber-50 border-l-4 border-amber-400 p-4 rounded-lg">
           <div className="flex items-center gap-3">
             <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
@@ -1851,7 +1874,7 @@ export function ProductionRequestDetailPage() {
                       Total Qty: <span className="tabular-nums">{totalLineQty.toLocaleString()}</span>
                     </span>
                   )}
-                  {isEditing && ['Draft', 'Requested'].includes(pr.status) && (
+                  {isEditing && canCreateEdit && ['Draft', 'Requested'].includes(pr.status) && (
                     <Button variant="primary" size="sm" className="gap-1" onClick={openAddLine} disabled={saving}>
                       <Plus className="w-4 h-4" />
                       Add line
@@ -1949,7 +1972,7 @@ export function ProductionRequestDetailPage() {
                                 </p>
                               )}
                             </div>
-                            {isEditing && ['Draft', 'Requested'].includes(pr.status) && (
+                            {isEditing && canCreateEdit && ['Draft', 'Requested'].includes(pr.status) && (
                               <button
                                 type="button"
                                 onClick={(e) => {
@@ -2234,16 +2257,16 @@ export function ProductionRequestDetailPage() {
             Activity log
           </CardTitle>
         </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
+        <CardContent className="p-0">
+          <div className="space-y-3 p-6 pb-3">
             {logs.length === 0 ? (
               <p className="text-sm text-gray-500 text-center py-8">
                 No activity recorded yet. Submissions, approvals, status changes, production runs, order links, and notes
                 will appear here.
               </p>
             ) : (
-              logs.map((log, index) => {
-                const isLast = index === logs.length - 1;
+              pagedPrLogs.map((log, index) => {
+                const isLast = index === pagedPrLogs.length - 1;
                 const t = new Date(log.created_at);
                 const timeStr = t.toLocaleString('en-PH', {
                   year: 'numeric',
@@ -2289,6 +2312,14 @@ export function ProductionRequestDetailPage() {
               })
             )}
           </div>
+          {logs.length > ACTIVITY_LOG_PAGE_SIZE && (
+            <TablePagination
+              page={prLogPage}
+              pageSize={ACTIVITY_LOG_PAGE_SIZE}
+              total={logs.length}
+              onPageChange={setPrLogPage}
+            />
+          )}
         </CardContent>
       </Card>
 

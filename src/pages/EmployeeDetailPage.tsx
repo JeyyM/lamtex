@@ -44,7 +44,7 @@ import {
 import { Button } from '@/src/components/ui/Button';
 import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 import { Badge } from '@/src/components/ui/Badge';
-import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagination';
+import { ACTIVITY_LOG_PAGE_SIZE, TABLE_PAGE_SIZE, TablePagination } from '@/src/components/ui/TablePagination';
 import type { EmployeeRole } from '@/src/types/employee';
 import { useAppContext } from '@/src/store/AppContext';
 import { supabase } from '@/src/lib/supabase';
@@ -99,6 +99,148 @@ import { fetchTripById } from '@/src/lib/logisticsScheduling';
 import { dispatchTableStatusBadgeVariant, tripStatusDisplay } from '@/src/lib/dispatchQueueUi';
 import { TripDetailsModal } from '@/src/components/logistics/TripDetailsModal';
 import type { Trip } from '@/src/types/logistics';
+import { OrderPermissionSection } from '@/src/components/employees/OrderPermissionToggles';
+import { EmployeesPermissionSection } from '@/src/components/employees/EmployeesPermissionToggles';
+import { AgentAnalyticsPermissionSection } from '@/src/components/employees/AgentAnalyticsPermissionToggles';
+import { ReportsPermissionSection } from '@/src/components/employees/ReportsPermissionToggles';
+import { SettingsPermissionSection } from '@/src/components/employees/SettingsPermissionToggles';
+import { ProductPermissionSection } from '@/src/components/employees/ProductPermissionToggles';
+import { MaterialPermissionSection } from '@/src/components/employees/MaterialPermissionToggles';
+import { WarehousePermissionSection } from '@/src/components/employees/WarehousePermissionToggles';
+import { LogisticsPermissionSection } from '@/src/components/employees/LogisticsPermissionToggles';
+import { SupplierPermissionSection } from '@/src/components/employees/SupplierPermissionToggles';
+import { FinancePermissionSection } from '@/src/components/employees/FinancePermissionToggles';
+import { ProductionRequestPermissionSection } from '@/src/components/employees/ProductionRequestPermissionToggles';
+import { PurchaseOrderPermissionSection } from '@/src/components/employees/PurchaseOrderPermissionToggles';
+import { InterBranchRequestPermissionSection } from '@/src/components/employees/InterBranchRequestPermissionToggles';
+import {
+  fetchEmployeeOrderPermissions,
+  orderPermissionSetsEqual,
+  saveEmployeeOrderPermissions,
+} from '@/src/lib/permissions/employeeOrderPermissions';
+import {
+  fetchEmployeeProductPermissions,
+  productPermissionSetsEqual,
+  saveEmployeeProductPermissions,
+} from '@/src/lib/permissions/employeeProductPermissions';
+import {
+  fetchEmployeeMaterialPermissions,
+  materialPermissionSetsEqual,
+  saveEmployeeMaterialPermissions,
+} from '@/src/lib/permissions/employeeMaterialPermissions';
+import {
+  fetchEmployeeWarehousePermissions,
+  warehousePermissionSetsEqual,
+  saveEmployeeWarehousePermissions,
+} from '@/src/lib/permissions/employeeWarehousePermissions';
+import {
+  fetchEmployeeLogisticsPermissions,
+  logisticsPermissionSetsEqual,
+  saveEmployeeLogisticsPermissions,
+} from '@/src/lib/permissions/employeeLogisticsPermissions';
+import {
+  fetchEmployeeSupplierPermissions,
+  supplierPermissionSetsEqual,
+  saveEmployeeSupplierPermissions,
+} from '@/src/lib/permissions/employeeSupplierPermissions';
+import {
+  fetchEmployeeFinancePermissions,
+  financePermissionSetsEqual,
+  saveEmployeeFinancePermissions,
+} from '@/src/lib/permissions/employeeFinancePermissions';
+import {
+  fetchEmployeeEmployeesPermissions,
+  employeesPermissionSetsEqual,
+  saveEmployeeEmployeesPermissions,
+} from '@/src/lib/permissions/employeeEmployeesPermissions';
+import {
+  fetchEmployeeAgentAnalyticsPermissions,
+  agentAnalyticsPermissionSetsEqual,
+  saveEmployeeAgentAnalyticsPermissions,
+} from '@/src/lib/permissions/employeeAgentAnalyticsPermissions';
+import {
+  fetchEmployeeReportsPermissions,
+  reportsPermissionSetsEqual,
+  saveEmployeeReportsPermissions,
+} from '@/src/lib/permissions/employeeReportsPermissions';
+import {
+  fetchEmployeeSettingsPermissions,
+  settingsPermissionSetsEqual,
+  saveEmployeeSettingsPermissions,
+} from '@/src/lib/permissions/employeeSettingsPermissions';
+import {
+  fetchEmployeeProductionRequestPermissions,
+  productionRequestPermissionSetsEqual,
+  saveEmployeeProductionRequestPermissions,
+} from '@/src/lib/permissions/employeeProductionRequestPermissions';
+import {
+  fetchEmployeePurchaseOrderPermissions,
+  purchaseOrderPermissionSetsEqual,
+  saveEmployeePurchaseOrderPermissions,
+} from '@/src/lib/permissions/employeePurchaseOrderPermissions';
+import {
+  fetchEmployeeInterBranchRequestPermissions,
+  interBranchRequestPermissionSetsEqual,
+  saveEmployeeInterBranchRequestPermissions,
+} from '@/src/lib/permissions/employeeInterBranchRequestPermissions';
+import {
+  ALL_ORDER_PERMISSIONS_GRANTED,
+  type OrderPermissionSet,
+} from '@/src/lib/permissions/orderPermissions';
+import {
+  ALL_PRODUCT_PERMISSIONS_GRANTED,
+  type ProductPermissionSet,
+} from '@/src/lib/permissions/productPermissions';
+import {
+  ALL_MATERIAL_PERMISSIONS_GRANTED,
+  type MaterialPermissionSet,
+} from '@/src/lib/permissions/materialPermissions';
+import {
+  ALL_WAREHOUSE_PERMISSIONS_GRANTED,
+  type WarehousePermissionSet,
+} from '@/src/lib/permissions/warehousePermissions';
+import {
+  ALL_LOGISTICS_PERMISSIONS_GRANTED,
+  type LogisticsPermissionSet,
+} from '@/src/lib/permissions/logisticsPermissions';
+import {
+  ALL_SUPPLIER_PERMISSIONS_GRANTED,
+  type SupplierPermissionSet,
+} from '@/src/lib/permissions/supplierPermissions';
+import {
+  ALL_FINANCE_PERMISSIONS_GRANTED,
+  type FinancePermissionSet,
+} from '@/src/lib/permissions/financePermissions';
+import {
+  ALL_EMPLOYEES_PERMISSIONS_GRANTED,
+  type EmployeesPermissionSet,
+} from '@/src/lib/permissions/employeesPermissions';
+import {
+  ALL_AGENT_ANALYTICS_PERMISSIONS_GRANTED,
+  type AgentAnalyticsPermissionSet,
+} from '@/src/lib/permissions/agentAnalyticsPermissions';
+import {
+  ALL_REPORTS_PERMISSIONS_GRANTED,
+  type ReportsPermissionSet,
+} from '@/src/lib/permissions/reportsPermissions';
+import {
+  ALL_SETTINGS_PERMISSIONS_GRANTED,
+  type SettingsPermissionSet,
+} from '@/src/lib/permissions/settingsPermissions';
+import { useEmployeesPermissions } from '@/src/lib/permissions/employeesPermissions';
+import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
+import {
+  ALL_PRODUCTION_REQUEST_PERMISSIONS_GRANTED,
+  type ProductionRequestPermissionSet,
+} from '@/src/lib/permissions/productionRequestPermissions';
+import {
+  ALL_PURCHASE_ORDER_PERMISSIONS_GRANTED,
+  type PurchaseOrderPermissionSet,
+} from '@/src/lib/permissions/purchaseOrderPermissions';
+import {
+  ALL_INTER_BRANCH_REQUEST_PERMISSIONS_GRANTED,
+  type InterBranchRequestPermissionSet,
+} from '@/src/lib/permissions/interBranchRequestPermissions';
 
 function isSalesAgent(emp: EmployeePerfRow): emp is SalesAgentPerf {
   return emp.role === 'Sales Agent';
@@ -414,12 +556,13 @@ type DetailTab =
   | 'trips'
   | 'requests'
   | 'catalog'
+  | 'access'
   | 'skills'
   | 'documents'
   | 'assets'
   | 'activity';
 
-const ACTIVITY_PAGE_SIZE = TABLE_PAGE_SIZE;
+const ACTIVITY_PAGE_SIZE = ACTIVITY_LOG_PAGE_SIZE;
 const AGENT_ORDERS_PAGE_SIZE = TABLE_PAGE_SIZE;
 const TRIP_HISTORY_PAGE_SIZE = TABLE_PAGE_SIZE;
 const WAREHOUSE_PR_PAGE_SIZE = TABLE_PAGE_SIZE;
@@ -470,6 +613,7 @@ const DETAIL_TABS: { id: DetailTab; label: string; icon: React.ComponentType<{ c
   { id: 'trips', label: 'Trip History', icon: Truck },
   { id: 'requests', label: 'PO & PR', icon: ClipboardList },
   { id: 'catalog', label: 'Catalog access', icon: Package },
+  { id: 'access', label: 'Access', icon: Shield },
   { id: 'skills', label: 'Skills & Training', icon: GraduationCap },
   { id: 'documents', label: 'Documents', icon: Folder },
   { id: 'assets', label: 'Assets', icon: Package },
@@ -553,7 +697,8 @@ function emptyProfileState(): EmployeeFullProfile {
 export default function EmployeeDetailPage() {
   const { employeeId: routeParam } = useParams<{ employeeId: string }>();
   const navigate = useNavigate();
-  const { employeeName, session, addAuditLog, employeeId: sessionEmployeeId, refreshWarehouseScope } = useAppContext();
+  const { employeeName, session, addAuditLog, employeeId: sessionEmployeeId, refreshWarehouseScope, refreshOrderPermissions, refreshProductPermissions, refreshMaterialPermissions, refreshWarehousePermissions, refreshProductionRequestPermissions, refreshPurchaseOrderPermissions, refreshInterBranchRequestPermissions, refreshLogisticsPermissions, refreshSupplierPermissions, refreshFinancePermissions, refreshEmployeesPermissions, refreshAgentAnalyticsPermissions, refreshReportsPermissions, refreshSettingsPermissions } = useAppContext();
+  const employeesModulePerms = useEmployeesPermissions();
   const [employee, setEmployee] = useState<EmployeePerfRow | null | undefined>(undefined);
   const [profile, setProfile] = useState<EmployeeFullProfile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -732,6 +877,104 @@ export default function EmployeeDetailPage() {
   const [catalogSection, setCatalogSection] = useState<'products' | 'materials'>('products');
   const [catalogProductCategoryId, setCatalogProductCategoryId] = useState('');
   const [catalogMaterialCategoryId, setCatalogMaterialCategoryId] = useState('');
+
+  const [orderPermDraft, setOrderPermDraft] = useState<OrderPermissionSet>({ ...ALL_ORDER_PERMISSIONS_GRANTED });
+  const [orderPermSaved, setOrderPermSaved] = useState<OrderPermissionSet>({ ...ALL_ORDER_PERMISSIONS_GRANTED });
+  const [orderPermLoading, setOrderPermLoading] = useState(false);
+  const [orderPermSaving, setOrderPermSaving] = useState(false);
+  const [orderPermError, setOrderPermError] = useState<string | null>(null);
+  const [orderPermSaveSuccess, setOrderPermSaveSuccess] = useState(false);
+
+  const [productPermDraft, setProductPermDraft] = useState<ProductPermissionSet>({ ...ALL_PRODUCT_PERMISSIONS_GRANTED });
+  const [productPermSaved, setProductPermSaved] = useState<ProductPermissionSet>({ ...ALL_PRODUCT_PERMISSIONS_GRANTED });
+  const [productPermLoading, setProductPermLoading] = useState(false);
+  const [productPermSaving, setProductPermSaving] = useState(false);
+  const [productPermError, setProductPermError] = useState<string | null>(null);
+  const [productPermSaveSuccess, setProductPermSaveSuccess] = useState(false);
+
+  const [materialPermDraft, setMaterialPermDraft] = useState<MaterialPermissionSet>({ ...ALL_MATERIAL_PERMISSIONS_GRANTED });
+  const [materialPermSaved, setMaterialPermSaved] = useState<MaterialPermissionSet>({ ...ALL_MATERIAL_PERMISSIONS_GRANTED });
+  const [materialPermLoading, setMaterialPermLoading] = useState(false);
+  const [materialPermSaving, setMaterialPermSaving] = useState(false);
+  const [materialPermError, setMaterialPermError] = useState<string | null>(null);
+  const [materialPermSaveSuccess, setMaterialPermSaveSuccess] = useState(false);
+
+  const [warehousePermDraft, setWarehousePermDraft] = useState<WarehousePermissionSet>({ ...ALL_WAREHOUSE_PERMISSIONS_GRANTED });
+  const [warehousePermSaved, setWarehousePermSaved] = useState<WarehousePermissionSet>({ ...ALL_WAREHOUSE_PERMISSIONS_GRANTED });
+  const [warehousePermLoading, setWarehousePermLoading] = useState(false);
+  const [warehousePermSaving, setWarehousePermSaving] = useState(false);
+  const [warehousePermError, setWarehousePermError] = useState<string | null>(null);
+  const [warehousePermSaveSuccess, setWarehousePermSaveSuccess] = useState(false);
+
+  const [logisticsPermDraft, setLogisticsPermDraft] = useState<LogisticsPermissionSet>({ ...ALL_LOGISTICS_PERMISSIONS_GRANTED });
+  const [logisticsPermSaved, setLogisticsPermSaved] = useState<LogisticsPermissionSet>({ ...ALL_LOGISTICS_PERMISSIONS_GRANTED });
+  const [logisticsPermLoading, setLogisticsPermLoading] = useState(false);
+  const [logisticsPermSaving, setLogisticsPermSaving] = useState(false);
+  const [logisticsPermError, setLogisticsPermError] = useState<string | null>(null);
+  const [logisticsPermSaveSuccess, setLogisticsPermSaveSuccess] = useState(false);
+
+  const [supplierPermDraft, setSupplierPermDraft] = useState<SupplierPermissionSet>({ ...ALL_SUPPLIER_PERMISSIONS_GRANTED });
+  const [supplierPermSaved, setSupplierPermSaved] = useState<SupplierPermissionSet>({ ...ALL_SUPPLIER_PERMISSIONS_GRANTED });
+  const [supplierPermLoading, setSupplierPermLoading] = useState(false);
+  const [supplierPermSaving, setSupplierPermSaving] = useState(false);
+  const [supplierPermError, setSupplierPermError] = useState<string | null>(null);
+  const [supplierPermSaveSuccess, setSupplierPermSaveSuccess] = useState(false);
+
+  const [financePermDraft, setFinancePermDraft] = useState<FinancePermissionSet>({ ...ALL_FINANCE_PERMISSIONS_GRANTED });
+  const [financePermSaved, setFinancePermSaved] = useState<FinancePermissionSet>({ ...ALL_FINANCE_PERMISSIONS_GRANTED });
+  const [financePermLoading, setFinancePermLoading] = useState(false);
+  const [financePermSaving, setFinancePermSaving] = useState(false);
+  const [financePermError, setFinancePermError] = useState<string | null>(null);
+  const [financePermSaveSuccess, setFinancePermSaveSuccess] = useState(false);
+
+  const [employeesPermDraft, setEmployeesPermDraft] = useState<EmployeesPermissionSet>({ ...ALL_EMPLOYEES_PERMISSIONS_GRANTED });
+  const [employeesPermSaved, setEmployeesPermSaved] = useState<EmployeesPermissionSet>({ ...ALL_EMPLOYEES_PERMISSIONS_GRANTED });
+  const [employeesPermLoading, setEmployeesPermLoading] = useState(false);
+  const [employeesPermSaving, setEmployeesPermSaving] = useState(false);
+  const [employeesPermError, setEmployeesPermError] = useState<string | null>(null);
+  const [employeesPermSaveSuccess, setEmployeesPermSaveSuccess] = useState(false);
+
+  const [agentAnalyticsPermDraft, setAgentAnalyticsPermDraft] = useState<AgentAnalyticsPermissionSet>({ ...ALL_AGENT_ANALYTICS_PERMISSIONS_GRANTED });
+  const [agentAnalyticsPermSaved, setAgentAnalyticsPermSaved] = useState<AgentAnalyticsPermissionSet>({ ...ALL_AGENT_ANALYTICS_PERMISSIONS_GRANTED });
+  const [agentAnalyticsPermLoading, setAgentAnalyticsPermLoading] = useState(false);
+  const [agentAnalyticsPermSaving, setAgentAnalyticsPermSaving] = useState(false);
+  const [agentAnalyticsPermError, setAgentAnalyticsPermError] = useState<string | null>(null);
+  const [agentAnalyticsPermSaveSuccess, setAgentAnalyticsPermSaveSuccess] = useState(false);
+
+  const [reportsPermDraft, setReportsPermDraft] = useState<ReportsPermissionSet>({ ...ALL_REPORTS_PERMISSIONS_GRANTED });
+  const [reportsPermSaved, setReportsPermSaved] = useState<ReportsPermissionSet>({ ...ALL_REPORTS_PERMISSIONS_GRANTED });
+  const [reportsPermLoading, setReportsPermLoading] = useState(false);
+  const [reportsPermSaving, setReportsPermSaving] = useState(false);
+  const [reportsPermError, setReportsPermError] = useState<string | null>(null);
+  const [reportsPermSaveSuccess, setReportsPermSaveSuccess] = useState(false);
+
+  const [settingsPermDraft, setSettingsPermDraft] = useState<SettingsPermissionSet>({ ...ALL_SETTINGS_PERMISSIONS_GRANTED });
+  const [settingsPermSaved, setSettingsPermSaved] = useState<SettingsPermissionSet>({ ...ALL_SETTINGS_PERMISSIONS_GRANTED });
+  const [settingsPermLoading, setSettingsPermLoading] = useState(false);
+  const [settingsPermSaving, setSettingsPermSaving] = useState(false);
+  const [settingsPermError, setSettingsPermError] = useState<string | null>(null);
+  const [settingsPermSaveSuccess, setSettingsPermSaveSuccess] = useState(false);
+
+  const [productionRequestPermDraft, setProductionRequestPermDraft] = useState<ProductionRequestPermissionSet>({ ...ALL_PRODUCTION_REQUEST_PERMISSIONS_GRANTED });
+  const [productionRequestPermSaved, setProductionRequestPermSaved] = useState<ProductionRequestPermissionSet>({ ...ALL_PRODUCTION_REQUEST_PERMISSIONS_GRANTED });
+  const [productionRequestPermLoading, setProductionRequestPermLoading] = useState(false);
+  const [productionRequestPermSaving, setProductionRequestPermSaving] = useState(false);
+  const [productionRequestPermError, setProductionRequestPermError] = useState<string | null>(null);
+  const [productionRequestPermSaveSuccess, setProductionRequestPermSaveSuccess] = useState(false);
+
+  const [purchaseOrderPermDraft, setPurchaseOrderPermDraft] = useState<PurchaseOrderPermissionSet>({ ...ALL_PURCHASE_ORDER_PERMISSIONS_GRANTED });
+  const [purchaseOrderPermSaved, setPurchaseOrderPermSaved] = useState<PurchaseOrderPermissionSet>({ ...ALL_PURCHASE_ORDER_PERMISSIONS_GRANTED });
+  const [purchaseOrderPermLoading, setPurchaseOrderPermLoading] = useState(false);
+  const [purchaseOrderPermSaving, setPurchaseOrderPermSaving] = useState(false);
+  const [purchaseOrderPermError, setPurchaseOrderPermError] = useState<string | null>(null);
+  const [purchaseOrderPermSaveSuccess, setPurchaseOrderPermSaveSuccess] = useState(false);
+
+  const [interBranchRequestPermDraft, setInterBranchRequestPermDraft] = useState<InterBranchRequestPermissionSet>({ ...ALL_INTER_BRANCH_REQUEST_PERMISSIONS_GRANTED });
+  const [interBranchRequestPermSaved, setInterBranchRequestPermSaved] = useState<InterBranchRequestPermissionSet>({ ...ALL_INTER_BRANCH_REQUEST_PERMISSIONS_GRANTED });
+  const [interBranchRequestPermLoading, setInterBranchRequestPermLoading] = useState(false);
+  const [interBranchRequestPermSaving, setInterBranchRequestPermSaving] = useState(false);
+  const [interBranchRequestPermError, setInterBranchRequestPermError] = useState<string | null>(null);
+  const [interBranchRequestPermSaveSuccess, setInterBranchRequestPermSaveSuccess] = useState(false);
 
   useEffect(() => {
     if (!routeParam) {
@@ -1998,7 +2241,665 @@ export default function EmployeeDetailPage() {
     }
   };
 
+  useEffect(() => {
+    if (!employee?.id) return;
+    let cancelled = false;
+    setOrderPermLoading(true);
+    setOrderPermError(null);
+    setOrderPermSaveSuccess(false);
+    void (async () => {
+      try {
+        const perms = await fetchEmployeeOrderPermissions(employee.id);
+        if (!cancelled) {
+          setOrderPermDraft(perms);
+          setOrderPermSaved(perms);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setOrderPermError(e instanceof Error ? e.message : 'Failed to load permissions');
+          const fallback = { ...ALL_ORDER_PERMISSIONS_GRANTED };
+          setOrderPermDraft(fallback);
+          setOrderPermSaved(fallback);
+        }
+      } finally {
+        if (!cancelled) setOrderPermLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [employee?.id]);
+
+  useEffect(() => {
+    if (!employee?.id) return;
+    let cancelled = false;
+    setProductPermLoading(true);
+    setProductPermError(null);
+    setProductPermSaveSuccess(false);
+    void (async () => {
+      try {
+        const perms = await fetchEmployeeProductPermissions(employee.id);
+        if (!cancelled) {
+          setProductPermDraft(perms);
+          setProductPermSaved(perms);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setProductPermError(e instanceof Error ? e.message : 'Failed to load permissions');
+          const fallback = { ...ALL_PRODUCT_PERMISSIONS_GRANTED };
+          setProductPermDraft(fallback);
+          setProductPermSaved(fallback);
+        }
+      } finally {
+        if (!cancelled) setProductPermLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [employee?.id]);
+
+  useEffect(() => {
+    if (!employee?.id) return;
+    let cancelled = false;
+    setMaterialPermLoading(true);
+    setMaterialPermError(null);
+    setMaterialPermSaveSuccess(false);
+    void (async () => {
+      try {
+        const perms = await fetchEmployeeMaterialPermissions(employee.id);
+        if (!cancelled) {
+          setMaterialPermDraft(perms);
+          setMaterialPermSaved(perms);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setMaterialPermError(e instanceof Error ? e.message : 'Failed to load permissions');
+          const fallback = { ...ALL_MATERIAL_PERMISSIONS_GRANTED };
+          setMaterialPermDraft(fallback);
+          setMaterialPermSaved(fallback);
+        }
+      } finally {
+        if (!cancelled) setMaterialPermLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [employee?.id]);
+
+  useEffect(() => {
+    if (!employee?.id) return;
+    let cancelled = false;
+    setWarehousePermLoading(true);
+    setWarehousePermError(null);
+    setWarehousePermSaveSuccess(false);
+    void (async () => {
+      try {
+        const perms = await fetchEmployeeWarehousePermissions(employee.id);
+        if (!cancelled) {
+          setWarehousePermDraft(perms);
+          setWarehousePermSaved(perms);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setWarehousePermError(e instanceof Error ? e.message : 'Failed to load permissions');
+          const fallback = { ...ALL_WAREHOUSE_PERMISSIONS_GRANTED };
+          setWarehousePermDraft(fallback);
+          setWarehousePermSaved(fallback);
+        }
+      } finally {
+        if (!cancelled) setWarehousePermLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [employee?.id]);
+
+  useEffect(() => {
+    if (!employee?.id) return;
+    let cancelled = false;
+    setLogisticsPermLoading(true);
+    setLogisticsPermError(null);
+    setLogisticsPermSaveSuccess(false);
+    void (async () => {
+      try {
+        const perms = await fetchEmployeeLogisticsPermissions(employee.id);
+        if (!cancelled) {
+          setLogisticsPermDraft(perms);
+          setLogisticsPermSaved(perms);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setLogisticsPermError(e instanceof Error ? e.message : 'Failed to load permissions');
+          const fallback = { ...ALL_LOGISTICS_PERMISSIONS_GRANTED };
+          setLogisticsPermDraft(fallback);
+          setLogisticsPermSaved(fallback);
+        }
+      } finally {
+        if (!cancelled) setLogisticsPermLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [employee?.id]);
+
+  useEffect(() => {
+    if (!employee?.id) return;
+    let cancelled = false;
+    setSupplierPermLoading(true);
+    setSupplierPermError(null);
+    setSupplierPermSaveSuccess(false);
+    void (async () => {
+      try {
+        const perms = await fetchEmployeeSupplierPermissions(employee.id);
+        if (!cancelled) {
+          setSupplierPermDraft(perms);
+          setSupplierPermSaved(perms);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setSupplierPermError(e instanceof Error ? e.message : 'Failed to load permissions');
+          const fallback = { ...ALL_SUPPLIER_PERMISSIONS_GRANTED };
+          setSupplierPermDraft(fallback);
+          setSupplierPermSaved(fallback);
+        }
+      } finally {
+        if (!cancelled) setSupplierPermLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [employee?.id]);
+
+  useEffect(() => {
+    if (!employee?.id) return;
+    let cancelled = false;
+    setFinancePermLoading(true);
+    setFinancePermError(null);
+    setFinancePermSaveSuccess(false);
+    void (async () => {
+      try {
+        const perms = await fetchEmployeeFinancePermissions(employee.id);
+        if (!cancelled) {
+          setFinancePermDraft(perms);
+          setFinancePermSaved(perms);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setFinancePermError(e instanceof Error ? e.message : 'Failed to load permissions');
+          const fallback = { ...ALL_FINANCE_PERMISSIONS_GRANTED };
+          setFinancePermDraft(fallback);
+          setFinancePermSaved(fallback);
+        }
+      } finally {
+        if (!cancelled) setFinancePermLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [employee?.id]);
+
+  useEffect(() => {
+    if (!employee?.id) return;
+    let cancelled = false;
+    setEmployeesPermLoading(true);
+    setEmployeesPermError(null);
+    setEmployeesPermSaveSuccess(false);
+    void (async () => {
+      try {
+        const perms = await fetchEmployeeEmployeesPermissions(employee.id);
+        if (!cancelled) {
+          setEmployeesPermDraft(perms);
+          setEmployeesPermSaved(perms);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setEmployeesPermError(e instanceof Error ? e.message : 'Failed to load permissions');
+          const fallback = { ...ALL_EMPLOYEES_PERMISSIONS_GRANTED };
+          setEmployeesPermDraft(fallback);
+          setEmployeesPermSaved(fallback);
+        }
+      } finally {
+        if (!cancelled) setEmployeesPermLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [employee?.id]);
+
+  useEffect(() => {
+    if (!employee?.id) return;
+    let cancelled = false;
+    setAgentAnalyticsPermLoading(true);
+    setAgentAnalyticsPermError(null);
+    setAgentAnalyticsPermSaveSuccess(false);
+    void (async () => {
+      try {
+        const perms = await fetchEmployeeAgentAnalyticsPermissions(employee.id);
+        if (!cancelled) {
+          setAgentAnalyticsPermDraft(perms);
+          setAgentAnalyticsPermSaved(perms);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setAgentAnalyticsPermError(e instanceof Error ? e.message : 'Failed to load permissions');
+          const fallback = { ...ALL_AGENT_ANALYTICS_PERMISSIONS_GRANTED };
+          setAgentAnalyticsPermDraft(fallback);
+          setAgentAnalyticsPermSaved(fallback);
+        }
+      } finally {
+        if (!cancelled) setAgentAnalyticsPermLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [employee?.id]);
+
+  useEffect(() => {
+    if (!employee?.id) return;
+    let cancelled = false;
+    setReportsPermLoading(true);
+    setReportsPermError(null);
+    setReportsPermSaveSuccess(false);
+    void (async () => {
+      try {
+        const perms = await fetchEmployeeReportsPermissions(employee.id);
+        if (!cancelled) {
+          setReportsPermDraft(perms);
+          setReportsPermSaved(perms);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setReportsPermError(e instanceof Error ? e.message : 'Failed to load permissions');
+          const fallback = { ...ALL_REPORTS_PERMISSIONS_GRANTED };
+          setReportsPermDraft(fallback);
+          setReportsPermSaved(fallback);
+        }
+      } finally {
+        if (!cancelled) setReportsPermLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [employee?.id]);
+
+  useEffect(() => {
+    if (!employee?.id) return;
+    let cancelled = false;
+    setSettingsPermLoading(true);
+    setSettingsPermError(null);
+    setSettingsPermSaveSuccess(false);
+    void (async () => {
+      try {
+        const perms = await fetchEmployeeSettingsPermissions(employee.id);
+        if (!cancelled) {
+          setSettingsPermDraft(perms);
+          setSettingsPermSaved(perms);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setSettingsPermError(e instanceof Error ? e.message : 'Failed to load permissions');
+          const fallback = { ...ALL_SETTINGS_PERMISSIONS_GRANTED };
+          setSettingsPermDraft(fallback);
+          setSettingsPermSaved(fallback);
+        }
+      } finally {
+        if (!cancelled) setSettingsPermLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [employee?.id]);
+
+  useEffect(() => {
+    if (!employee?.id) return;
+    let cancelled = false;
+    setProductionRequestPermLoading(true);
+    setProductionRequestPermError(null);
+    setProductionRequestPermSaveSuccess(false);
+    void (async () => {
+      try {
+        const perms = await fetchEmployeeProductionRequestPermissions(employee.id);
+        if (!cancelled) {
+          setProductionRequestPermDraft(perms);
+          setProductionRequestPermSaved(perms);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setProductionRequestPermError(e instanceof Error ? e.message : 'Failed to load permissions');
+          const fallback = { ...ALL_PRODUCTION_REQUEST_PERMISSIONS_GRANTED };
+          setProductionRequestPermDraft(fallback);
+          setProductionRequestPermSaved(fallback);
+        }
+      } finally {
+        if (!cancelled) setProductionRequestPermLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [employee?.id]);
+
+  useEffect(() => {
+    if (!employee?.id) return;
+    let cancelled = false;
+    setPurchaseOrderPermLoading(true);
+    setPurchaseOrderPermError(null);
+    setPurchaseOrderPermSaveSuccess(false);
+    void (async () => {
+      try {
+        const perms = await fetchEmployeePurchaseOrderPermissions(employee.id);
+        if (!cancelled) {
+          setPurchaseOrderPermDraft(perms);
+          setPurchaseOrderPermSaved(perms);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setPurchaseOrderPermError(e instanceof Error ? e.message : 'Failed to load permissions');
+          const fallback = { ...ALL_PURCHASE_ORDER_PERMISSIONS_GRANTED };
+          setPurchaseOrderPermDraft(fallback);
+          setPurchaseOrderPermSaved(fallback);
+        }
+      } finally {
+        if (!cancelled) setPurchaseOrderPermLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [employee?.id]);
+
+  useEffect(() => {
+    if (!employee?.id) return;
+    let cancelled = false;
+    setInterBranchRequestPermLoading(true);
+    setInterBranchRequestPermError(null);
+    setInterBranchRequestPermSaveSuccess(false);
+    void (async () => {
+      try {
+        const perms = await fetchEmployeeInterBranchRequestPermissions(employee.id);
+        if (!cancelled) {
+          setInterBranchRequestPermDraft(perms);
+          setInterBranchRequestPermSaved(perms);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setInterBranchRequestPermError(e instanceof Error ? e.message : 'Failed to load permissions');
+          const fallback = { ...ALL_INTER_BRANCH_REQUEST_PERMISSIONS_GRANTED };
+          setInterBranchRequestPermDraft(fallback);
+          setInterBranchRequestPermSaved(fallback);
+        }
+      } finally {
+        if (!cancelled) setInterBranchRequestPermLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [employee?.id]);
+
+  const handleSaveOrderPermissions = async () => {
+    if (!employee) return;
+    setOrderPermSaving(true);
+    setOrderPermError(null);
+    setOrderPermSaveSuccess(false);
+    try {
+      await saveEmployeeOrderPermissions(employee.id, orderPermDraft);
+      setOrderPermSaved({ ...orderPermDraft });
+      setOrderPermSaveSuccess(true);
+      addAuditLog(
+        'Order permissions updated',
+        'Employee',
+        `${employee.employeeName} (${employee.employeeId})`,
+      );
+      if (sessionEmployeeId === employee.id) {
+        await refreshOrderPermissions();
+      }
+    } catch (e) {
+      setOrderPermError(e instanceof Error ? e.message : 'Failed to save permissions');
+    } finally {
+      setOrderPermSaving(false);
+    }
+  };
+
+  const handleSaveProductPermissions = async () => {
+    if (!employee) return;
+    setProductPermSaving(true);
+    setProductPermError(null);
+    setProductPermSaveSuccess(false);
+    try {
+      await saveEmployeeProductPermissions(employee.id, productPermDraft);
+      setProductPermSaved({ ...productPermDraft });
+      setProductPermSaveSuccess(true);
+      addAuditLog(
+        'Product permissions updated',
+        'Employee',
+        `${employee.employeeName} (${employee.employeeId})`,
+      );
+      if (sessionEmployeeId === employee.id) {
+        await refreshProductPermissions();
+      }
+    } catch (e) {
+      setProductPermError(e instanceof Error ? e.message : 'Failed to save permissions');
+    } finally {
+      setProductPermSaving(false);
+    }
+  };
+
+  const handleSaveMaterialPermissions = async () => {
+    if (!employee) return;
+    setMaterialPermSaving(true);
+    setMaterialPermError(null);
+    setMaterialPermSaveSuccess(false);
+    try {
+      await saveEmployeeMaterialPermissions(employee.id, materialPermDraft);
+      setMaterialPermSaved({ ...materialPermDraft });
+      setMaterialPermSaveSuccess(true);
+      addAuditLog(
+        'Material permissions updated',
+        'Employee',
+        `${employee.employeeName} (${employee.employeeId})`,
+      );
+      if (sessionEmployeeId === employee.id) {
+        await refreshMaterialPermissions();
+      }
+    } catch (e) {
+      setMaterialPermError(e instanceof Error ? e.message : 'Failed to save permissions');
+    } finally {
+      setMaterialPermSaving(false);
+    }
+  };
+
+  const handleSaveWarehousePermissions = async () => {
+    if (!employee) return;
+    setWarehousePermSaving(true);
+    setWarehousePermError(null);
+    setWarehousePermSaveSuccess(false);
+    try {
+      await saveEmployeeWarehousePermissions(employee.id, warehousePermDraft);
+      setWarehousePermSaved({ ...warehousePermDraft });
+      setWarehousePermSaveSuccess(true);
+      addAuditLog('Warehouse permissions updated', 'Employee', `${employee.employeeName} (${employee.employeeId})`);
+      if (sessionEmployeeId === employee.id) await refreshWarehousePermissions();
+    } catch (e) {
+      setWarehousePermError(e instanceof Error ? e.message : 'Failed to save permissions');
+    } finally {
+      setWarehousePermSaving(false);
+    }
+  };
+
+  const handleSaveLogisticsPermissions = async () => {
+    if (!employee) return;
+    setLogisticsPermSaving(true);
+    setLogisticsPermError(null);
+    setLogisticsPermSaveSuccess(false);
+    try {
+      await saveEmployeeLogisticsPermissions(employee.id, logisticsPermDraft);
+      setLogisticsPermSaved({ ...logisticsPermDraft });
+      setLogisticsPermSaveSuccess(true);
+      addAuditLog('Logistics permissions updated', 'Employee', `${employee.employeeName} (${employee.employeeId})`);
+      if (sessionEmployeeId === employee.id) await refreshLogisticsPermissions();
+    } catch (e) {
+      setLogisticsPermError(e instanceof Error ? e.message : 'Failed to save permissions');
+    } finally {
+      setLogisticsPermSaving(false);
+    }
+  };
+
+  const handleSaveSupplierPermissions = async () => {
+    if (!employee) return;
+    setSupplierPermSaving(true);
+    setSupplierPermError(null);
+    setSupplierPermSaveSuccess(false);
+    try {
+      await saveEmployeeSupplierPermissions(employee.id, supplierPermDraft);
+      setSupplierPermSaved({ ...supplierPermDraft });
+      setSupplierPermSaveSuccess(true);
+      addAuditLog('Supplier permissions updated', 'Employee', `${employee.employeeName} (${employee.employeeId})`);
+      if (sessionEmployeeId === employee.id) await refreshSupplierPermissions();
+    } catch (e) {
+      setSupplierPermError(e instanceof Error ? e.message : 'Failed to save permissions');
+    } finally {
+      setSupplierPermSaving(false);
+    }
+  };
+
+  const handleSaveFinancePermissions = async () => {
+    if (!employee) return;
+    setFinancePermSaving(true);
+    setFinancePermError(null);
+    setFinancePermSaveSuccess(false);
+    try {
+      await saveEmployeeFinancePermissions(employee.id, financePermDraft);
+      setFinancePermSaved({ ...financePermDraft });
+      setFinancePermSaveSuccess(true);
+      addAuditLog('Finance permissions updated', 'Employee', `${employee.employeeName} (${employee.employeeId})`);
+      if (sessionEmployeeId === employee.id) await refreshFinancePermissions();
+    } catch (e) {
+      setFinancePermError(e instanceof Error ? e.message : 'Failed to save permissions');
+    } finally {
+      setFinancePermSaving(false);
+    }
+  };
+
+  const handleSaveEmployeesPermissions = async () => {
+    if (!employee) return;
+    setEmployeesPermSaving(true);
+    setEmployeesPermError(null);
+    setEmployeesPermSaveSuccess(false);
+    try {
+      await saveEmployeeEmployeesPermissions(employee.id, employeesPermDraft);
+      setEmployeesPermSaved({ ...employeesPermDraft });
+      setEmployeesPermSaveSuccess(true);
+      addAuditLog('Employees permissions updated', 'Employee', `${employee.employeeName} (${employee.employeeId})`);
+      if (sessionEmployeeId === employee.id) await refreshEmployeesPermissions();
+    } catch (e) {
+      setEmployeesPermError(e instanceof Error ? e.message : 'Failed to save permissions');
+    } finally {
+      setEmployeesPermSaving(false);
+    }
+  };
+
+  const handleSaveAgentAnalyticsPermissions = async () => {
+    if (!employee) return;
+    setAgentAnalyticsPermSaving(true);
+    setAgentAnalyticsPermError(null);
+    setAgentAnalyticsPermSaveSuccess(false);
+    try {
+      await saveEmployeeAgentAnalyticsPermissions(employee.id, agentAnalyticsPermDraft);
+      setAgentAnalyticsPermSaved({ ...agentAnalyticsPermDraft });
+      setAgentAnalyticsPermSaveSuccess(true);
+      addAuditLog('Agent Analytics permissions updated', 'Employee', `${employee.employeeName} (${employee.employeeId})`);
+      if (sessionEmployeeId === employee.id) await refreshAgentAnalyticsPermissions();
+    } catch (e) {
+      setAgentAnalyticsPermError(e instanceof Error ? e.message : 'Failed to save permissions');
+    } finally {
+      setAgentAnalyticsPermSaving(false);
+    }
+  };
+
+  const handleSaveReportsPermissions = async () => {
+    if (!employee) return;
+    setReportsPermSaving(true);
+    setReportsPermError(null);
+    setReportsPermSaveSuccess(false);
+    try {
+      await saveEmployeeReportsPermissions(employee.id, reportsPermDraft);
+      setReportsPermSaved({ ...reportsPermDraft });
+      setReportsPermSaveSuccess(true);
+      addAuditLog('Reports permissions updated', 'Employee', `${employee.employeeName} (${employee.employeeId})`);
+      if (sessionEmployeeId === employee.id) await refreshReportsPermissions();
+    } catch (e) {
+      setReportsPermError(e instanceof Error ? e.message : 'Failed to save permissions');
+    } finally {
+      setReportsPermSaving(false);
+    }
+  };
+
+  const handleSaveSettingsPermissions = async () => {
+    if (!employee) return;
+    setSettingsPermSaving(true);
+    setSettingsPermError(null);
+    setSettingsPermSaveSuccess(false);
+    try {
+      await saveEmployeeSettingsPermissions(employee.id, settingsPermDraft);
+      setSettingsPermSaved({ ...settingsPermDraft });
+      setSettingsPermSaveSuccess(true);
+      addAuditLog('Settings permissions updated', 'Employee', `${employee.employeeName} (${employee.employeeId})`);
+      if (sessionEmployeeId === employee.id) await refreshSettingsPermissions();
+    } catch (e) {
+      setSettingsPermError(e instanceof Error ? e.message : 'Failed to save permissions');
+    } finally {
+      setSettingsPermSaving(false);
+    }
+  };
+
+  const handleSaveProductionRequestPermissions = async () => {
+    if (!employee) return;
+    setProductionRequestPermSaving(true);
+    setProductionRequestPermError(null);
+    setProductionRequestPermSaveSuccess(false);
+    try {
+      await saveEmployeeProductionRequestPermissions(employee.id, productionRequestPermDraft);
+      setProductionRequestPermSaved({ ...productionRequestPermDraft });
+      setProductionRequestPermSaveSuccess(true);
+      addAuditLog('Production request permissions updated', 'Employee', `${employee.employeeName} (${employee.employeeId})`);
+      if (sessionEmployeeId === employee.id) await refreshProductionRequestPermissions();
+    } catch (e) {
+      setProductionRequestPermError(e instanceof Error ? e.message : 'Failed to save permissions');
+    } finally {
+      setProductionRequestPermSaving(false);
+    }
+  };
+
+  const handleSavePurchaseOrderPermissions = async () => {
+    if (!employee) return;
+    setPurchaseOrderPermSaving(true);
+    setPurchaseOrderPermError(null);
+    setPurchaseOrderPermSaveSuccess(false);
+    try {
+      await saveEmployeePurchaseOrderPermissions(employee.id, purchaseOrderPermDraft);
+      setPurchaseOrderPermSaved({ ...purchaseOrderPermDraft });
+      setPurchaseOrderPermSaveSuccess(true);
+      addAuditLog('Purchase order permissions updated', 'Employee', `${employee.employeeName} (${employee.employeeId})`);
+      if (sessionEmployeeId === employee.id) await refreshPurchaseOrderPermissions();
+    } catch (e) {
+      setPurchaseOrderPermError(e instanceof Error ? e.message : 'Failed to save permissions');
+    } finally {
+      setPurchaseOrderPermSaving(false);
+    }
+  };
+
+  const handleSaveInterBranchRequestPermissions = async () => {
+    if (!employee) return;
+    setInterBranchRequestPermSaving(true);
+    setInterBranchRequestPermError(null);
+    setInterBranchRequestPermSaveSuccess(false);
+    try {
+      await saveEmployeeInterBranchRequestPermissions(employee.id, interBranchRequestPermDraft);
+      setInterBranchRequestPermSaved({ ...interBranchRequestPermDraft });
+      setInterBranchRequestPermSaveSuccess(true);
+      addAuditLog('Inter-branch request permissions updated', 'Employee', `${employee.employeeName} (${employee.employeeId})`);
+      if (sessionEmployeeId === employee.id) await refreshInterBranchRequestPermissions();
+    } catch (e) {
+      setInterBranchRequestPermError(e instanceof Error ? e.message : 'Failed to save permissions');
+    } finally {
+      setInterBranchRequestPermSaving(false);
+    }
+  };
+
   const p = profile ?? emptyProfileState();
+
+  if (!employeesModulePerms.pageAccess) {
+    return <ModuleAccessDenied moduleName="Employees" />;
+  }
 
   if (loading) {
     return (
@@ -5150,6 +6051,222 @@ export default function EmployeeDetailPage() {
           </div>
         );
       }
+
+      case 'access':
+        return (
+          <div className="space-y-6">
+            <EmployeesPermissionSection
+              value={employeesPermDraft}
+              savedValue={employeesPermSaved}
+              onChange={(next) => {
+                setEmployeesPermDraft(next);
+                setEmployeesPermSaveSuccess(false);
+                setEmployeesPermError(null);
+              }}
+              onSave={handleSaveEmployeesPermissions}
+              saving={employeesPermSaving}
+              loading={employeesPermLoading}
+              dirty={!employeesPermissionSetsEqual(employeesPermDraft, employeesPermSaved)}
+              saveError={employeesPermError}
+              saveSuccess={employeesPermSaveSuccess}
+            />
+            <AgentAnalyticsPermissionSection
+              value={agentAnalyticsPermDraft}
+              savedValue={agentAnalyticsPermSaved}
+              onChange={(next) => {
+                setAgentAnalyticsPermDraft(next);
+                setAgentAnalyticsPermSaveSuccess(false);
+                setAgentAnalyticsPermError(null);
+              }}
+              onSave={handleSaveAgentAnalyticsPermissions}
+              saving={agentAnalyticsPermSaving}
+              loading={agentAnalyticsPermLoading}
+              dirty={!agentAnalyticsPermissionSetsEqual(agentAnalyticsPermDraft, agentAnalyticsPermSaved)}
+              saveError={agentAnalyticsPermError}
+              saveSuccess={agentAnalyticsPermSaveSuccess}
+            />
+            <ReportsPermissionSection
+              value={reportsPermDraft}
+              savedValue={reportsPermSaved}
+              onChange={(next) => {
+                setReportsPermDraft(next);
+                setReportsPermSaveSuccess(false);
+                setReportsPermError(null);
+              }}
+              onSave={handleSaveReportsPermissions}
+              saving={reportsPermSaving}
+              loading={reportsPermLoading}
+              dirty={!reportsPermissionSetsEqual(reportsPermDraft, reportsPermSaved)}
+              saveError={reportsPermError}
+              saveSuccess={reportsPermSaveSuccess}
+            />
+            <SettingsPermissionSection
+              value={settingsPermDraft}
+              savedValue={settingsPermSaved}
+              onChange={(next) => {
+                setSettingsPermDraft(next);
+                setSettingsPermSaveSuccess(false);
+                setSettingsPermError(null);
+              }}
+              onSave={handleSaveSettingsPermissions}
+              saving={settingsPermSaving}
+              loading={settingsPermLoading}
+              dirty={!settingsPermissionSetsEqual(settingsPermDraft, settingsPermSaved)}
+              saveError={settingsPermError}
+              saveSuccess={settingsPermSaveSuccess}
+            />
+            <OrderPermissionSection
+              value={orderPermDraft}
+              savedValue={orderPermSaved}
+              onChange={(next) => {
+                setOrderPermDraft(next);
+                setOrderPermSaveSuccess(false);
+                setOrderPermError(null);
+              }}
+              onSave={handleSaveOrderPermissions}
+              saving={orderPermSaving}
+              loading={orderPermLoading}
+              dirty={!orderPermissionSetsEqual(orderPermDraft, orderPermSaved)}
+              saveError={orderPermError}
+              saveSuccess={orderPermSaveSuccess}
+            />
+            <ProductPermissionSection
+              value={productPermDraft}
+              savedValue={productPermSaved}
+              onChange={(next) => {
+                setProductPermDraft(next);
+                setProductPermSaveSuccess(false);
+                setProductPermError(null);
+              }}
+              onSave={handleSaveProductPermissions}
+              saving={productPermSaving}
+              loading={productPermLoading}
+              dirty={!productPermissionSetsEqual(productPermDraft, productPermSaved)}
+              saveError={productPermError}
+              saveSuccess={productPermSaveSuccess}
+            />
+            <MaterialPermissionSection
+              value={materialPermDraft}
+              savedValue={materialPermSaved}
+              onChange={(next) => {
+                setMaterialPermDraft(next);
+                setMaterialPermSaveSuccess(false);
+                setMaterialPermError(null);
+              }}
+              onSave={handleSaveMaterialPermissions}
+              saving={materialPermSaving}
+              loading={materialPermLoading}
+              dirty={!materialPermissionSetsEqual(materialPermDraft, materialPermSaved)}
+              saveError={materialPermError}
+              saveSuccess={materialPermSaveSuccess}
+            />
+            <WarehousePermissionSection
+              value={warehousePermDraft}
+              savedValue={warehousePermSaved}
+              onChange={(next) => {
+                setWarehousePermDraft(next);
+                setWarehousePermSaveSuccess(false);
+                setWarehousePermError(null);
+              }}
+              onSave={handleSaveWarehousePermissions}
+              saving={warehousePermSaving}
+              loading={warehousePermLoading}
+              dirty={!warehousePermissionSetsEqual(warehousePermDraft, warehousePermSaved)}
+              saveError={warehousePermError}
+              saveSuccess={warehousePermSaveSuccess}
+            />
+            <LogisticsPermissionSection
+              value={logisticsPermDraft}
+              savedValue={logisticsPermSaved}
+              onChange={(next) => {
+                setLogisticsPermDraft(next);
+                setLogisticsPermSaveSuccess(false);
+                setLogisticsPermError(null);
+              }}
+              onSave={handleSaveLogisticsPermissions}
+              saving={logisticsPermSaving}
+              loading={logisticsPermLoading}
+              dirty={!logisticsPermissionSetsEqual(logisticsPermDraft, logisticsPermSaved)}
+              saveError={logisticsPermError}
+              saveSuccess={logisticsPermSaveSuccess}
+            />
+            <SupplierPermissionSection
+              value={supplierPermDraft}
+              savedValue={supplierPermSaved}
+              onChange={(next) => {
+                setSupplierPermDraft(next);
+                setSupplierPermSaveSuccess(false);
+                setSupplierPermError(null);
+              }}
+              onSave={handleSaveSupplierPermissions}
+              saving={supplierPermSaving}
+              loading={supplierPermLoading}
+              dirty={!supplierPermissionSetsEqual(supplierPermDraft, supplierPermSaved)}
+              saveError={supplierPermError}
+              saveSuccess={supplierPermSaveSuccess}
+            />
+            <FinancePermissionSection
+              value={financePermDraft}
+              savedValue={financePermSaved}
+              onChange={(next) => {
+                setFinancePermDraft(next);
+                setFinancePermSaveSuccess(false);
+                setFinancePermError(null);
+              }}
+              onSave={handleSaveFinancePermissions}
+              saving={financePermSaving}
+              loading={financePermLoading}
+              dirty={!financePermissionSetsEqual(financePermDraft, financePermSaved)}
+              saveError={financePermError}
+              saveSuccess={financePermSaveSuccess}
+            />
+            <ProductionRequestPermissionSection
+              value={productionRequestPermDraft}
+              savedValue={productionRequestPermSaved}
+              onChange={(next) => {
+                setProductionRequestPermDraft(next);
+                setProductionRequestPermSaveSuccess(false);
+                setProductionRequestPermError(null);
+              }}
+              onSave={handleSaveProductionRequestPermissions}
+              saving={productionRequestPermSaving}
+              loading={productionRequestPermLoading}
+              dirty={!productionRequestPermissionSetsEqual(productionRequestPermDraft, productionRequestPermSaved)}
+              saveError={productionRequestPermError}
+              saveSuccess={productionRequestPermSaveSuccess}
+            />
+            <PurchaseOrderPermissionSection
+              value={purchaseOrderPermDraft}
+              savedValue={purchaseOrderPermSaved}
+              onChange={(next) => {
+                setPurchaseOrderPermDraft(next);
+                setPurchaseOrderPermSaveSuccess(false);
+                setPurchaseOrderPermError(null);
+              }}
+              onSave={handleSavePurchaseOrderPermissions}
+              saving={purchaseOrderPermSaving}
+              loading={purchaseOrderPermLoading}
+              dirty={!purchaseOrderPermissionSetsEqual(purchaseOrderPermDraft, purchaseOrderPermSaved)}
+              saveError={purchaseOrderPermError}
+              saveSuccess={purchaseOrderPermSaveSuccess}
+            />
+            <InterBranchRequestPermissionSection
+              value={interBranchRequestPermDraft}
+              savedValue={interBranchRequestPermSaved}
+              onChange={(next) => {
+                setInterBranchRequestPermDraft(next);
+                setInterBranchRequestPermSaveSuccess(false);
+                setInterBranchRequestPermError(null);
+              }}
+              onSave={handleSaveInterBranchRequestPermissions}
+              saving={interBranchRequestPermSaving}
+              loading={interBranchRequestPermLoading}
+              dirty={!interBranchRequestPermissionSetsEqual(interBranchRequestPermDraft, interBranchRequestPermSaved)}
+              saveError={interBranchRequestPermError}
+              saveSuccess={interBranchRequestPermSaveSuccess}
+            />
+          </div>
+        );
 
       case 'activity':
         return (

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
+import { useReportsPermissions } from '@/src/lib/permissions/reportsPermissions';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { StatKpiCard } from '@/src/components/ui/StatKpiCard';
 import { Badge } from '@/src/components/ui/Badge';
@@ -226,6 +227,7 @@ type ViewMode = 'overview' | 'analytics' | 'payments' | 'products';
 
 export function CustomersPage() {
   const { branch } = useAppContext();
+  const reportsPerms = useReportsPermissions();
   const navigate = useNavigate();
   const [viewMode, setViewMode] = useState<ViewMode>('overview');
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
@@ -311,10 +313,12 @@ export function CustomersPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
+          {reportsPerms.pageAccess && (
           <Button variant="outline" onClick={() => navigate('/reports')}>
             <BarChart3 className="w-4 h-4 mr-2" />
             Customer Reports
           </Button>
+          )}
           <Button variant="primary" onClick={() => navigate('/customers/new')}>
             <Plus className="w-4 h-4 mr-2" />
             Add New Customer

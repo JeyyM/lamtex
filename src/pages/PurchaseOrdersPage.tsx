@@ -26,6 +26,8 @@ import {
   createDraftPurchaseOrder,
   poLogRoleMap,
 } from '@/src/lib/createDraftPurchaseOrder';
+import { usePurchaseOrderPermissions } from '@/src/lib/permissions/purchaseOrderPermissions';
+import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
 import {
   ShoppingCart,
   Search,
@@ -131,6 +133,7 @@ const getStatusIcon = (status: POStatus) => {
 
 export function PurchaseOrdersPage() {
   const { branch, employeeName, role, session, addAuditLog } = useAppContext();
+  const perms = usePurchaseOrderPermissions();
   const navigate = useNavigate();
   /** Branch-scoped users (assigned branch or executive branch filter) see material names instead of item counts. */
   const showMaterialsColumn = Boolean(branch);
@@ -402,6 +405,10 @@ export function PurchaseOrdersPage() {
     );
   }
 
+  if (!perms.pageAccess) {
+    return <ModuleAccessDenied moduleName="Purchase Orders" />;
+  }
+
   return (
     <div className="space-y-4 sm:space-y-6 p-3 sm:p-4 md:p-6">
 
@@ -411,12 +418,14 @@ export function PurchaseOrdersPage() {
           <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Purchase Orders</h1>
         </div>
         <div className="flex flex-col sm:flex-row flex-wrap gap-2 w-full sm:w-auto sm:items-center">
+          {perms.creation && (
           <Button variant="primary" onClick={() => void handleNewPO()} disabled={creating} className="w-full sm:w-auto gap-2">
             {creating
               ? <><Loader2 className="w-4 h-4 animate-spin" /> Creating…</>
               : <><Plus className="w-4 h-4" /> New Purchase Order</>
             }
           </Button>
+          )}
         </div>
       </div>
 

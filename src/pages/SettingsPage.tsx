@@ -1,5 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useAppContext } from '@/src/store/AppContext';
+import {
+  hasAnySettingsTabAccess,
+  settingsTabAllowed,
+  useSettingsPermissions,
+  type SettingsTabId,
+} from '@/src/lib/permissions/settingsPermissions';
+import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Button } from '@/src/components/ui/Button';
 import { Badge } from '@/src/components/ui/Badge';
@@ -121,6 +128,7 @@ const MOCK_PAYMENT_PROFILES: PaymentProfile[] = [
 
 export default function SettingsPage() {
   const { selectedBranch, setBranch, addAuditLog } = useAppContext();
+  const settingsPerms = useSettingsPermissions();
   const [viewMode, setViewMode] = useState<ViewMode>('company');
   const [resolvedBranchId, setResolvedBranchId] = useState<string | null>(null);
   const [branchSettingsLoading, setBranchSettingsLoading] = useState(true);
@@ -135,14 +143,21 @@ export default function SettingsPage() {
   const allSettingsTabs: Array<{ id: ViewMode; label: string; icon: React.ReactNode }> = [
     { id: 'company', label: 'Company Info', icon: <Building2 className="w-4 h-4" /> },
     { id: 'addresses', label: 'Addresses', icon: <MapPin className="w-4 h-4" /> },
-    { id: 'payment', label: 'Payment Profiles', icon: <CreditCard className="w-4 h-4" /> },
+    { id: 'payment', label: 'Payment Profiles (WIP)', icon: <CreditCard className="w-4 h-4" /> },
     { id: 'social', label: 'Social Media', icon: <Globe className="w-4 h-4" /> },
     { id: 'notifications', label: 'Notifications', icon: <Bell className="w-4 h-4" /> },
     { id: 'security', label: 'Security', icon: <Shield className="w-4 h-4" /> },
   ];
-  const settingsTabs = SHOW_SETTINGS_SECURITY_TAB
-    ? allSettingsTabs
-    : allSettingsTabs.filter((t) => t.id !== 'security');
+  const settingsTabs = useMemo(() => {
+    let tabs = SHOW_SETTINGS_SECURITY_TAB
+      ? allSettingsTabs
+      : allSettingsTabs.filter((t) => t.id !== 'security');
+    tabs = tabs.filter((tab) => {
+      if (tab.id === 'security') return SHOW_SETTINGS_SECURITY_TAB;
+      return settingsTabAllowed(settingsPerms, tab.id as SettingsTabId);
+    });
+    return tabs;
+  }, [settingsPerms]);
 
   const getPaymentIcon = (type: string) => {
     switch (type) {
@@ -195,6 +210,13 @@ export default function SettingsPage() {
       setViewMode('company');
     }
   }, [viewMode]);
+
+  useEffect(() => {
+    if (settingsTabs.length === 0) return;
+    if (!settingsTabs.some((tab) => tab.id === viewMode)) {
+      setViewMode(settingsTabs[0].id);
+    }
+  }, [viewMode, settingsTabs]);
 
   const companyTabSaving = profileSaving;
 
@@ -258,6 +280,10 @@ export default function SettingsPage() {
       setNewBranchSaving(false);
     }
   };
+
+  if (!hasAnySettingsTabAccess(settingsPerms)) {
+    return <ModuleAccessDenied moduleName="Settings" />;
+  }
 
   return (
     <div className="p-3 sm:p-4 md:p-6 space-y-6">
@@ -550,7 +576,7 @@ export default function SettingsPage() {
       {viewMode === 'payment' && (
         <div className="space-y-6">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <h2 className="text-lg font-bold text-gray-900">Payment Methods</h2>
+            <h2 className="text-lg font-bold text-gray-900">Payment Methods (WIP)</h2>
             <Button className="bg-red-600 hover:bg-red-700 w-full sm:w-auto">
               <Plus className="w-4 h-4 mr-2" />
               Add Payment Method

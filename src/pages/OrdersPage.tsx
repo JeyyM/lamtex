@@ -10,6 +10,8 @@ import { useAppContext } from '@/src/store/AppContext';
 import { supabase } from '@/src/lib/supabase';
 import { orderStatusBadgeVariant, paymentStatusBadgeVariant } from '@/src/lib/orderStatusBadges';
 import { createDraftOrder } from '@/src/lib/createDraftOrder';
+import { useOrderPermissions } from '@/src/lib/permissions/orderPermissions';
+import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
 import { getPeriodRange, type PeriodKey } from '@/src/lib/agentAnalytics';
 import {
   fetchDelayedTripOrderIdsForBranch,
@@ -446,6 +448,7 @@ async function downloadOrdersWorkbook(rows: OrderRow[], lineRows: OrderLineExpor
 export function OrdersPage() {
   const navigate = useNavigate();
   const { branch, addAuditLog, role, employeeName, session, employeeId } = useAppContext();
+  const perms = useOrderPermissions();
   const [searchTerm, setSearchTerm] = useState('');
   const [creating, setCreating] = useState(false);
   const [showProofModal, setShowProofModal] = useState(false);
@@ -880,6 +883,10 @@ export function OrdersPage() {
     return <Navigate to="/" replace />;
   }
 
+  if (!perms.pageAccess) {
+    return <ModuleAccessDenied moduleName="Orders" />;
+  }
+
   // Regular view
   return (
     <div className="space-y-6">
@@ -889,15 +896,17 @@ export function OrdersPage() {
           <p className="text-sm text-gray-500 mt-1">Create, track, and manage customer orders</p>
         </div>
         <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
-          <Button
-            variant="primary"
-            className="gap-2 w-full sm:w-auto"
-            onClick={() => void handleNewOrder()}
-            disabled={creating}
-          >
-            {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-            New order
-          </Button>
+          {perms.creation && (
+            <Button
+              variant="primary"
+              className="gap-2 w-full sm:w-auto"
+              onClick={() => void handleNewOrder()}
+              disabled={creating}
+            >
+              {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+              New order
+            </Button>
+          )}
         </div>
       </div>
 
@@ -955,50 +964,52 @@ export function OrdersPage() {
               <CalendarRange className="w-4 h-4 shrink-0 text-gray-600" aria-hidden />
               <span className="truncate text-left text-sm font-normal">{ordersPeriodTriggerLabel}</span>
             </Button>
-            <Button
-              type="button"
-              variant="outline"
-              className="gap-2 shrink-0 border-gray-300 bg-white sm:ml-auto"
-              disabled={sortedOrders.length === 0 || exportingOrders || loading || resolvedBranchIdForList == null}
-              onClick={async () => {
-                if (
-                  sortedOrders.length === 0 ||
-                  exportingOrders ||
-                  loading ||
-                  resolvedBranchIdForList == null
-                ) {
-                  return;
-                }
-                const ordersForExport = sortedOrders.filter((o) => o.branch_id === resolvedBranchIdForList);
-                if (ordersForExport.length === 0) {
-                  window.alert('No orders match the selected branch. Refresh the list and try again.');
-                  return;
-                }
-                setExportingOrders(true);
-                try {
-                  const ids = ordersForExport.map((o) => o.id);
-                  const lines = await fetchOrderLineItemsForExport(ids);
-                  await downloadOrdersWorkbook(ordersForExport, lines, branch ?? 'orders');
-                  addAuditLog(
-                    'Exported orders Excel',
-                    'Order',
-                    `${ordersForExport.length} orders, ${lines.length} line items (${branch ?? 'branch'})`,
-                  );
-                } catch (e) {
-                  console.error(e);
-                  window.alert(e instanceof Error ? e.message : 'Export failed.');
-                } finally {
-                  setExportingOrders(false);
-                }
-              }}
-            >
-              {exportingOrders ? (
-                <Loader2 className="w-4 h-4 animate-spin" aria-hidden />
-              ) : (
-                <Download className="w-4 h-4" aria-hidden />
-              )}
-              {exportingOrders ? 'Exporting…' : 'Export'}
-            </Button>
+            {perms.dataExport && (
+              <Button
+                type="button"
+                variant="outline"
+                className="gap-2 shrink-0 border-gray-300 bg-white sm:ml-auto"
+                disabled={sortedOrders.length === 0 || exportingOrders || loading || resolvedBranchIdForList == null}
+                onClick={async () => {
+                  if (
+                    sortedOrders.length === 0 ||
+                    exportingOrders ||
+                    loading ||
+                    resolvedBranchIdForList == null
+                  ) {
+                    return;
+                  }
+                  const ordersForExport = sortedOrders.filter((o) => o.branch_id === resolvedBranchIdForList);
+                  if (ordersForExport.length === 0) {
+                    window.alert('No orders match the selected branch. Refresh the list and try again.');
+                    return;
+                  }
+                  setExportingOrders(true);
+                  try {
+                    const ids = ordersForExport.map((o) => o.id);
+                    const lines = await fetchOrderLineItemsForExport(ids);
+                    await downloadOrdersWorkbook(ordersForExport, lines, branch ?? 'orders');
+                    addAuditLog(
+                      'Exported orders Excel',
+                      'Order',
+                      `${ordersForExport.length} orders, ${lines.length} line items (${branch ?? 'branch'})`,
+                    );
+                  } catch (e) {
+                    console.error(e);
+                    window.alert(e instanceof Error ? e.message : 'Export failed.');
+                  } finally {
+                    setExportingOrders(false);
+                  }
+                }}
+              >
+                {exportingOrders ? (
+                  <Loader2 className="w-4 h-4 animate-spin" aria-hidden />
+                ) : (
+                  <Download className="w-4 h-4" aria-hidden />
+                )}
+                {exportingOrders ? 'Exporting…' : 'Export'}
+              </Button>
+            )}
           </div>
           {dateRangeInvalid && (
             <p className="text-xs text-red-600 mt-2">
@@ -1056,17 +1067,19 @@ export function OrdersPage() {
                         <div><div className="text-xs text-gray-500">Order Date</div><div className="text-gray-900 truncate">{order.order_date ?? '—'}</div></div>
                         <div><div className="text-xs text-gray-500">Required Date</div><div className="text-gray-900 truncate">{order.required_date ?? '—'}</div></div>
                       </div>
-                      <div className="flex items-center justify-between gap-2 pt-2 border-t border-gray-100">
-                        <div>
-                          <div className="font-semibold text-gray-900">₱{order.total_amount.toLocaleString()}</div>
-                          {resolvedOrderDiscountPercentForList(order) > 0 && (
-                            <div className="text-xs text-gray-500">
-                              -{resolvedOrderDiscountPercentForList(order).toFixed(1)}% discount
-                            </div>
-                          )}
+                      {perms.payment && (
+                        <div className="flex items-center justify-between gap-2 pt-2 border-t border-gray-100">
+                          <div>
+                            <div className="font-semibold text-gray-900">₱{order.total_amount.toLocaleString()}</div>
+                            {resolvedOrderDiscountPercentForList(order) > 0 && (
+                              <div className="text-xs text-gray-500">
+                                -{resolvedOrderDiscountPercentForList(order).toFixed(1)}% discount
+                              </div>
+                            )}
+                          </div>
+                          <Badge variant={getPaymentBadgeVariant(order.payment_status)} className="text-xs flex-shrink-0">{order.payment_status}</Badge>
                         </div>
-                        <Badge variant={getPaymentBadgeVariant(order.payment_status)} className="text-xs flex-shrink-0">{order.payment_status}</Badge>
-                      </div>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -1093,9 +1106,11 @@ export function OrdersPage() {
                       <th onClick={() => handleSort('required_date')} className="px-6 py-3 text-left font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
                         <span className="flex items-center">Required Date{sortIcon('required_date')}</span>
                       </th>
-                      <th onClick={() => handleSort('amount')} className="px-6 py-3 text-left font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
-                        <span className="flex items-center">Amount{sortIcon('amount')}</span>
-                      </th>
+                      {perms.payment && (
+                        <th onClick={() => handleSort('amount')} className="px-6 py-3 text-left font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                          <span className="flex items-center">Amount{sortIcon('amount')}</span>
+                        </th>
+                      )}
                       <th className="px-3 py-3 text-left font-medium align-top min-w-[10.5rem] max-w-[14rem]">
                         <div className="normal-case">
                           <select
@@ -1115,22 +1130,24 @@ export function OrdersPage() {
                       <th onClick={() => handleSort('urgency')} className="px-6 py-3 text-left font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900 normal-case">
                         <span className="flex items-center">Urgency{sortIcon('urgency')}</span>
                       </th>
-                      <th className="px-3 py-3 text-left font-medium align-top min-w-[9.5rem] max-w-[13rem]">
-                        <div className="normal-case">
-                          <select
-                            aria-label="Filter by payment"
-                            value={headerPaymentFilter}
-                            onChange={(e) => setHeaderPaymentFilter(e.target.value)}
-                            onClick={(e) => e.stopPropagation()}
-                            className="w-full text-sm font-medium text-gray-800 border border-gray-200 rounded-md px-2 py-1.5 bg-white hover:border-gray-300 focus:outline-none focus:ring-1 focus:ring-red-500 focus:border-red-500"
-                          >
-                            <option value="">Payment</option>
-                            {distinctPaymentStatuses.map((p) => (
-                              <option key={p} value={p}>{p}</option>
-                            ))}
-                          </select>
-                        </div>
-                      </th>
+                      {perms.payment && (
+                        <th className="px-3 py-3 text-left font-medium align-top min-w-[9.5rem] max-w-[13rem]">
+                          <div className="normal-case">
+                            <select
+                              aria-label="Filter by payment"
+                              value={headerPaymentFilter}
+                              onChange={(e) => setHeaderPaymentFilter(e.target.value)}
+                              onClick={(e) => e.stopPropagation()}
+                              className="w-full text-sm font-medium text-gray-800 border border-gray-200 rounded-md px-2 py-1.5 bg-white hover:border-gray-300 focus:outline-none focus:ring-1 focus:ring-red-500 focus:border-red-500"
+                            >
+                              <option value="">Payment</option>
+                              {distinctPaymentStatuses.map((p) => (
+                                <option key={p} value={p}>{p}</option>
+                              ))}
+                            </select>
+                          </div>
+                        </th>
+                      )}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
@@ -1181,17 +1198,19 @@ export function OrdersPage() {
                           {rowOverlay({})}
                           <span className="relative z-10 pointer-events-none">{order.required_date ?? '—'}</span>
                         </td>
-                        <td className="relative px-6 py-4 align-middle">
-                          {rowOverlay({})}
-                          <div className="relative z-10 pointer-events-none">
-                            <div className="font-medium text-gray-900">₱{order.total_amount.toLocaleString()}</div>
-                            {resolvedOrderDiscountPercentForList(order) > 0 && (
-                              <div className="text-xs text-gray-500">
-                                -{resolvedOrderDiscountPercentForList(order).toFixed(1)}% discount
-                              </div>
-                            )}
-                          </div>
-                        </td>
+                        {perms.payment && (
+                          <td className="relative px-6 py-4 align-middle">
+                            {rowOverlay({})}
+                            <div className="relative z-10 pointer-events-none">
+                              <div className="font-medium text-gray-900">₱{order.total_amount.toLocaleString()}</div>
+                              {resolvedOrderDiscountPercentForList(order) > 0 && (
+                                <div className="text-xs text-gray-500">
+                                  -{resolvedOrderDiscountPercentForList(order).toFixed(1)}% discount
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                        )}
                         <td className="relative px-6 py-4 align-middle">
                           {rowOverlay({})}
                           <span className="relative z-10 inline-flex pointer-events-none">
@@ -1206,18 +1225,20 @@ export function OrdersPage() {
                             </Badge>
                           </span>
                         </td>
-                        <td className="relative px-6 py-4 align-middle">
-                          {rowOverlay({})}
-                          <span className="relative z-10 inline-flex pointer-events-none">
-                            <Badge variant={getPaymentBadgeVariant(order.payment_status)} className="min-w-[100px] justify-center">{order.payment_status}</Badge>
-                          </span>
-                        </td>
+                        {perms.payment && (
+                          <td className="relative px-6 py-4 align-middle">
+                            {rowOverlay({})}
+                            <span className="relative z-10 inline-flex pointer-events-none">
+                              <Badge variant={getPaymentBadgeVariant(order.payment_status)} className="min-w-[100px] justify-center">{order.payment_status}</Badge>
+                            </span>
+                          </td>
+                        )}
                       </tr>
                       );
                     })}
                     {sortedOrders.length === 0 && (
                       <tr>
-                        <td colSpan={7} className="px-6 py-12 text-center text-gray-500">
+                        <td colSpan={perms.payment ? 7 : 5} className="px-6 py-12 text-center text-gray-500">
                           <FileText className="w-12 h-12 mx-auto mb-3 text-gray-400" />
                           <p className="font-medium">No orders found</p>
                           <p className="text-sm mt-1">Try adjusting your filters or create a new order</p>

@@ -1,6 +1,20 @@
 import React from 'react';
 import { NavLink, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
+import { useOrderPermissions } from '@/src/lib/permissions/orderPermissions';
+import { useProductPermissions } from '@/src/lib/permissions/productPermissions';
+import { useMaterialPermissions } from '@/src/lib/permissions/materialPermissions';
+import { useWarehousePermissions } from '@/src/lib/permissions/warehousePermissions';
+import { useProductionRequestPermissions } from '@/src/lib/permissions/productionRequestPermissions';
+import { usePurchaseOrderPermissions } from '@/src/lib/permissions/purchaseOrderPermissions';
+import { useInterBranchRequestPermissions } from '@/src/lib/permissions/interBranchRequestPermissions';
+import { useLogisticsPermissions } from '@/src/lib/permissions/logisticsPermissions';
+import { useSupplierPermissions } from '@/src/lib/permissions/supplierPermissions';
+import { useFinancePermissions } from '@/src/lib/permissions/financePermissions';
+import { useEmployeesPermissions } from '@/src/lib/permissions/employeesPermissions';
+import { useAgentAnalyticsPermissions } from '@/src/lib/permissions/agentAnalyticsPermissions';
+import { useReportsPermissions } from '@/src/lib/permissions/reportsPermissions';
+import { useSettingsPermissions, hasAnySettingsTabAccess } from '@/src/lib/permissions/settingsPermissions';
 import { 
   LayoutDashboard, 
   Package, 
@@ -25,6 +39,20 @@ import lamtexLogo from '../../assets/Lamtex Logo.png';
 
 export function Sidebar() {
   const { role, isSidebarCollapsed, setIsSidebarCollapsed, isMobileMenuOpen, setIsMobileMenuOpen, session, signOut } = useAppContext();
+  const orderPerms = useOrderPermissions();
+  const productPerms = useProductPermissions();
+  const materialPerms = useMaterialPermissions();
+  const warehousePerms = useWarehousePermissions();
+  const productionRequestPerms = useProductionRequestPermissions();
+  const purchaseOrderPerms = usePurchaseOrderPermissions();
+  const interBranchRequestPerms = useInterBranchRequestPermissions();
+  const logisticsPerms = useLogisticsPermissions();
+  const supplierPerms = useSupplierPermissions();
+  const financePerms = useFinancePermissions();
+  const employeesPerms = useEmployeesPermissions();
+  const agentAnalyticsPerms = useAgentAnalyticsPermissions();
+  const reportsPerms = useReportsPermissions();
+  const settingsPerms = useSettingsPermissions();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -43,16 +71,38 @@ export function Sidebar() {
     { name: 'Logistics', path: '/logistics', icon: Truck, roles: ['Executive', 'Logistics', 'Manager'] },
     { name: 'Chats', path: '/chats', icon: MessageCircle, roles: ['Executive', 'Warehouse', 'Logistics', 'Agent', 'Finance', 'Production', 'Manager'] },
     { name: 'Customers', path: '/customers', icon: Users, roles: ['Executive', 'Agent', 'Manager'] },
-    { name: 'Suppliers', path: '/suppliers', icon: Truck, roles: ['Executive', 'Procurement', 'Manager'] },
+    { name: 'Suppliers', path: '/suppliers', icon: Truck, roles: ['Executive', 'Procurement', 'Manager'], alsoActiveOn: ['/suppliers'] },
     { name: 'Finance', path: '/finance', icon: CreditCard, roles: ['Executive', 'Finance', 'Agent', 'Manager'] },
-    { name: 'Employees', path: '/employees', icon: Users, roles: ['Executive', 'Manager'] },
-    { name: 'Agent Analytics', path: '/agents', icon: UserCheck, roles: ['Executive', 'Manager'] },
-    { name: 'Reports', path: '/reports', icon: BarChart3, roles: ['Executive', 'Finance', 'Manager'] },
+    { name: 'Employees', path: '/employees', icon: Users, roles: ['Executive', 'Manager'], alsoActiveOn: ['/employees'] },
+    { name: 'Agent Analytics', path: '/agents', icon: UserCheck, roles: ['Executive', 'Manager'], alsoActiveOn: ['/agents'] },
+    { name: 'Reports', path: '/reports', icon: BarChart3, roles: ['Executive', 'Finance', 'Manager'], alsoActiveOn: ['/reports'] },
     // { name: 'Forecasts', path: '/forecasts', icon: LineChart, roles: ['Executive', 'Finance', 'Manager'] }, // hidden for now
-    { name: 'Settings', path: '/settings', icon: Settings, roles: ['Executive', 'Warehouse', 'Logistics', 'Agent', 'Driver', 'Finance', 'Production', 'Manager', 'Procurement'] },
+    { name: 'Settings', path: '/settings', icon: Settings, roles: ['Executive', 'Warehouse', 'Logistics', 'Agent', 'Driver', 'Finance', 'Production', 'Manager', 'Procurement'], alsoActiveOn: ['/settings'] },
   ];
 
-  const filteredNav = navItems.filter(item => item.roles.includes(role));
+  const filteredNav = navItems.filter(item => {
+    if (!item.roles.includes(role)) return false;
+    if (item.path === '/orders' && !orderPerms.pageAccess) return false;
+    if (item.path === '/products' && !productPerms.pageAccess) return false;
+    if (item.path === '/materials' && !materialPerms.pageAccess) return false;
+    if (
+      item.path === '/warehouse' &&
+      !warehousePerms.pageAccess &&
+      !productionRequestPerms.pageAccess &&
+      !purchaseOrderPerms.pageAccess &&
+      !interBranchRequestPerms.pageAccess
+    ) {
+      return false;
+    }
+    if (item.path === '/logistics' && !logisticsPerms.pageAccess) return false;
+    if (item.path === '/suppliers' && !supplierPerms.pageAccess) return false;
+    if (item.path === '/finance' && !financePerms.pageAccess) return false;
+    if (item.path === '/employees' && !employeesPerms.pageAccess) return false;
+    if (item.path === '/agents' && !agentAnalyticsPerms.pageAccess) return false;
+    if (item.path === '/reports' && !reportsPerms.pageAccess) return false;
+    if (item.path === '/settings' && !hasAnySettingsTabAccess(settingsPerms)) return false;
+    return true;
+  });
 
   return (
     <>

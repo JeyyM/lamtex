@@ -1,6 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
+import { useFinancePermissions } from '@/src/lib/permissions/financePermissions';
+import { useAgentAnalyticsPermissions } from '@/src/lib/permissions/agentAnalyticsPermissions';
+import { useReportsPermissions } from '@/src/lib/permissions/reportsPermissions';
+import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
 import { branchChartColorAt, employeeProfilePathFromAgent, agentChartColor, agentChartColorAt, type AgentLeaderboardRow, type BranchAnalyticsRow } from '@/src/lib/agentAnalytics';
 import { AgentColorSwatch } from '@/src/components/agentAnalytics/AgentColorSwatch';
 import { NewCustomerTrendCard } from '@/src/components/agentAnalytics/NewCustomerTrendCard';
@@ -669,6 +673,9 @@ function paymentBehaviorBadge(
 
 export function ReportsPage(): React.ReactElement {
   const { branch } = useAppContext();
+  const financePerms = useFinancePermissions();
+  const agentAnalyticsPerms = useAgentAnalyticsPermissions();
+  const reportsPerms = useReportsPermissions();
   const navigate = useNavigate();
 
   const [viewMode, setViewMode] = useState<ViewMode>('overview');
@@ -1635,6 +1642,10 @@ export function ReportsPage(): React.ReactElement {
     }
   };
 
+  if (!reportsPerms.pageAccess) {
+    return <ModuleAccessDenied moduleName="Reports" />;
+  }
+
   return (
     <>
     <div className="space-y-4 sm:space-y-6">
@@ -2201,9 +2212,11 @@ export function ReportsPage(): React.ReactElement {
                     Period sales with live receivables · sort by any column to find overdue or top AR
                   </p>
                 </div>
+                {financePerms.pageAccess && (
                 <Button variant="outline" size="sm" onClick={() => navigate('/finance')}>
                   Open finance
                 </Button>
+                )}
               </div>
             </CardHeader>
             <CardContent className="p-0">
@@ -2548,9 +2561,11 @@ export function ReportsPage(): React.ReactElement {
                   <CardTitle>Detailed agent performance metrics</CardTitle>
                   <p className="text-xs text-gray-500 mt-1">{agentsScopeLabel} · {periodLabel}</p>
                 </div>
+                {agentAnalyticsPerms.pageAccess && (
                 <Button variant="outline" size="sm" onClick={() => navigate('/agents')}>
                   Full analytics
                 </Button>
+                )}
               </div>
             </CardHeader>
             <CardContent>

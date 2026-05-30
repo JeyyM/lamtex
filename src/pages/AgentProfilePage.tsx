@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useAgentAnalyticsPermissions } from '@/src/lib/permissions/agentAnalyticsPermissions';
+import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
 import { 
   ArrowLeft, Mail, Phone, MapPin, Calendar, Briefcase, 
   Users, Award, FileText, Settings, Edit,
@@ -14,6 +16,7 @@ import { StatKpiCard } from '@/src/components/ui/StatKpiCard';
 const AgentProfilePage: React.FC = () => {
   const { agentId, employeeId } = useParams<{ agentId?: string; employeeId?: string }>();
   const navigate = useNavigate();
+  const agentAnalyticsPerms = useAgentAnalyticsPermissions();
   const [activeTab, setActiveTab] = useState('overview');
   const [showSensitiveInfo, setShowSensitiveInfo] = useState(false);
   
@@ -27,6 +30,10 @@ const AgentProfilePage: React.FC = () => {
   // Determine the back navigation path
   const backPath = agentId ? '/agents' : '/employees';
   const backLabel = agentId ? 'Agent Analytics' : 'Employees';
+
+  if (agentId && !agentAnalyticsPerms.pageAccess) {
+    return <ModuleAccessDenied moduleName="Agent Analytics" />;
+  }
 
   if (!agent || !agentProfile) {
     return (

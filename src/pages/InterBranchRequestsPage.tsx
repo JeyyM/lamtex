@@ -22,6 +22,9 @@ import {
   fetchInterBranchRequestLinesForExport,
   type InterBranchRequestHeaderExportRow,
 } from '@/src/lib/interBranchRequestsExport';
+import { useInterBranchRequestPermissions } from '@/src/lib/permissions/interBranchRequestPermissions';
+import { useProductionRequestPermissions } from '@/src/lib/permissions/productionRequestPermissions';
+import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
 import {
   Search,
   Plus,
@@ -90,6 +93,8 @@ const fmt = (d: string) => new Date(d).toLocaleDateString('en-PH', { year: 'nume
 
 export function InterBranchRequestsPage() {
   const { branch, addAuditLog } = useAppContext();
+  const perms = useInterBranchRequestPermissions();
+  const prPerms = useProductionRequestPermissions();
   const navigate = useNavigate();
   const [rows, setRows] = useState<IBRListRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -346,6 +351,10 @@ export function InterBranchRequestsPage() {
     );
   }
 
+  if (!perms.pageAccess) {
+    return <ModuleAccessDenied moduleName="Inter-branch Requests" />;
+  }
+
   return (
     <div className="space-y-4 sm:space-y-6 p-3 sm:p-4 md:p-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -353,12 +362,16 @@ export function InterBranchRequestsPage() {
           <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Inter-branch requests</h1>
         </div>
         <div className="flex flex-col sm:flex-row flex-wrap gap-2 w-full sm:w-auto">
+          {prPerms.pageAccess && (
           <Button type="button" variant="outline" onClick={() => navigate('/production-requests')} className="w-full sm:w-auto gap-2">
             <Factory className="w-4 h-4" /> Production requests
           </Button>
+          )}
+          {perms.creation && (
           <Button variant="primary" onClick={() => navigate('/inter-branch-requests/new')} className="w-full sm:w-auto gap-2">
             <Plus className="w-4 h-4" /> New inter-branch request
           </Button>
+          )}
         </div>
       </div>
 

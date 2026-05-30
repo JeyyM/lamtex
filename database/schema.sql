@@ -934,6 +934,91 @@ CREATE TABLE IF NOT EXISTS employee_material_assignments (
   UNIQUE (employee_id, material_id)
 );
 
+-- Per-employee order module permissions (Employee profile → Access tab)
+CREATE TABLE IF NOT EXISTS employee_order_permissions (
+  employee_id   UUID PRIMARY KEY REFERENCES employees(id) ON DELETE CASCADE,
+  permissions   JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS employee_product_permissions (
+  employee_id   UUID PRIMARY KEY REFERENCES employees(id) ON DELETE CASCADE,
+  permissions   JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS employee_material_permissions (
+  employee_id   UUID PRIMARY KEY REFERENCES employees(id) ON DELETE CASCADE,
+  permissions   JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS employee_warehouse_permissions (
+  employee_id   UUID PRIMARY KEY REFERENCES employees(id) ON DELETE CASCADE,
+  permissions   JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS employee_production_request_permissions (
+  employee_id   UUID PRIMARY KEY REFERENCES employees(id) ON DELETE CASCADE,
+  permissions   JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS employee_purchase_order_permissions (
+  employee_id   UUID PRIMARY KEY REFERENCES employees(id) ON DELETE CASCADE,
+  permissions   JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS employee_inter_branch_request_permissions (
+  employee_id   UUID PRIMARY KEY REFERENCES employees(id) ON DELETE CASCADE,
+  permissions   JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS employee_logistics_permissions (
+  employee_id   UUID PRIMARY KEY REFERENCES employees(id) ON DELETE CASCADE,
+  permissions   JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS employee_supplier_permissions (
+  employee_id   UUID PRIMARY KEY REFERENCES employees(id) ON DELETE CASCADE,
+  permissions   JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS employee_finance_permissions (
+  employee_id   UUID PRIMARY KEY REFERENCES employees(id) ON DELETE CASCADE,
+  permissions   JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS employee_employees_permissions (
+  employee_id   UUID PRIMARY KEY REFERENCES employees(id) ON DELETE CASCADE,
+  permissions   JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS employee_agent_analytics_permissions (
+  employee_id   UUID PRIMARY KEY REFERENCES employees(id) ON DELETE CASCADE,
+  permissions   JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS employee_reports_permissions (
+  employee_id   UUID PRIMARY KEY REFERENCES employees(id) ON DELETE CASCADE,
+  permissions   JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS employee_settings_permissions (
+  employee_id   UUID PRIMARY KEY REFERENCES employees(id) ON DELETE CASCADE,
+  permissions   JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Add FK from BOM table to raw_materials
 DO $$ BEGIN
   ALTER TABLE product_variant_raw_materials
@@ -3402,15 +3487,60 @@ CREATE INDEX IF NOT EXISTS idx_employee_product_assignments_employee ON employee
 CREATE INDEX IF NOT EXISTS idx_employee_product_assignments_product ON employee_product_assignments(product_id);
 CREATE INDEX IF NOT EXISTS idx_employee_material_assignments_employee ON employee_material_assignments(employee_id);
 CREATE INDEX IF NOT EXISTS idx_employee_material_assignments_material ON employee_material_assignments(material_id);
+CREATE INDEX IF NOT EXISTS idx_employee_order_permissions_updated ON employee_order_permissions(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_employee_product_permissions_updated ON employee_product_permissions(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_employee_material_permissions_updated ON employee_material_permissions(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_employee_warehouse_permissions_updated ON employee_warehouse_permissions(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_employee_production_request_permissions_updated ON employee_production_request_permissions(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_employee_purchase_order_permissions_updated ON employee_purchase_order_permissions(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_employee_inter_branch_request_permissions_updated ON employee_inter_branch_request_permissions(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_employee_logistics_permissions_updated ON employee_logistics_permissions(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_employee_supplier_permissions_updated ON employee_supplier_permissions(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_employee_finance_permissions_updated ON employee_finance_permissions(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_employee_employees_permissions_updated ON employee_employees_permissions(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_employee_agent_analytics_permissions_updated ON employee_agent_analytics_permissions(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_employee_reports_permissions_updated ON employee_reports_permissions(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_employee_settings_permissions_updated ON employee_settings_permissions(updated_at DESC);
 
 ALTER TABLE employee_product_assignments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE employee_material_assignments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE employee_order_permissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE employee_product_permissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE employee_material_permissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE employee_warehouse_permissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE employee_production_request_permissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE employee_purchase_order_permissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE employee_inter_branch_request_permissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE employee_logistics_permissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE employee_supplier_permissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE employee_finance_permissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE employee_employees_permissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE employee_agent_analytics_permissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE employee_reports_permissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE employee_settings_permissions ENABLE ROW LEVEL SECURITY;
 
 DO $$
 DECLARE
   tbl text;
 BEGIN
-  FOREACH tbl IN ARRAY ARRAY['employee_product_assignments', 'employee_material_assignments']
+  FOREACH tbl IN ARRAY ARRAY[
+    'employee_product_assignments',
+    'employee_material_assignments',
+    'employee_order_permissions',
+    'employee_product_permissions',
+    'employee_material_permissions',
+    'employee_warehouse_permissions',
+    'employee_production_request_permissions',
+    'employee_purchase_order_permissions',
+    'employee_inter_branch_request_permissions',
+    'employee_logistics_permissions',
+    'employee_supplier_permissions',
+    'employee_finance_permissions',
+    'employee_employees_permissions',
+    'employee_agent_analytics_permissions',
+    'employee_reports_permissions',
+    'employee_settings_permissions'
+  ]
   LOOP
     BEGIN
       EXECUTE format(

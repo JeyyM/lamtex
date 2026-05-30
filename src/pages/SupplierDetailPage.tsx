@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useSupplierPermissions } from '@/src/lib/permissions/supplierPermissions';
+import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
@@ -152,6 +154,7 @@ export function SupplierDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { branch: navbarBranch, addAuditLog } = useAppContext();
+  const perms = useSupplierPermissions();
 
   const [supplier, setSupplier] = useState<SupplierRow | null>(null);
   const [loading, setLoading] = useState(true);
@@ -550,6 +553,10 @@ export function SupplierDetailPage() {
       },
     ]);
   };
+
+  if (!perms.pageAccess) {
+    return <ModuleAccessDenied moduleName="Suppliers" />;
+  }
 
   if (loading) {
     return (
