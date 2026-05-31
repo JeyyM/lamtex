@@ -87,6 +87,24 @@ export async function deleteIbrProof(proofId: string): Promise<{ error: string |
   return { error: error?.message ?? null };
 }
 
+export type IbrProofUpdateInput = {
+  file_name?: string;
+  note?: string | null;
+  proof_type?: IbrProofType;
+};
+
+export async function updateIbrProof(
+  proofId: string,
+  input: IbrProofUpdateInput,
+): Promise<{ error: string | null }> {
+  const payload: Record<string, unknown> = {};
+  if (input.file_name !== undefined) payload.file_name = input.file_name;
+  if (input.note !== undefined) payload.note = input.note;
+  if (input.proof_type !== undefined) payload.proof_type = input.proof_type;
+  const { error } = await supabase.from('inter_branch_delivery_proofs').update(payload).eq('id', proofId);
+  return { error: error?.message ?? null };
+}
+
 export async function uploadIbrProofBinary(
   requestId: string,
   proofType: IbrProofType,

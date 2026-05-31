@@ -11,10 +11,11 @@ import {
   IBR_PROOF_GALLERY_FOLDER,
   ibrProofFileIsImageName,
   insertIbrProofDocuments,
+  updateIbrProof,
   uploadIbrProofBinary,
 } from '@/src/lib/ibrProofDocuments';
 import type { IbrProofDocument, IbrProofType } from '@/src/types/ibrProofs';
-import { FileText, Image as ImageIcon, Loader2, Trash2, Truck, Upload, X } from 'lucide-react';
+import { Edit, FileText, Image as ImageIconLucide, Loader2, Trash2, Truck, Upload, X } from 'lucide-react';
 
 const MAX_PROOF_BATCH = 30;
 const PROOF_UPLOAD_ACCEPT = 'image/*,.pdf,.doc,.docx,.xls,.xlsx';
@@ -59,6 +60,12 @@ export default function IbrDocumentsProofs({
   const [selectedProofLocalFiles, setSelectedProofLocalFiles] = useState<File[]>([]);
   const [showProofImageGallery, setShowProofImageGallery] = useState(false);
   const [proofUploadBusy, setProofUploadBusy] = useState(false);
+  const [showProofEditModal, setShowProofEditModal] = useState(false);
+  const [editingProof, setEditingProof] = useState<IbrProofDocument | null>(null);
+  const [editProofTitle, setEditProofTitle] = useState('');
+  const [editProofNotes, setEditProofNotes] = useState('');
+  const [editProofType, setEditProofType] = useState<IbrProofType>('delivery');
+  const [proofEditBusy, setProofEditBusy] = useState(false);
 
   const loadProofs = useCallback(async () => {
     setProofsLoading(true);
@@ -82,15 +89,55 @@ export default function IbrDocumentsProofs({
     [proofs, documentsProofTab],
   );
 
-  const imageProofsFiltered = useMemo(
-    () => documentProofsFiltered.filter((p) => p.fileUrl && ibrProofFileIsImageName(p.fileName)),
-    [documentProofsFiltered],
-  );
+  const openProofEditModal = (proof: IbrProofDocument) => {
+    setEditingProof(proof);
+    setEditProofTitle(proof.fileName);
+    setEditProofNotes(proof.note ?? '');
+    setEditProofType(proof.type);
+    setShowProofEditModal(true);
+  };
 
-  const fileProofsFiltered = useMemo(
-    () => documentProofsFiltered.filter((p) => !p.fileUrl || !ibrProofFileIsImageName(p.fileName)),
-    [documentProofsFiltered],
-  );
+  const closeProofEditModal = () => {
+    setShowProofEditModal(false);
+    setEditingProof(null);
+  };
+
+  const handleSaveProofEdit = async () => {
+    if (!editingProof || !canUpload) return;
+    setProofEditBusy(true);
+    try {
+      const titleTrim = editProofTitle.trim();
+      const notesTrim = editProofNotes.trim();
+      const { error } = await updateIbrProof(editingProof.id, {
+        file_name: titleTrim || editingProof.fileName,
+        note: notesTrim || null,
+        proof_type: editProofType,
+      });
+      if (error) {
+        alert(error);
+        return;
+      }
+      await onInsertLog(
+        'updated',
+        `Updated ${proofTypeLabel(editProofType).toLowerCase()} proof: ${titleTrim || editingProof.fileName}`,
+        {
+          file_name: editingProof.fileName,
+          note: editingProof.note ?? null,
+          type: editingProof.type,
+        },
+        {
+          file_name: titleTrim || editingProof.fileName,
+          note: notesTrim || null,
+          type: editProofType,
+        },
+        { proof_id: editingProof.id },
+      );
+      closeProofEditModal();
+      await loadProofs();
+    } finally {
+      setProofEditBusy(false);
+    }
+  };
 
   const openProofDocumentModal = () => {
     setProofType(documentsProofTab);
@@ -233,7 +280,7 @@ export default function IbrDocumentsProofs({
         <CardHeader>
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <CardTitle className="flex items-center gap-2 text-base">
-              <ImageIcon className="w-5 h-5" />
+              <ImageIconLucide className="w-5 h-5" />
               Proof of delivery
             </CardTitle>
             <Button
@@ -272,123 +319,88 @@ export default function IbrDocumentsProofs({
               <Loader2 className="w-4 h-4 animate-spin" /> Loading proofs…
             </p>
           ) : documentProofsFiltered.length > 0 ? (
-            <div className="space-y-4">
-              {imageProofsFiltered.length > 0 && (
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                  {imageProofsFiltered.map((p) => (
-                    <div key={p.id} className="group relative rounded-xl overflow-hidden border border-gray-200 bg-gray-50 aspect-square">
-                      <a href={p.fileUrl} target="_blank" rel="noopener noreferrer" className="block w-full h-full">
-                        <img
-                          src={p.fileUrl}
-                          alt=""
-                          className="w-full h-full object-cover"
-                          onError={(e) => {
-                            (e.target as HTMLImageElement).style.display = 'none';
-                          }}
+            <div className="space-y-3">
+              <h4 className="text-sm font-semibold text-gray-700 mb-3">
+                Uploaded — {proofTypeLabel(documentsProofTab)}
+              </h4>
+              {documentProofsFiltered.map((proof) => (
+                <div
+                  key={proof.id}
+                  className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200"
+                >
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                    <div
+                      className={`w-10 h-10 flex-shrink-0 rounded-lg flex items-center justify-center ${
+                        proof.type === 'delivery' ? 'bg-blue-100' : 'bg-amber-100'
+                      }`}
+                    >
+                      {ibrProofFileIsImageName(proof.fileName) ? (
+                        <ImageIconLucide
+                          className={`w-5 h-5 ${proof.type === 'delivery' ? 'text-blue-600' : 'text-amber-700'}`}
                         />
-                      </a>
-                      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent px-2 py-1.5">
-                        <p className="text-white text-[10px] truncate">{p.fileName}</p>
-                        <p className="text-white/70 text-[9px]">
-                          {new Date(p.createdAt).toLocaleDateString('en-PH', {
-                            month: 'short',
-                            day: 'numeric',
-                            year: 'numeric',
-                          })}
-                          {p.uploadedBy ? ` · ${p.uploadedBy}` : ''}
-                        </p>
-                      </div>
-                      {canUpload && (
-                        <button
-                          type="button"
-                          onClick={() => void handleRemoveProof(p)}
-                          className="absolute top-1.5 right-1.5 w-7 h-7 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center shadow opacity-0 group-hover:opacity-100 transition-opacity"
-                          aria-label="Remove proof"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                      ) : (
+                        <FileText
+                          className={`w-5 h-5 ${proof.type === 'delivery' ? 'text-blue-600' : 'text-amber-700'}`}
+                        />
                       )}
                     </div>
-                  ))}
-                </div>
-              )}
-
-              {fileProofsFiltered.length > 0 && (
-                <div className="space-y-3">
-                  {fileProofsFiltered.map((proof) => (
-                    <div
-                      key={proof.id}
-                      className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200"
-                    >
-                      <div className="flex items-center gap-3 min-w-0 flex-1">
-                        <div
-                          className={`w-10 h-10 flex-shrink-0 rounded-lg flex items-center justify-center ${
-                            proof.type === 'delivery' ? 'bg-blue-100' : 'bg-amber-100'
-                          }`}
-                        >
-                          <FileText
-                            className={`w-5 h-5 ${proof.type === 'delivery' ? 'text-blue-600' : 'text-amber-700'}`}
-                          />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="font-medium text-gray-900 truncate">{proof.fileName}</p>
-                          <div className="flex items-center gap-2 mt-1 flex-wrap">
-                            <Badge className="text-xs flex-shrink-0">{proofTypeLabel(proof.type)}</Badge>
-                            <span className="text-xs text-gray-500">
-                              {new Date(proof.createdAt).toLocaleString('en-US', {
-                                month: 'short',
-                                day: 'numeric',
-                                hour: '2-digit',
-                                minute: '2-digit',
-                              })}
-                            </span>
-                          </div>
-                          {proof.note && (
-                            <p className="text-xs text-gray-600 mt-2 whitespace-pre-wrap border-t border-gray-200/80 pt-2">
-                              {proof.note}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2 justify-end flex-shrink-0">
-                        {proof.fileUrl ? (
-                          <Button variant="outline" size="sm" onClick={() => window.open(proof.fileUrl, '_blank')}>
-                            View
-                          </Button>
+                    <div className="min-w-0 flex-1">
+                      <p className="font-medium text-gray-900 truncate">{proof.fileName}</p>
+                      <p className="text-xs text-gray-500 truncate">{proof.fileName}</p>
+                      <div className="flex items-center gap-2 mt-1 flex-wrap">
+                        <Badge className="text-xs flex-shrink-0">{proofTypeLabel(proof.type)}</Badge>
+                        <span className="text-xs text-gray-500">
+                          {new Date(proof.createdAt).toLocaleString('en-US', {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </span>
+                        {proof.uploadedBy ? (
+                          <span className="text-xs text-gray-500">· {proof.uploadedBy}</span>
                         ) : null}
-                        {canUpload && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="text-red-700 border-red-200 hover:bg-red-50"
-                            onClick={() => void handleRemoveProof(proof)}
-                          >
-                            <Trash2 className="w-3.5 h-3.5 mr-1" />
-                            Remove
-                          </Button>
-                        )}
                       </div>
+                      {proof.note && (
+                        <p className="text-xs text-gray-600 mt-2 pr-1 whitespace-pre-wrap border-t border-gray-200/80 pt-2">
+                          {proof.note}
+                        </p>
+                      )}
                     </div>
-                  ))}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 sm:gap-3 justify-end sm:justify-start flex-shrink-0">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => openProofEditModal(proof)}
+                      disabled={!canUpload}
+                    >
+                      <Edit className="w-3.5 h-3.5 mr-1" />
+                      Edit
+                    </Button>
+                    {proof.fileUrl ? (
+                      <Button variant="outline" size="sm" onClick={() => window.open(proof.fileUrl, '_blank')}>
+                        View
+                      </Button>
+                    ) : null}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="text-red-700 border-red-200 hover:bg-red-50"
+                      onClick={() => void handleRemoveProof(proof)}
+                      disabled={!canUpload}
+                    >
+                      <Trash2 className="w-3.5 h-3.5 mr-1" />
+                      Remove
+                    </Button>
+                  </div>
                 </div>
-              )}
+              ))}
             </div>
           ) : (
-            <div className="text-center py-8 space-y-3">
-              <p className="text-sm text-gray-500">
-                No {documentsProofTab === 'delivery' ? 'delivery' : 'other'} proofs yet.
-              </p>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleUploadClick}
-                disabled={!canUpload || proofUploadBusy}
-                className="gap-2"
-              >
-                <Upload className="w-4 h-4" />
-                Upload {documentsProofTab === 'delivery' ? 'delivery' : 'other'} proof
-              </Button>
-            </div>
+            <p className="text-sm text-gray-500 text-center py-8">
+              No {documentsProofTab === 'delivery' ? 'delivery' : 'other'} documents yet.
+            </p>
           )}
         </CardContent>
       </Card>
@@ -490,7 +502,7 @@ export default function IbrDocumentsProofs({
                   tabIndex={0}
                   onKeyDown={(e) => e.key === 'Enter' && setShowProofImageGallery(true)}
                 >
-                  <ImageIcon className="w-8 h-8 text-gray-300 mb-2" />
+                  <ImageIconLucide className="w-8 h-8 text-gray-300 mb-2" />
                   <p className="text-sm text-gray-500">Click to select from image gallery</p>
                 </div>
               ) : (
@@ -568,6 +580,100 @@ export default function IbrDocumentsProofs({
         }}
         stackOnTopOfModal
       />
+
+      <ModalPortal open={showProofEditModal && !!editingProof} onBackdropClick={closeProofEditModal}>
+        <div
+          className="bg-white rounded-lg shadow-xl max-w-xl w-full max-h-[90vh] overflow-y-auto"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="border-b border-gray-200 px-6 py-4 flex items-center justify-between">
+            <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+              <Edit className="w-6 h-6 text-red-600" />
+              Edit proof
+            </h2>
+            <button
+              type="button"
+              onClick={closeProofEditModal}
+              className="text-gray-400 hover:text-gray-600"
+              disabled={proofEditBusy}
+            >
+              <X className="w-6 h-6" />
+            </button>
+          </div>
+          <div className="p-6 space-y-4">
+            <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700">
+              <span className="font-medium text-gray-900">{editingProof?.fileName}</span>
+              <span className="mx-2 text-gray-400">·</span>
+              <Badge className="text-xs align-middle">
+                {editingProof ? proofTypeLabel(editingProof.type) : 'Delivery'}
+              </Badge>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Document type</label>
+              <div className="grid grid-cols-2 gap-3">
+                {IBR_PROOF_TYPES.map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setEditProofType(t)}
+                    className={`p-3 border-2 rounded-lg text-center transition-colors ${
+                      editProofType === t
+                        ? t === 'delivery'
+                          ? 'border-blue-500 bg-blue-50 text-blue-700'
+                          : 'border-amber-500 bg-amber-50 text-amber-800'
+                        : 'border-gray-200 hover:border-gray-300 text-gray-700'
+                    }`}
+                  >
+                    {t === 'delivery' ? (
+                      <Truck className="w-5 h-5 mx-auto mb-1" />
+                    ) : (
+                      <FileText className="w-5 h-5 mx-auto mb-1" />
+                    )}
+                    <span className="text-sm font-semibold">{proofTypeLabel(t)}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Title / purpose</label>
+              <input
+                type="text"
+                value={editProofTitle}
+                onChange={(e) => setEditProofTitle(e.target.value)}
+                placeholder="Proof of delivery"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Notes</label>
+              <textarea
+                value={editProofNotes}
+                onChange={(e) => setEditProofNotes(e.target.value)}
+                rows={3}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-300 focus:border-gray-400 outline-none text-sm"
+                placeholder="Additional information…"
+              />
+            </div>
+
+            <div className="flex gap-3 pt-2">
+              <Button variant="outline" onClick={closeProofEditModal} className="flex-1" disabled={proofEditBusy}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                onClick={() => void handleSaveProofEdit()}
+                className="flex-1"
+                disabled={proofEditBusy || !canUpload}
+              >
+                {proofEditBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Save'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </ModalPortal>
     </>
   );
 }
