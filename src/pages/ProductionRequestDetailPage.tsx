@@ -269,6 +269,14 @@ type OrderPickerSort =
   | 'lines_desc'
   | 'lines_asc';
 
+/** Orders shown by default in the PR “Add sales order” picker (switch off). */
+const ORDER_PICKER_ACTIVE_STATUSES = new Set(['Approved', 'Scheduled']);
+
+function orderPickerMatchesStatusFilter(status: string, showAllStatuses: boolean): boolean {
+  if (showAllStatuses) return true;
+  return ORDER_PICKER_ACTIVE_STATUSES.has(status);
+}
+
 function sortOrderPickerList(rows: OrderPickerRow[], sort: OrderPickerSort): OrderPickerRow[] {
   const out = [...rows];
   out.sort((a, b) => {
@@ -402,6 +410,7 @@ export function ProductionRequestDetailPage() {
   const [showOrderPicker, setShowOrderPicker] = useState(false);
   const [orderSearch, setOrderSearch] = useState('');
   const [orderPickerSort, setOrderPickerSort] = useState<OrderPickerSort>('newest');
+  const [orderPickerShowAllStatuses, setOrderPickerShowAllStatuses] = useState(false);
   const [orderPickerList, setOrderPickerList] = useState<OrderPickerRow[]>([]);
   const [orderPickerLoading, setOrderPickerLoading] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -1379,6 +1388,7 @@ export function ProductionRequestDetailPage() {
   const openOrderPicker = () => {
     setOrderSearch('');
     setOrderPickerSort('newest');
+    setOrderPickerShowAllStatuses(false);
     setShowOrderPicker(true);
   };
 
@@ -1406,10 +1416,17 @@ export function ProductionRequestDetailPage() {
     const q = orderSearch.trim().toLowerCase();
     const filtered = orderPickerList.filter((o) => {
       if (involvedOrderIdSet.has(o.id)) return false;
+      if (!orderPickerMatchesStatusFilter(o.status, orderPickerShowAllStatuses)) return false;
       return orderPickerRowMatchesSearch(o, q);
     });
     return sortOrderPickerList(filtered, orderPickerSort);
-  }, [orderPickerList, orderSearch, involvedOrderIdSet, orderPickerSort]);
+  }, [
+    orderPickerList,
+    orderSearch,
+    involvedOrderIdSet,
+    orderPickerSort,
+    orderPickerShowAllStatuses,
+  ]);
 
   const totalLineQty = useMemo(
     () => items.reduce((s, it) => s + (Number(it.quantity) || 0), 0),
@@ -2132,8 +2149,9 @@ export function ProductionRequestDetailPage() {
               </button>
             </div>
             <p className="text-sm text-gray-600">
-              Same branch as this request. Search by order #, customer name, or customer tax / business ID;
-              already-linked orders are hidden.
+              Same branch as this request. By default only <strong>Approved</strong> and{' '}
+              <strong>Scheduled</strong> orders are listed. Search by order #, customer name, or
+              customer tax / business ID; already-linked orders are hidden.
             </p>
             <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
               <div className="relative flex-1 min-w-0">
@@ -2170,12 +2188,38 @@ export function ProductionRequestDetailPage() {
                 </select>
               </div>
             </div>
+            <label className="flex items-start justify-between gap-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 cursor-pointer">
+              <span className="min-w-0">
+                <span className="block text-sm font-medium text-gray-900">Show all order statuses</span>
+                <span className="block text-xs text-gray-500 mt-0.5">
+                  Include delivered, completed, in transit, and other statuses beyond approved and
+                  scheduled.
+                </span>
+              </span>
+              <span className="relative inline-flex shrink-0 items-center mt-0.5">
+                <input
+                  type="checkbox"
+                  className="sr-only peer"
+                  checked={orderPickerShowAllStatuses}
+                  onChange={(e) => setOrderPickerShowAllStatuses(e.target.checked)}
+                  disabled={saving}
+                />
+                <span
+                  className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-red-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-600"
+                  aria-hidden
+                />
+              </span>
+            </label>
             {orderPickerLoading ? (
               <div className="flex justify-center py-8 text-gray-500 gap-2 text-sm">
                 <Loader2 className="w-4 h-4 animate-spin" /> Loading…
               </div>
             ) : filteredOrderPicker.length === 0 ? (
-              <p className="text-sm text-gray-500 text-center py-6">No orders to show. Try another search.</p>
+              <p className="text-sm text-gray-500 text-center py-6">
+                {orderPickerShowAllStatuses
+                  ? 'No orders to show. Try another search.'
+                  : 'No approved or scheduled orders to show. Try another search, or turn on “Show all order statuses”.'}
+              </p>
             ) : (
               <ul className="overflow-y-auto min-h-0 max-h-[min(60vh,22rem)] space-y-2 pr-1">
                 {filteredOrderPicker.map((o) => {
