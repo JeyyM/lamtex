@@ -209,18 +209,39 @@ import { readEnv } from './env';
 const app = express();
 app.use(express.json({ limit: '1mb' }));
 
-/** Restore full /api/... path when Vercel rewrites to /api. */
+/** Restore full /api/... path when Vercel rewrites to /api/index. */
 app.use((req, _res, next) => {
   if (!process.env.VERCEL) {
     next();
     return;
   }
+
+  const originalPath = req.query.originalPath;
+  if (typeof originalPath === 'string' && originalPath.trim() !== '') {
+    const clean = originalPath.replace(/^\/+/, '');
+    const qIndex = req.url?.indexOf('?') ?? -1;
+    let extra = '';
+    if (qIndex >= 0 && req.url) {
+      const params = new URLSearchParams(req.url.slice(qIndex + 1));
+      params.delete('originalPath');
+      const rest = params.toString();
+      if (rest) extra = `?${rest}`;
+    }
+    req.url = `/api/${clean}${extra}`;
+    delete req.query.originalPath;
+    next();
+    return;
+  }
+
   const forwarded =
     req.headers['x-vercel-forwarded-url'] ??
     req.headers['x-forwarded-uri'] ??
     req.headers['x-invoke-path'];
-  if (typeof forwarded === 'string' && forwarded.startsWith('/api')) {
-    req.url = forwarded;
+  if (typeof forwarded === 'string') {
+    const path = forwarded.split('?')[0];
+    if (path.startsWith('/api/') && path !== '/api/index') {
+      req.url = forwarded.startsWith('/api') ? forwarded : path;
+    }
   }
   next();
 });

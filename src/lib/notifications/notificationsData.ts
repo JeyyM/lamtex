@@ -178,10 +178,10 @@ async function sendOrderNotificationEmail(
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      console.warn('[notifications] Email send failed', body);
+      console.warn('[notifications] Email send failed', { endpoint, status: res.status, body });
     }
   } catch (e) {
-    console.warn('[notifications] Email API unreachable — in-app notifications still created', e);
+    console.warn('[notifications] Email API unreachable — in-app notifications still created', { endpoint, error: e });
   }
 }
 

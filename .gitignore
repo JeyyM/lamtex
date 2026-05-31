@@ -7,3 +7,6 @@ lib/vercel-api.cjs
 *.log
 .env*
 !.env.example
+
+# Separate repo / deployment (Lamtex Catalogue)
+Lamtex Catalogue/
