@@ -37,6 +37,11 @@ import { usePurchaseOrderPermissions } from '@/src/lib/permissions/purchaseOrder
 import { useInterBranchRequestPermissions } from '@/src/lib/permissions/interBranchRequestPermissions';
 import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
 import { scopedMaterialIdList, scopedProductIdList } from '@/src/lib/warehouseScope';
+import {
+  fetchLatestRestockDatesForMaterials,
+  fetchLatestRestockDatesForVariants,
+  formatRestockDateLabel,
+} from '@/src/lib/warehouseInventoryRestockDates';
 import { effectiveInventoryBranch } from '@/src/lib/inventoryAccess';
 import { computeStockStatus } from '@/src/lib/stockStatus';
 import { reportTripDelay } from '@/src/lib/orderTripDelay';
@@ -140,7 +145,7 @@ interface FinishedGood {
   currentStock: number;
   unit: string;
   reorderPoint: number;
-  maxCapacity: number;
+  quota: number;
   location: string;
   lastRestocked: string;
   status: StockStatus;
@@ -156,7 +161,7 @@ interface RawMaterial {
   categorySlug: string;
   currentStock: number;
   unit: string;
-  maxCapacity: number;
+  quota: number;
   lastRestocked: string;
   status: StockStatus;
 }
@@ -1049,11 +1054,9 @@ export default function WarehousePage() {
           const rowName = sizeLabel ? `${productName} — ${sizeLabel}` : productName;
 
           const lr = v.last_restocked;
-          const lastRestocked = lr
-            ? new Date(String(lr)).toISOString().split('T')[0]
-            : '—';
+          const fallbackRestock = lr ? formatRestockDateLabel(String(lr)) : '—';
 
-          const maxCapacity = Math.max(100, reorderPoint * 4, branchStock + 1);
+          const quota = Math.max(100, reorderPoint * 4, branchStock + 1);
 
           finished.push({
             id: variantId,
@@ -1067,11 +1070,25 @@ export default function WarehousePage() {
             currentStock: branchStock,
             unit: 'pcs',
             reorderPoint,
-            maxCapacity,
+            quota,
             location: '',
-            lastRestocked,
+            lastRestocked: fallbackRestock,
             status: uiStatus,
           });
+        }
+      }
+
+      const variantRestockById = await fetchLatestRestockDatesForVariants(
+        finished.map((row) => row.id),
+        branchId,
+      );
+      for (const row of finished) {
+        const fromPr = variantRestockById.get(row.id);
+        const fallback = row.lastRestocked !== '—' ? row.lastRestocked : null;
+        if (fromPr && fallback) {
+          row.lastRestocked = fromPr >= fallback ? fromPr : fallback;
+        } else if (fromPr) {
+          row.lastRestocked = fromPr;
         }
       }
 
@@ -1141,7 +1158,7 @@ export default function WarehousePage() {
             const computed = computeStockStatus(stock, reorderPoint);
             const uiStatus = stockComputeToUi(computed);
             const uom = m.unit_of_measure ?? 'kg';
-            const maxCapacity = Math.max(100, reorderPoint * 4, stock + 1);
+            const quota = Math.max(100, reorderPoint * 4, stock + 1);
             const cat = m.material_categories as { name?: string; slug?: string } | null;
             const categoryName = cat?.name ?? 'Uncategorized';
             const categorySlug = (cat?.slug?.trim() || categoryName
@@ -1157,10 +1174,25 @@ export default function WarehousePage() {
               categorySlug,
               currentStock: stock,
               unit: String(uom),
-              maxCapacity,
-              lastRestocked: m.last_restock_date ? String(m.last_restock_date) : '—',
+              quota,
+              lastRestocked: formatRestockDateLabel(
+                m.last_restock_date ? String(m.last_restock_date) : null,
+              ),
               status: uiStatus,
             };
+          });
+
+          const materialRestockById = await fetchLatestRestockDatesForMaterials(
+            rawList.map((row) => row.id),
+            branchId,
+          );
+          rawList = rawList.map((row) => {
+            const fromPo = materialRestockById.get(row.id);
+            if (!fromPo) return row;
+            const fallback = row.lastRestocked !== '—' ? row.lastRestocked : null;
+            const lastRestocked =
+              fallback && fromPo >= fallback ? fromPo : fallback ?? fromPo;
+            return { ...row, lastRestocked };
           });
         }
       }
@@ -2499,9 +2531,9 @@ export default function WarehousePage() {
           av = a.currentStock;
           bv = b.currentStock;
           break;
-        case 'capacity': {
-          const da = Math.max(a.maxCapacity, 1);
-          const db = Math.max(b.maxCapacity, 1);
+        case 'quota': {
+          const da = Math.max(a.quota, 1);
+          const db = Math.max(b.quota, 1);
           av = a.currentStock / da;
           bv = b.currentStock / db;
           break;
@@ -2548,9 +2580,9 @@ export default function WarehousePage() {
           av = a.currentStock;
           bv = b.currentStock;
           break;
-        case 'capacity': {
-          const da = Math.max(a.maxCapacity, 1);
-          const db = Math.max(b.maxCapacity, 1);
+        case 'quota': {
+          const da = Math.max(a.quota, 1);
+          const db = Math.max(b.quota, 1);
           av = a.currentStock / da;
           bv = b.currentStock / db;
           break;
@@ -3188,10 +3220,10 @@ export default function WarehousePage() {
                           <span className="inline-flex items-center justify-center">Current Stock{finishedSortIcon('currentStock')}</span>
                         </th>
                         <th
-                          onClick={() => handleFinishedSort('capacity')}
+                          onClick={() => handleFinishedSort('quota')}
                           className="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
                         >
-                          <span className="inline-flex items-center justify-center">Capacity{finishedSortIcon('capacity')}</span>
+                          <span className="inline-flex items-center justify-center">Quota{finishedSortIcon('quota')}</span>
                         </th>
                         <th
                           onClick={() => handleFinishedSort('status')}
@@ -3223,8 +3255,8 @@ export default function WarehousePage() {
                         </tr>
                       ) : (
                         pagedFinishedGoods.map((item) => {
-                          const capDenom = Math.max(item.maxCapacity, 1);
-                          const pct = Math.min(100, Math.round((item.currentStock / capDenom) * 100));
+                          const quotaDenom = Math.max(item.quota, 1);
+                          const pct = Math.min(100, Math.round((item.currentStock / quotaDenom) * 100));
                           return (
                         <tr key={item.id} className="hover:bg-gray-50">
                           <td className="px-3 py-3 text-sm">
@@ -3296,8 +3328,8 @@ export default function WarehousePage() {
                     <div className="p-8 text-center text-sm text-gray-500">No finished goods to show.</div>
                   ) : (
                     pagedFinishedGoods.map((item) => {
-                      const capDenom = Math.max(item.maxCapacity, 1);
-                      const pct = Math.min(100, Math.round((item.currentStock / capDenom) * 100));
+                      const quotaDenom = Math.max(item.quota, 1);
+                      const pct = Math.min(100, Math.round((item.currentStock / quotaDenom) * 100));
                       return (
                     <div key={item.id} className="p-4 space-y-3">
                       <div className="flex items-start justify-between gap-3">
@@ -3342,7 +3374,7 @@ export default function WarehousePage() {
                       </div>
                       
                       <div>
-                        <p className="text-xs text-gray-500 mb-2">Capacity Usage</p>
+                        <p className="text-xs text-gray-500 mb-2">Quota usage</p>
                         <div className="flex items-center gap-2">
                           <div className="flex-1 bg-gray-200 rounded-full h-2">
                             <div 
@@ -3407,10 +3439,10 @@ export default function WarehousePage() {
                           <span className="inline-flex items-center justify-center">Current Stock{rawSortIcon('currentStock')}</span>
                         </th>
                         <th
-                          onClick={() => handleRawSort('capacity')}
+                          onClick={() => handleRawSort('quota')}
                           className="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
                         >
-                          <span className="inline-flex items-center justify-center">Capacity{rawSortIcon('capacity')}</span>
+                          <span className="inline-flex items-center justify-center">Quota{rawSortIcon('quota')}</span>
                         </th>
                         <th
                           onClick={() => handleRawSort('status')}
@@ -3442,8 +3474,8 @@ export default function WarehousePage() {
                         </tr>
                       ) : (
                       pagedRawMaterials.map(item => {
-                        const capDenom = Math.max(item.maxCapacity, 1);
-                        const pct = Math.min(100, Math.round((item.currentStock / capDenom) * 100));
+                        const quotaDenom = Math.max(item.quota, 1);
+                        const pct = Math.min(100, Math.round((item.currentStock / quotaDenom) * 100));
                         return (
                         <tr key={item.id} className="hover:bg-gray-50">
                           <td className="px-3 py-3 text-sm text-gray-900">
@@ -3511,8 +3543,8 @@ export default function WarehousePage() {
                     <div className="p-8 text-center text-sm text-gray-500">No raw materials to show.</div>
                   ) : (
                   pagedRawMaterials.map(item => {
-                    const capDenom = Math.max(item.maxCapacity, 1);
-                    const pct = Math.min(100, Math.round((item.currentStock / capDenom) * 100));
+                    const quotaDenom = Math.max(item.quota, 1);
+                    const pct = Math.min(100, Math.round((item.currentStock / quotaDenom) * 100));
                     return (
                     <div key={item.id} className="p-4 space-y-3">
                       <div className="flex items-start justify-between gap-3">
@@ -3553,7 +3585,7 @@ export default function WarehousePage() {
                         </div>
 
                         <div>
-                        <p className="text-xs text-gray-500 mb-2">Capacity Usage</p>
+                        <p className="text-xs text-gray-500 mb-2">Quota usage</p>
                         <div className="flex items-center gap-2">
                           <div className="flex-1 bg-gray-200 rounded-full h-2">
                             <div 
