@@ -38,7 +38,9 @@ import { isProductFamilyCatalogHidden, CATALOG_HIDDEN_CLASS } from '../lib/produ
 import { downloadVariantsComparisonWorkbook } from '../lib/productFamilyExport';
 import { useProductPermissions } from '../lib/permissions/productPermissions';
 import { useProductionRequestPermissions } from '../lib/permissions/productionRequestPermissions';
+import { useOrderPermissions } from '../lib/permissions/orderPermissions';
 import { ProductProductionRequestHistoryCard } from '../components/products/ProductProductionRequestHistoryCard';
+import { ProductOrderHistoryCard } from '../components/products/ProductOrderHistoryCard';
 import { ModuleAccessDenied } from '../components/permissions/ModuleAccessDenied';
 import {
   DATE_PERIOD_OPTIONS,
@@ -304,6 +306,7 @@ export default function ProductFamilyPage() {
     useAppContext();
   const perms = useProductPermissions();
   const prPerms = useProductionRequestPermissions();
+  const orderPerms = useOrderPermissions();
 
   // Hide branch selector while on this page; the product's own branch drives data
   useEffect(() => {
@@ -2294,11 +2297,18 @@ export default function ProductFamilyPage() {
       )}
 
       {familyViewTab === 'prHistory' && perms.productionRequestsHistory && familyId && (
-        <ProductProductionRequestHistoryCard
-          productId={familyId}
-          active={familyViewTab === 'prHistory'}
-          canOpenDetail={prPerms.pageAccess}
-        />
+        <div className="space-y-4">
+          <ProductOrderHistoryCard
+            productId={familyId}
+            active={familyViewTab === 'prHistory'}
+            canOpenDetail={orderPerms.pageAccess}
+          />
+          <ProductProductionRequestHistoryCard
+            productId={familyId}
+            active={familyViewTab === 'prHistory'}
+            canOpenDetail={prPerms.pageAccess}
+          />
+        </div>
       )}
 
       {/* Modals */}

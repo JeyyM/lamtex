@@ -9,15 +9,15 @@ import {
   type ProductPrHistoryRow,
 } from '@/src/lib/productProductionRequestHistory';
 
-type PrStatus =
-  | 'Draft'
-  | 'Requested'
-  | 'Accepted'
-  | 'Rejected'
-  | 'In Progress'
-  | 'Completed'
-  | 'Cancelled'
-  | string;
+const PR_STATUSES = [
+  'Draft',
+  'Requested',
+  'Accepted',
+  'Rejected',
+  'In Progress',
+  'Completed',
+  'Cancelled',
+] as const;
 
 const fmt = (date: string | null | undefined) =>
   date
@@ -25,7 +25,7 @@ const fmt = (date: string | null | undefined) =>
     : '—';
 
 const getStatusVariant = (
-  status: PrStatus,
+  status: string,
 ): 'success' | 'warning' | 'danger' | 'neutral' | 'default' | 'info' => {
   if (status === 'Completed') return 'success';
   if (status === 'Cancelled' || status === 'Rejected') return 'danger';
@@ -101,12 +101,11 @@ export function ProductProductionRequestHistoryCard({
   };
 
   const distinctStatuses = useMemo(() => {
-    const s = new Set(
-      rows
-        .filter((r) => r.production_requests)
-        .map((r) => r.production_requests!.status)
-        .filter(Boolean),
-    );
+    const s = new Set<string>(PR_STATUSES);
+    for (const r of rows) {
+      const st = r.production_requests?.status;
+      if (st) s.add(st);
+    }
     return Array.from(s).sort((a, b) => a.localeCompare(b));
   }, [rows]);
 
@@ -197,8 +196,7 @@ export function ProductProductionRequestHistoryCard({
   };
 
   return (
-    <div className="space-y-4">
-      <Card>
+    <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 flex-wrap">
             <ClipboardList className="w-5 h-5" />
@@ -470,6 +468,5 @@ export function ProductProductionRequestHistoryCard({
           )}
         </CardContent>
       </Card>
-    </div>
   );
 }

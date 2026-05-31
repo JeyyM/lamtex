@@ -21,22 +21,50 @@ export type ProductPrHistoryRow = {
   } | null;
 };
 
+const PR_HISTORY_SELECT = `
+  id, request_id, product_variant_id, quantity, quantity_completed,
+  product_variants ( sku, size ),
+  production_requests!inner (
+    id, pr_number, status, request_date, expected_completion_date, created_by,
+    branches:branches!branch_id ( name )
+  )
+`;
+
+/** All PR lines for a product (by product_id and any variant on the product). */
 export async function fetchProductProductionRequestHistory(
   productId: string,
 ): Promise<ProductPrHistoryRow[]> {
-  const { data, error } = await supabase
-    .from('production_request_items')
-    .select(`
-      id, request_id, product_variant_id, quantity, quantity_completed,
-      product_variants ( sku, size ),
-      production_requests (
-        id, pr_number, status, request_date, expected_completion_date, created_by,
-        branches:branches!branch_id ( name )
-      )
-    `)
-    .eq('product_id', productId)
-    .order('id', { ascending: false });
+  const { data: variants, error: vErr } = await supabase
+    .from('product_variants')
+    .select('id')
+    .eq('product_id', productId);
+  if (vErr) throw new Error(vErr.message);
 
+  const variantIds = (variants ?? []).map((v) => String(v.id)).filter(Boolean);
+
+  let query = supabase.from('production_request_items').select(PR_HISTORY_SELECT);
+
+  if (variantIds.length > 0) {
+    query = query.or(
+      `product_id.eq.${productId},product_variant_id.in.(${variantIds.join(',')})`,
+    );
+  } else {
+    query = query.eq('product_id', productId);
+  }
+
+  const { data, error } = await query.limit(1000);
   if (error) throw new Error(error.message);
-  return (data ?? []) as unknown as ProductPrHistoryRow[];
+
+  const rows = (data ?? []) as unknown as ProductPrHistoryRow[];
+
+  return rows
+    .filter((r) => r.production_requests != null)
+    .sort((a, b) => {
+      const da = a.production_requests?.request_date ?? '';
+      const db = b.production_requests?.request_date ?? '';
+      if (db !== da) return db.localeCompare(da);
+      const pa = a.production_requests?.pr_number ?? '';
+      const pb = b.production_requests?.pr_number ?? '';
+      return pb.localeCompare(pa, undefined, { numeric: true });
+    });
 }
