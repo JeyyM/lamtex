@@ -161,7 +161,6 @@ interface RawMaterial {
   categorySlug: string;
   currentStock: number;
   unit: string;
-  quota: number;
   lastRestocked: string;
   status: StockStatus;
 }
@@ -1158,7 +1157,6 @@ export default function WarehousePage() {
             const computed = computeStockStatus(stock, reorderPoint);
             const uiStatus = stockComputeToUi(computed);
             const uom = m.unit_of_measure ?? 'kg';
-            const quota = Math.max(100, reorderPoint * 4, stock + 1);
             const cat = m.material_categories as { name?: string; slug?: string } | null;
             const categoryName = cat?.name ?? 'Uncategorized';
             const categorySlug = (cat?.slug?.trim() || categoryName
@@ -1174,7 +1172,6 @@ export default function WarehousePage() {
               categorySlug,
               currentStock: stock,
               unit: String(uom),
-              quota,
               lastRestocked: formatRestockDateLabel(
                 m.last_restock_date ? String(m.last_restock_date) : null,
               ),
@@ -2580,13 +2577,6 @@ export default function WarehousePage() {
           av = a.currentStock;
           bv = b.currentStock;
           break;
-        case 'quota': {
-          const da = Math.max(a.quota, 1);
-          const db = Math.max(b.quota, 1);
-          av = a.currentStock / da;
-          bv = b.currentStock / db;
-          break;
-        }
         case 'status':
           av = stockStatusRank[a.status];
           bv = stockStatusRank[b.status];
@@ -3439,12 +3429,6 @@ export default function WarehousePage() {
                           <span className="inline-flex items-center justify-center">Current Stock{rawSortIcon('currentStock')}</span>
                         </th>
                         <th
-                          onClick={() => handleRawSort('quota')}
-                          className="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
-                        >
-                          <span className="inline-flex items-center justify-center">Quota{rawSortIcon('quota')}</span>
-                        </th>
-                        <th
                           onClick={() => handleRawSort('status')}
                           className="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
                         >
@@ -3461,22 +3445,19 @@ export default function WarehousePage() {
                     <tbody className="bg-white divide-y divide-gray-200">
                       {inventoryLoading ? (
                         <tr>
-                          <td colSpan={6} className="px-3 py-12 text-center text-gray-500">
+                          <td colSpan={5} className="px-3 py-12 text-center text-gray-500">
                             <Loader2 className="w-8 h-8 animate-spin mx-auto text-red-500" />
                             <p className="mt-2 text-sm">Loading inventory…</p>
                           </td>
                         </tr>
                       ) : sortedRawMaterials.length === 0 ? (
                         <tr>
-                          <td colSpan={6} className="px-3 py-12 text-center text-sm text-gray-500">
+                          <td colSpan={5} className="px-3 py-12 text-center text-sm text-gray-500">
                             No raw materials to show. Try another branch or filters.
                           </td>
                         </tr>
                       ) : (
-                      pagedRawMaterials.map(item => {
-                        const quotaDenom = Math.max(item.quota, 1);
-                        const pct = Math.min(100, Math.round((item.currentStock / quotaDenom) * 100));
-                        return (
+                      pagedRawMaterials.map(item => (
                         <tr key={item.id} className="hover:bg-gray-50">
                           <td className="px-3 py-3 text-sm text-gray-900">
                             <Link
@@ -3501,22 +3482,6 @@ export default function WarehousePage() {
                             <span className="font-semibold text-gray-900">{item.currentStock}</span>
                             <span className="text-gray-500"> {item.unit}</span>
                           </td>
-                          <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">
-                            <div className="flex items-center gap-2">
-                              <div className="w-20 bg-gray-200 rounded-full h-2">
-                                <div 
-                                  className={`h-2 rounded-full ${
-                                    pct > 60 ? 'bg-green-500' :
-                                    pct > 30 ? 'bg-yellow-500' : 'bg-red-500'
-                                  }`}
-                                  style={{ width: `${pct}%` }}
-                                />
-                            </div>
-                              <span className="text-xs text-gray-500">
-                                {pct}%
-                            </span>
-                            </div>
-                          </td>
                           <td className="px-3 py-3 whitespace-nowrap">
                             <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border ${getStatusColor(item.status)}`}>
                               {getStatusIcon(item.status)}
@@ -3525,8 +3490,7 @@ export default function WarehousePage() {
                           </td>
                           <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">{item.lastRestocked}</td>
                         </tr>
-                        );
-                      })
+                      ))
                       )}
                     </tbody>
                   </table>
@@ -3542,10 +3506,7 @@ export default function WarehousePage() {
                   ) : sortedRawMaterials.length === 0 ? (
                     <div className="p-8 text-center text-sm text-gray-500">No raw materials to show.</div>
                   ) : (
-                  pagedRawMaterials.map(item => {
-                    const quotaDenom = Math.max(item.quota, 1);
-                    const pct = Math.min(100, Math.round((item.currentStock / quotaDenom) * 100));
-                    return (
+                  pagedRawMaterials.map(item => (
                     <div key={item.id} className="p-4 space-y-3">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
@@ -3582,24 +3543,6 @@ export default function WarehousePage() {
                           <p className="text-xs text-gray-500">Last Restocked</p>
                           <p className="text-gray-900">{item.lastRestocked}</p>
                         </div>
-                        </div>
-
-                        <div>
-                        <p className="text-xs text-gray-500 mb-2">Quota usage</p>
-                        <div className="flex items-center gap-2">
-                          <div className="flex-1 bg-gray-200 rounded-full h-2">
-                            <div 
-                              className={`h-2 rounded-full ${
-                                pct > 60 ? 'bg-green-500' :
-                                pct > 30 ? 'bg-yellow-500' : 'bg-red-500'
-                              }`}
-                              style={{ width: `${pct}%` }}
-                            />
-                        </div>
-                          <span className="text-xs text-gray-600">
-                            {pct}%
-                          </span>
-                        </div>
                       </div>
 
                       <Link
@@ -3609,8 +3552,7 @@ export default function WarehousePage() {
                         View material
                       </Link>
                     </div>
-                    );
-                  })
+                  ))
                   )}
                 </div>
                 {!inventoryLoading && sortedRawMaterials.length > 0 && (
