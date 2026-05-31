@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import RawMaterialPickerModal from '@/src/components/products/RawMaterialPickerModal';
 import ImageGalleryModal from '@/src/components/ImageGalleryModal';
 import PurchaseOrderDocumentsProofs, {
@@ -161,6 +161,26 @@ const materialDisplayLine = (mat: { name: string; brand?: string | null } | null
   const b = mat.brand?.trim();
   return b ? `${mat.name} · ${b}` : mat.name;
 };
+
+function MaterialNameLink({
+  mat,
+  className = 'text-sm font-semibold text-blue-700 hover:text-blue-900 hover:underline truncate',
+  onClick,
+}: {
+  mat: { id?: string; name: string; brand?: string | null } | null | undefined;
+  className?: string;
+  onClick?: (e: React.MouseEvent<HTMLAnchorElement>) => void;
+}) {
+  const label = materialDisplayLine(mat);
+  if (!mat?.id) {
+    return <span className="text-sm font-semibold text-gray-900 truncate">{label}</span>;
+  }
+  return (
+    <Link to={`/materials/${mat.id}`} className={className} onClick={onClick}>
+      {label}
+    </Link>
+  );
+}
 
 const getStatusVariant = (status: POStatus): 'success' | 'warning' | 'danger' | 'neutral' | 'default' => {
   if (status === 'Completed')          return 'success';
@@ -1851,7 +1871,10 @@ export function PurchaseOrderDetailPage() {
                             </div>
                           )}
                           <div className="flex-1 min-w-0">
-                            <div className="text-sm font-semibold text-gray-900 truncate">{materialDisplayLine(mat)}</div>
+                            <MaterialNameLink
+                              mat={mat}
+                              onClick={isEditing ? (e) => e.stopPropagation() : undefined}
+                            />
                             <div className="text-xs text-gray-400 font-mono">{mat?.sku}</div>
                             <div className="text-xs text-gray-500 mt-0.5">
                               Ordered: <span className="font-medium text-gray-700">{item.quantity_ordered.toLocaleString()} {item.unit_of_measure}</span>
@@ -2236,7 +2259,7 @@ export function PurchaseOrderDetailPage() {
                       )}
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
-                          <span className="text-sm font-semibold text-gray-900 truncate">{materialDisplayLine(mat)}</span>
+                          <MaterialNameLink mat={mat} className="text-sm font-semibold text-blue-700 hover:text-blue-900 hover:underline truncate" />
                           {isFull    && <span className="text-xs font-medium px-1.5 py-0.5 rounded-full bg-green-100 text-green-700">Fully received</span>}
                           {isPartial && <span className="text-xs font-medium px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">Partial</span>}
                           {isNone    && remaining > 0 && <span className="text-xs font-medium px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">Not receiving</span>}
