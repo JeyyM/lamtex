@@ -174,7 +174,7 @@ export function LogisticsPage() {
   const [draftDispatchCustomStart, setDraftDispatchCustomStart] = useState('');
   const [draftDispatchCustomEnd, setDraftDispatchCustomEnd] = useState('');
   const [tripSortKey, setTripSortKey] = useState<string>('scheduledDate');
-  const [tripSortDir, setTripSortDir] = useState<'asc' | 'desc'>('asc');
+  const [tripSortDir, setTripSortDir] = useState<'asc' | 'desc'>('desc');
   const [selectedCalendarTrip, setSelectedCalendarTrip] = useState<Trip | null>(null);
   const [fleetTrucks, setFleetTrucks] = useState<Vehicle[]>([]);
 
@@ -523,7 +523,10 @@ export function LogisticsPage() {
   // Sort + filter helpers
   const handleTripSort = (key: string) => {
     if (tripSortKey === key) setTripSortDir(d => d === 'asc' ? 'desc' : 'asc');
-    else { setTripSortKey(key); setTripSortDir('asc'); }
+    else {
+      setTripSortKey(key);
+      setTripSortDir(key === 'scheduledDate' ? 'desc' : 'asc');
+    }
   };
   const tripSortIcon = (col: string) => {
     if (tripSortKey !== col) return <ArrowUpDown className="w-3 h-3 ml-1 inline opacity-40" />;

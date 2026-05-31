@@ -135,7 +135,7 @@ export function TripsPage(): React.ReactElement {
     if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
     else {
       setSortKey(key);
-      setSortDir('asc');
+      setSortDir(key === 'scheduledDate' ? 'desc' : 'asc');
     }
   };
 

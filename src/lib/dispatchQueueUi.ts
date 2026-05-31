@@ -120,37 +120,54 @@ export function dispatchTableStatusBadgeVariant(
   return 'default';
 }
 
-/** Parse a trip's schedule into epoch ms — prefers ISO scheduledDate over localized display strings. */
-export function tripScheduleSortMs(trip: Trip): number | null {
-  const iso = (trip.scheduledDate ?? '').trim().slice(0, 10);
+/** Parse dispatch schedule strings (ISO, M/D/YY, localized datetime) to epoch ms. */
+export function parseDispatchScheduleMs(value: string | null | undefined): number | null {
+  const raw = (value ?? '').trim();
+  if (!raw) return null;
+
+  const iso = raw.slice(0, 10);
   if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
     const ms = Date.parse(`${iso}T12:00:00`);
     if (Number.isFinite(ms)) return ms;
   }
 
-  const dep = trip.departureTime?.trim();
-  if (dep) {
-    const ms = Date.parse(dep);
-    if (Number.isFinite(ms)) return ms;
+  const datePart = raw.includes(',') ? raw.split(',')[0].trim() : raw;
+  const slashMatch = datePart.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (slashMatch) {
+    const month = Number(slashMatch[1]);
+    const day = Number(slashMatch[2]);
+    let year = Number(slashMatch[3]);
+    if (year < 100) year += year >= 70 ? 1900 : 2000;
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      const ms = Date.UTC(year, month - 1, day, 12, 0, 0);
+      if (Number.isFinite(ms)) return ms;
+    }
   }
 
-  if (trip.scheduledDate?.trim()) {
-    const ms = Date.parse(trip.scheduledDate);
-    if (Number.isFinite(ms)) return ms;
-  }
-
+  const ms = Date.parse(raw);
+  if (Number.isFinite(ms)) return ms;
   return null;
+}
+
+/** Parse a trip's schedule into epoch ms — prefers ISO scheduledDate over localized display strings. */
+export function tripScheduleSortMs(trip: Trip): number | null {
+  const fromScheduled = parseDispatchScheduleMs(trip.scheduledDate);
+  if (fromScheduled != null) return fromScheduled;
+  return parseDispatchScheduleMs(trip.departureTime);
 }
 
 /** Compare two trips by schedule date/time (invalid/missing dates sort last). */
 export function compareTripScheduleDates(a: Trip, b: Trip, dir: 'asc' | 'desc'): number {
   const ta = tripScheduleSortMs(a);
   const tb = tripScheduleSortMs(b);
-  if (ta == null && tb == null) return 0;
+  if (ta == null && tb == null) {
+    return a.tripNumber.localeCompare(b.tripNumber);
+  }
   if (ta == null) return 1;
   if (tb == null) return -1;
   const diff = ta - tb;
-  return dir === 'asc' ? diff : -diff;
+  if (diff !== 0) return dir === 'asc' ? diff : -diff;
+  return a.tripNumber.localeCompare(b.tripNumber);
 }
 
 /** Date-only label for dispatch tables (hides departure time until scheduling is time-precise). */
