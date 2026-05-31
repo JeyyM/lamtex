@@ -9,6 +9,8 @@ import type {
   NotificationCategory,
   OrderAgentContact,
   OrderCancelledNotifyPayload,
+  OrderCancelledFromTripNotifyPayload,
+  OrderCustomerCancelledNotifyPayload,
   OrderCreatedNotifyPayload,
   OrderCustomerApprovedNotifyPayload,
   OrderCustomerScheduledNotifyPayload,
@@ -3335,6 +3337,156 @@ export async function notifyOrderCancelled(payload: OrderCancelledNotifyPayload)
     }
   }
   await sendOrderCancelledNotificationEmail(payload);
+}
+
+export async function buildOrderCancelledFromTripNotifyPayload(
+  orderUuid: string,
+  opts: {
+    cancelledBy: string | null;
+    cancellationReason: string;
+    additionalNotes?: string | null;
+    tripNumber: string;
+  },
+): Promise<OrderCancelledFromTripNotifyPayload | null> {
+  const order = await fetchOrderDetailSnapshotForNotify(orderUuid);
+  if (!order) return null;
+
+  const branchId = order.branchId?.trim();
+  const logisticsEmails = branchId ? await fetchBranchLogisticsEmails(branchId) : [];
+  const executiveEmails = await fetchEmailsForRoles(['Executive']);
+  const agentEmail = order.agentId?.trim() ? await fetchAgentEmail(order.agentId) : null;
+  const base = buildOrderNotifyPayload({ ...order, status: 'Cancelled' }, orderUuid);
+
+  return {
+    ...base,
+    cancelledBy: opts.cancelledBy,
+    cancellationReason: opts.cancellationReason,
+    additionalNotes: opts.additionalNotes ?? null,
+    tripNumber: opts.tripNumber,
+    agentEmail,
+    logisticsEmails,
+    executiveEmails,
+  };
+}
+
+async function sendOrderCancelledFromTripStaffEmail(
+  payload: OrderCancelledFromTripNotifyPayload,
+  notifyTarget: 'agent' | 'executive' | 'logistics',
+): Promise<void> {
+  try {
+    const res = await notifyFetch('/api/notifications/order-cancelled', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...payload,
+        cancelledByRole: 'logistics',
+        notifyTarget,
+        tripNumber: payload.tripNumber,
+        logisticsEmails: payload.logisticsEmails,
+        executiveEmails: payload.executiveEmails,
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      console.warn('[notifications] Order cancelled from trip email failed', notifyTarget, body);
+    }
+  } catch (e) {
+    console.warn('[notifications] Order cancelled from trip email API unreachable', notifyTarget, e);
+  }
+}
+
+async function sendOrderCustomerCancelledNotificationEmail(
+  payload: OrderCustomerCancelledNotifyPayload,
+): Promise<boolean> {
+  try {
+    const res = await notifyFetch('/api/notifications/order-cancelled-customer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      console.warn('[notifications] Customer cancellation email failed', body);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn('[notifications] Customer cancellation email API unreachable', e);
+    return false;
+  }
+}
+
+export async function buildOrderCustomerCancelledNotifyPayload(
+  orderUuid: string,
+  opts: {
+    cancellationReason: string;
+    cancelledBy?: string | null;
+    tripNumber?: string | null;
+  },
+): Promise<OrderCustomerCancelledNotifyPayload | null> {
+  const order = await fetchOrderDetailSnapshotForNotify(orderUuid);
+  if (!order) return null;
+
+  const base = await buildOrderCustomerNotifyPayload(order, orderUuid, { status: 'Cancelled' });
+  if (!base) return null;
+
+  return {
+    ...base,
+    cancellationReason: opts.cancellationReason,
+    cancelledBy: opts.cancelledBy ?? null,
+    tripNumber: opts.tripNumber ?? null,
+  };
+}
+
+/** Cancel from trip: notify agent, logistics, executives in-app; email all staff + optional customer. */
+export async function notifyOrderCancelledFromTrip(
+  orderUuid: string,
+  opts: {
+    cancelledBy: string | null;
+    cancellationReason: string;
+    additionalNotes?: string | null;
+    tripNumber: string;
+    notifyCustomer: boolean;
+  },
+): Promise<void> {
+  const { error: rpcError } = await supabase.rpc('notify_order_cancelled_from_trip', {
+    p_order_id: orderUuid,
+    p_cancelled_by: opts.cancelledBy,
+    p_cancellation_reason: opts.cancellationReason,
+    p_trip_number: opts.tripNumber,
+  });
+  if (rpcError) {
+    console.error('[notifications] RPC notify_order_cancelled_from_trip failed', rpcError);
+  }
+
+  const payload = await buildOrderCancelledFromTripNotifyPayload(orderUuid, opts);
+  if (payload) {
+    if (payload.agentEmail?.trim()) {
+      await sendOrderCancelledFromTripStaffEmail(payload, 'agent');
+    }
+    if (payload.logisticsEmails.length) {
+      await sendOrderCancelledFromTripStaffEmail(payload, 'logistics');
+    }
+    if (payload.executiveEmails.length) {
+      await sendOrderCancelledFromTripStaffEmail(payload, 'executive');
+    }
+  }
+
+  if (opts.notifyCustomer) {
+    const customerPayload = await buildOrderCustomerCancelledNotifyPayload(orderUuid, {
+      cancellationReason: opts.cancellationReason,
+      cancelledBy: opts.cancelledBy,
+      tripNumber: opts.tripNumber,
+    });
+    if (customerPayload?.customerEmail?.trim()) {
+      const sent = await sendOrderCustomerCancelledNotificationEmail(customerPayload);
+      if (sent && customerPayload.portalId) {
+        await recordOrderPortalEmailSent(customerPayload.portalId, customerPayload.customerEmail);
+      }
+    }
+  }
+
+  window.dispatchEvent(new Event('lamtex:notifications-refresh'));
 }
 
 export async function buildOrderScheduledNotifyPayload(

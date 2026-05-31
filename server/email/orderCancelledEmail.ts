@@ -15,20 +15,25 @@ import {
 
 export interface OrderCancelledEmailPayload extends OrderCreatedEmailPayload {
   cancelledBy: string | null;
-  cancelledByRole: 'agent' | 'executive';
+  cancelledByRole: 'agent' | 'executive' | 'logistics';
   cancellationReason: string;
   additionalNotes?: string | null;
-  notifyTarget: 'agent' | 'executive';
+  notifyTarget: 'agent' | 'executive' | 'logistics';
   agentEmail?: string | null;
+  logisticsEmails?: string[];
+  executiveEmails?: string[];
+  tripNumber?: string | null;
 }
 
-/** Cancellation notification — routed to agent or executives depending on who cancelled. */
+/** Cancellation notification — routed to agent, executives, or logistics depending on audience. */
 export function buildOrderCancelledEmailHtml(p: OrderCancelledEmailPayload): string {
   const forAgent = p.notifyTarget === 'agent';
+  const forLogistics = p.notifyTarget === 'logistics';
   const lineCount = p.lineCount ?? p.items.length;
   const discountAmount = p.discountAmount ?? Math.max(0, p.subtotal - p.totalAmount);
-  const cancelledLabel = p.cancelledBy?.trim() || (forAgent ? 'Executive' : 'Agent');
+  const cancelledLabel = p.cancelledBy?.trim() || (forAgent ? 'Staff' : 'Agent');
   const agentLabel = p.agentName?.trim() || '—';
+  const tripRef = p.tripNumber?.trim();
 
   const lineRows = p.items
     .map((item) => {
@@ -53,15 +58,32 @@ export function buildOrderCancelledEmailHtml(p: OrderCancelledEmailPayload): str
 
   const headerBg = forAgent
     ? 'background:linear-gradient(135deg,#4b5563,#374151);'
-    : 'background:linear-gradient(135deg,#7c3aed,#5b21b6);';
-  const headerSub = forAgent ? 'color:#d1d5db;' : 'color:#ddd6fe;';
+    : forLogistics
+      ? 'background:linear-gradient(135deg,#dc2626,#b91c1c);'
+      : 'background:linear-gradient(135deg,#7c3aed,#5b21b6);';
+  const headerSub = forAgent ? 'color:#d1d5db;' : forLogistics ? 'color:#fecaca;' : 'color:#ddd6fe;';
   const title = forAgent
     ? 'Your order was cancelled'
-    : `Order cancelled by ${esc(agentLabel)}`;
-  const refLabel = forAgent ? 'Cancelled by executive' : 'Cancelled by agent';
+    : forLogistics
+      ? tripRef
+        ? `Order cancelled from trip ${tripRef}`
+        : 'Order cancelled from dispatch'
+      : tripRef
+        ? `Order cancelled from trip ${tripRef}`
+        : `Order cancelled by ${esc(agentLabel)}`;
+  const refLabel = forAgent
+    ? 'Cancelled by staff'
+    : forLogistics
+      ? 'Cancelled from trip'
+      : 'Cancelled by agent';
+  const tripPhrase = tripRef ? ` from trip <strong>${esc(tripRef)}</strong>` : '';
   const intro = forAgent
-    ? `Your order for <strong>${esc(p.customerName ?? 'the customer')}</strong> was cancelled by ${esc(cancelledLabel)}. Details and line items are below.`
-    : `The agent <strong>${esc(agentLabel)}</strong> cancelled order ${esc(p.orderNumber)} for ${esc(p.customerName ?? 'the customer')}. Review the details below.`;
+    ? `Your order for <strong>${esc(p.customerName ?? 'the customer')}</strong> was cancelled${tripPhrase ? ` ${tripPhrase}` : ''} by ${esc(cancelledLabel)}. Details and line items are below.`
+    : forLogistics
+      ? `Order <strong>${esc(p.orderNumber)}</strong> for ${esc(p.customerName ?? 'the customer')} was cancelled${tripPhrase ? ` ${tripPhrase}` : ''} and removed from dispatch${p.cancelledBy?.trim() ? ` by ${esc(p.cancelledBy.trim())}` : ''}.`
+      : tripRef
+        ? `Order ${esc(p.orderNumber)} for ${esc(p.customerName ?? 'the customer')} was cancelled ${tripPhrase} by ${esc(cancelledLabel)}. Review the details below.`
+        : `The agent <strong>${esc(agentLabel)}</strong> cancelled order ${esc(p.orderNumber)} for ${esc(p.customerName ?? 'the customer')}. Review the details below.`;
 
   const orderSummaryRows = [
     detailRow('Order number', p.orderNumber),
@@ -98,7 +120,7 @@ export function buildOrderCancelledEmailHtml(p: OrderCancelledEmailPayload): str
     .filter(Boolean)
     .join('');
 
-  const cancelKind = forAgent ? 'agent-notify' : 'exec-notify';
+  const cancelKind = forAgent ? 'agent-notify' : forLogistics ? 'logistics-notify' : 'exec-notify';
   const discountRow =
     discountAmount > 0
       ? `<tr>
@@ -153,7 +175,7 @@ export function buildOrderCancelledEmailHtml(p: OrderCancelledEmailPayload): str
               </tfoot>
             </table>
             <div style="margin-top:28px;text-align:center;">
-              <a href="${orderUrl}" style="display:inline-block;background:${forAgent ? '#4b5563' : '#7c3aed'};color:#ffffff;text-decoration:none;padding:13px 32px;border-radius:8px;font-weight:600;font-size:15px;box-shadow:0 1px 2px rgba(0,0,0,.06);">View order</a>
+              <a href="${orderUrl}" style="display:inline-block;background:${forAgent ? '#4b5563' : forLogistics ? '#dc2626' : '#7c3aed'};color:#ffffff;text-decoration:none;padding:13px 32px;border-radius:8px;font-weight:600;font-size:15px;box-shadow:0 1px 2px rgba(0,0,0,.06);">View order</a>
             </div>
           </td>
         </tr>

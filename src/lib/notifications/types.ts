@@ -74,6 +74,22 @@ export interface OrderCancelledNotifyPayload extends OrderCreatedNotifyPayload {
   agentEmail?: string | null;
 }
 
+export interface OrderCancelledFromTripNotifyPayload extends OrderCreatedNotifyPayload {
+  cancelledBy: string | null;
+  cancellationReason: string;
+  additionalNotes?: string | null;
+  tripNumber: string;
+  agentEmail?: string | null;
+  logisticsEmails: string[];
+  executiveEmails: string[];
+}
+
+export interface OrderCustomerCancelledNotifyPayload extends OrderCustomerApprovedNotifyPayload {
+  cancellationReason: string;
+  cancelledBy?: string | null;
+  tripNumber?: string | null;
+}
+
 export interface OrderLogisticsReadyNotifyPayload extends OrderCreatedNotifyPayload {
   approvedBy: string | null;
   branchId: string;

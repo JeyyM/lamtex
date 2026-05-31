@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { X, MapPin, Truck, User, Calendar, Clock, Package, AlertTriangle, Edit, CheckCircle, Phone, Mail, Building, FileText, Navigation, ExternalLink, Loader2, Camera, CheckCircle2, Ban } from 'lucide-react';
-import { notifyOrderPacked, notifyOrderInTransit, notifyOrderDeliveryRecorded } from '@/src/lib/notifications/notificationsData';
+import { notifyOrderPacked, notifyOrderInTransit, notifyOrderDeliveryRecorded, notifyOrderCancelledFromTrip } from '@/src/lib/notifications/notificationsData';
 import { deductVariantBranchStock } from '@/src/lib/productVariantStock';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
@@ -505,6 +505,16 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
       const ok = await tryCompleteTripIfAllOrdersDelivered(trip.id);
       if (ok) onTripStatusChange?.(trip.id, 'Complete');
     }
+
+    void notifyOrderCancelledFromTrip(orderId, {
+      cancelledBy: actorName,
+      cancellationReason: data.reason,
+      additionalNotes: data.additionalNotes ?? null,
+      tripNumber: trip.tripNumber,
+      notifyCustomer: data.notifyCustomer,
+    }).catch((notifyErr) => {
+      if (import.meta.env.DEV) console.warn('[trip] cancellation notification failed:', notifyErr);
+    });
 
     setCancelTarget(null);
   }, [cancelTarget, ordersData, orderStatuses, trip, employeeName, session, role, addAuditLog, onOrderStatusChange, onTripStatusChange]);

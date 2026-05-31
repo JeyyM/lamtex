@@ -161,15 +161,19 @@ export function orderRevisedSubject(p: OrderRef): string {
 }
 
 export function orderCancelledSubject(
-  p: OrderRef,
-  notifyTarget: 'agent' | 'executive',
+  p: OrderRef & { tripNumber?: string | null },
+  notifyTarget: 'agent' | 'executive' | 'logistics',
 ): string {
+  const tripSuffix = p.tripNumber?.trim() ? ` (trip ${p.tripNumber.trim()})` : '';
   if (notifyTarget === 'agent') {
-    return notificationSubject('Agent', `Order ${p.orderNumber} cancelled — ${p.customerName ?? 'Customer'}`);
+    return notificationSubject('Agent', `Order ${p.orderNumber} cancelled${tripSuffix} — ${p.customerName ?? 'Customer'}`);
+  }
+  if (notifyTarget === 'logistics') {
+    return notificationSubject('Logistics', `Order ${p.orderNumber} cancelled from trip${tripSuffix}`);
   }
   return notificationSubject(
     'Executive',
-    `Order ${p.orderNumber} cancelled by agent — ${p.customerName ?? 'Customer'}`,
+    `Order ${p.orderNumber} cancelled${tripSuffix} — ${p.customerName ?? 'Customer'}`,
   );
 }
 

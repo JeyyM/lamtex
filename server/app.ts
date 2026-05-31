@@ -51,6 +51,11 @@ import {
   type OrderCustomerUnscheduledEmailPayload,
 } from './email/orderCustomerUnscheduledEmail';
 import {
+  buildOrderCustomerCancelledEmailHtml,
+  orderCustomerCancelledSubject,
+  type OrderCustomerCancelledEmailPayload,
+} from './email/orderCustomerCancelledEmail';
+import {
   buildOrderCustomerPortalShareEmailHtml,
   type OrderCustomerPortalShareEmailPayload,
 } from './email/orderCustomerPortalShareEmail';
@@ -1818,17 +1823,53 @@ app.post('/api/notifications/order-cancelled', async (req, res) => {
       return;
     }
 
-    const forAgent = payload.notifyTarget === 'agent';
-    const subject = orderCancelledSubject(payload, payload.notifyTarget);
-    const sentTo = resolveRecipient(forAgent ? payload.agentEmail : null);
+    const target = payload.notifyTarget;
+    const subject = orderCancelledSubject(payload, target);
     const html = buildOrderCancelledEmailHtml(payload);
+    const sent: Array<{ id?: string; sentTo: string; notifyTarget: typeof target }> = [];
+
+    if (target === 'logistics') {
+      const emails = (payload.logisticsEmails ?? []).map((e) => e?.trim()).filter(Boolean) as string[];
+      const targets = emails.length > 0 ? emails : [null];
+      const uniqueRecipients = [...new Set(targets.map((email) => resolveRecipient(email)))];
+      for (const sentTo of uniqueRecipients) {
+        const { id } = await sendViaResend({
+          to: sentTo,
+          subject,
+          html,
+          entityRef: emailEntityRef(payload.orderId, 'cancelled-logistics'),
+        });
+        sent.push({ id, sentTo, notifyTarget: target });
+      }
+      res.json({ ok: true, subject, sentCount: sent.length, sent, notifyTarget: target });
+      return;
+    }
+
+    if (target === 'executive') {
+      const emails = (payload.executiveEmails ?? []).map((e) => e?.trim()).filter(Boolean) as string[];
+      const targets = emails.length > 0 ? emails : [null];
+      const uniqueRecipients = [...new Set(targets.map((email) => resolveRecipient(email)))];
+      for (const sentTo of uniqueRecipients) {
+        const { id } = await sendViaResend({
+          to: sentTo,
+          subject,
+          html,
+          entityRef: emailEntityRef(payload.orderId, 'cancelled-executive'),
+        });
+        sent.push({ id, sentTo, notifyTarget: target });
+      }
+      res.json({ ok: true, subject, sentCount: sent.length, sent, notifyTarget: target });
+      return;
+    }
+
+    const sentTo = resolveRecipient(payload.agentEmail);
     const { id } = await sendViaResend({
       to: sentTo,
       subject,
       html,
-      entityRef: emailEntityRef(payload.orderId, `cancelled-${payload.notifyTarget}`),
+      entityRef: emailEntityRef(payload.orderId, 'cancelled-agent'),
     });
-    res.json({ ok: true, id, sentTo, subject, notifyTarget: payload.notifyTarget });
+    res.json({ ok: true, id, sentTo, subject, notifyTarget: target });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Internal error';
     if (message.includes('RESEND_API_KEY')) {
@@ -1836,6 +1877,35 @@ app.post('/api/notifications/order-cancelled', async (req, res) => {
       return;
     }
     console.error('[notify-server]', err);
+    res.status(502).json({ error: message });
+  }
+});
+
+app.post('/api/notifications/order-cancelled-customer', async (req, res) => {
+  try {
+    const payload = req.body as OrderCustomerCancelledEmailPayload;
+    if (!payload?.orderId || !payload?.orderNumber || !payload?.customerEmail?.trim()) {
+      res.status(400).json({ error: 'Missing orderId, orderNumber, or customerEmail' });
+      return;
+    }
+
+    const subject = orderCustomerCancelledSubject(payload);
+    const html = buildOrderCustomerCancelledEmailHtml(payload);
+    const sentTo = resolveRecipient(payload.customerEmail);
+    const { id } = await sendViaResend({
+      to: sentTo,
+      subject,
+      html,
+      entityRef: emailEntityRef(payload.orderId, 'cancelled-customer'),
+    });
+    res.json({ ok: true, id, sentTo, subject });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Internal error';
+    if (message.includes('RESEND_API_KEY')) {
+      res.status(503).json({ error: message });
+      return;
+    }
+    console.error('[notify-server] order-cancelled-customer', err);
     res.status(502).json({ error: message });
   }
 });

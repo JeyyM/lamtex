@@ -1232,7 +1232,9 @@ export default function ProductFamilyPage() {
               </Button>
               <Button variant="primary" onClick={handleSaveEdit} disabled={saving} className="flex-1 sm:flex-none">
                 {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
-                <span className="hidden sm:inline">Save Changes</span>
+                <span className="hidden sm:inline">
+                  {editedVariant?.id.startsWith('NEW-') ? 'Save Variant' : 'Save Changes'}
+                </span>
                 <span className="sm:hidden">Save</span>
               </Button>
             </>
