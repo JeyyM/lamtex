@@ -7,6 +7,11 @@ import { Button } from '@/src/components/ui/Button';
 import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagination';
 import { supabase } from '@/src/lib/supabase';
 import { downloadCustomersWorkbook, fetchCustomersExportByIds } from '@/src/lib/customersExport';
+import {
+  applyDormantStatusLocally,
+  isCustomerDormantByLastOrder,
+  syncCustomerDormantStatuses,
+} from '@/src/lib/customerDormancy';
 import { employeeProfilePathFromAgent } from '@/src/lib/agentAnalytics';
 import { getOrdersByCustomer } from '@/src/mock/orders';
 import {
@@ -177,32 +182,38 @@ export function CustomersPage() {
           (c: any) => !branch || c.branches?.name === branch
         );
 
-        setAllCustomers(
-          filtered.map((c: any) => ({
-            id: c.id,
-            customer_code: c.customer_code ? String(c.customer_code) : null,
-            name: c.name,
-            type: c.type ?? '',
-            status: c.status ?? 'Active',
-            risk_level: c.risk_level ?? 'Low',
-            payment_behavior: c.payment_behavior ?? 'Good',
-            contact_person: c.contact_person ?? '',
-            phone: c.phone ?? '',
-            email: c.email ?? '',
-            outstanding_balance: Number(c.outstanding_balance ?? 0),
-            overdue_amount: Number(c.overdue_amount ?? 0),
-            total_purchases_ytd: Number(c.total_purchases_ytd ?? 0),
-            order_count: c.order_count ?? 0,
-            last_order_date: c.last_order_date ?? null,
-            assigned_agent_id: c.assigned_agent_id ?? null,
-            employees: c.employees
-              ? {
-                  employee_id: String(c.employees.employee_id ?? ''),
-                  employee_name: String(c.employees.employee_name ?? ''),
-                }
-              : null,
-          }))
-        );
+        const mapped = filtered.map((c: any) => ({
+          id: c.id,
+          customer_code: c.customer_code ? String(c.customer_code) : null,
+          name: c.name,
+          type: c.type ?? '',
+          status: c.status ?? 'Active',
+          risk_level: c.risk_level ?? 'Low',
+          payment_behavior: c.payment_behavior ?? 'Good',
+          contact_person: c.contact_person ?? '',
+          phone: c.phone ?? '',
+          email: c.email ?? '',
+          outstanding_balance: Number(c.outstanding_balance ?? 0),
+          overdue_amount: Number(c.overdue_amount ?? 0),
+          total_purchases_ytd: Number(c.total_purchases_ytd ?? 0),
+          order_count: c.order_count ?? 0,
+          last_order_date: c.last_order_date ?? null,
+          assigned_agent_id: c.assigned_agent_id ?? null,
+          employees: c.employees
+            ? {
+                employee_id: String(c.employees.employee_id ?? ''),
+                employee_name: String(c.employees.employee_name ?? ''),
+              }
+            : null,
+        }));
+
+        try {
+          await syncCustomerDormantStatuses(mapped);
+        } catch (syncErr) {
+          console.warn('[Customers] dormant status sync failed', syncErr);
+        }
+
+        setAllCustomers(applyDormantStatusLocally(mapped));
       } catch (err) {
         console.error('Failed to fetch customers:', err);
         setAllCustomers([]);
@@ -221,11 +232,18 @@ export function CustomersPage() {
       customer.contact_person.toLowerCase().includes(searchTerm.toLowerCase()) ||
       customer.id.toLowerCase().includes(searchTerm.toLowerCase());
 
+    const isDormant = isCustomerDormantByLastOrder(customer.last_order_date);
+    const isAtRisk = customer.risk_level === 'High' || customer.overdue_amount > 0;
+
     const matchesTab =
       activeTab === 'all' ||
-      (activeTab === 'active' && customer.status === 'Active' && customer.risk_level === 'Low') ||
-      (activeTab === 'atrisk' && (customer.risk_level === 'High' || customer.overdue_amount > 0)) ||
-      (activeTab === 'dormant' && customer.status === 'Dormant');
+      (activeTab === 'active' &&
+        !isDormant &&
+        customer.status === 'Active' &&
+        customer.risk_level === 'Low' &&
+        !isAtRisk) ||
+      (activeTab === 'atrisk' && !isDormant && isAtRisk) ||
+      (activeTab === 'dormant' && isDormant);
 
     const matchesType    = !filterType    || customer.type             === filterType;
     const matchesStatus  = !filterStatus  || customer.status           === filterStatus;
@@ -326,9 +344,17 @@ export function CustomersPage() {
 
   const tabCounts = {
     all: allCustomers.length,
-    active: allCustomers.filter(c => c.status === 'Active' && c.risk_level === 'Low').length,
-    atrisk: allCustomers.filter(c => c.risk_level === 'High' || c.overdue_amount > 0).length,
-    dormant: allCustomers.filter(c => c.status === 'Dormant').length,
+    active: allCustomers.filter((c) => {
+      const isDormant = isCustomerDormantByLastOrder(c.last_order_date);
+      const isAtRisk = c.risk_level === 'High' || c.overdue_amount > 0;
+      return !isDormant && c.status === 'Active' && c.risk_level === 'Low' && !isAtRisk;
+    }).length,
+    atrisk: allCustomers.filter((c) => {
+      const isDormant = isCustomerDormantByLastOrder(c.last_order_date);
+      const isAtRisk = c.risk_level === 'High' || c.overdue_amount > 0;
+      return !isDormant && isAtRisk;
+    }).length,
+    dormant: allCustomers.filter((c) => isCustomerDormantByLastOrder(c.last_order_date)).length,
   };
 
   return (
