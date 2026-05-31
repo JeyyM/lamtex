@@ -15,6 +15,8 @@ import {
 } from '@/src/lib/tripsBoardData';
 import type { Trip } from '@/src/types/logistics';
 import type { DispatchSearchExtras } from '@/src/lib/dispatchQueueUi';
+import { dispatchBoardTripsForView } from '@/src/lib/dispatchBoardTripFilters';
+import type { DatePeriodKind } from '@/src/lib/datePeriodQuery';
 
 export function TripsPage(): React.ReactElement {
   const { branch } = useAppContext();
@@ -36,6 +38,7 @@ export function TripsPage(): React.ReactElement {
   const [sortKey, setSortKey] = useState('scheduledDate');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [searchMatchedOrderIds, setSearchMatchedOrderIds] = useState<Set<string>>(new Set());
+  const [dispatchPeriodKind] = useState<DatePeriodKind>('year');
 
   const [selectedTrip, setSelectedTrip] = useState<Trip | null>(null);
   const [showTripDetails, setShowTripDetails] = useState(false);
@@ -117,9 +120,18 @@ export function TripsPage(): React.ReactElement {
     [tripOrderMeta, searchMatchedOrderIds],
   );
 
+  const visibleTrips = useMemo(
+    () =>
+      dispatchBoardTripsForView(trips, {
+        searching: searchQuery.trim().length > 0,
+        periodKind: dispatchPeriodKind,
+      }),
+    [trips, searchQuery, dispatchPeriodKind],
+  );
+
   const kpis = useMemo(
-    () => computeTripsBoardKpis(trips, tripLowestOrderStatus),
-    [trips, tripLowestOrderStatus],
+    () => computeTripsBoardKpis(visibleTrips, tripLowestOrderStatus),
+    [visibleTrips, tripLowestOrderStatus],
   );
 
   const emptyMessage = useMemo(() => {
@@ -189,7 +201,7 @@ export function TripsPage(): React.ReactElement {
       </div>
 
       <TripsDispatchTable
-        trips={trips}
+        trips={visibleTrips}
         loading={loading}
         emptyMessage={emptyMessage}
         searchQuery={searchQuery}

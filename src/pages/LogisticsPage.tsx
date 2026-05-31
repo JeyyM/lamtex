@@ -11,7 +11,6 @@ import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagination';
 import {
   DATE_PERIOD_OPTIONS,
-  inDatePeriodRange,
   periodTriggerLabel,
   resolveDatePeriodQuery,
   todayIsoLocal,
@@ -101,6 +100,7 @@ import {
   compareTripScheduleDates,
   formatTripScheduleDate,
 } from '@/src/lib/dispatchQueueUi';
+import { dispatchBoardTripsForView } from '@/src/lib/dispatchBoardTripFilters';
 
 type ViewMode = 'dispatch' | 'fleet' | 'routes' | 'shipments';
 type TransportType = 'truck' | 'interisland';
@@ -596,11 +596,14 @@ export function LogisticsPage() {
   }, [dispatchPeriodModalOpen]);
 
   const dateFilteredTrips = useMemo(() => {
-    if (!liveDispatch || dispatchPeriodQuery.invalid) return trips;
-    return trips.filter((trip) =>
-      inDatePeriodRange(trip.scheduledDate, dispatchPeriodQuery.from, dispatchPeriodQuery.to),
-    );
-  }, [trips, dispatchPeriodQuery, liveDispatch]);
+    if (!liveDispatch) return trips;
+    return dispatchBoardTripsForView(trips, {
+      searching: false,
+      periodKind: dispatchPeriodKind,
+      customStart: dispatchCustomStart,
+      customEnd: dispatchCustomEnd,
+    });
+  }, [trips, liveDispatch, dispatchPeriodKind, dispatchCustomStart, dispatchCustomEnd]);
 
   /** 14-day strip shows every trip on those days (including future dates); not limited by queue period end. */
   const calendarTrips = useMemo(
@@ -649,7 +652,7 @@ export function LogisticsPage() {
 
   const filteredTrips = useMemo(() => {
     const searching = searchQuery.trim().length > 0;
-    const source = liveDispatch && !searching ? dateFilteredTrips : trips;
+    const source = searching ? trips : dateFilteredTrips;
     const filtered = source.filter((trip) => {
       const matchesSearch = tripMatchesDispatchSearch(trip, searchQuery, dispatchSearchExtras);
       const matchesStatus = filterStatus === 'All'

@@ -86,6 +86,22 @@ export function inDatePeriodRange(
   return true;
 }
 
+/**
+ * Dispatch queue schedule filter: clip the past per the selected period, but always include
+ * trips scheduled today or in the future (upcoming deliveries must not disappear).
+ */
+export function inDispatchQueueScheduleRange(
+  dateStr: string | null | undefined,
+  dateFrom: string,
+  dateTo: string,
+): boolean {
+  const d = csvDateOnlyIso(dateStr);
+  if (!d) return false;
+  const today = todayIsoLocal();
+  if (d >= today) return true;
+  return inDatePeriodRange(dateStr, dateFrom, dateTo);
+}
+
 /** Inclusive day count for averaging (minimum 1). */
 export function daysInRange(from: string, to: string): number {
   if (!from || !to) return 365;
