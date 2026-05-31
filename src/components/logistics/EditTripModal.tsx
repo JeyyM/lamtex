@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { X, AlertCircle, Save, Weight, Box, Plus, Minus, Search, Loader2, Clock } from 'lucide-react';
 import { Button } from '@/src/components/ui/Button';
 import { supabase } from '@/src/lib/supabase';
+import { fetchOrderLoadByOrderId, orderLoadWithFallback } from '@/src/lib/orderLoadMetrics';
 import type { Trip, OrderReadyForDispatch, DriverOption, Vehicle } from '@/src/types/logistics';
 
 interface EditTripModalProps {
@@ -124,22 +125,33 @@ export function EditTripModal({
       .from('orders')
       .select('id, order_number, customer_name, delivery_address, weight_kg, volume_cbm, status')
       .in('id', trip.orders)
-      .then(({ data }) => {
+      .then(async ({ data }) => {
+        const rows = data ?? [];
+        const statusById = new Map<string, string>();
+        for (const o of rows) {
+          statusById.set(o.id as string, String((o.status as string) ?? '').trim());
+        }
+        const loadByOrderId = await fetchOrderLoadByOrderId(trip.orders ?? [], statusById);
         setCurrentOrderDetails(
-          (data ?? []).map((o) => ({
-            id: o.id as string,
-            orderNumber: (o.order_number as string) ?? '—',
-            customer: (o.customer_name as string) ?? '—',
-            destination: ((o.delivery_address as string) || '').split(/[\n,]/)[0]?.trim()?.slice(0, 80) || '—',
-            weight: num(o.weight_kg, 10),
-            volume: num(o.volume_cbm, 0.05),
-            status: (o.status as string) ?? 'Scheduled',
-          }))
+          rows.map((o) => {
+            const { weight, volume } = orderLoadWithFallback(o.id as string, loadByOrderId, {
+              weight_kg: o.weight_kg,
+              volume_cbm: o.volume_cbm,
+            });
+            return {
+              id: o.id as string,
+              orderNumber: (o.order_number as string) ?? '—',
+              customer: (o.customer_name as string) ?? '—',
+              destination: ((o.delivery_address as string) || '').split(/[\n,]/)[0]?.trim()?.slice(0, 80) || '—',
+              weight,
+              volume,
+              status: (o.status as string) ?? 'Scheduled',
+            };
+          }),
         );
-        // seed per-order statuses from real DB status
         setOrderStatuses((prev) => {
           const next = { ...prev };
-          (data ?? []).forEach((o) => {
+          rows.forEach((o) => {
             next[o.id as string] = (o.status as string) ?? 'Scheduled';
           });
           return next;

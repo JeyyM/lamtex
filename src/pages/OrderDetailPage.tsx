@@ -27,6 +27,7 @@ import {
   notifyOrderPaymentProofRecorded,
 } from '@/src/lib/notifications/notificationsData';
 import { deductVariantBranchStock } from '@/src/lib/productVariantStock';
+import { finishedGoodProductHref } from '@/src/lib/productRoutes';
 import { useAppContext } from '@/src/store/AppContext';
 import { orderCatalogBranch } from '@/src/lib/inventoryAccess';
 import { branchHasShippingContainers } from '@/src/lib/fleetContainers';
@@ -155,6 +156,53 @@ function isPersistedOrderLineId(id: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
 }
 
+async function resolveProductHrefsForLineItems(items: OrderLineItem[]): Promise<Record<string, string>> {
+  const hrefs: Record<string, string> = {};
+  if (!items.length) return hrefs;
+
+  const variantUuids = [
+    ...(items.map((i) => i.variantId).filter(Boolean) as string[]),
+    ...items.filter((i) => !i.variantId && i.sku).map((i) => i.sku),
+  ].filter(Boolean);
+
+  const variantToProduct = new Map<string, string>();
+  if (variantUuids.length) {
+    const { data: variantRows } = await supabase
+      .from('product_variants')
+      .select('id, product_id')
+      .in('id', variantUuids);
+    for (const v of variantRows ?? []) {
+      if (v.id && v.product_id) variantToProduct.set(v.id as string, v.product_id as string);
+    }
+  }
+
+  const unresolvedNames = new Set<string>();
+  for (const item of items) {
+    const variantUuid = item.variantId || item.sku;
+    const productId = variantUuid ? variantToProduct.get(variantUuid) : undefined;
+    if (productId) {
+      hrefs[item.id] = finishedGoodProductHref(productId);
+    } else if (item.productName) {
+      unresolvedNames.add(item.productName);
+    }
+  }
+
+  if (unresolvedNames.size) {
+    const { data: productsByName } = await supabase
+      .from('products')
+      .select('id, name')
+      .in('name', [...unresolvedNames]);
+    const nameToId = new Map((productsByName ?? []).map((p) => [p.name as string, p.id as string]));
+    for (const item of items) {
+      if (hrefs[item.id]) continue;
+      const productId = nameToId.get(item.productName);
+      if (productId) hrefs[item.id] = finishedGoodProductHref(productId);
+    }
+  }
+
+  return hrefs;
+}
+
 export function OrderDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -182,6 +230,8 @@ export function OrderDetailPage() {
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   // Cache fetched products by id for instant lookup when re-editing items
   const [productCache, setProductCache] = useState<Record<string, DBProductDet>>({});
+  /** Product family page links keyed by order line item id. */
+  const [productHrefByLineId, setProductHrefByLineId] = useState<Record<string, string>>({});
   
   // Fulfill order state
   const [showFulfillModal, setShowFulfillModal] = useState(false);
@@ -459,6 +509,8 @@ export function OrderDetailPage() {
         quantityShipped: item.quantity_shipped != null ? Number(item.quantity_shipped) : undefined,
         quantityDelivered: item.quantity_delivered != null ? Number(item.quantity_delivered) : undefined,
       }));
+
+      setProductHrefByLineId(await resolveProductHrefsForLineItems(lineItems));
 
       const mappedOrder: OrderDetail = {
         id: (row as any).order_number,
@@ -4470,7 +4522,16 @@ export function OrderDetailPage() {
                   <div key={index} className="p-4 space-y-3">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0 flex-1">
-                        <div className="font-medium text-gray-900 break-words">{item.productName}</div>
+                        {productHrefByLineId[item.id] ? (
+                          <Link
+                            to={productHrefByLineId[item.id]}
+                            className="font-medium text-blue-600 hover:text-blue-800 hover:underline break-words"
+                          >
+                            {item.productName}
+                          </Link>
+                        ) : (
+                          <div className="font-medium text-gray-900 break-words">{item.productName}</div>
+                        )}
                         <div className="text-xs text-gray-500 mt-1">{item.variantDescription}</div>
                         <div className="text-xs text-gray-600 mt-1">SKU: {item.sku}</div>
                         <div className="flex gap-2 mt-2 flex-wrap">
@@ -4526,11 +4587,15 @@ export function OrderDetailPage() {
 
               {/* Desktop Table View */}
               <div className="hidden md:block overflow-x-auto">
-                <table className="w-full text-sm">
+                <table className="w-full text-sm table-fixed">
+                  <colgroup>
+                    <col className="w-[9rem]" />
+                    <col className="w-[32%]" />
+                  </colgroup>
                   <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b border-gray-200">
                     <tr>
-                      <th className="px-6 py-3 text-left font-medium">SKU</th>
-                      <th className="px-6 py-3 text-left font-medium">Product</th>
+                      <th className="px-3 py-3 text-left font-medium">SKU</th>
+                      <th className="px-4 py-3 text-left font-medium">Product</th>
                       <th className="px-6 py-3 text-center font-medium">Qty</th>
                       <th className="px-6 py-3 text-center font-medium">Delivered</th>
                       {perms.payment && (
@@ -4547,10 +4612,23 @@ export function OrderDetailPage() {
                   <tbody className="divide-y divide-gray-200">
                     {displayOrder.items.map((item, index) => (
                       <tr key={index} className="hover:bg-gray-50">
-                        <td className="px-6 py-4 text-gray-600">{item.sku}</td>
-                        <td className="px-6 py-4">
-                          <div className="font-medium text-gray-900">{item.productName}</div>
-                          <div className="text-xs text-gray-500">{item.variantDescription}</div>
+                        <td className="px-3 py-4 text-gray-600 align-top">
+                          <span className="block truncate font-mono text-xs" title={item.sku}>
+                            {item.sku}
+                          </span>
+                        </td>
+                        <td className="px-4 py-4 align-top">
+                          {productHrefByLineId[item.id] ? (
+                            <Link
+                              to={productHrefByLineId[item.id]}
+                              className="font-medium text-blue-600 hover:text-blue-800 hover:underline break-words"
+                            >
+                              {item.productName}
+                            </Link>
+                          ) : (
+                            <div className="font-medium text-gray-900 break-words">{item.productName}</div>
+                          )}
+                          <div className="text-xs text-gray-500 break-words">{item.variantDescription}</div>
                           {item.negotiatedPrice && item.originalPrice && item.negotiatedPrice < item.originalPrice && (
                             <Badge variant="danger" className="mt-1">Negotiated</Badge>
                           )}

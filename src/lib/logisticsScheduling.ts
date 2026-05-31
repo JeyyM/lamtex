@@ -6,6 +6,7 @@ import { supabase } from '@/src/lib/supabase';
 import { resolveBranchIdByName } from '@/src/lib/branchCompanySettings';
 import { fetchBranchDepotPinByBranchName } from '@/src/lib/companyAddressesSettings';
 import { notifyCustomerOrdersUnscheduledFromTrip, notifyDriverTripAssigned, notifyLogisticsOrderLoading, notifyOrdersScheduled } from '@/src/lib/notifications/notificationsData';
+import { fetchOrderLoadByOrderId, orderLoadWithFallback } from '@/src/lib/orderLoadMetrics';
 import type { OrderReadyForDispatch, Trip, DriverOption } from '@/src/types/logistics';
 
 const QUEUE_STATUSES = ['Approved', 'Partially Fulfilled'] as const;
@@ -480,30 +481,16 @@ async function buildOrderQueueFromRows(
     }
   }
 
-  const partialIds = filteredOrders
-    .filter((o) => String((o as { status?: string }).status ?? '').trim() === 'Partially Fulfilled')
+  const queueOrderIds = filteredOrders
+    .filter((o) => !assigned.has(o.id as string))
     .map((o) => o.id as string);
 
-  const remainderByOrder = new Map<string, { ordered: number; remaining: number }>();
-  if (partialIds.length) {
-    const { data: lineRows, error: lineErr } = await supabase
-      .from('order_line_items')
-      .select('order_id, quantity, quantity_delivered')
-      .in('order_id', partialIds);
-    if (lineErr) {
-      if (import.meta.env.DEV) console.warn('[logistics] partial order line fetch failed:', lineErr.message);
-    } else {
-      for (const row of lineRows ?? []) {
-        const oid = row.order_id as string;
-        const q = Math.max(0, num(row.quantity, 0));
-        const d = Math.max(0, num(row.quantity_delivered, 0));
-        const cur = remainderByOrder.get(oid) ?? { ordered: 0, remaining: 0 };
-        cur.ordered += q;
-        cur.remaining += Math.max(0, q - d);
-        remainderByOrder.set(oid, cur);
-      }
-    }
+  const orderStatusById = new Map<string, string>();
+  for (const o of filteredOrders) {
+    orderStatusById.set(o.id as string, String((o as { status?: string }).status ?? '').trim());
   }
+
+  const loadByOrderId = await fetchOrderLoadByOrderId(queueOrderIds, orderStatusById);
 
   const out: OrderReadyForDispatch[] = [];
   for (const o of filteredOrders) {
@@ -519,17 +506,16 @@ async function buildOrderQueueFromRows(
     const coords = custId ? coordsByCustomerId.get(custId) : undefined;
 
     const st = String((o as { status?: string }).status ?? '').trim();
-    let volume = Math.max(0.01, num(o.volume_cbm, 0.05));
-    let weight = Math.max(1, num(o.weight_kg, 10));
+    const { weight, volume } = orderLoadWithFallback(o.id as string, loadByOrderId, {
+      weight_kg: o.weight_kg,
+      volume_cbm: o.volume_cbm,
+    });
     let notes: string | undefined;
 
     if (st === 'Partially Fulfilled') {
-      const rem = remainderByOrder.get(o.id as string);
-      if (!rem || rem.remaining <= 0 || rem.ordered <= 0) continue;
-      const scale = Math.min(1, rem.remaining / rem.ordered);
-      volume = Math.max(0.01, volume * scale);
-      weight = Math.max(1, weight * scale);
-      notes = `Partial: ${rem.remaining} of ${rem.ordered} units still to deliver`;
+      const rem = loadByOrderId.get(o.id as string);
+      if (!rem || rem.remainingUnits <= 0 || rem.orderedUnits <= 0) continue;
+      notes = `Partial: ${rem.remainingUnits} of ${rem.orderedUnits} units still to deliver`;
     }
 
     out.push({
@@ -1575,15 +1561,28 @@ async function recalcTripLoadFromOrders(
 
   const { data: orders, error } = await supabase
     .from('orders')
-    .select('weight_kg, volume_cbm')
+    .select('id, status, weight_kg, volume_cbm')
     .in('id', orderIds);
   if (error) throw new Error(error.message);
+
+  const statusById = new Map<string, string>();
+  for (const o of orders ?? []) {
+    statusById.set(o.id as string, String((o as { status?: string }).status ?? '').trim());
+  }
+  const loadByOrderId = await fetchOrderLoadByOrderId(orderIds, statusById);
 
   let weightKg = 0;
   let volumeCbm = 0;
   for (const o of orders ?? []) {
-    weightKg += num((o as { weight_kg?: unknown }).weight_kg, 0);
-    volumeCbm += num((o as { volume_cbm?: unknown }).volume_cbm, 0);
+    const id = o.id as string;
+    const computed = loadByOrderId.get(id);
+    if (computed) {
+      weightKg += computed.weightKg;
+      volumeCbm += computed.volumeCbm;
+    } else {
+      weightKg += num((o as { weight_kg?: unknown }).weight_kg, 0);
+      volumeCbm += num((o as { volume_cbm?: unknown }).volume_cbm, 0);
+    }
   }
   const wPct = maxWeightKg > 0 ? (weightKg / maxWeightKg) * 100 : 0;
   const vPct = maxVolumeCbm > 0 ? (volumeCbm / maxVolumeCbm) * 100 : 0;
