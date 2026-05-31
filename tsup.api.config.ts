@@ -1,6 +1,6 @@
 import { defineConfig } from 'tsup';
 
-/** Bundle Express + serverless-http for Vercel (CJS loaded by api/index.ts). */
+/** Bundle Express + serverless-http for Vercel (single self-contained CJS file). */
 export default defineConfig({
   entry: { 'vercel-api': 'api/vercelEntry.ts' },
   format: ['cjs'],
@@ -12,5 +12,7 @@ export default defineConfig({
   sourcemap: false,
   minify: false,
   bundle: true,
+  /** Inline all npm deps — vercel-api.cjs is includeFiles, not dependency-traced by Vercel. */
+  noExternal: [/.*/],
   outExtension: () => ({ js: '.cjs' }),
 });
