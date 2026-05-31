@@ -769,7 +769,7 @@ export function OrderProductSelectionModal({
     if (raw === '') {
       alert(
         purpose === 'interBranch'
-          ? 'Enter a quantity to send (at least 1).'
+          ? 'Enter a quantity to receive (at least 1).'
           : purpose === 'production'
             ? 'Enter a quantity to produce (at least 1).'
             : 'Enter a quantity.',
@@ -875,7 +875,7 @@ export function OrderProductSelectionModal({
                   {initialEdit
                     ? 'Update quantity or variant, then apply.'
                     : purpose === 'interBranch'
-                      ? 'Category or search, then pick a variant and quantity to send.'
+                      ? 'Category or search, then pick a variant and quantity to receive.'
                       : purpose === 'production'
                         ? 'Category or search, then a size'
                         : purpose === 'movements'
@@ -1250,7 +1250,7 @@ export function OrderProductSelectionModal({
                   <div>
                     <label className="block text-sm font-semibold text-gray-900 mb-3">
                       {purpose === 'interBranch'
-                        ? 'Quantity to send'
+                        ? 'Quantity to receive'
                         : purpose === 'production'
                           ? 'Quantity to produce'
                           : 'Quantity requested'}

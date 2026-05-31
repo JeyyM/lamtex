@@ -962,6 +962,8 @@ export function InterBranchRequestDetailPage() {
   const [saving, setSaving] = useState(false);
   /** Inline delivered-qty drafts keyed by item id. */
   const [ibrDeliveredDrafts, setIbrDeliveredDrafts] = useState<Record<string, string>>({});
+  /** Inline product receive-qty drafts keyed by item id (staged until Save). */
+  const [ibrProductQtyDrafts, setIbrProductQtyDrafts] = useState<Record<string, string>>({});
 
   const saveIbrDeliveredInline = async (itemId: string, raw: string, max: number) => {
     const val = Math.max(0, Math.min(Math.round(Number(raw) || 0), max));
@@ -1747,6 +1749,7 @@ export function InterBranchRequestDetailPage() {
 
       setIsEditing(false);
       setEditStatus(null);
+      setIbrProductQtyDrafts({});
       await loadRequest(id);
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : 'Save failed');
@@ -1928,6 +1931,11 @@ export function InterBranchRequestDetailPage() {
   const removeLine = (lineId: string) => {
     if (!id || !ibr || !isEditing) return;
     setItems((prev) => prev.filter((row) => row.id !== lineId));
+    setIbrProductQtyDrafts((prev) => {
+      const next = { ...prev };
+      delete next[lineId];
+      return next;
+    });
     if (editingProductLineId === lineId) {
       setEditingProductLineId(null);
       setShowProductPicker(false);
@@ -1935,6 +1943,31 @@ export function InterBranchRequestDetailPage() {
     if (editingMaterialLineId === lineId) {
       setEditingMaterialLineId(null);
     }
+  };
+
+  const saveIbrProductQtyInline = (itemId: string, raw: string) => {
+    if (!isEditing) return;
+    const line = items.find((i) => i.id === itemId);
+    if (!line) return;
+    const q = Math.max(1, Math.floor(Number(raw) || 0));
+    const ship = Number(line.quantity_shipped) || 0;
+    const del = Number(line.quantity_delivered) || 0;
+    if (q < ship) {
+      alert(`Quantity cannot be less than already shipped (${ship}).`);
+      setIbrProductQtyDrafts((p) => ({ ...p, [itemId]: String(line.quantity) }));
+      return;
+    }
+    if (q < del) {
+      alert(`Quantity cannot be less than already delivered (${del}).`);
+      setIbrProductQtyDrafts((p) => ({ ...p, [itemId]: String(line.quantity) }));
+      return;
+    }
+    setItems((prev) => prev.map((i) => (i.id === itemId ? { ...i, quantity: q } : i)));
+    setIbrProductQtyDrafts((p) => {
+      const next = { ...p };
+      delete next[itemId];
+      return next;
+    });
   };
 
   const submit = async () => {
@@ -2582,6 +2615,7 @@ export function InterBranchRequestDetailPage() {
   const handleCancelEdit = () => {
     setIsEditing(false);
     setEditStatus(null);
+    setIbrProductQtyDrafts({});
     if (id) void loadRequest(id);
   };
 
@@ -3598,16 +3632,32 @@ export function InterBranchRequestDetailPage() {
                             );
                           })()}
                           <p className="text-xs text-gray-500 mt-0.5">
-                            {editingLines ? 'Product · click row to edit' : 'Product'}
+                            {editingLines ? 'Product · click row to change variant' : 'Product'}
                           </p>
                         </div>
                         <div className="flex items-center justify-between sm:justify-end gap-6">
-                          <div className="text-right">
-                            <p className="text-xs text-gray-500">Quantity to send</p>
-                            <p className="font-medium text-gray-900 tabular-nums">
-                              {Number(it.quantity).toLocaleString()}{' '}
-                              <span className="text-xs font-normal text-gray-500">units</span>
-                            </p>
+                          <div className="text-right" onClick={(e) => e.stopPropagation()}>
+                            <p className="text-xs text-gray-500 mb-0.5">Quantity to receive</p>
+                            {editingLines ? (
+                              <div className="flex items-center justify-end gap-1">
+                                <input
+                                  type="number"
+                                  min={1}
+                                  step={1}
+                                  value={ibrProductQtyDrafts[it.id] ?? Number(it.quantity)}
+                                  onChange={(e) => setIbrProductQtyDrafts((p) => ({ ...p, [it.id]: e.target.value }))}
+                                  onBlur={(e) => saveIbrProductQtyInline(it.id, e.target.value)}
+                                  onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                                  className="w-16 text-sm border border-gray-300 rounded px-1.5 py-0.5 text-right focus:ring-1 focus:ring-blue-500"
+                                />
+                                <span className="text-xs text-gray-400">units</span>
+                              </div>
+                            ) : (
+                              <p className="font-medium text-gray-900 tabular-nums">
+                                {Number(it.quantity).toLocaleString()}{' '}
+                                <span className="text-xs font-normal text-gray-500">units</span>
+                              </p>
+                            )}
                           </div>
                           <div className="text-right" onClick={(e) => e.stopPropagation()}>
                             <p className="text-xs text-gray-500 mb-0.5">Delivered</p>
