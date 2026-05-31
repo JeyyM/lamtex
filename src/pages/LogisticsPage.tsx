@@ -98,6 +98,7 @@ import {
   tripStatusIsCompletedUi,
   getDispatchVehicleColor,
   tripMatchesDispatchSearch,
+  compareTripScheduleDates,
 } from '@/src/lib/dispatchQueueUi';
 
 type ViewMode = 'dispatch' | 'fleet' | 'routes' | 'shipments';
@@ -654,6 +655,10 @@ export function LogisticsPage() {
     });
 
     return [...filtered].sort((a, b) => {
+      if (tripSortKey === 'scheduledDate' || tripSortKey === 'default') {
+        return compareTripScheduleDates(a, b, tripSortDir);
+      }
+
       let av: string | number;
       let bv: string | number;
       switch (tripSortKey) {
@@ -664,10 +669,6 @@ export function LogisticsPage() {
         case 'driverName':
           av = (a.driverName || '').toLowerCase();
           bv = (b.driverName || '').toLowerCase();
-          break;
-        case 'scheduledDate':
-          av = a.departureTime || a.scheduledDate || '';
-          bv = b.departureTime || b.scheduledDate || '';
           break;
         case 'orders':
           av = a.orders.length;
@@ -682,8 +683,7 @@ export function LogisticsPage() {
           bv = lowestOrderStatus(b.id, b.status);
           break;
         default:
-          av = a.scheduledDate || '';
-          bv = b.scheduledDate || '';
+          return compareTripScheduleDates(a, b, tripSortDir);
       }
       if (typeof av === 'number' && typeof bv === 'number') {
         return tripSortDir === 'asc' ? av - bv : bv - av;

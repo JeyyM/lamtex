@@ -34,7 +34,7 @@ export function TripsPage(): React.ReactElement {
   const [showCompleted, setShowCompleted] = useState(false);
   const [page, setPage] = useState(1);
   const [sortKey, setSortKey] = useState('scheduledDate');
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [searchMatchedOrderIds, setSearchMatchedOrderIds] = useState<Set<string>>(new Set());
 
   const [selectedTrip, setSelectedTrip] = useState<Trip | null>(null);

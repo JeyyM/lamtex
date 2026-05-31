@@ -7,6 +7,7 @@ import {
   DISPATCH_QUEUE_STATUS_OPTIONS,
   dispatchQueueStatusSelectClass,
   dispatchTableStatusBadgeVariant,
+  compareTripScheduleDates,
   tripMatchesDispatchSearch,
   type DispatchSearchExtras,
 } from '@/src/lib/dispatchQueueUi';
@@ -68,16 +69,16 @@ export function TripsDispatchTable({
     });
 
     return [...filteredRows].sort((a, b) => {
+      if (sortKey === 'scheduledDate' || sortKey === 'default') {
+        return compareTripScheduleDates(a, b, sortDir);
+      }
+
       let av: string | number;
       let bv: string | number;
       switch (sortKey) {
         case 'vehicleName':
           av = a.vehicleName.toLowerCase();
           bv = b.vehicleName.toLowerCase();
-          break;
-        case 'scheduledDate':
-          av = a.departureTime || a.scheduledDate || '';
-          bv = b.departureTime || b.scheduledDate || '';
           break;
         case 'orders':
           av = a.orders.length;
@@ -92,8 +93,7 @@ export function TripsDispatchTable({
           bv = resolveStatus(b);
           break;
         default:
-          av = a.scheduledDate || '';
-          bv = b.scheduledDate || '';
+          return compareTripScheduleDates(a, b, sortDir);
       }
       if (typeof av === 'number' && typeof bv === 'number') {
         return sortDir === 'asc' ? av - bv : bv - av;

@@ -119,3 +119,36 @@ export function dispatchTableStatusBadgeVariant(
   if (status === 'Cancelled') return 'danger';
   return 'default';
 }
+
+/** Parse a trip's schedule into epoch ms — prefers ISO scheduledDate over localized display strings. */
+export function tripScheduleSortMs(trip: Trip): number | null {
+  const iso = (trip.scheduledDate ?? '').trim().slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+    const ms = Date.parse(`${iso}T12:00:00`);
+    if (Number.isFinite(ms)) return ms;
+  }
+
+  const dep = trip.departureTime?.trim();
+  if (dep) {
+    const ms = Date.parse(dep);
+    if (Number.isFinite(ms)) return ms;
+  }
+
+  if (trip.scheduledDate?.trim()) {
+    const ms = Date.parse(trip.scheduledDate);
+    if (Number.isFinite(ms)) return ms;
+  }
+
+  return null;
+}
+
+/** Compare two trips by schedule date/time (invalid/missing dates sort last). */
+export function compareTripScheduleDates(a: Trip, b: Trip, dir: 'asc' | 'desc'): number {
+  const ta = tripScheduleSortMs(a);
+  const tb = tripScheduleSortMs(b);
+  if (ta == null && tb == null) return 0;
+  if (ta == null) return 1;
+  if (tb == null) return -1;
+  const diff = ta - tb;
+  return dir === 'asc' ? diff : -diff;
+}
