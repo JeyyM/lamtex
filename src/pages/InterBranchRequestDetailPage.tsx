@@ -3522,27 +3522,19 @@ export function InterBranchRequestDetailPage() {
               <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
                 <h2 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
                   <Package className="w-4 h-4" />
-                  Products to send
-                  <span className="text-xs font-normal text-gray-400">({productLines.length})</span>
+                  Products
+                  <span className="text-xs font-normal text-gray-400">
+                    ({productLines.length} item{productLines.length !== 1 ? 's' : ''})
+                  </span>
                 </h2>
-                {editingLines && (
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    className="gap-1"
-                    onClick={() => {
-                      setEditingProductLineId(null);
-                      setShowProductPicker(true);
-                    }}
-                    disabled={saving}
-                  >
-                    <Plus className="w-4 h-4" />
-                    Add product
-                  </Button>
-                )}
               </div>
               {productLines.length === 0 ? (
-                <p className="text-center py-6 text-sm text-gray-500">No product lines. Add variants the fulfilling branch will produce or ship (linked PR is created when you save).</p>
+                <div className="text-center py-6 space-y-2 max-w-md mx-auto">
+                  <p className="text-sm text-gray-500">No products on this request yet.</p>
+                  <p className="text-xs text-gray-400">
+                    Products the fulfilling branch will produce or ship (linked PR is created when you save).
+                  </p>
+                </div>
               ) : (
                 <div className="space-y-2">
                   {productLines.map((it) => (
@@ -3658,6 +3650,26 @@ export function InterBranchRequestDetailPage() {
                     </div>
                   ))}
                 </div>
+              )}
+
+              {editingLines && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingProductLineId(null);
+                    setShowProductPicker(true);
+                  }}
+                  disabled={saving}
+                  className="mt-3 w-full flex items-center gap-3 px-4 py-3 border-2 border-dashed border-gray-300 rounded-xl hover:border-indigo-400 hover:bg-indigo-50 transition-all text-left group"
+                >
+                  <div className="w-10 h-10 rounded-lg bg-gray-100 group-hover:bg-indigo-100 flex items-center justify-center flex-shrink-0 transition-colors">
+                    <Plus className="w-5 h-5 text-gray-400 group-hover:text-indigo-500" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-gray-600 group-hover:text-indigo-700">Add a Product</p>
+                    <p className="text-xs text-gray-400 mt-0.5">Browse catalog · Set qty before adding to the request</p>
+                  </div>
+                </button>
               )}
             </CardContent>
           </Card>

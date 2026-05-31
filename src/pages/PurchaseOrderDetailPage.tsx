@@ -1304,6 +1304,7 @@ export function PurchaseOrderDetailPage() {
   const displayItems = isEditing ? stagedItems : items;
   const totalItemValue = sumPurchaseOrderLineItemsTotal(displayItems);
   const poTotalAmount = po ? effectivePurchaseOrderTotal(po.total_amount, totalItemValue) : 0;
+  const poWorkflowBusy = workflowSaving || approvalLoading || cancelPoLoading;
 
   // ── Loading / Error ───────────────────────────────────────
   if (loading) {
@@ -1379,22 +1380,26 @@ export function PurchaseOrderDetailPage() {
                 <Button
                   variant="primary"
                   onClick={() => setShowSubmitModal(true)}
-                  disabled={workflowSaving}
+                  disabled={poWorkflowBusy}
                   className="gap-2"
                 >
-                  <Send className="w-4 h-4" />
-                  Submit for approval
+                  {approvalLoading
+                    ? <Loader2 className="w-4 h-4 animate-spin" />
+                    : <Send className="w-4 h-4" />}
+                  {approvalLoading ? 'Submitting…' : 'Submit for approval'}
                 </Button>
               )}
               {po.status === 'Rejected' && perms.creation && (
                 <Button
                   variant="primary"
                   onClick={() => setShowResubmitModal(true)}
-                  disabled={workflowSaving}
+                  disabled={poWorkflowBusy}
                   className="gap-2"
                 >
-                  <Send className="w-4 h-4" />
-                  Resubmit for approval
+                  {approvalLoading
+                    ? <Loader2 className="w-4 h-4 animate-spin" />
+                    : <Send className="w-4 h-4" />}
+                  {approvalLoading ? 'Resubmitting…' : 'Resubmit for approval'}
                 </Button>
               )}
               {po.status === 'Requested' && perms.approvals && (
@@ -1402,19 +1407,24 @@ export function PurchaseOrderDetailPage() {
                   <Button
                     variant="primary"
                     onClick={() => setShowAcceptModal(true)}
-                    disabled={workflowSaving}
+                    disabled={poWorkflowBusy}
                     className="gap-2"
                   >
-                    <CheckCircle className="w-4 h-4" />
-                    Accept
+                    {approvalLoading
+                      ? <Loader2 className="w-4 h-4 animate-spin" />
+                      : <CheckCircle className="w-4 h-4" />}
+                    {approvalLoading ? 'Accepting…' : 'Accept'}
                   </Button>
                   <Button
                     variant="outline"
                     onClick={() => setShowRejectModal(true)}
-                    disabled={workflowSaving}
+                    disabled={poWorkflowBusy}
                     className="gap-2 border-red-300 text-red-700 hover:bg-red-50"
                   >
-                    <XCircle className="w-4 h-4" /> Reject
+                    {approvalLoading
+                      ? <Loader2 className="w-4 h-4 animate-spin" />
+                      : <XCircle className="w-4 h-4" />}
+                    {approvalLoading ? 'Rejecting…' : 'Reject'}
                   </Button>
                 </>
               )}
@@ -1422,13 +1432,13 @@ export function PurchaseOrderDetailPage() {
                 <Button
                   variant="primary"
                   onClick={handleConfirmOrder}
-                  disabled={workflowSaving}
+                  disabled={poWorkflowBusy}
                   className="gap-2 bg-violet-600 hover:bg-violet-700"
                 >
                   {workflowSaving
                     ? <Loader2 className="w-4 h-4 animate-spin" />
                     : <ShieldCheck className="w-4 h-4" />}
-                  Confirm Order
+                  {workflowSaving ? 'Confirming…' : 'Confirm Order'}
                 </Button>
               )}
               {canReceiveOrRecordPayment && perms.receiveOrders && (
@@ -1454,14 +1464,22 @@ export function PurchaseOrderDetailPage() {
                   type="button"
                   variant="outline"
                   onClick={() => setShowCancelPoModal(true)}
+                  disabled={poWorkflowBusy}
                   className="gap-2 border-red-300 text-red-700 hover:bg-red-50"
                 >
-                  <Ban className="w-4 h-4" />
-                  Cancel order
+                  {cancelPoLoading
+                    ? <Loader2 className="w-4 h-4 animate-spin" />
+                    : <Ban className="w-4 h-4" />}
+                  {cancelPoLoading ? 'Cancelling…' : 'Cancel order'}
                 </Button>
               )}
               {perms.creation && (
-              <Button variant="outline" onClick={handleStartEdit} className="gap-2">
+              <Button
+                variant="outline"
+                onClick={handleStartEdit}
+                disabled={poWorkflowBusy}
+                className="gap-2"
+              >
                 <Edit className="w-4 h-4" /> Edit
               </Button>
               )}
@@ -2461,7 +2479,7 @@ export function PurchaseOrderDetailPage() {
       <ModalPortal
         open={showSubmitModal && !!po}
         backdropClassName="bg-black/60"
-        onBackdropClick={() => !approvalLoading && setShowSubmitModal(false)}
+        onBackdropClick={() => !poWorkflowBusy && setShowSubmitModal(false)}
       >
           <div
             className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden"
@@ -2485,7 +2503,7 @@ export function PurchaseOrderDetailPage() {
               <button
                 type="button"
                 onClick={() => setShowSubmitModal(false)}
-                disabled={approvalLoading}
+                disabled={poWorkflowBusy}
                 className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 transition-colors disabled:opacity-50"
               >
                 Cancel
@@ -2493,11 +2511,11 @@ export function PurchaseOrderDetailPage() {
               <button
                 type="button"
                 onClick={handleSubmitForApproval}
-                disabled={approvalLoading}
+                disabled={poWorkflowBusy}
                 className="px-5 py-2 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-700 transition-colors disabled:opacity-50 flex items-center gap-2"
               >
                 {approvalLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                Submit for approval
+                {approvalLoading ? 'Submitting…' : 'Submit for approval'}
               </button>
             </div>
           </div>
@@ -2507,7 +2525,7 @@ export function PurchaseOrderDetailPage() {
       <ModalPortal
         open={showResubmitModal && !!po}
         backdropClassName="bg-black/60"
-        onBackdropClick={() => !approvalLoading && setShowResubmitModal(false)}
+        onBackdropClick={() => !poWorkflowBusy && setShowResubmitModal(false)}
       >
           <div
             className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden"
@@ -2536,7 +2554,7 @@ export function PurchaseOrderDetailPage() {
               <button
                 type="button"
                 onClick={() => setShowResubmitModal(false)}
-                disabled={approvalLoading}
+                disabled={poWorkflowBusy}
                 className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 transition-colors disabled:opacity-50"
               >
                 Cancel
@@ -2544,11 +2562,11 @@ export function PurchaseOrderDetailPage() {
               <button
                 type="button"
                 onClick={handleResubmitForApproval}
-                disabled={approvalLoading}
+                disabled={poWorkflowBusy}
                 className="px-5 py-2 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-700 transition-colors disabled:opacity-50 flex items-center gap-2"
               >
                 {approvalLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                Resubmit for approval
+                {approvalLoading ? 'Resubmitting…' : 'Resubmit for approval'}
               </button>
             </div>
           </div>
@@ -2558,7 +2576,7 @@ export function PurchaseOrderDetailPage() {
       <ModalPortal
         open={showAcceptModal && !!po}
         backdropClassName="bg-black/60"
-        onBackdropClick={() => !approvalLoading && setShowAcceptModal(false)}
+        onBackdropClick={() => !poWorkflowBusy && setShowAcceptModal(false)}
       >
           <div
             className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden"
@@ -2583,7 +2601,7 @@ export function PurchaseOrderDetailPage() {
               <button
                 type="button"
                 onClick={() => setShowAcceptModal(false)}
-                disabled={approvalLoading}
+                disabled={poWorkflowBusy}
                 className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 transition-colors disabled:opacity-50"
               >
                 Cancel
@@ -2591,11 +2609,11 @@ export function PurchaseOrderDetailPage() {
               <button
                 type="button"
                 onClick={handleAcceptRequest}
-                disabled={approvalLoading}
+                disabled={poWorkflowBusy}
                 className="px-5 py-2 rounded-lg bg-green-600 text-white font-semibold hover:bg-green-700 transition-colors disabled:opacity-50 flex items-center gap-2"
               >
                 {approvalLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-                Confirm acceptance
+                {approvalLoading ? 'Accepting…' : 'Confirm acceptance'}
               </button>
             </div>
           </div>
@@ -2606,7 +2624,7 @@ export function PurchaseOrderDetailPage() {
         open={showRejectModal && !!po}
         backdropClassName="bg-black/60"
         onBackdropClick={() => {
-          if (!approvalLoading) {
+          if (!poWorkflowBusy) {
             setShowRejectModal(false);
             setRejectionReason('');
           }
@@ -2647,7 +2665,7 @@ export function PurchaseOrderDetailPage() {
               <button
                 type="button"
                 onClick={() => { setShowRejectModal(false); setRejectionReason(''); }}
-                disabled={approvalLoading}
+                disabled={poWorkflowBusy}
                 className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 transition-colors disabled:opacity-50"
               >
                 Cancel
@@ -2655,11 +2673,11 @@ export function PurchaseOrderDetailPage() {
               <button
                 type="button"
                 onClick={handleRejectRequest}
-                disabled={approvalLoading}
+                disabled={poWorkflowBusy}
                 className="px-5 py-2 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-700 transition-colors disabled:opacity-50 flex items-center gap-2"
               >
                 {approvalLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <XCircle className="w-4 h-4" />}
-                Confirm rejection
+                {approvalLoading ? 'Rejecting…' : 'Confirm rejection'}
               </button>
             </div>
           </div>
@@ -2669,7 +2687,7 @@ export function PurchaseOrderDetailPage() {
         open={showCancelPoModal && !!po}
         backdropClassName="bg-black/60"
         onBackdropClick={() => {
-          if (!cancelPoLoading) {
+          if (!poWorkflowBusy) {
             setShowCancelPoModal(false);
             setCancelPoNote('');
           }
@@ -2712,7 +2730,7 @@ export function PurchaseOrderDetailPage() {
                   setShowCancelPoModal(false);
                   setCancelPoNote('');
                 }}
-                disabled={cancelPoLoading}
+                disabled={poWorkflowBusy}
                 className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 transition-colors disabled:opacity-50"
               >
                 Back
@@ -2720,11 +2738,11 @@ export function PurchaseOrderDetailPage() {
               <button
                 type="button"
                 onClick={() => void handleCancelPurchaseOrder()}
-                disabled={cancelPoLoading}
+                disabled={poWorkflowBusy}
                 className="px-5 py-2 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-700 transition-colors disabled:opacity-50 flex items-center gap-2"
               >
                 {cancelPoLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Ban className="w-4 h-4" />}
-                Confirm cancel
+                {cancelPoLoading ? 'Cancelling…' : 'Confirm cancel'}
               </button>
             </div>
           </div>
