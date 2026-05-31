@@ -233,9 +233,26 @@ export function PurchaseOrderDetailPage() {
   const [saving, setSaving]             = useState(false);
   /** Inline received-qty drafts keyed by item id. */
   const [receivedDrafts, setReceivedDrafts] = useState<Record<string, string>>({});
+  /** Inline ordered-qty drafts keyed by item id (edit mode). */
+  const [orderedDrafts, setOrderedDrafts] = useState<Record<string, string>>({});
+
+  const saveOrderedInlineToStage = (itemId: string, raw: string) => {
+    const val = Math.max(0, Number(raw) || 0);
+    setStagedItems((prev) =>
+      prev.map((i) => (i.id === itemId ? { ...i, quantity_ordered: val } : i)),
+    );
+    if (editingItemId === itemId) setEditItemQtyOrdered(String(val));
+  };
 
   const saveReceivedInline = async (itemId: string, raw: string, max: number) => {
     const val = Math.max(0, Math.min(Math.round(Number(raw) || 0), max));
+    if (isEditing) {
+      setStagedItems((prev) =>
+        prev.map((i) => (i.id === itemId ? { ...i, quantity_received: val } : i)),
+      );
+      if (editingItemId === itemId) setEditItemQtyReceived(String(val));
+      return;
+    }
     const { error } = await supabase
       .from('purchase_order_items')
       .update({ quantity_received: val })
@@ -486,6 +503,8 @@ export function PurchaseOrderDetailPage() {
     setOriginalItems([...items]);
     // Restore saved toggle states from DB
     setPriceUpdateItems(new Set(items.filter(i => i.sync_price_on_receive).map(i => i.id)));
+    setOrderedDrafts({});
+    setReceivedDrafts({});
     setIsEditing(true);
   };
 
@@ -496,6 +515,8 @@ export function PurchaseOrderDetailPage() {
     setOriginalItems([]);
     setEditingItemId(null);
     setPriceUpdateItems(new Set());
+    setOrderedDrafts({});
+    setReceivedDrafts({});
   };
 
   const handleSave = async () => {
@@ -1876,9 +1897,36 @@ export function PurchaseOrderDetailPage() {
                               onClick={isEditing ? (e) => e.stopPropagation() : undefined}
                             />
                             <div className="text-xs text-gray-400 font-mono">{mat?.sku}</div>
-                            <div className="text-xs text-gray-500 mt-0.5">
-                              Ordered: <span className="font-medium text-gray-700">{item.quantity_ordered.toLocaleString()} {item.unit_of_measure}</span>
-                            </div>
+                            {isEditing ? (
+                              <div className="flex items-center gap-1.5 mt-0.5" onClick={(e) => e.stopPropagation()}>
+                                <span className="text-xs text-gray-500">Ordered:</span>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  step="any"
+                                  value={orderedDrafts[item.id] ?? item.quantity_ordered}
+                                  onChange={(e) => setOrderedDrafts((p) => ({ ...p, [item.id]: e.target.value }))}
+                                  onBlur={(e) => {
+                                    saveOrderedInlineToStage(item.id, e.target.value);
+                                    setOrderedDrafts((p) => {
+                                      const next = { ...p };
+                                      delete next[item.id];
+                                      return next;
+                                    });
+                                  }}
+                                  onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                                  className="w-20 text-xs border border-gray-300 rounded px-1.5 py-0.5 focus:ring-1 focus:ring-indigo-500"
+                                />
+                                <span className="text-xs text-gray-500">{item.unit_of_measure}</span>
+                              </div>
+                            ) : (
+                              <div className="text-xs text-gray-500 mt-0.5">
+                                Ordered:{' '}
+                                <span className="font-medium text-gray-700">
+                                  {item.quantity_ordered.toLocaleString()} {item.unit_of_measure}
+                                </span>
+                              </div>
+                            )}
                             {isEditing ? (
                               <div className="flex items-center gap-1.5 mt-1" onClick={(e) => e.stopPropagation()}>
                                 <span className="text-xs text-gray-500">Received:</span>
