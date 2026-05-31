@@ -244,7 +244,20 @@ type OrderPickerRow = {
   customerRef: OrderPickerCustomerRef | null;
 };
 
-function orderPickerRowMatchesSearch(o: OrderPickerRow, q: string): boolean {
+function orderPickerLineMatchesSearch(li: InvolvedOrderLine, q: string): boolean {
+  if (!q) return true;
+  const title = [li.product_name, li.variant_description].filter(Boolean).join(' · ');
+  const haystacks = [
+    li.product_name,
+    li.variant_description,
+    li.sku,
+    title,
+    [li.product_name, li.variant_description].filter(Boolean).join(' '),
+  ];
+  return haystacks.some((s) => s && String(s).toLowerCase().includes(q));
+}
+
+function orderPickerHeaderMatchesSearch(o: OrderPickerRow, q: string): boolean {
   if (!q) return true;
   if (o.order_number.toLowerCase().includes(q)) return true;
   if ((o.customer_name ?? '').toLowerCase().includes(q)) return true;
@@ -255,6 +268,17 @@ function orderPickerRowMatchesSearch(o: OrderPickerRow, q: string): boolean {
     if ((c.business_registration ?? '').toLowerCase().includes(q)) return true;
   }
   return false;
+}
+
+function orderPickerRowMatchesSearch(o: OrderPickerRow, q: string): boolean {
+  if (!q) return true;
+  if (orderPickerHeaderMatchesSearch(o, q)) return true;
+  return (o.order_line_items ?? []).some((li) => orderPickerLineMatchesSearch(li, q));
+}
+
+/** Once an order is included, show all of its lines in one group (search only filters which orders appear). */
+function orderPickerLinesForDisplay(o: OrderPickerRow): InvolvedOrderLine[] {
+  return o.order_line_items ?? [];
 }
 
 type OrderPickerSort =
@@ -1337,7 +1361,22 @@ export function ProductionRequestDetailPage() {
           : null;
         return { ...rest, order_line_items, customerRef };
       });
-      setOrderPickerList(rows);
+      const mergedByOrderId = new Map<string, OrderPickerRow>();
+      for (const row of rows) {
+        const prev = mergedByOrderId.get(row.id);
+        if (!prev) {
+          mergedByOrderId.set(row.id, row);
+          continue;
+        }
+        const lineById = new Map<string, InvolvedOrderLine>();
+        for (const li of prev.order_line_items ?? []) lineById.set(li.id, li);
+        for (const li of row.order_line_items ?? []) lineById.set(li.id, li);
+        mergedByOrderId.set(row.id, {
+          ...prev,
+          order_line_items: [...lineById.values()],
+        });
+      }
+      setOrderPickerList([...mergedByOrderId.values()]);
     } finally {
       setOrderPickerLoading(false);
     }
@@ -2091,29 +2130,31 @@ export function ProductionRequestDetailPage() {
                             </button>
                           )}
                       </div>
-                      <div className="border-t border-gray-100 bg-gray-50/90">
-                        <p className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-500">
-                          Line items
+                      <div className="border-t border-gray-100 bg-gray-50/90 px-3 pb-3 pt-2">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                          Line items ({row.lineItems.length})
                         </p>
                         {row.lineItems.length === 0 ? (
-                          <p className="px-3 pb-3 text-xs text-gray-500">No lines on this order.</p>
+                          <p className="pt-1 text-xs text-gray-500">No lines on this order.</p>
                         ) : (
-                          <ul className="divide-y divide-gray-200/80">
-                            {row.lineItems.map((li) => {
-                              const title = [li.product_name, li.variant_description].filter(Boolean).join(' · ') || '—';
-                              return (
-                                <li key={li.id} className="px-3 py-2 flex items-start justify-between gap-3 text-sm">
-                                  <div className="min-w-0">
-                                    <p className="text-gray-900 font-medium leading-snug">{title}</p>
-                                    {li.sku && <p className="text-xs text-gray-500 font-mono mt-0.5">{li.sku}</p>}
-                                  </div>
-                                  <p className="shrink-0 font-semibold tabular-nums text-gray-900">
-                                    ×{li.quantity.toLocaleString()}
-                                  </p>
-                                </li>
-                              );
-                            })}
-                          </ul>
+                          <div className="mt-1.5 rounded-md border border-gray-200/80 bg-white overflow-hidden">
+                            <ul className="divide-y divide-gray-100">
+                              {row.lineItems.map((li) => {
+                                const title = [li.product_name, li.variant_description].filter(Boolean).join(' · ') || '—';
+                                return (
+                                  <li key={li.id} className="px-3 py-2 flex items-start justify-between gap-3 text-sm">
+                                    <div className="min-w-0">
+                                      <p className="text-gray-900 font-medium leading-snug">{title}</p>
+                                      {li.sku && <p className="text-xs text-gray-500 font-mono mt-0.5">{li.sku}</p>}
+                                    </div>
+                                    <p className="shrink-0 font-semibold tabular-nums text-gray-900">
+                                      ×{li.quantity.toLocaleString()}
+                                    </p>
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          </div>
                         )}
                       </div>
                     </div>
@@ -2150,8 +2191,8 @@ export function ProductionRequestDetailPage() {
             </div>
             <p className="text-sm text-gray-600">
               Same branch as this request. By default only <strong>Approved</strong> and{' '}
-              <strong>Scheduled</strong> orders are listed. Search by order #, customer name, or
-              customer tax / business ID; already-linked orders are hidden.
+              <strong>Scheduled</strong> orders are listed. Search by order #, customer, product,
+              variant, SKU, or tax / business ID; already-linked orders are hidden.
             </p>
             <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
               <div className="relative flex-1 min-w-0">
@@ -2159,7 +2200,7 @@ export function ProductionRequestDetailPage() {
                 <input
                   type="search"
                   className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm"
-                  placeholder="Search…"
+                  placeholder="Search order, customer, product, variant, SKU…"
                   value={orderSearch}
                   onChange={(e) => setOrderSearch(e.target.value)}
                 />
@@ -2223,7 +2264,7 @@ export function ProductionRequestDetailPage() {
             ) : (
               <ul className="overflow-y-auto min-h-0 max-h-[min(60vh,22rem)] space-y-2 pr-1">
                 {filteredOrderPicker.map((o) => {
-                  const lines = o.order_line_items ?? [];
+                  const lines = orderPickerLinesForDisplay(o);
                   return (
                     <li
                       key={o.id}
@@ -2255,33 +2296,37 @@ export function ProductionRequestDetailPage() {
                           {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Add'}
                         </Button>
                       </div>
-                      <div className="border-t border-gray-100 bg-gray-50/90">
-                        <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500">
-                          Line items
+                      <div className="border-t border-gray-100 bg-gray-50/90 px-2 pb-2 pt-1.5">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500 px-0.5">
+                          Line items ({lines.length})
                         </p>
                         {lines.length === 0 ? (
-                          <p className="px-2 pb-2 text-xs text-gray-500">No lines on this order.</p>
+                          <p className="px-0.5 pt-1 text-xs text-gray-500">No lines on this order.</p>
                         ) : (
-                          <ul className="divide-y divide-gray-200/80 max-h-40 overflow-y-auto">
-                            {lines.map((li) => {
-                              const title =
-                                [li.product_name, li.variant_description].filter(Boolean).join(' · ') || '—';
-                              return (
-                                <li
-                                  key={li.id}
-                                  className="px-2 py-1.5 flex items-start justify-between gap-2 text-xs"
-                                >
-                                  <div className="min-w-0">
-                                    <p className="text-gray-900 font-medium leading-snug">{title}</p>
-                                    {li.sku && <p className="text-[10px] text-gray-500 font-mono mt-0.5">{li.sku}</p>}
-                                  </div>
-                                  <p className="shrink-0 font-semibold tabular-nums text-gray-900">
-                                    ×{li.quantity.toLocaleString()}
-                                  </p>
-                                </li>
-                              );
-                            })}
-                          </ul>
+                          <div className="mt-1 rounded-md border border-gray-200/80 bg-white overflow-hidden">
+                            <ul className="divide-y divide-gray-100">
+                              {lines.map((li) => {
+                                const title =
+                                  [li.product_name, li.variant_description].filter(Boolean).join(' · ') || '—';
+                                return (
+                                  <li
+                                    key={li.id}
+                                    className="px-2 py-1.5 flex items-start justify-between gap-2 text-xs"
+                                  >
+                                    <div className="min-w-0">
+                                      <p className="text-gray-900 font-medium leading-snug">{title}</p>
+                                      {li.sku && (
+                                        <p className="text-[10px] text-gray-500 font-mono mt-0.5">{li.sku}</p>
+                                      )}
+                                    </div>
+                                    <p className="shrink-0 font-semibold tabular-nums text-gray-900">
+                                      ×{li.quantity.toLocaleString()}
+                                    </p>
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          </div>
                         )}
                       </div>
                     </li>
