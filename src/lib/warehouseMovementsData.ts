@@ -30,6 +30,7 @@ export type MonthlyRevenueChartRow = { month: string; revenue: number };
 export async function fetchVariantMonthlyOrderMetrics(
   variantId: string,
   branchName: string | null | undefined,
+  opts?: { dateFrom?: string; dateTo?: string },
 ): Promise<{ units: MonthlyMovementChartRow[]; revenue: MonthlyRevenueChartRow[] }> {
   const { data, error } = await supabase
     .from('order_line_items')
@@ -47,14 +48,11 @@ export async function fetchVariantMonthlyOrderMetrics(
     if (b.id && b.name) branchNameById.set(String(b.id), String(b.name));
   }
 
-  const end = new Date();
-  const monthSlots: { ymk: string; label: string }[] = [];
-  for (let k = 11; k >= 0; k--) {
-    const d = new Date(end.getFullYear(), end.getMonth() - k, 1);
-    const ymk = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-    const label = d.toLocaleDateString('en-PH', { month: 'short', year: '2-digit' });
-    monthSlots.push({ ymk, label });
-  }
+  const dateFrom = opts?.dateFrom ?? '';
+  const dateTo = opts?.dateTo ?? '';
+  const monthSlots =
+    dateFrom && dateTo ? monthSlotsBetween(dateFrom, dateTo) : lastNMonthSlots(12);
+  if (monthSlots.length === 0) return { units: [], revenue: [] };
   const monthSet = new Set(monthSlots.map((s) => s.ymk));
   const qtyAgg = new Map<string, number>();
   const revAgg = new Map<string, number>();
@@ -74,6 +72,7 @@ export async function fetchVariantMonthlyOrderMetrics(
     const ord = rawO == null ? null : Array.isArray(rawO) ? rawO[0] : rawO;
     if (!ord?.order_date) continue;
     if (CHART_EXCLUDED_ORDER_STATUSES.has(ord.status)) continue;
+    if (!inDatePeriodRange(ord.order_date, dateFrom, dateTo)) continue;
     if (bnFilter) {
       const bid = ord.branch_id;
       const bn = bid ? branchNameById.get(bid) : null;
@@ -133,8 +132,11 @@ export type VariantInvolvedOrderRow = {
 export async function fetchVariantInvolvedOrders(
   variantId: string,
   branchName: string | null | undefined,
-  limit = 150,
+  opts?: { dateFrom?: string; dateTo?: string; limit?: number },
 ): Promise<VariantInvolvedOrderRow[]> {
+  const limit = opts?.limit ?? 150;
+  const dateFrom = opts?.dateFrom ?? '';
+  const dateTo = opts?.dateTo ?? '';
   const { data, error } = await supabase
     .from('order_line_items')
     .select(
@@ -185,6 +187,7 @@ export async function fetchVariantInvolvedOrders(
     const ord = rawO == null ? null : Array.isArray(rawO) ? rawO[0] : rawO;
     if (!ord?.id) continue;
     if (CHART_EXCLUDED_ORDER_STATUSES.has(ord.status)) continue;
+    if (!inDatePeriodRange(ord.order_date, dateFrom, dateTo)) continue;
     if (bnFilter) {
       const bid = ord.branch_id;
       const bn = bid ? branchNameById.get(bid) : null;
@@ -339,14 +342,21 @@ export type MaterialUsageRow = {
 export async function fetchMaterialUsageRows(
   materialId: string,
   branchCode: string | null,
-  limit = 120,
+  opts?: { dateFrom?: string; dateTo?: string; limit?: number },
 ): Promise<MaterialUsageRow[]> {
-  const { data, error } = await supabase
+  const limit = opts?.limit ?? 120;
+  const dateFrom = opts?.dateFrom ?? '';
+  const dateTo = opts?.dateTo ?? '';
+
+  let query = supabase
     .from('material_consumption')
     .select(
       'id, consumption_date, quantity_consumed, product_id, product_name, total_cost, cost_per_unit, branch, created_at',
     )
-    .eq('material_id', materialId)
+    .eq('material_id', materialId);
+  if (dateFrom) query = query.gte('consumption_date', dateFrom);
+  if (dateTo) query = query.lte('consumption_date', dateTo);
+  const { data, error } = await query
     .order('consumption_date', { ascending: false })
     .order('created_at', { ascending: false })
     .limit(limit);

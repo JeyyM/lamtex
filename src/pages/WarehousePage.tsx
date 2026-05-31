@@ -939,6 +939,72 @@ export default function WarehousePage() {
   const [movementsMaterialUsageRows, setMovementsMaterialUsageRows] = useState<MaterialUsageRow[]>([]);
   const [movementsHistoryLoading, setMovementsHistoryLoading] = useState(false);
   const [movementsLoadTick, setMovementsLoadTick] = useState(0);
+  const [movementsPeriodKind, setMovementsPeriodKind] = useState<DatePeriodKind>('sixMonths');
+  const [movementsCustomStart, setMovementsCustomStart] = useState('');
+  const [movementsCustomEnd, setMovementsCustomEnd] = useState('');
+  const [movementsPeriodModalOpen, setMovementsPeriodModalOpen] = useState(false);
+  const [draftMovementsPeriodKind, setDraftMovementsPeriodKind] = useState<DatePeriodKind>('sixMonths');
+  const [draftMovementsCustomStart, setDraftMovementsCustomStart] = useState('');
+  const [draftMovementsCustomEnd, setDraftMovementsCustomEnd] = useState('');
+
+  const movementsPeriodQuery = useMemo(
+    () => resolveDatePeriodQuery(movementsPeriodKind, movementsCustomStart, movementsCustomEnd),
+    [movementsPeriodKind, movementsCustomStart, movementsCustomEnd],
+  );
+
+  const maxMovementsCustomDate = useMemo(() => todayIsoLocal(), []);
+
+  const draftMovementsCustomInvalid = Boolean(
+    draftMovementsCustomStart && draftMovementsCustomEnd && draftMovementsCustomStart > draftMovementsCustomEnd,
+  );
+
+  const openMovementsPeriodModal = () => {
+    setDraftMovementsPeriodKind(movementsPeriodKind);
+    setDraftMovementsCustomStart(movementsCustomStart);
+    setDraftMovementsCustomEnd(movementsCustomEnd);
+    setMovementsPeriodModalOpen(true);
+  };
+
+  const handleMovementsPeriodChange = (kind: DatePeriodKind) => {
+    setMovementsPeriodKind(kind);
+    if (kind === 'custom') {
+      const t = new Date();
+      const iso = todayIsoLocal();
+      const start = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-01`;
+      setMovementsCustomStart(start);
+      setMovementsCustomEnd(iso);
+    }
+  };
+
+  const handleMovementsModalPresetPick = (kind: DatePeriodKind) => {
+    if (kind !== 'custom') {
+      handleMovementsPeriodChange(kind);
+      setMovementsPeriodModalOpen(false);
+      return;
+    }
+    setDraftMovementsPeriodKind('custom');
+    const t = new Date();
+    const iso = todayIsoLocal();
+    const start = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-01`;
+    setDraftMovementsCustomStart((prev) => prev || movementsCustomStart || start);
+    setDraftMovementsCustomEnd((prev) => prev || movementsCustomEnd || iso);
+  };
+
+  const applyMovementsModalCustomRange = () => {
+    setMovementsPeriodKind('custom');
+    setMovementsCustomStart(draftMovementsCustomStart);
+    setMovementsCustomEnd(draftMovementsCustomEnd);
+    setMovementsPeriodModalOpen(false);
+  };
+
+  useEffect(() => {
+    if (!movementsPeriodModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMovementsPeriodModalOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [movementsPeriodModalOpen]);
 
   const getStatusColor = (status: StockStatus) => {
     switch (status) {
@@ -2001,8 +2067,12 @@ export default function WarehousePage() {
   }, [fetchWarehouseInventory]);
 
   useEffect(() => {
-    if (activeTab !== 'movements' || !movementsSelected) return;
+    if (activeTab !== 'movements' || !movementsSelected || movementsPeriodQuery.invalid) return;
     let cancelled = false;
+    const periodOpts = {
+      dateFrom: movementsPeriodQuery.from,
+      dateTo: movementsPeriodQuery.to,
+    };
     void (async () => {
       setMovementsChartLoading(true);
       setMovementsHistoryLoading(true);
@@ -2014,9 +2084,9 @@ export default function WarehousePage() {
       try {
         if (movementsSelected.kind === 'variant') {
           const [metrics, stock, orders] = await Promise.all([
-            fetchVariantMonthlyOrderMetrics(movementsSelected.variantId, branch),
+            fetchVariantMonthlyOrderMetrics(movementsSelected.variantId, branch, periodOpts),
             fetchVariantStockAtBranch(movementsSelected.variantId, branch),
-            fetchVariantInvolvedOrders(movementsSelected.variantId, branch),
+            fetchVariantInvolvedOrders(movementsSelected.variantId, branch, periodOpts),
           ]);
           if (cancelled) return;
           setMovementsChartData(metrics.units);
@@ -2027,9 +2097,9 @@ export default function WarehousePage() {
           const bCode = await resolveBranchCode(branch);
           if (cancelled) return;
           const [chart, stock, usage] = await Promise.all([
-            fetchMaterialMonthlyUsageFromConsumption(movementsSelected.materialId, bCode),
+            fetchMaterialMonthlyUsageFromConsumption(movementsSelected.materialId, bCode, periodOpts),
             fetchMaterialStockAtBranch(movementsSelected.materialId, branch),
-            fetchMaterialUsageRows(movementsSelected.materialId, bCode),
+            fetchMaterialUsageRows(movementsSelected.materialId, bCode, periodOpts),
           ]);
           if (cancelled) return;
           setMovementsChartData(chart);
@@ -2047,7 +2117,15 @@ export default function WarehousePage() {
     return () => {
       cancelled = true;
     };
-  }, [activeTab, movementsSelected, branch, movementsLoadTick]);
+  }, [
+    activeTab,
+    movementsSelected,
+    branch,
+    movementsLoadTick,
+    movementsPeriodQuery.from,
+    movementsPeriodQuery.to,
+    movementsPeriodQuery.invalid,
+  ]);
 
   // ── Orders & Loading tab handlers ────────────────────────────────────────
   const applyWarehouseShipment = useCallback(
@@ -4775,6 +4853,20 @@ export default function WarehousePage() {
                   <Factory className="w-4 h-4" />
                   Select raw material
                 </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="gap-2 border-gray-300 bg-white max-w-[18rem]"
+                  aria-haspopup="dialog"
+                  aria-expanded={movementsPeriodModalOpen}
+                  aria-label="Choose movements period"
+                  onClick={openMovementsPeriodModal}
+                >
+                  <CalendarRange className="w-4 h-4 shrink-0 text-gray-600" aria-hidden />
+                  <span className="truncate text-left text-sm font-normal">
+                    {periodTriggerLabel(movementsPeriodKind, movementsCustomStart, movementsCustomEnd)}
+                  </span>
+                </Button>
                 <button
                   type="button"
                   disabled={!movementsSelected}
@@ -4857,8 +4949,8 @@ export default function WarehousePage() {
                     </div>
                     <div className="text-sm text-gray-500">
                       {movementsSelected.kind === 'variant'
-                        ? 'With this variant (newest first)'
-                        : 'Consumption events (newest first)'}
+                        ? `In ${movementsPeriodQuery.displayLabel} (newest first)`
+                        : `In ${movementsPeriodQuery.displayLabel} (newest first)`}
                     </div>
                   </div>
                 </div>
@@ -4871,7 +4963,8 @@ export default function WarehousePage() {
                         Units sold by month
                       </h3>
                       <p className="text-sm text-gray-600 mt-1">
-                        Units per month from customer orders (uses your selected branch when set).
+                        Units per month from customer orders · {movementsPeriodQuery.displayLabel}
+                        {branch ? ` · ${branch}` : ''}.
                       </p>
                       <div className="h-[360px] mt-4">
                         {movementsChartLoading ? (
@@ -4881,7 +4974,7 @@ export default function WarehousePage() {
                           </div>
                         ) : movementsChartData.length === 0 ? (
                           <div className="flex h-full min-h-[240px] items-center justify-center rounded-lg border border-dashed border-gray-200 bg-gray-50/50 px-4 text-center text-sm text-gray-500">
-                            No monthly points in the last 12 months for this selection (with current filters).
+                            No activity in {movementsPeriodQuery.displayLabel} for this selection (with current filters).
                           </div>
                         ) : (
                           <ResponsiveContainer width="100%" height="100%">
@@ -4921,7 +5014,7 @@ export default function WarehousePage() {
                         Revenue by month
                       </h3>
                       <p className="text-sm text-gray-600 mt-1">
-                        PHP per month from each order line at the price recorded on the order.
+                        PHP per month from each order line · {movementsPeriodQuery.displayLabel}.
                       </p>
                       <div className="h-[360px] mt-4">
                         {movementsChartLoading ? (
@@ -4931,7 +5024,7 @@ export default function WarehousePage() {
                           </div>
                         ) : movementsRevenueChartData.length === 0 ? (
                           <div className="flex h-full min-h-[240px] items-center justify-center rounded-lg border border-dashed border-gray-200 bg-gray-50/50 px-4 text-center text-sm text-gray-500">
-                            No revenue in the last 12 months for this selection (with current filters).
+                            No revenue in {movementsPeriodQuery.displayLabel} for this selection (with current filters).
                           </div>
                         ) : (
                           <ResponsiveContainer width="100%" height="100%">
@@ -4981,7 +5074,7 @@ export default function WarehousePage() {
                       Usage by month
                     </h3>
                     <p className="text-sm text-gray-600 mt-1">
-                      Quantity consumed in production per month.
+                      Quantity consumed in production per month · {movementsPeriodQuery.displayLabel}.
                     </p>
                     <div className="h-[360px] mt-4">
                       {movementsChartLoading ? (
@@ -4991,7 +5084,7 @@ export default function WarehousePage() {
                         </div>
                       ) : movementsChartData.length === 0 ? (
                         <div className="flex h-full min-h-[240px] items-center justify-center rounded-lg border border-dashed border-gray-200 bg-gray-50/50 px-4 text-center text-sm text-gray-500">
-                          No monthly points in the last 12 months for this selection (with current filters).
+                          No activity in {movementsPeriodQuery.displayLabel} for this selection (with current filters).
                         </div>
                       ) : (
                         <ResponsiveContainer width="100%" height="100%">
@@ -5558,6 +5651,101 @@ export default function WarehousePage() {
                   variant="primary"
                   disabled={draftScheduleCustomInvalid}
                   onClick={applyScheduleModalCustomRange}
+                >
+                  Apply range
+                </Button>
+              )}
+            </div>
+          </div>
+      </PortalModalOverlay>
+
+      <PortalModalOverlay
+        open={movementsPeriodModalOpen}
+        onClose={() => setMovementsPeriodModalOpen(false)}
+        mobileBottomSheet
+      >
+          <div
+            className="bg-white w-full sm:max-w-lg sm:rounded-xl shadow-xl max-h-[90vh] overflow-y-auto"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="warehouse-movements-period-modal-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-4 border-b border-gray-200 sticky top-0 bg-white z-10">
+              <h2 id="warehouse-movements-period-modal-title" className="text-lg font-semibold text-gray-900">
+                Movements period
+              </h2>
+              <button
+                type="button"
+                className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+                aria-label="Close"
+                onClick={() => setMovementsPeriodModalOpen(false)}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <p className="text-sm text-gray-600">
+                Filter charts, order history, and usage records by date. On-hand stock always reflects the current branch level.
+              </p>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {DATE_PERIOD_OPTIONS.map(({ kind, label }) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    onClick={() => handleMovementsModalPresetPick(kind)}
+                    className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
+                      draftMovementsPeriodKind === kind
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-white text-gray-800 border-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {draftMovementsPeriodKind === 'custom' && (
+                <div className="space-y-2 pt-1 border-t border-gray-100">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="text-xs font-medium text-gray-600 w-full sm:w-auto">From</label>
+                    <input
+                      type="date"
+                      value={draftMovementsCustomStart}
+                      max={maxMovementsCustomDate}
+                      onChange={(e) => setDraftMovementsCustomStart(e.target.value)}
+                      className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    />
+                    <label className="text-xs font-medium text-gray-600">To</label>
+                    <input
+                      type="date"
+                      value={draftMovementsCustomEnd}
+                      min={draftMovementsCustomStart || undefined}
+                      max={maxMovementsCustomDate}
+                      onChange={(e) => setDraftMovementsCustomEnd(e.target.value)}
+                      className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    />
+                  </div>
+                  {draftMovementsCustomInvalid && (
+                    <p className="text-xs text-red-600">Start must be on or before end.</p>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 p-4 border-t border-gray-200 bg-gray-50">
+              <Button
+                type="button"
+                variant="outline"
+                className="border-gray-300 bg-white"
+                onClick={() => setMovementsPeriodModalOpen(false)}
+              >
+                Cancel
+              </Button>
+              {draftMovementsPeriodKind === 'custom' && (
+                <Button
+                  type="button"
+                  variant="primary"
+                  disabled={draftMovementsCustomInvalid}
+                  onClick={applyMovementsModalCustomRange}
                 >
                   Apply range
                 </Button>
