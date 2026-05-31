@@ -170,7 +170,7 @@ export function EditTripModal({
   for (const o of currentOrderDetails) allOrdersMap.set(o.id, o);
   for (const o of availableOrders) {
     if (!allOrdersMap.has(o.id)) {
-      allOrdersMap.set(o.id, { id: o.id, orderNumber: o.orderNumber, customer: o.customer, destination: o.destination, weight: o.weight, volume: o.volume, status: o.urgency ?? 'Approved' });
+      allOrdersMap.set(o.id, { id: o.id, orderNumber: o.orderNumber, customer: o.customer, destination: o.destination, weight: o.weight, volume: o.volume, status: 'Approved' });
     }
   }
 
@@ -197,7 +197,7 @@ export function EditTripModal({
   };
   const handleAddOrder = (id: string) => {
     setTripOrderIds((prev) => [...prev, id]);
-    setOrderStatuses((s) => ({ ...s, [id]: allOrdersMap.get(id)?.status ?? 'Scheduled' }));
+    setOrderStatuses((s) => ({ ...s, [id]: 'Scheduled' }));
   };
 
   const handleSave = async () => {

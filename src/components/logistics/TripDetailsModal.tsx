@@ -622,7 +622,7 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
     return () => {
       document.body.style.overflow = originalOverflow;
     };
-  }, [isOpen, trip.id]);
+  }, [isOpen, trip.id, trip.orders.join('|')]);
 
   if (!isOpen) return null;
 

@@ -3484,7 +3484,8 @@ export function OrderDetailPage() {
 
   const allPaymentStatuses = ['Unbilled', 'Invoiced', 'Partially Paid', 'Paid', 'Overdue', 'On Credit'];
 
-  const canUseLogisticsUi = perms.scheduling || perms.deliveries;
+  const canUseLogisticsUi = perms.scheduling || perms.deliveries || perms.orderLoading;
+  const canMarkOrderLoading = perms.orderLoading || perms.scheduling;
   /** Request-phase orders: agents set required date / delivery type at creation; logistics edits them later. */
   const canEditOrderDeliveryFields =
     perms.deliveries ||
@@ -3684,7 +3685,7 @@ export function OrderDetailPage() {
                   {order.deliveryType === 'Ship' ? 'Schedule shipment' : 'Plan route'}
                 </Button>
               )}
-              {logisticsReplacesFulfill && order.status === 'Scheduled' && perms.scheduling && (
+              {logisticsReplacesFulfill && order.status === 'Scheduled' && canMarkOrderLoading && (
                 <Button
                   variant="primary"
                   className="gap-2"
@@ -3695,7 +3696,7 @@ export function OrderDetailPage() {
                   Mark Loading
                 </Button>
               )}
-              {logisticsReplacesFulfill && order.status === 'Loading' && perms.scheduling && (
+              {logisticsReplacesFulfill && order.status === 'Loading' && canMarkOrderLoading && (
                 <Button
                   variant="primary"
                   className="gap-2"

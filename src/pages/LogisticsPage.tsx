@@ -72,6 +72,7 @@ import {
   fetchDriversForBranch,
   fetchBranchHqCoords,
   updateTrip,
+  fetchTripById,
   applyOrderLabelsToTrips,
   fetchOrderIdsMatchingDispatchSearch,
 } from '@/src/lib/logisticsScheduling';
@@ -1747,15 +1748,22 @@ export function LogisticsPage() {
           vehicles={fleetTrucks}
           availableOrders={planningOrders}
           onSave={async (params) => {
+            const tripId = selectedTrip.id;
             const result = await updateTrip({
-              tripId: selectedTrip.id,
+              tripId,
               ...params,
               scheduledBy: employeeName?.trim() || null,
             });
             if (!result.ok) throw new Error(result.error ?? 'Failed to save trip');
             setShowEditTrip(false);
-            setSelectedTrip(null);
-            refreshLogistics();
+            await refreshLogistics();
+            const { trip: freshTrip } = await fetchTripById(tripId);
+            if (freshTrip) {
+              setSelectedTrip(freshTrip);
+              setShowTripDetails(true);
+            } else {
+              setSelectedTrip(null);
+            }
           }}
         />
       )}

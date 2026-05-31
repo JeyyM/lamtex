@@ -1453,6 +1453,7 @@ export async function updateTrip(params: {
 
   // Orders removed from this trip → revert to Approved
   const removed = params.previousOrderUuids.filter((id) => !params.orderUuids.includes(id));
+  const newlyAdded = params.orderUuids.filter((id) => !params.previousOrderUuids.includes(id));
   const previousDates = removed.length > 0 ? await fetchOrderScheduledDepartureDates(removed) : {};
   if (removed.length > 0) {
     await supabase
@@ -1462,7 +1463,16 @@ export async function updateTrip(params: {
     fireOrderUnscheduledFromTripNotifications(removed, previousDates);
   }
 
-  // Apply per-order status from the editor; fall back to 'Scheduled' for any without explicit status
+  const { data: tripScheduleRow } = await supabase
+    .from('trips')
+    .select('scheduled_date, trip_number, vehicle_name, driver_name')
+    .eq('id', params.tripId)
+    .maybeSingle();
+  const tripScheduledDate = tripScheduleRow?.scheduled_date
+    ? String(tripScheduleRow.scheduled_date).slice(0, 10)
+    : null;
+
+  // Apply per-order status from the editor; newly added orders always become Scheduled.
   const orderNow = new Date().toISOString();
   const prevOrderStatusById: Record<string, string> = {};
   if (params.orderUuids.length > 0) {
@@ -1476,11 +1486,14 @@ export async function updateTrip(params: {
     }
   }
   for (const id of params.orderUuids) {
-    const orderSt = params.orderStatuses?.[id] ?? 'Scheduled';
-    await supabase
-      .from('orders')
-      .update({ status: orderSt, updated_at: orderNow })
-      .eq('id', id);
+    const isNew = newlyAdded.includes(id);
+    const orderSt = isNew ? 'Scheduled' : (params.orderStatuses?.[id] ?? 'Scheduled');
+    const patch: Record<string, unknown> = { status: orderSt, updated_at: orderNow };
+    if (isNew && tripScheduledDate) {
+      patch.scheduled_departure_date = tripScheduledDate;
+    }
+    const { error: orderUpdErr } = await supabase.from('orders').update(patch).eq('id', id);
+    if (orderUpdErr) return { ok: false, error: orderUpdErr.message };
   }
 
   const newlyLoading = params.orderUuids.filter((id) => {
@@ -1493,20 +1506,14 @@ export async function updateTrip(params: {
     });
   }
 
-  const newlyAdded = params.orderUuids.filter((id) => !params.previousOrderUuids.includes(id));
-  const newlyScheduled = newlyAdded.filter((id) => (params.orderStatuses?.[id] ?? 'Scheduled') === 'Scheduled');
+  const newlyScheduled = newlyAdded;
   if (newlyScheduled.length > 0) {
-    const { data: trip } = await supabase
-      .from('trips')
-      .select('trip_number, scheduled_date, vehicle_name, driver_name')
-      .eq('id', params.tripId)
-      .maybeSingle();
     fireOrderScheduledNotifications(newlyScheduled, {
       scheduledBy: params.scheduledBy ?? null,
-      tripNumber: (trip?.trip_number as string | undefined) ?? null,
-      scheduledDate: trip?.scheduled_date ? String(trip.scheduled_date).slice(0, 10) : null,
-      vehicleName: (trip?.vehicle_name as string | undefined) ?? params.vehicleName,
-      driverName: (trip?.driver_name as string | undefined) ?? params.driverName,
+      tripNumber: (tripScheduleRow?.trip_number as string | undefined) ?? null,
+      scheduledDate: tripScheduledDate,
+      vehicleName: (tripScheduleRow?.vehicle_name as string | undefined) ?? params.vehicleName,
+      driverName: (tripScheduleRow?.driver_name as string | undefined) ?? params.driverName,
     });
   }
 

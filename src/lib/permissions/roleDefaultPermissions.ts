@@ -128,7 +128,7 @@ type RoleDefaultPartials = {
 /** Per-role default permission grants (only listed keys are true). */
 export const ROLE_DEFAULTS: Partial<Record<UserRole, RoleDefaultPartials>> = {
   Warehouse: {
-    orders: { pageAccess: true, deliveries: true },
+    orders: { pageAccess: true, deliveries: true, orderLoading: true },
     products: {
       pageAccess: true,
       stockAccess: true,

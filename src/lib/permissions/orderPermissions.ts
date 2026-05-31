@@ -22,6 +22,7 @@ export type OrderPermissionKey =
   | 'payment'
   | 'approvals'
   | 'scheduling'
+  | 'orderLoading'
   | 'deliveries'
   | 'cancellation'
   | 'orderSummary'
@@ -76,6 +77,11 @@ export const ORDER_PERMISSIONS: readonly OrderPermissionDef[] = [
     key: 'scheduling',
     label: 'Scheduling',
     description: 'Mark as Scheduled, create trips, and mark orders as In Transit.',
+  },
+  {
+    key: 'orderLoading',
+    label: 'Order Loading',
+    description: 'Mark orders as Loading and Packed while preparing shipments in the warehouse.',
   },
   {
     key: 'deliveries',
