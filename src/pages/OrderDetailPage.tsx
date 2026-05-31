@@ -165,23 +165,36 @@ async function resolveProductHrefsForLineItems(items: OrderLineItem[]): Promise<
     ...items.filter((i) => !i.variantId && i.sku).map((i) => i.sku),
   ].filter(Boolean);
 
-  const variantToProduct = new Map<string, string>();
+  const variantToProduct = new Map<string, { productId: string; categorySlug?: string }>();
   if (variantUuids.length) {
     const { data: variantRows } = await supabase
       .from('product_variants')
-      .select('id, product_id')
+      .select('id, product_id, products(product_categories(slug))')
       .in('id', variantUuids);
-    for (const v of variantRows ?? []) {
-      if (v.id && v.product_id) variantToProduct.set(v.id as string, v.product_id as string);
+    for (const raw of variantRows ?? []) {
+      const row = raw as {
+        id?: string;
+        product_id?: string;
+        products?: { product_categories?: { slug?: string } | { slug?: string }[] | null } | null;
+      };
+      if (!row.id || !row.product_id) continue;
+      const prod = Array.isArray(row.products) ? row.products[0] : row.products;
+      const cat = prod?.product_categories;
+      const catRow = Array.isArray(cat) ? cat[0] : cat;
+      const slug = typeof catRow?.slug === 'string' ? catRow.slug.trim() : '';
+      variantToProduct.set(row.id, {
+        productId: row.product_id,
+        categorySlug: slug || undefined,
+      });
     }
   }
 
   const unresolvedNames = new Set<string>();
   for (const item of items) {
     const variantUuid = item.variantId || item.sku;
-    const productId = variantUuid ? variantToProduct.get(variantUuid) : undefined;
-    if (productId) {
-      hrefs[item.id] = finishedGoodProductHref(productId);
+    const linked = variantUuid ? variantToProduct.get(variantUuid) : undefined;
+    if (linked) {
+      hrefs[item.id] = finishedGoodProductHref(linked.productId, linked.categorySlug);
     } else if (item.productName) {
       unresolvedNames.add(item.productName);
     }
@@ -190,13 +203,28 @@ async function resolveProductHrefsForLineItems(items: OrderLineItem[]): Promise<
   if (unresolvedNames.size) {
     const { data: productsByName } = await supabase
       .from('products')
-      .select('id, name')
+      .select('id, name, product_categories(slug)')
       .in('name', [...unresolvedNames]);
-    const nameToId = new Map((productsByName ?? []).map((p) => [p.name as string, p.id as string]));
+    const nameToProduct = new Map<string, { productId: string; categorySlug?: string }>();
+    for (const raw of productsByName ?? []) {
+      const row = raw as {
+        id?: string;
+        name?: string;
+        product_categories?: { slug?: string } | { slug?: string }[] | null;
+      };
+      if (!row.id || !row.name) continue;
+      const cat = row.product_categories;
+      const catRow = Array.isArray(cat) ? cat[0] : cat;
+      const slug = typeof catRow?.slug === 'string' ? catRow.slug.trim() : '';
+      nameToProduct.set(row.name, {
+        productId: row.id,
+        categorySlug: slug || undefined,
+      });
+    }
     for (const item of items) {
       if (hrefs[item.id]) continue;
-      const productId = nameToId.get(item.productName);
-      if (productId) hrefs[item.id] = finishedGoodProductHref(productId);
+      const linked = nameToProduct.get(item.productName);
+      if (linked) hrefs[item.id] = finishedGoodProductHref(linked.productId, linked.categorySlug);
     }
   }
 
