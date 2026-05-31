@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import { ArrowDown, ArrowUp, ArrowUpDown, ClipboardList, Factory, Loader2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
-import { Button } from '@/src/components/ui/Button';
 import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagination';
 import {
   fetchProductProductionRequestHistory,
@@ -45,20 +44,12 @@ export interface ProductProductionRequestHistoryCardProps {
   productId: string;
   active: boolean;
   canOpenDetail: boolean;
-  canCreate: boolean;
-  onRequestProduction?: () => void | Promise<void>;
-  creating?: boolean;
-  createDisabled?: boolean;
 }
 
 export function ProductProductionRequestHistoryCard({
   productId,
   active,
   canOpenDetail,
-  canCreate,
-  onRequestProduction,
-  creating = false,
-  createDisabled = false,
 }: ProductProductionRequestHistoryCardProps) {
   const navigate = useNavigate();
   const [rows, setRows] = useState<ProductPrHistoryRow[]>([]);
@@ -209,33 +200,13 @@ export function ProductProductionRequestHistoryCard({
     <div className="space-y-4">
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle className="flex items-center gap-2 flex-wrap">
-              <ClipboardList className="w-5 h-5" />
-              <span>Production Request History</span>
-              <span className="text-base font-medium text-gray-500 tabular-nums">
-                ({rowsMatchingFilters.length})
-              </span>
-            </CardTitle>
-            {canCreate && onRequestProduction && (
-              <Button
-                variant="primary"
-                onClick={() => void onRequestProduction()}
-                disabled={creating || createDisabled}
-                className="gap-2"
-              >
-                {creating ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" /> Creating…
-                  </>
-                ) : (
-                  <>
-                    <Factory className="w-4 h-4" /> Request Production
-                  </>
-                )}
-              </Button>
-            )}
-          </div>
+          <CardTitle className="flex items-center gap-2 flex-wrap">
+            <ClipboardList className="w-5 h-5" />
+            <span>Production Request History</span>
+            <span className="text-base font-medium text-gray-500 tabular-nums">
+              ({rowsMatchingFilters.length})
+            </span>
+          </CardTitle>
           {!loading && rows.length > 0 && (
             <div className="md:hidden mt-3">
               <select
@@ -266,23 +237,8 @@ export function ProductProductionRequestHistoryCard({
                 No production requests yet for this product
               </p>
               <p className="text-gray-400 text-xs mt-1">
-                Request production to track manufacturing history
+                Use Request Production above to start a new request
               </p>
-              {canCreate && onRequestProduction && (
-                <Button
-                  variant="outline"
-                  onClick={() => void onRequestProduction()}
-                  disabled={creating || createDisabled}
-                  className="mt-4 gap-2"
-                >
-                  {creating ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Factory className="w-4 h-4" />
-                  )}
-                  Create First Request
-                </Button>
-              )}
             </div>
           ) : (
             <>

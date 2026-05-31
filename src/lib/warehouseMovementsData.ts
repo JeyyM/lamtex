@@ -4,6 +4,7 @@
  * Raw material monthly series in Warehouse Movements: production usage (`material_consumption`). PO receipt helpers remain for other pages.
  */
 import { supabase } from '@/src/lib/supabase';
+import { inDatePeriodRange, lastNMonthSlots, monthSlotsBetween } from '@/src/lib/datePeriodQuery';
 
 const CHART_EXCLUDED_ORDER_STATUSES = new Set(['Cancelled', 'Rejected', 'Draft']);
 
@@ -270,6 +271,7 @@ export async function fetchMaterialMonthlyReceiptsFromPo(materialId: string): Pr
 export async function fetchMaterialMonthlyUsageFromConsumption(
   materialId: string,
   branchCode: string | null,
+  opts?: { dateFrom?: string; dateTo?: string },
 ): Promise<MonthlyMovementChartRow[]> {
   const { data, error } = await supabase
     .from('material_consumption')
@@ -281,14 +283,12 @@ export async function fetchMaterialMonthlyUsageFromConsumption(
     return [];
   }
 
-  const end = new Date();
-  const monthSlots: { ymk: string; label: string }[] = [];
-  for (let k = 11; k >= 0; k--) {
-    const d = new Date(end.getFullYear(), end.getMonth() - k, 1);
-    const ymk = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-    const label = d.toLocaleDateString('en-PH', { month: 'short', year: '2-digit' });
-    monthSlots.push({ ymk, label });
-  }
+  const dateFrom = opts?.dateFrom ?? '';
+  const dateTo = opts?.dateTo ?? '';
+  const monthSlots =
+    dateFrom && dateTo ? monthSlotsBetween(dateFrom, dateTo) : lastNMonthSlots(18);
+  if (monthSlots.length === 0) return [];
+
   const monthSet = new Set(monthSlots.map((s) => s.ymk));
   const agg = new Map<string, number>();
   const code = branchCode?.trim() ?? '';
@@ -303,6 +303,7 @@ export async function fetchMaterialMonthlyUsageFromConsumption(
       if (b && b !== code) continue;
     }
     if (!r.consumption_date) continue;
+    if (!inDatePeriodRange(r.consumption_date, dateFrom, dateTo)) continue;
     const q = Number(r.quantity_consumed) || 0;
     if (q <= 0) continue;
     const ymk = consumptionCalendarMonthKey(r.consumption_date);

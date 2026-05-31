@@ -2298,10 +2298,6 @@ export default function ProductFamilyPage() {
           productId={familyId}
           active={familyViewTab === 'prHistory'}
           canOpenDetail={prPerms.pageAccess}
-          canCreate={prPerms.creation}
-          onRequestProduction={handleRequestProduction}
-          creating={requestingProduction}
-          createDisabled={!displayVariant || displayVariant.id.startsWith('NEW-')}
         />
       )}
 

@@ -73,6 +73,10 @@ import { EntityActivityLogCard } from '@/src/components/domain/EntityActivityLog
 import { insertRawMaterialLog, mapAppRoleToLogRole } from '@/src/lib/domainActivityLog';
 import {
   DATE_PERIOD_OPTIONS,
+  avgMonthlyUsage,
+  inDatePeriodRange,
+  lastNMonthSlots,
+  monthSlotsBetween,
   periodTriggerLabel,
   resolveDatePeriodQuery,
   todayIsoLocal,
@@ -493,17 +497,21 @@ export function MaterialDetailPage() {
   const [bomUsageAllBranches, setBomUsageAllBranches] = useState(false);
 
   useEffect(() => {
-    if (activeTab !== 'analytics' || !id) return;
+    if (activeTab !== 'analytics' || !id || exportQueryDates.invalid) return;
     let cancelled = false;
     void (async () => {
       setConsumptionSeriesLoading(true);
       setBomUsageAllBranches(false);
       const bCode = await resolveBranchCode(selectedBranch ?? null);
       if (cancelled) return;
-      let rows = await fetchMaterialMonthlyUsageFromConsumption(id, bCode);
+      const periodOpts = {
+        dateFrom: exportQueryDates.from,
+        dateTo: exportQueryDates.to,
+      };
+      let rows = await fetchMaterialMonthlyUsageFromConsumption(id, bCode, periodOpts);
       let allBranchFallback = false;
       if (rows.length === 0 && bCode) {
-        const allRows = await fetchMaterialMonthlyUsageFromConsumption(id, null);
+        const allRows = await fetchMaterialMonthlyUsageFromConsumption(id, null, periodOpts);
         if (!cancelled && allRows.length > 0) {
           rows = allRows;
           allBranchFallback = true;
@@ -518,7 +526,7 @@ export function MaterialDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [activeTab, id, selectedBranch]);
+  }, [activeTab, id, selectedBranch, exportQueryDates.from, exportQueryDates.to, exportQueryDates.invalid]);
 
   const usageForecastData = useMemo(() => {
     if (!material) {
@@ -536,18 +544,17 @@ export function MaterialDetailPage() {
 
   const usageHasConsumptionData = consumptionMonthlySeries.length > 0;
 
-  /** Analytics summary numbers only from logged BOM consumption (not the material.monthly_consumption field). */
+  /** Analytics summary numbers only from logged BOM consumption in the selected period. */
   const analyticsConsumptionFromBom = useMemo(() => {
     if (!material || consumptionMonthlySeries.length === 0) return null;
-    const total = consumptionMonthlySeries.reduce((s, r) => s + (Number(r.qty) || 0), 0);
-    const n = consumptionMonthlySeries.length;
-    const avgMonthly = n > 0 ? total / n : 0;
-    return { avgMonthly, yearlyProjection: avgMonthly * 12 };
-  }, [material, consumptionMonthlySeries]);
+    const periodTotal = consumptionMonthlySeries.reduce((s, r) => s + (Number(r.qty) || 0), 0);
+    const avgMonthly = avgMonthlyUsage(periodTotal, exportQueryDates.from, exportQueryDates.to);
+    return { avgMonthly, periodTotal };
+  }, [material, consumptionMonthlySeries, exportQueryDates.from, exportQueryDates.to]);
 
   /** Monthly unit price: PO line averages when present; else catalog cost from activity log (material_updated / cost_synced_from_po). */
   const { priceHistoryData, hasPriceHistory: priceHasPoData } = useMemo(() => {
-    if (!material) {
+    if (!material || exportQueryDates.invalid) {
       return { priceHistoryData: [] as { month: string; price: number | null }[], hasPriceHistory: false };
     }
 
@@ -555,6 +562,7 @@ export function MaterialDetailPage() {
     for (const row of poHistory) {
       const od = row.purchase_orders?.order_date;
       if (!od) continue;
+      if (!inDatePeriodRange(od, exportQueryDates.from, exportQueryDates.to)) continue;
       const key = od.slice(0, 7);
       const up = Number(row.unit_price) || 0;
       if (up > 0) {
@@ -572,6 +580,7 @@ export function MaterialDetailPage() {
     );
     for (const log of logsChrono) {
       if (log.action !== 'material_updated' && log.action !== 'cost_synced_from_po') continue;
+      if (!inDatePeriodRange(log.created_at, exportQueryDates.from, exportQueryDates.to)) continue;
       const nv = log.new_value;
       if (nv == null || typeof nv !== 'object' || Array.isArray(nv)) continue;
       const cpu = Number((nv as Record<string, unknown>).cost_per_unit);
@@ -580,25 +589,22 @@ export function MaterialDetailPage() {
       logPriceByMonth.set(key, Math.round(cpu * 100) / 100);
     }
 
-    const y = new Date().getFullYear();
-    const m0 = new Date().getMonth();
-    const mKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-    const mLab = (d: Date) => d.toLocaleDateString('en-PH', { month: 'short', year: '2-digit' });
+    const monthSlots =
+      exportQueryDates.from && exportQueryDates.to
+        ? monthSlotsBetween(exportQueryDates.from, exportQueryDates.to)
+        : lastNMonthSlots(18);
 
-    const pRows: { month: string; price: number | null }[] = [];
-    for (let k = 17; k >= 0; k--) {
-      const d = new Date(y, m0 - k, 1);
-      const key = mKey(d);
-      const ag = pAgg.get(key);
-      const logP = logPriceByMonth.get(key);
+    const pRows: { month: string; price: number | null }[] = monthSlots.map(({ ymk, label }) => {
+      const ag = pAgg.get(ymk);
+      const logP = logPriceByMonth.get(ymk);
       let price: number | null = null;
       if (ag && ag.n > 0) {
         price = Math.round((ag.sum / ag.n) * 100) / 100;
       } else if (logP != null) {
         price = logP;
       }
-      pRows.push({ month: mLab(d), price });
-    }
+      return { month: label, price };
+    });
     const hasPriceHistory = pRows.some(r => r.price != null);
     if (!hasPriceHistory) {
       return { priceHistoryData: [] as { month: string; price: number | null }[], hasPriceHistory: false };
@@ -610,7 +616,7 @@ export function MaterialDetailPage() {
       priceHistoryData: pRows,
       hasPriceHistory: true,
     };
-  }, [material, poHistory, materialLogRows]);
+  }, [material, poHistory, materialLogRows, exportQueryDates.from, exportQueryDates.to, exportQueryDates.invalid]);
 
   const handleHistorySort = (key: string) => {
     if (historySortKey === key) {
@@ -1179,7 +1185,7 @@ export function MaterialDetailPage() {
           </button>
           )}
         </nav>
-        {perms.exportAccess && (
+        {activeTab === 'analytics' && perms.analyticsAccess && (
         <div className="flex flex-wrap items-center gap-2 pb-2 sm:pb-0">
           <Button
             type="button"
@@ -1187,7 +1193,7 @@ export function MaterialDetailPage() {
             className="gap-2 border-gray-300 bg-white max-w-[18rem]"
             aria-haspopup="dialog"
             aria-expanded={exportPeriodModalOpen}
-            aria-label="Choose export period"
+            aria-label="Choose analytics period"
             onClick={openExportPeriodModal}
           >
             <CalendarRange className="w-4 h-4 shrink-0 text-gray-600" aria-hidden />
@@ -1195,6 +1201,7 @@ export function MaterialDetailPage() {
               {periodTriggerLabel(exportPeriodKind, exportCustomStart, exportCustomEnd)}
             </span>
           </Button>
+          {perms.exportAccess && (
           <Button
             type="button"
             variant="outline"
@@ -1230,6 +1237,7 @@ export function MaterialDetailPage() {
             )}
             {exportingMaterial ? 'Exporting…' : 'Export'}
           </Button>
+          )}
         </div>
         )}
       </div>
@@ -1611,13 +1619,13 @@ export function MaterialDetailPage() {
               </CardTitle>
               {usageHasConsumptionData ? (
                 <p className="text-xs text-gray-500 font-normal mt-1">
-                  Monthly <strong>BOM consumption</strong> logged when production consumes materials (same source as product
-                  BOM deductions).{' '}
+                  Monthly <strong>BOM consumption</strong> for{' '}
+                  <strong>{exportQueryDates.displayLabel}</strong>
                   {bomUsageAllBranches && selectedBranch
-                    ? `Showing all branches — no consumption rows tagged for ${selectedBranch} in this window.`
+                    ? ` — showing all branches (no rows tagged for ${selectedBranch} in this period).`
                     : selectedBranch
-                      ? `Filtered to site code for ${selectedBranch}.`
-                      : 'All branches.'}
+                      ? ` · filtered to site code for ${selectedBranch}.`
+                      : ' · all branches.'}
                 </p>
               ) : !consumptionSeriesLoading ? (
                 <p className="text-xs text-gray-500 font-normal mt-1">
@@ -1682,7 +1690,8 @@ export function MaterialDetailPage() {
               </CardTitle>
               {priceHasPoData ? (
                 <p className="text-xs text-gray-500 font-normal mt-1">
-                  Monthly <strong>average</strong> unit price from <strong>purchase orders</strong> when available; otherwise the
+                  Monthly <strong>average</strong> unit price for{' '}
+                  <strong>{exportQueryDates.displayLabel}</strong> from purchase orders when available; otherwise the
                   catalog <strong>unit cost</strong> recorded in the activity log for that month.
                 </p>
               ) : null}
@@ -1746,10 +1755,10 @@ export function MaterialDetailPage() {
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-gray-500">Yearly Total</span>
+                    <span className="text-sm text-gray-500">Period Total</span>
                     <span className={`text-lg font-bold ${analyticsConsumptionFromBom ? 'text-gray-900' : 'text-gray-400 font-normal'}`}>
                       {analyticsConsumptionFromBom
-                        ? `${analyticsConsumptionFromBom.yearlyProjection.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${material.unit_of_measure}`
+                        ? `${analyticsConsumptionFromBom.periodTotal.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${material.unit_of_measure}`
                         : '—'}
                     </span>
                   </div>

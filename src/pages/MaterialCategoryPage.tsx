@@ -71,7 +71,12 @@ function getMaterialStockForBranch(m: RawMaterialRow, branchLabel: string): numb
 export default function MaterialCategoryPage() {
   const navigate = useNavigate();
   const { categoryName } = useParams<{ categoryName: string }>();
-  const { selectedBranch, employeeName, role, session, addAuditLog, warehouseScope } = useAppContext();
+  const { selectedBranch, setHideBranchSelector, employeeName, role, session, addAuditLog, warehouseScope } = useAppContext();
+
+  useEffect(() => {
+    setHideBranchSelector(true);
+    return () => setHideBranchSelector(false);
+  }, [setHideBranchSelector]);
   const perms = useMaterialPermissions();
   const scopedMaterialIds = scopedMaterialIdList(warehouseScope);
   const [searchQuery, setSearchQuery] = useState('');
