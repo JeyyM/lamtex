@@ -909,8 +909,8 @@ export default function WarehousePage() {
       .sort((a, b) => {
         const da = a.trip.scheduledDate ?? '';
         const db = b.trip.scheduledDate ?? '';
-        if (da !== db) return da.localeCompare(db);
-        return a.trip.tripNumber.localeCompare(b.trip.tripNumber);
+        if (da !== db) return db.localeCompare(da);
+        return b.trip.tripNumber.localeCompare(a.trip.tripNumber);
       });
   }, [warehouseOrders, warehouseTrips]);
   const resolveWarehouseOrderRow = useCallback(
@@ -1889,8 +1889,8 @@ export default function WarehousePage() {
         tripSummaries.sort((a, b) => {
           const da = a.scheduledDate ?? '';
           const db = b.scheduledDate ?? '';
-          if (da !== db) return da.localeCompare(db);
-          return a.tripNumber.localeCompare(b.tripNumber);
+          if (da !== db) return db.localeCompare(da);
+          return b.tripNumber.localeCompare(a.tripNumber);
         });
       }
 
