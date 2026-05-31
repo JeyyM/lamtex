@@ -1110,7 +1110,6 @@ export function OrderProductSelectionModal({
                               return prev;
                             });
                           }}
-                          onWheel={(e) => e.preventDefault()}
                           className="min-w-0 w-full text-xl font-bold text-gray-900 bg-white px-3 py-2 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
                         />
                       </div>
@@ -1282,7 +1281,6 @@ export function OrderProductSelectionModal({
                             }
                             if (/^\d*$/.test(v)) setVariantQtyInput(v);
                           }}
-                          onWheel={(e) => e.preventDefault()}
                           placeholder={isProductionLike ? '0' : '1'}
                           className="w-full text-center text-2xl font-bold pl-3 pr-10 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
                         />
@@ -1348,7 +1346,6 @@ export function OrderProductSelectionModal({
                                   placeholder="0"
                                   value={d.percentage}
                                   onChange={(e) => updateDiscount(i, 'percentage', e.target.value)}
-                                  onWheel={(e) => e.preventDefault()}
                                   className="w-20 px-3 py-2 text-sm text-center border border-gray-300 rounded-lg [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                 />
                                 <span className="text-sm text-gray-600">%</span>

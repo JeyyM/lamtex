@@ -6,7 +6,7 @@ export default defineConfig({
   format: ['cjs'],
   platform: 'node',
   target: 'node20',
-  outDir: 'lib',
+  outDir: 'api',
   clean: false,
   splitting: false,
   sourcemap: false,

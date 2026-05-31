@@ -8,19 +8,35 @@ import type { Express } from 'express';
 import { createRequire } from 'node:module';
 import { rebuildVercelApiUrl } from './vercelApiUrl';
 
+/** Express reads the raw body via express.json() — disable Vercel's default parser. */
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
 const require = createRequire(import.meta.url);
 
 let cachedApp: Express | null = null;
 
 function getApp(): Express {
   if (!cachedApp) {
-    const bundled = require('../lib/vercel-api.cjs') as { default: Express };
+    const bundled = require('./vercel-api.cjs') as { default: Express };
     cachedApp = bundled.default;
   }
   return cachedApp;
 }
 
 export default function handler(req: VercelRequest, res: VercelResponse): void {
-  req.url = rebuildVercelApiUrl(req);
-  getApp()(req, res);
+  try {
+    req.url = rebuildVercelApiUrl(req);
+    getApp()(req, res);
+  } catch (err) {
+    console.error('[api/index] handler error', err);
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: err instanceof Error ? err.message : 'Internal error',
+      });
+    }
+  }
 }

@@ -15,10 +15,11 @@ import {
 
 /** Approval notification email — standalone builder (order submitted for executive review). */
 export function buildOrderApprovalEmailHtml(p: OrderCreatedEmailPayload): string {
-  const lineCount = p.lineCount ?? p.items.length;
+  const items = p.items ?? [];
+  const lineCount = p.lineCount ?? items.length;
   const discountAmount = p.discountAmount ?? Math.max(0, p.subtotal - p.totalAmount);
 
-  const lineRows = p.items
+  const lineRows = items
     .map((item) => {
       const variantLine = item.variantDescription
         ? `<div style="color:#6b7280;font-size:12px;margin-top:2px;">${esc(item.variantDescription)}</div>`

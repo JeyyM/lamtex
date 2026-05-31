@@ -17,7 +17,7 @@
     },
     "api/index.ts": {
       "maxDuration": 10,
-      "includeFiles": "lib/vercel-api.cjs"
+      "includeFiles": "api/vercel-api.cjs"
     },
     "api/cron/overdue-payments.ts": {
       "maxDuration": 10
