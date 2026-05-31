@@ -137,7 +137,7 @@ function orderHistoryPaymentBadgeVariant(payment: string): 'default' | 'success'
 export function CustomerDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { addAuditLog } = useAppContext();
+  const { addAuditLog, isExecutiveUser, employeeId } = useAppContext();
   const customerPerms = useCustomerPermissions();
 
   const [customer, setCustomer] = useState<CustomerDetail | null>(null);
@@ -177,6 +177,10 @@ export function CustomerDetailPage() {
         ]);
         if (custRes.error || !custRes.data) { setNotFound(true); return; }
         const c = custRes.data as any;
+        if (!isExecutiveUser && employeeId && c.assigned_agent_id !== employeeId) {
+          setNotFound(true);
+          return;
+        }
         const empRow = embedOne<Record<string, unknown>>(c.employees);
         const employeesNormalized =
           empRow && typeof empRow.employee_name === 'string'
@@ -277,7 +281,7 @@ export function CustomerDetailPage() {
       }
     };
     fetchAll();
-  }, [id]);
+  }, [id, isExecutiveUser, employeeId]);
 
   const exportQueryDates = useMemo(
     () => resolveDatePeriodQuery(exportPeriodKind, exportCustomStart, exportCustomEnd),

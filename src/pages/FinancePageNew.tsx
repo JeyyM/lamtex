@@ -50,6 +50,8 @@ import {
   fetchOrdersWithPaymentProofs,
   fetchOutstandingOrders,
   commissionOrderMatchesAgent,
+  outstandingOrderMatchesAgent,
+  customerCreditMatchesAgent,
   type CustomerCreditRow,
   type FinanceMetrics,
   type OrderCommissionProofRow,
@@ -215,12 +217,13 @@ function parseFinanceTab(value: string | null): TabId | null {
 }
 
 export function FinancePageNew() {
-  const { employeeName, employeeId, employeeDashboardRole, branch, addAuditLog } = useAppContext();
+  const { employeeName, employeeId, employeeDashboardRole, branch, addAuditLog, isExecutiveUser } = useAppContext();
   const perms = useFinancePermissions();
   const canCommissions = perms.commissions;
   const canFinancePage = perms.pageAccess;
   const employeesPerms = useEmployeesPermissions();
   const isSalesAgentView = employeeDashboardRole === 'Agent';
+  const scopeToCurrentUser = !isExecutiveUser && Boolean(employeeId);
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [tab, setTabState] = useState<TabId>(() => parseFinanceTab(searchParams.get('tab')) ?? 'outstanding');
@@ -480,6 +483,9 @@ export function FinancePageNew() {
   const filteredOutstanding = useMemo(() => {
     const q = search.trim().toLowerCase();
     let rows = outstanding;
+    if (scopeToCurrentUser && employeeId) {
+      rows = rows.filter((r) => outstandingOrderMatchesAgent(r, employeeId));
+    }
     if (q) rows = rows.filter((r) => [r.orderNumber, r.customerName, r.agentName].some((v) => v?.toLowerCase().includes(q)));
     if (headerPaymentFilter) rows = rows.filter((r) => r.paymentStatus === headerPaymentFilter);
     if (!includePaidOrders) rows = rows.filter((r) => r.paymentStatus !== 'Paid');
@@ -506,7 +512,12 @@ export function FinancePageNew() {
       if (as > bs) return sortDir === 'asc' ? 1 : -1;
       return 0;
     });
-  }, [outstanding, search, headerPaymentFilter, includePaidOrders, sortKey, sortDir, exportQueryDates]);
+  }, [outstanding, search, headerPaymentFilter, includePaidOrders, sortKey, sortDir, exportQueryDates, scopeToCurrentUser, employeeId]);
+
+  const filteredCredits = useMemo(() => {
+    if (!scopeToCurrentUser || !employeeId) return credits;
+    return credits.filter((r) => customerCreditMatchesAgent(r, employeeId));
+  }, [credits, scopeToCurrentUser, employeeId]);
 
   const handleExportOutstanding = async () => {
     if (exportingOutstanding || exportQueryDates.invalid) return;
@@ -554,10 +565,12 @@ export function FinancePageNew() {
   const filteredOrdersWithProofs = useMemo(() => {
     const q = commissionSearch.trim().toLowerCase();
     let rows = ordersWithProofs;
-    if (isAgent && employeeId) {
-      rows = rows.filter(
-        (r) => commissionOrderMatchesAgent(r, employeeId) && r.pendingCashCommissionCount > 0,
-      );
+    if (scopeToCurrentUser && employeeId) {
+      rows = rows.filter((r) => {
+        if (!commissionOrderMatchesAgent(r, employeeId)) return false;
+        if (isSalesAgentView) return r.pendingCashCommissionCount > 0;
+        return true;
+      });
     }
     if (q) {
       rows = rows.filter((r) =>
@@ -626,7 +639,7 @@ export function FinancePageNew() {
       if (as > bs) return commissionSortDir === 'asc' ? 1 : -1;
       return 0;
     });
-  }, [ordersWithProofs, commissionSearch, commissionSortKey, commissionSortDir, isAgent, employeeId]);
+  }, [ordersWithProofs, commissionSearch, commissionSortKey, commissionSortDir, scopeToCurrentUser, employeeId, isSalesAgentView]);
 
   const commissionTotalPages = Math.max(1, Math.ceil(filteredOrdersWithProofs.length / COMMISSION_PAGE_SIZE));
 
@@ -991,9 +1004,11 @@ export function FinancePageNew() {
               </div>
             ) : credits.length === 0 ? (
               <p className="py-10 text-center text-sm text-gray-500">No customers with credit configured.</p>
+            ) : filteredCredits.length === 0 ? (
+              <p className="py-10 text-center text-sm text-gray-500">No credit accounts assigned to you.</p>
             ) : (
               <div className="space-y-3">
-                {credits.map((c) => (
+                {filteredCredits.map((c) => (
                   <CreditRowCard key={c.customerId} row={c} canEdit={canFinancePage} onEdit={() => setCreditEdit(c)} />
                 ))}
               </div>
@@ -1031,9 +1046,11 @@ export function FinancePageNew() {
               </div>
             ) : filteredOrdersWithProofs.length === 0 ? (
               <p className="py-10 text-center text-sm text-gray-500">
-                {isAgent
+                {scopeToCurrentUser && isSalesAgentView
                   ? 'No cash payment proofs awaiting commission payout on your orders.'
-                  : 'No orders with payment proofs yet.'}
+                  : scopeToCurrentUser
+                    ? 'No payment proofs on file for your accounts.'
+                    : 'No orders with payment proofs yet.'}
               </p>
             ) : (
               <div className="overflow-x-auto">

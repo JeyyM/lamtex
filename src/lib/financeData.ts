@@ -49,6 +49,7 @@ export type OutstandingOrderRow = {
 export type CustomerCreditRow = {
   customerId: string;
   customerName: string;
+  assignedAgentId: string | null;
   paymentTerms: string | null;
   creditLimit: number;
   outstandingBalance: number;
@@ -496,7 +497,7 @@ export async function fetchCustomerCredit(): Promise<CustomerCreditRow[]> {
   const { data, error } = await supabase
     .from('customers')
     .select(
-      'id, name, payment_terms, credit_limit, outstanding_balance, available_credit, overdue_amount, payment_score',
+      'id, name, assigned_agent_id, payment_terms, credit_limit, outstanding_balance, available_credit, overdue_amount, payment_score',
     )
     .order('outstanding_balance', { ascending: false });
   if (error) throw error;
@@ -514,6 +515,7 @@ export async function fetchCustomerCredit(): Promise<CustomerCreditRow[]> {
       return {
         customerId: String(r.id),
         customerName: asString(r.name) ?? '—',
+        assignedAgentId: asString(r.assigned_agent_id),
         paymentTerms: asString(r.payment_terms),
         creditLimit: limit,
         outstandingBalance: outstanding,
@@ -706,7 +708,23 @@ function normEmployeeId(v: string | null | undefined): string | null {
 export function commissionOrderMatchesAgent(row: OrderWithPaymentProofsRow, employeeId: string): boolean {
   const me = normEmployeeId(employeeId);
   if (!me) return false;
-  return normEmployeeId(row.orderAgentId) === me;
+  return (
+    normEmployeeId(row.orderAgentId) === me ||
+    normEmployeeId(row.assignedAgentId) === me ||
+    normEmployeeId(row.agentId) === me
+  );
+}
+
+export function outstandingOrderMatchesAgent(row: OutstandingOrderRow, employeeId: string): boolean {
+  const me = normEmployeeId(employeeId);
+  if (!me) return false;
+  return normEmployeeId(row.agentId) === me;
+}
+
+export function customerCreditMatchesAgent(row: CustomerCreditRow, employeeId: string): boolean {
+  const me = normEmployeeId(employeeId);
+  if (!me) return false;
+  return normEmployeeId(row.assignedAgentId) === me;
 }
 
 async function fetchCustomerClientType(customerId: string | null): Promise<ClientType> {

@@ -125,7 +125,7 @@ const customerRowCellContentClass = 'relative z-[1] pointer-events-none';
 type CustomerTab = 'all' | 'active' | 'atrisk' | 'dormant';
 
 export function CustomersPage() {
-  const { branch, addAuditLog } = useAppContext();
+  const { branch, addAuditLog, isExecutiveUser, employeeId } = useAppContext();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<CustomerTab>('all');
   const [searchTerm, setSearchTerm] = useState('');
@@ -162,6 +162,10 @@ export function CustomersPage() {
         if (branch) {
           // Filter by branch name via the joined branches table
           query = query.eq('branches.name', branch);
+        }
+
+        if (!isExecutiveUser && employeeId) {
+          query = query.eq('assigned_agent_id', employeeId);
         }
 
         const { data, error } = await query;
@@ -208,7 +212,7 @@ export function CustomersPage() {
     };
 
     fetchCustomers();
-  }, [branch]);
+  }, [branch, isExecutiveUser, employeeId]);
 
   const filteredCustomers = allCustomers.filter(customer => {
     const matchesSearch =
