@@ -1,5 +1,6 @@
 import { supabase } from '@/src/lib/supabase';
 import type { UserRole } from '@/src/types';
+import { directoryRoleFromDashboardRole } from './roleDefaultPermissions';
 
 export type EmployeeUserRoleRow = {
   userRole: UserRole;
@@ -53,10 +54,15 @@ export async function saveEmployeeUserRoles(
   const { error: insErr } = await supabase.from('employee_user_roles').insert(rows);
   if (insErr) throw insErr;
 
-  const { error: updErr } = await supabase
-    .from('employees')
-    .update({ user_role: primaryRole, updated_at: ts() })
-    .eq('id', id);
+  const directoryUpdate: { user_role: UserRole; updated_at: string; role?: ReturnType<typeof directoryRoleFromDashboardRole> } = {
+    user_role: primaryRole,
+    updated_at: ts(),
+  };
+  if (primaryRole !== 'Executive') {
+    directoryUpdate.role = directoryRoleFromDashboardRole(primaryRole);
+  }
+
+  const { error: updErr } = await supabase.from('employees').update(directoryUpdate).eq('id', id);
   if (updErr) throw updErr;
 }
 

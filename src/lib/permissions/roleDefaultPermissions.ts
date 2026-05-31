@@ -66,7 +66,7 @@ import {
   type SettingsPermissionSet,
 } from './settingsPermissions';
 
-export const ASSIGNABLE_DASHBOARD_ROLES = ['Agent', 'Logistics', 'Warehouse', 'Driver'] as const;
+export const ASSIGNABLE_DASHBOARD_ROLES = ['Executive', 'Agent', 'Logistics', 'Warehouse', 'Driver'] as const;
 export type AssignableDashboardRole = (typeof ASSIGNABLE_DASHBOARD_ROLES)[number];
 
 export function isAssignableDashboardRole(role: string): role is AssignableDashboardRole {

@@ -18,14 +18,22 @@ type Props = {
 };
 
 export function DashboardRoleMultiSelect({ value, onChange, disabled }: Props) {
-  const available = ASSIGNABLE_DASHBOARD_ROLES.filter((r) => !value.roles.includes(r));
+  const hasExecutive = value.roles.includes('Executive');
+  const available = ASSIGNABLE_DASHBOARD_ROLES.filter((r) => !value.roles.includes(r) && !hasExecutive);
 
   const addRole = (role: AssignableDashboardRole) => {
     if (value.roles.includes(role)) return;
-    const roles = [...value.roles, role];
+    if (role === 'Executive') {
+      onChange({ roles: ['Executive'], primaryRole: 'Executive' });
+      return;
+    }
+    const roles = [...value.roles.filter((r) => r !== 'Executive'), role];
     onChange({
       roles,
-      primaryRole: value.primaryRole || role,
+      primaryRole:
+        value.primaryRole && value.primaryRole !== 'Executive' && roles.includes(value.primaryRole)
+          ? value.primaryRole
+          : role,
     });
   };
 
@@ -114,7 +122,10 @@ export function DashboardRoleMultiSelect({ value, onChange, disabled }: Props) {
       ) : null}
 
       <p className="text-xs text-gray-500">
-        Star marks the main dashboard role. Permissions from all selected roles are combined.
+        Star marks the main dashboard role.
+        {hasExecutive
+          ? ' Executive is exclusive and cannot be combined with other roles.'
+          : ' Permissions from all selected roles are combined.'}
       </p>
     </div>
   );

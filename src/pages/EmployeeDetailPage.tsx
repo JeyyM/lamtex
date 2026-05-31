@@ -45,6 +45,7 @@ import {
 import { Button } from '@/src/components/ui/Button';
 import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 import { Badge } from '@/src/components/ui/Badge';
+import { cn } from '@/src/lib/utils';
 import { ACTIVITY_LOG_PAGE_SIZE, TABLE_PAGE_SIZE, TablePagination } from '@/src/components/ui/TablePagination';
 import type { EmployeeRole } from '@/src/types/employee';
 import { useAppContext } from '@/src/store/AppContext';
@@ -191,8 +192,12 @@ import {
   saveEmployeeInterBranchRequestPermissions,
 } from '@/src/lib/permissions/employeeInterBranchRequestPermissions';
 import { applyDefaultPermissionsForRoles } from '@/src/lib/permissions/applyRoleDefaultPermissions';
-import { resolveEmployeeDashboardRoles } from '@/src/lib/permissions/employeeUserRoles';
+import { resolveEmployeeDashboardRoles, saveEmployeeUserRoles } from '@/src/lib/permissions/employeeUserRoles';
 import { rolesHaveDefaultTemplates } from '@/src/lib/permissions/roleDefaultPermissions';
+import {
+  DashboardRoleMultiSelect,
+  type DashboardRoleAssignment,
+} from '@/src/components/employees/DashboardRoleMultiSelect';
 import {
   employeeHasAgentDetailTabs,
   employeeHasTripHistoryDetailTabs,
@@ -366,6 +371,40 @@ function overviewField(label: string, value: string | null | undefined) {
     <div>
       <p className="text-sm text-gray-500">{label}</p>
       <p className="mt-0.5 text-base font-semibold text-gray-900">{display}</p>
+    </div>
+  );
+}
+
+function dashboardRolesOverviewField(roles: UserRole[], primaryRole: UserRole | null) {
+  return (
+    <div>
+      <p className="text-sm text-gray-500">App dashboard roles</p>
+      {roles.length === 0 ? (
+        <p className="mt-0.5 text-base font-semibold text-gray-900">—</p>
+      ) : (
+        <div className="mt-1.5 flex flex-wrap gap-2">
+          {roles.map((role) => {
+            const isPrimary = primaryRole === role;
+            return (
+              <span
+                key={role}
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-sm font-medium',
+                  isPrimary
+                    ? 'border-amber-300 bg-amber-50 text-amber-900'
+                    : 'border-gray-200 bg-gray-50 text-gray-800',
+                )}
+              >
+                <Star className={cn('w-3.5 h-3.5', isPrimary ? 'fill-current text-amber-600' : 'text-gray-300')} />
+                {role}
+                {isPrimary ? (
+                  <span className="text-[10px] uppercase tracking-wide text-amber-700 font-semibold">Main</span>
+                ) : null}
+              </span>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -720,6 +759,7 @@ export default function EmployeeDetailPage() {
   const employeesModulePerms = useEmployeesPermissions();
   const [employee, setEmployee] = useState<EmployeePerfRow | null | undefined>(undefined);
   const [employeeDashboardRoles, setEmployeeDashboardRoles] = useState<UserRole[]>([]);
+  const [employeePrimaryDashboardRole, setEmployeePrimaryDashboardRole] = useState<UserRole | null>(null);
   const [profile, setProfile] = useState<EmployeeFullProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -757,6 +797,10 @@ export default function EmployeeDetailPage() {
   const [ovCivil, setOvCivil] = useState('');
   const [ovReligion, setOvReligion] = useState('');
   const [ovBlood, setOvBlood] = useState('');
+  const [ovRoleAssignment, setOvRoleAssignment] = useState<DashboardRoleAssignment>({
+    roles: [],
+    primaryRole: null,
+  });
 
   const [ctPrimary, setCtPrimary] = useState('');
   const [ctSecondary, setCtSecondary] = useState('');
@@ -1011,6 +1055,7 @@ export default function EmployeeDetailPage() {
     if (!routeParam) {
       setEmployee(null);
       setEmployeeDashboardRoles([]);
+      setEmployeePrimaryDashboardRole(null);
       setProfile(null);
       setLoading(false);
       return;
@@ -1021,6 +1066,7 @@ export default function EmployeeDetailPage() {
         setLoading(true);
         setError(null);
         setEmployeeDashboardRoles([]);
+        setEmployeePrimaryDashboardRole(null);
         const emp = await fetchEmployeeWithPerformanceByIdentifier(routeParam);
         if (cancelled) return;
         setEmployee(emp);
@@ -1032,17 +1078,22 @@ export default function EmployeeDetailPage() {
             (prof?.loginAccount?.userRole as UserRole | null | undefined) ??
             (emp.loginAccount?.userRole as UserRole | null | undefined) ??
             null;
-          const { roles } = await resolveEmployeeDashboardRoles(emp.id, legacyRole, emp.role);
-          if (!cancelled) setEmployeeDashboardRoles(roles);
+          const { roles, primaryRole } = await resolveEmployeeDashboardRoles(emp.id, legacyRole, emp.role);
+          if (!cancelled) {
+            setEmployeeDashboardRoles(roles);
+            setEmployeePrimaryDashboardRole(primaryRole);
+          }
         } else {
           setProfile(null);
           setEmployeeDashboardRoles([]);
+          setEmployeePrimaryDashboardRole(null);
         }
       } catch (e) {
         if (!cancelled) {
           setError(e instanceof Error ? e.message : 'Failed to load employee');
           setEmployee(null);
           setEmployeeDashboardRoles([]);
+          setEmployeePrimaryDashboardRole(null);
           setProfile(null);
         }
       } finally {
@@ -3153,6 +3204,10 @@ export default function EmployeeDetailPage() {
                       setOvCivil(per?.civil_status ?? '');
                       setOvReligion(per?.religion ?? '');
                       setOvBlood(per?.blood_type ?? '');
+                      setOvRoleAssignment({
+                        roles: [...employeeDashboardRoles],
+                        primaryRole: employeePrimaryDashboardRole,
+                      });
                       setEditOverview(true);
                     }}
                   >
@@ -3173,6 +3228,12 @@ export default function EmployeeDetailPage() {
                         void (async () => {
                           setSavingSection('overview');
                           try {
+                            const dashboardRoles = ovRoleAssignment.roles;
+                            const primaryRole = ovRoleAssignment.primaryRole;
+                            if (dashboardRoles.length === 0 || !primaryRole) {
+                              window.alert('Select at least one app dashboard role.');
+                              return;
+                            }
                             await upsertEmployeePersonalInfo(employee.id, {
                               date_of_birth: ovDob || null,
                               gender: ovGender || null,
@@ -3181,13 +3242,17 @@ export default function EmployeeDetailPage() {
                               religion: ovReligion || null,
                               blood_type: ovBlood || null,
                             });
+                            await saveEmployeeUserRoles(employee.id, dashboardRoles, primaryRole);
+                            setEmployeeDashboardRoles(dashboardRoles);
+                            setEmployeePrimaryDashboardRole(primaryRole);
                             addAuditLog(
                               'Employee profile',
                               'Employee',
-                              `Updated personal info for ${employee.employeeName} (${employee.employeeId})`,
+                              `Updated personal info and dashboard roles for ${employee.employeeName} (${employee.employeeId})`,
                             );
                             setEditOverview(false);
                             await refreshProfileFromServer();
+                            await reloadEmployeeHeader();
                           } catch (e) {
                             window.alert(e instanceof Error ? e.message : 'Save failed');
                           } finally {
@@ -3221,9 +3286,13 @@ export default function EmployeeDetailPage() {
                     {overviewField('Nationality', per?.nationality)}
                     {overviewField('Blood Type', per?.blood_type)}
                   </div>
+                  <div className="md:col-span-2">
+                    {dashboardRolesOverviewField(employeeDashboardRoles, employeePrimaryDashboardRole)}
+                  </div>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-10 gap-y-4 text-sm">
+                <div className="space-y-5 text-sm">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-x-10 gap-y-4">
                   <div className="space-y-3">
                     <div>
                       <label className="block text-sm text-gray-500 mb-1">Date of birth</label>
@@ -3290,6 +3359,15 @@ export default function EmployeeDetailPage() {
                         onChange={(e) => setOvBlood(e.target.value)}
                       />
                     </div>
+                  </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-500 mb-2">App dashboard roles</label>
+                    <DashboardRoleMultiSelect
+                      value={ovRoleAssignment}
+                      onChange={setOvRoleAssignment}
+                      disabled={savingSection === 'overview'}
+                    />
                   </div>
                 </div>
               )}
