@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { X, Upload, Search, Loader2, AlertTriangle, RefreshCw, Zap } from 'lucide-react';
 import { supabase } from '@/src/lib/supabase';
 import { optimizeImage, formatBytes } from '@/src/lib/imageOptimizer';
+import { fetchGalleryImages, IMAGE_GALLERY_BUCKET, type GalleryImage } from '@/src/lib/imageGalleryStorage';
 
 interface ImageGalleryModalProps {
   isOpen: boolean;
@@ -18,14 +19,9 @@ interface ImageGalleryModalProps {
   stackOnTopOfModal?: boolean;
 }
 
-interface StorageImage {
-  name: string;
-  url: string;
-  created_at: string;
-  size: number;
-}
+interface StorageImage extends GalleryImage {}
 
-const BUCKET = 'images';
+const BUCKET = IMAGE_GALLERY_BUCKET;
 
 const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
   isOpen,
@@ -56,39 +52,17 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
     setError(null);
 
     try {
-      const path = folder || '';
-      const { data, error: listError } = await supabase.storage
-        .from(BUCKET)
-        .list(path, { limit: 200, sortBy: { column: 'created_at', order: 'desc' } });
-
-      if (listError) {
-        throw listError;
-      }
-
-      // Only list real image files by name. Do not require `id`: some storage responses omit it and would hide every file.
-      const imageExtensions = ['.jpg', '.jpeg', '.png', '.webp', '.avif', '.gif', '.jfif', '.bmp'];
-      const files = (data ?? []).filter(
-        (f) =>
-          f.name &&
-          !f.name.startsWith('.') &&
-          imageExtensions.some((ext) => f.name.toLowerCase().endsWith(ext)),
-      );
-
-      const mapped: StorageImage[] = files.map(f => {
-        const filePath = folder ? `${folder}/${f.name}` : f.name;
-        const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(filePath);
-        return {
-          name: f.name,
-          url: urlData.publicUrl,
-          created_at: f.created_at ?? new Date().toISOString(),
-          size: (f.metadata as any)?.size ?? 0,
-        };
-      });
-
+      const mapped = await fetchGalleryImages(folder);
       setImages(mapped);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to load images from storage:', err);
-      setError(err.message ?? 'Failed to load images');
+      const message = err instanceof Error ? err.message : 'Failed to load images';
+      setError(
+        message.toLowerCase().includes('timed out')
+          ? 'Loading existing images timed out. You can still upload a new image below, or tap Retry.'
+          : message,
+      );
+      setImages([]);
     } finally {
       setLoading(false);
     }
