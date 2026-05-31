@@ -8,8 +8,8 @@
     "dev:app": "vite --port=3000 --host=0.0.0.0",
     "dev:notify": "tsx watch server/index.ts",
     "dev:vercel": "vercel dev",
-    "build": "npm run build:api && vite build",
-    "build:api": "tsup --config tsup.api.config.ts",
+    "build": "vite build",
+    "start:notify": "tsx server/index.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit"

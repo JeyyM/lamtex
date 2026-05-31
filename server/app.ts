@@ -207,6 +207,37 @@ import {
 import { readEnv } from './env';
 
 const app = express();
+
+const NOTIFY_CORS_ORIGINS = [
+  'https://lamtex.vercel.app',
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+];
+
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  const appUrl = readEnv('APP_URL')?.replace(/\/$/, '');
+  const allowed =
+    origin &&
+    (NOTIFY_CORS_ORIGINS.includes(origin) || (appUrl != null && origin === appUrl))
+      ? origin
+      : undefined;
+
+  if (allowed) {
+    res.setHeader('Access-Control-Allow-Origin', allowed);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  }
+
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(204);
+    return;
+  }
+
+  next();
+});
+
 app.use(express.json({ limit: '1mb' }));
 
 /** Restore full /api/... path when Vercel rewrites to /api/index. */

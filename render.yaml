@@ -1,0 +1,21 @@
+# Notification / email API — always-on Express (Render Web Service).
+# Frontend stays on Vercel; set VITE_NOTIFY_API_URL to this service URL.
+services:
+  - type: web
+    name: lamtex-notify
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm run start:notify
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: APP_URL
+        value: https://lamtex.vercel.app
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM_EMAIL
+        sync: false
+      - key: NOTIFICATIONS_EMAIL_OVERRIDE
+        sync: false

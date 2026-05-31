@@ -1,4 +1,5 @@
 import { supabase } from '@/src/lib/supabase';
+import { notifyFetch } from '@/src/lib/notifyApi';
 import type {
   Chat,
   ChatMessage,
@@ -556,7 +557,7 @@ export function subscribeToMyChats(onChange: () => void): () => void {
 
 export async function fetchLinkPreview(url: string): Promise<ChatLinkPreview | null> {
   try {
-    const res = await fetch('/api/link-preview', {
+    const res = await notifyFetch('/api/link-preview', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url }),

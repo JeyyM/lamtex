@@ -1,24 +1,13 @@
 {
-  "buildCommand": "npm run build:api && vite build",
+  "buildCommand": "vite build",
   "outputDirectory": "dist",
   "rewrites": [
-    {
-      "source": "/api/(.*)",
-      "destination": "/api/index?originalPath=$1"
-    },
     {
       "source": "/((?!api/).*)",
       "destination": "/index.html"
     }
   ],
   "functions": {
-    "api/health.ts": {
-      "maxDuration": 10
-    },
-    "api/index.js": {
-      "maxDuration": 10,
-      "includeFiles": "api/vercel-api.cjs"
-    },
     "api/cron/overdue-payments.ts": {
       "maxDuration": 10
     }

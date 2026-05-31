@@ -1,5 +1,6 @@
 import { formatDistanceToNow } from 'date-fns';
 import { computeProofCommissionForClientType, computeDueDateFromDelivery, formatDateOnlyLocal } from '@/src/lib/financeData';
+import { notifyFetch } from '@/src/lib/notifyApi';
 import { ensureOrderCustomerPortal, recordOrderPortalEmailSent } from '@/src/lib/orderCustomerPortal';
 import { supabase } from '@/src/lib/supabase';
 import type { OrderDetail } from '@/src/types/orders';
@@ -171,7 +172,7 @@ async function sendOrderNotificationEmail(
   payload: OrderCreatedNotifyPayload,
 ): Promise<void> {
   try {
-    const res = await fetch(endpoint, {
+    const res = await notifyFetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -384,7 +385,7 @@ async function sendPurchaseOrderNotificationEmail(
 ): Promise<boolean> {
   try {
     console.log(`${PO_NOTIFY_LOG} sending email`, { endpoint, poNumber: payload.poNumber });
-    const res = await fetch(endpoint, {
+    const res = await notifyFetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -466,7 +467,7 @@ async function sendPurchaseOrderRejectedNotificationEmail(
       poNumber: payload.poNumber,
       submitterEmail: payload.submitterEmail ?? null,
     });
-    const res = await fetch('/api/notifications/purchase-order-rejected', {
+    const res = await notifyFetch('/api/notifications/purchase-order-rejected', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -597,7 +598,7 @@ async function sendPurchaseOrderAcceptedNotificationEmail(
       poNumber: payload.poNumber,
       submitterEmail: payload.submitterEmail ?? null,
     });
-    const res = await fetch('/api/notifications/purchase-order-accepted', {
+    const res = await notifyFetch('/api/notifications/purchase-order-accepted', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -684,7 +685,7 @@ async function sendPurchaseOrderConfirmedNotificationEmail(
       audience: payload.audience,
       recipientCount: payload.recipientEmails?.length ?? 0,
     });
-    const res = await fetch('/api/notifications/purchase-order-confirmed', {
+    const res = await notifyFetch('/api/notifications/purchase-order-confirmed', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -781,7 +782,7 @@ async function sendPurchaseOrderCancelledNotificationEmail(
       poNumber: payload.poNumber,
       submitterEmail: payload.submitterEmail ?? null,
     });
-    const res = await fetch('/api/notifications/purchase-order-cancelled', {
+    const res = await notifyFetch('/api/notifications/purchase-order-cancelled', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -1028,7 +1029,7 @@ async function sendProductionRequestNotificationEmail(
 ): Promise<boolean> {
   try {
     console.log(`${PR_NOTIFY_LOG} sending email`, { endpoint, prNumber: payload.prNumber });
-    const res = await fetch(endpoint, {
+    const res = await notifyFetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -1458,7 +1459,7 @@ async function sendPurchaseOrderReceivedNotificationEmail(
   payload: PurchaseOrderReceivedNotifyPayload,
 ): Promise<boolean> {
   try {
-    const res = await fetch('/api/notifications/purchase-order-received', {
+    const res = await notifyFetch('/api/notifications/purchase-order-received', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -1550,7 +1551,7 @@ async function sendPurchaseOrderPaymentRecordedNotificationEmail(
   payload: PurchaseOrderPaymentRecordedNotifyPayload,
 ): Promise<boolean> {
   try {
-    const res = await fetch('/api/notifications/purchase-order-payment-recorded', {
+    const res = await notifyFetch('/api/notifications/purchase-order-payment-recorded', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -1806,7 +1807,7 @@ async function sendOrderDecisionNotificationEmail(payload: OrderDecisionNotifyPa
       ? '/api/notifications/order-approved'
       : '/api/notifications/order-rejected';
   try {
-    const res = await fetch(endpoint, {
+    const res = await notifyFetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -1871,7 +1872,7 @@ async function sendOrderLogisticsReadyNotificationEmail(
   payload: OrderLogisticsReadyNotifyPayload,
 ): Promise<void> {
   try {
-    const res = await fetch('/api/notifications/order-ready-for-scheduling', {
+    const res = await notifyFetch('/api/notifications/order-ready-for-scheduling', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -1925,7 +1926,7 @@ async function sendOrderLogisticsLoadingNotificationEmail(
   payload: OrderLogisticsLoadingNotifyPayload,
 ): Promise<void> {
   try {
-    const res = await fetch('/api/notifications/order-loading', {
+    const res = await notifyFetch('/api/notifications/order-loading', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -1983,7 +1984,7 @@ export async function buildOrderPackedNotifyPayload(
 
 async function sendOrderPackedNotificationEmail(payload: OrderPackedNotifyPayload): Promise<void> {
   try {
-    const res = await fetch('/api/notifications/order-packed', {
+    const res = await notifyFetch('/api/notifications/order-packed', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -2088,7 +2089,7 @@ async function sendOrderInTransitNotificationEmail(
   notifyTarget: 'executive' | 'warehouse' | 'agent',
 ): Promise<void> {
   try {
-    const res = await fetch('/api/notifications/order-in-transit', {
+    const res = await notifyFetch('/api/notifications/order-in-transit', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...payload, notifyTarget }),
@@ -2140,7 +2141,7 @@ async function sendOrderCustomerInTransitNotificationEmail(
   payload: OrderCustomerInTransitNotifyPayload,
 ): Promise<boolean> {
   try {
-    const res = await fetch('/api/notifications/order-in-transit-customer', {
+    const res = await notifyFetch('/api/notifications/order-in-transit-customer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -2249,7 +2250,7 @@ async function sendOrderDeliveryRecordedNotificationEmail(
   notifyTarget: 'executive' | 'agent',
 ): Promise<void> {
   try {
-    const res = await fetch('/api/notifications/order-delivery-recorded', {
+    const res = await notifyFetch('/api/notifications/order-delivery-recorded', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...payload, notifyTarget }),
@@ -2296,7 +2297,7 @@ async function sendOrderCustomerDeliveryRecordedNotificationEmail(
   payload: OrderCustomerDeliveryRecordedNotifyPayload,
 ): Promise<boolean> {
   try {
-    const res = await fetch('/api/notifications/order-delivery-recorded-customer', {
+    const res = await notifyFetch('/api/notifications/order-delivery-recorded-customer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -2357,7 +2358,7 @@ async function sendOrderCustomerPaymentRecordedNotificationEmail(
   payload: OrderCustomerPaymentRecordedNotifyPayload,
 ): Promise<boolean> {
   try {
-    const res = await fetch('/api/notifications/order-payment-recorded-customer', {
+    const res = await notifyFetch('/api/notifications/order-payment-recorded-customer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -2464,7 +2465,7 @@ async function sendOrderDeliveryProofUploadedAgentEmail(
   payload: OrderDeliveryProofUploadedNotifyPayload,
 ): Promise<void> {
   try {
-    const res = await fetch('/api/notifications/order-delivery-proof-uploaded-agent', {
+    const res = await notifyFetch('/api/notifications/order-delivery-proof-uploaded-agent', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -2582,7 +2583,7 @@ async function sendOrderPaymentRecordedExecutiveEmail(
   payload: OrderPaymentRecordedNotifyPayload,
 ): Promise<void> {
   try {
-    const res = await fetch('/api/notifications/order-payment-recorded', {
+    const res = await notifyFetch('/api/notifications/order-payment-recorded', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -2701,7 +2702,7 @@ async function sendOrderPaymentOverdueEmail(
   notifyTarget: 'executive' | 'agent',
 ): Promise<void> {
   try {
-    const res = await fetch('/api/notifications/order-payment-overdue', {
+    const res = await notifyFetch('/api/notifications/order-payment-overdue', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...payload, notifyTarget }),
@@ -2719,7 +2720,7 @@ async function sendOrderCustomerPaymentOverdueEmail(
   payload: OrderCustomerPaymentOverdueNotifyPayload,
 ): Promise<void> {
   try {
-    const res = await fetch('/api/notifications/order-payment-overdue-customer', {
+    const res = await notifyFetch('/api/notifications/order-payment-overdue-customer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -2836,7 +2837,7 @@ export async function buildOrderCommissionPaidNotifyPayload(
 
 async function sendOrderCommissionPaidAgentEmail(payload: OrderCommissionPaidNotifyPayload): Promise<void> {
   try {
-    const res = await fetch('/api/notifications/order-commission-paid-agent', {
+    const res = await notifyFetch('/api/notifications/order-commission-paid-agent', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -3065,7 +3066,7 @@ async function sendOrderCustomerScheduledNotificationEmail(
   payload: OrderCustomerScheduledNotifyPayload,
 ): Promise<boolean> {
   try {
-    const res = await fetch('/api/notifications/order-scheduled-customer', {
+    const res = await notifyFetch('/api/notifications/order-scheduled-customer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -3086,7 +3087,7 @@ async function sendOrderCustomerUnscheduledNotificationEmail(
   payload: OrderCustomerUnscheduledNotifyPayload,
 ): Promise<boolean> {
   try {
-    const res = await fetch('/api/notifications/order-unscheduled-customer', {
+    const res = await notifyFetch('/api/notifications/order-unscheduled-customer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -3169,7 +3170,7 @@ async function sendOrderCustomerApprovedNotificationEmail(
   payload: OrderCustomerApprovedNotifyPayload,
 ): Promise<boolean> {
   try {
-    const res = await fetch('/api/notifications/order-approved-customer', {
+    const res = await notifyFetch('/api/notifications/order-approved-customer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -3201,7 +3202,7 @@ async function sendOrderCustomerPortalShareNotificationEmail(
   payload: OrderCustomerPortalShareNotifyPayload,
 ): Promise<boolean> {
   try {
-    const res = await fetch('/api/notifications/order-portal-share', {
+    const res = await notifyFetch('/api/notifications/order-portal-share', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -3297,7 +3298,7 @@ export async function buildOrderCancelledNotifyPayload(
 
 async function sendOrderCancelledNotificationEmail(payload: OrderCancelledNotifyPayload): Promise<void> {
   try {
-    const res = await fetch('/api/notifications/order-cancelled', {
+    const res = await notifyFetch('/api/notifications/order-cancelled', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -3371,7 +3372,7 @@ async function sendOrderScheduledNotificationEmail(
   notifyTarget: 'executive' | 'warehouse' | 'agent',
 ): Promise<void> {
   try {
-    const res = await fetch('/api/notifications/order-scheduled', {
+    const res = await notifyFetch('/api/notifications/order-scheduled', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...payload, notifyTarget }),
@@ -3532,7 +3533,7 @@ async function sendTripDriverAssignedNotificationEmail(
   payload: TripDriverAssignedNotifyPayload,
 ): Promise<void> {
   try {
-    const res = await fetch('/api/notifications/trip-driver-assigned', {
+    const res = await notifyFetch('/api/notifications/trip-driver-assigned', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -3662,7 +3663,7 @@ async function sendProductStockAlertEmailRequest(
   payload: ProductStockAlertEmailRequestPayload,
 ): Promise<void> {
   try {
-    const res = await fetch('/api/notifications/product-stock-alert', {
+    const res = await notifyFetch('/api/notifications/product-stock-alert', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -3797,7 +3798,7 @@ async function sendMaterialStockAlertEmailRequest(
   payload: MaterialStockAlertEmailRequestPayload,
 ): Promise<void> {
   try {
-    const res = await fetch('/api/notifications/material-stock-alert', {
+    const res = await notifyFetch('/api/notifications/material-stock-alert', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -4224,7 +4225,7 @@ async function sendInterBranchWorkflowEmail(payload: InterBranchNotifyEmailPaylo
       ibrNumber: payload.ibrNumber,
       groupCount: payload.recipientGroups?.length ?? 0,
     });
-    const res = await fetch('/api/notifications/inter-branch-workflow', {
+    const res = await notifyFetch('/api/notifications/inter-branch-workflow', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
