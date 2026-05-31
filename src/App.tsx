@@ -15,6 +15,7 @@ import MaterialCategoryPage from './pages/MaterialCategoryPage';
 import ProductCategoryPage from './pages/ProductCategoryPage';
 import ProductFamilyPage from './pages/ProductFamilyPage';
 import { LogisticsPage } from './pages/LogisticsPage';
+import { TripsPage } from './pages/TripsPage';
 import { CustomersPage } from './pages/CustomersPageNew';
 import { CustomerDetailPage } from './pages/CustomerDetailPage';
 import { CustomerFormPage } from './pages/CustomerFormPage';
@@ -119,6 +120,7 @@ function AppRoutes() {
             <Route path="materials/:id/edit" element={<MaterialFormPage />} />
             <Route path="logistics" element={<LogisticsPage />} />
             <Route path="logistics/:vehicleId" element={<TruckDetailPage />} />
+            <Route path="trips" element={<TripsPage />} />
             <Route path="warehouse" element={<WarehousePage />} />
             <Route path="customers" element={<CustomersPage />} />
             <Route path="customers/new" element={<CustomerFormPage />} />

@@ -36,6 +36,7 @@ import {
   Factory,
   ClipboardList,
   GitBranch,
+  Route,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/src/lib/utils';
@@ -89,6 +90,8 @@ export function Sidebar() {
           return interBranchRequestPerms.pageAccess;
         case '/logistics':
           return logisticsPerms.pageAccess;
+        case '/trips':
+          return orderPerms.orderLoading && !logisticsPerms.pageAccess;
         case '/chats':
           return true;
         case '/customers':
@@ -133,7 +136,11 @@ export function Sidebar() {
         ].filter((item) => isVisible(item.path));
 
     const tail: NavItem[] = [
-      { name: 'Logistics', path: '/logistics', icon: Truck },
+      ...(logisticsPerms.pageAccess
+        ? [{ name: 'Logistics', path: '/logistics', icon: Truck }]
+        : orderPerms.orderLoading
+          ? [{ name: 'Trips', path: '/trips', icon: Route }]
+          : []),
       { name: 'Chats', path: '/chats', icon: MessageCircle },
       { name: 'Customers', path: '/customers', icon: Users },
       { name: 'Suppliers', path: '/suppliers', icon: Truck, alsoActiveOn: ['/suppliers'] },
@@ -147,6 +154,7 @@ export function Sidebar() {
     return [...core, ...warehouseBlock, ...tail];
   }, [
     orderPerms.pageAccess,
+    orderPerms.orderLoading,
     productPerms.pageAccess,
     materialPerms.pageAccess,
     warehousePerms.pageAccess,
