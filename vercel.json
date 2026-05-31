@@ -15,7 +15,7 @@
     "api/health.ts": {
       "maxDuration": 10
     },
-    "api/index.ts": {
+    "api/index.cjs": {
       "maxDuration": 10,
       "includeFiles": "api/vercel-api.cjs"
     },
