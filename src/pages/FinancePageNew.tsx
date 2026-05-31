@@ -679,7 +679,7 @@ export function FinancePageNew() {
     <div className="p-3 sm:p-4 md:p-6 space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Invoices & Payments</h1>
+          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Finance</h1>
           <p className="text-sm text-gray-600 mt-1">
             Track delivered orders awaiting payment, monitor customer credit, and review orders with payment proofs on file.
           </p>

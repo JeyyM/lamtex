@@ -25,6 +25,7 @@ import {
   MapPin,
   Package,
   Phone,
+  Plus,
   Shield,
   Star,
   TrendingUp,
