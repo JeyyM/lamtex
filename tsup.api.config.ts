@@ -1,8 +1,8 @@
 import { defineConfig } from 'tsup';
 
-/** Bundle Express API for Vercel (CJS output loaded by api/index.ts). */
+/** Bundle Express + serverless-http for Vercel (CJS loaded by api/index.ts). */
 export default defineConfig({
-  entry: { 'vercel-api': 'server/vercel-handler.ts' },
+  entry: { 'vercel-api': 'api/vercelEntry.ts' },
   format: ['cjs'],
   platform: 'node',
   target: 'node20',

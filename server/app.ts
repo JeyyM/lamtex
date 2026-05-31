@@ -1922,6 +1922,12 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
+app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  if (res.headersSent) return;
+  console.error('[notify-server] unhandled error', err);
+  res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
+});
+
 app.use((_req, res) => {
   if (res.headersSent) return;
   console.warn('[notify-server] unmatched route', _req.method, _req.url);

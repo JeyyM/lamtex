@@ -4,7 +4,7 @@
  * Dedicated handlers (api/health.ts, api/cron/*) are matched by the filesystem first.
  */
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import type { Express } from 'express';
+import path from 'node:path';
 import { createRequire } from 'node:module';
 import { rebuildVercelApiUrl } from './vercelApiUrl';
 
@@ -15,22 +15,42 @@ export const config = {
   },
 };
 
-const require = createRequire(import.meta.url);
+type ServerlessHandler = (req: VercelRequest, res: VercelResponse) => Promise<unknown>;
 
-let cachedApp: Express | null = null;
+const require = createRequire(path.join(process.cwd(), 'package.json'));
 
-function getApp(): Express {
-  if (!cachedApp) {
-    const bundled = require('./vercel-api.cjs') as { default: Express };
-    cachedApp = bundled.default;
+let cachedHandler: ServerlessHandler | null = null;
+
+function resolveBundlePath(): string {
+  const candidates = [
+    path.join(process.cwd(), 'api', 'vercel-api.cjs'),
+    path.join(process.cwd(), 'vercel-api.cjs'),
+  ];
+  for (const candidate of candidates) {
+    try {
+      require.resolve(candidate);
+      return candidate;
+    } catch {
+      // try next
+    }
   }
-  return cachedApp;
+  throw new Error(
+    `Express API bundle missing (api/vercel-api.cjs). cwd=${process.cwd()} — ensure npm run build:api ran.`,
+  );
 }
 
-export default function handler(req: VercelRequest, res: VercelResponse): void {
+function getHandler(): ServerlessHandler {
+  if (!cachedHandler) {
+    const bundlePath = resolveBundlePath();
+    cachedHandler = require(bundlePath).default as ServerlessHandler;
+  }
+  return cachedHandler;
+}
+
+export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
   try {
     req.url = rebuildVercelApiUrl(req);
-    getApp()(req, res);
+    await getHandler()(req, res);
   } catch (err) {
     console.error('[api/index] handler error', err);
     if (!res.headersSent) {
