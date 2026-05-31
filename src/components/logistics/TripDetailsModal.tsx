@@ -19,6 +19,7 @@ import { reportTripDelay } from '@/src/lib/orderTripDelay';
 import { resolveBranchIdByName } from '@/src/lib/branchCompanySettings';
 import { releaseOrderFromActiveTrips, tryCompleteTripIfAllOrdersDelivered, tryCompleteTripsForDeliveredOrder } from '@/src/lib/logisticsScheduling';
 import { attachOrderDeliveryProofsAndNotify } from '@/src/lib/notifications/notificationsData';
+import { formatTripScheduleDate } from '@/src/lib/dispatchQueueUi';
 
 interface OrderLineItem {
   id: string;
@@ -153,6 +154,109 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
     onOrderStatusChange?.(trip.id, orderId, next);
   };
 
+  const applyTripShipmentCore = useCallback(
+    async (
+      tripOrder: TripOrder,
+      rows: { itemId: string; shippedQuantity: number }[],
+      nextOrderStatus: 'Packed' | 'In Transit',
+    ) => {
+      const orderId = tripOrder.order.id;
+      const branchId = branch?.id ?? null;
+      const movementNoteBase =
+        nextOrderStatus === 'Packed'
+          ? `Packed / loaded for order ${tripOrder.order.orderNumber} (Trip ${trip.tripNumber})`
+          : `Dispatched for order ${tripOrder.order.orderNumber} (Trip ${trip.tripNumber})`;
+
+      for (const row of rows) {
+        if (row.shippedQuantity <= 0) continue;
+        const item = tripOrder.order.items.find((i) => i.id === row.itemId);
+        if (!item?.variantId) continue;
+
+        const { data: stockRow } = await supabase
+          .from('product_variant_stock')
+          .select('id, quantity')
+          .eq('variant_id', item.variantId)
+          .eq('branch_id', branchId)
+          .maybeSingle();
+
+        if (!stockRow) continue;
+
+        await deductVariantBranchStock({
+          variantId: item.variantId,
+          branchId,
+          quantity: row.shippedQuantity,
+        });
+
+        await supabase.from('product_stock_movements').insert({
+          variant_id: item.variantId,
+          branch_id: branchId,
+          movement_type: 'outgoing',
+          quantity: row.shippedQuantity,
+          reference_type: 'order',
+          reference_id: orderId,
+          notes: movementNoteBase,
+          created_by: session?.user?.id ?? null,
+        });
+
+        const { data: lineRow } = await supabase
+          .from('order_line_items')
+          .select('quantity_shipped')
+          .eq('id', row.itemId)
+          .maybeSingle();
+        const prevShipped = Number(lineRow?.quantity_shipped ?? item.quantityShipped ?? 0);
+        const newShipped = prevShipped + row.shippedQuantity;
+        await supabase.from('order_line_items').update({ quantity_shipped: newShipped }).eq('id', row.itemId);
+      }
+
+      await supabase
+        .from('orders')
+        .update({ status: nextOrderStatus, updated_at: new Date().toISOString() })
+        .eq('id', orderId);
+
+      const auditMsg =
+        nextOrderStatus === 'Packed'
+          ? `Marked order ${tripOrder.order.orderNumber} as Packed (loaded) from Trip ${trip.tripNumber}`
+          : `Marked order ${tripOrder.order.orderNumber} as In Transit from Trip ${trip.tripNumber}`;
+      addAuditLog?.(auditMsg, 'order');
+
+      setOrderStatuses((s) => ({ ...s, [orderId]: nextOrderStatus }));
+      setOrdersData((prev) =>
+        prev.map((o) =>
+          o.order.id === orderId
+            ? {
+                ...o,
+                order: {
+                  ...o.order,
+                  status: nextOrderStatus,
+                  items: o.order.items.map((li) => {
+                    const row = rows.find((r) => r.itemId === li.id);
+                    if (!row || row.shippedQuantity <= 0) return li;
+                    return { ...li, quantityShipped: (li.quantityShipped ?? 0) + row.shippedQuantity };
+                  }),
+                },
+              }
+            : o,
+        ),
+      );
+      onOrderStatusChange?.(trip.id, orderId, nextOrderStatus);
+      if (nextOrderStatus === 'Packed') {
+        void notifyOrderPacked(orderId, { markedBy: employeeName?.trim() || null }).catch((notifyErr) => {
+          console.warn('[TripDetailsModal] order packed notification failed', notifyErr);
+        });
+      } else if (nextOrderStatus === 'In Transit') {
+        void notifyOrderInTransit(orderId, {
+          markedBy: employeeName?.trim() || null,
+          tripNumber: trip.tripNumber,
+          vehicleName: trip.vehicleName ?? null,
+          driverName: trip.driverName ?? null,
+        }).catch((notifyErr) => {
+          console.warn('[TripDetailsModal] order in transit notification failed', notifyErr);
+        });
+      }
+    },
+    [branch, session, trip, addAuditLog, onOrderStatusChange, employeeName],
+  );
+
   const applyTripShipment = useCallback(
     async (
       tripOrder: TripOrder,
@@ -161,107 +265,43 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
     ) => {
       setInTransitSubmitting(true);
       try {
-        const orderId = tripOrder.order.id;
-        const branchId = branch?.id ?? null;
-        const movementNoteBase =
-          nextOrderStatus === 'Packed'
-            ? `Packed / loaded for order ${tripOrder.order.orderNumber} (Trip ${trip.tripNumber})`
-            : `Dispatched for order ${tripOrder.order.orderNumber} (Trip ${trip.tripNumber})`;
-
-        for (const row of rows) {
-          if (row.shippedQuantity <= 0) continue;
-          const item = tripOrder.order.items.find((i) => i.id === row.itemId);
-          if (!item?.variantId) continue;
-
-          const { data: stockRow } = await supabase
-            .from('product_variant_stock')
-            .select('id, quantity')
-            .eq('variant_id', item.variantId)
-            .eq('branch_id', branchId)
-            .maybeSingle();
-
-          if (!stockRow) continue;
-
-          await deductVariantBranchStock({
-            variantId: item.variantId,
-            branchId,
-            quantity: row.shippedQuantity,
-          });
-
-          await supabase.from('product_stock_movements').insert({
-            variant_id: item.variantId,
-            branch_id: branchId,
-            movement_type: 'outgoing',
-            quantity: row.shippedQuantity,
-            reference_type: 'order',
-            reference_id: orderId,
-            notes: movementNoteBase,
-            created_by: session?.user?.id ?? null,
-          });
-
-          const { data: lineRow } = await supabase
-            .from('order_line_items')
-            .select('quantity_shipped')
-            .eq('id', row.itemId)
-            .maybeSingle();
-          const prevShipped = Number(lineRow?.quantity_shipped ?? item.quantityShipped ?? 0);
-          const newShipped = prevShipped + row.shippedQuantity;
-          await supabase.from('order_line_items').update({ quantity_shipped: newShipped }).eq('id', row.itemId);
-        }
-
-        await supabase
-          .from('orders')
-          .update({ status: nextOrderStatus, updated_at: new Date().toISOString() })
-          .eq('id', orderId);
-
-        const auditMsg =
-          nextOrderStatus === 'Packed'
-            ? `Marked order ${tripOrder.order.orderNumber} as Packed (loaded) from Trip ${trip.tripNumber}`
-            : `Marked order ${tripOrder.order.orderNumber} as In Transit from Trip ${trip.tripNumber}`;
-        addAuditLog?.(auditMsg, 'order');
-
-        setOrderStatuses((s) => ({ ...s, [orderId]: nextOrderStatus }));
-        setOrdersData((prev) =>
-          prev.map((o) =>
-            o.order.id === orderId
-              ? {
-                  ...o,
-                  order: {
-                    ...o.order,
-                    status: nextOrderStatus,
-                    items: o.order.items.map((li) => {
-                      const row = rows.find((r) => r.itemId === li.id);
-                      if (!row || row.shippedQuantity <= 0) return li;
-                      return { ...li, quantityShipped: (li.quantityShipped ?? 0) + row.shippedQuantity };
-                    }),
-                  },
-                }
-              : o,
-          ),
-        );
-        onOrderStatusChange?.(trip.id, orderId, nextOrderStatus);
-        if (nextOrderStatus === 'Packed') {
-          void notifyOrderPacked(orderId, { markedBy: employeeName?.trim() || null }).catch((notifyErr) => {
-            console.warn('[TripDetailsModal] order packed notification failed', notifyErr);
-          });
-        } else if (nextOrderStatus === 'In Transit') {
-          void notifyOrderInTransit(orderId, {
-            markedBy: employeeName?.trim() || null,
-            tripNumber: trip.tripNumber,
-            vehicleName: trip.vehicleName ?? null,
-            driverName: trip.driverName ?? null,
-          }).catch((notifyErr) => {
-            console.warn('[TripDetailsModal] order in transit notification failed', notifyErr);
-          });
-        }
+        await applyTripShipmentCore(tripOrder, rows, nextOrderStatus);
       } catch (err) {
         console.error('applyTripShipment error', err);
       } finally {
         setInTransitSubmitting(false);
       }
     },
-    [branch, session, trip, addAuditLog, onOrderStatusChange, employeeName],
+    [applyTripShipmentCore],
   );
+
+  const orderReadyForInTransit = useCallback(
+    (orderId: string, fallbackStatus?: string) => {
+      const st = String(orderStatuses[orderId] ?? fallbackStatus ?? '').trim();
+      return st === 'Ready' || st === 'Packed';
+    },
+    [orderStatuses],
+  );
+
+  const handleMarkAllInTransit = useCallback(async () => {
+    if (inTransitSubmitting || ordersLoading) return;
+    setInTransitSubmitting(true);
+    try {
+      for (const tripOrder of ordersData) {
+        const { order, customer } = tripOrder;
+        if (!order || !orderReadyForInTransit(order.id, order.status)) continue;
+        const rows = order.items.map((i) => ({
+          itemId: i.id,
+          shippedQuantity: remainingToShipForLine(i, orderStatuses[order.id] ?? order.status),
+        }));
+        await applyTripShipmentCore(tripOrder, rows, 'In Transit');
+      }
+    } catch (err) {
+      console.error('handleMarkAllInTransit error', err);
+    } finally {
+      setInTransitSubmitting(false);
+    }
+  }, [applyTripShipmentCore, inTransitSubmitting, orderReadyForInTransit, ordersData, ordersLoading, orderStatuses]);
 
   const handleConfirmPackShipment = useCallback(
     async (rows: { itemId: string; shippedQuantity: number }[]) => {
@@ -628,6 +668,11 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
 
   const customersInTrip = ordersData;
 
+  const allOrdersReadyForInTransit = React.useMemo(() => {
+    if (ordersLoading || customersInTrip.length === 0) return false;
+    return customersInTrip.every(({ order }) => orderReadyForInTransit(order.id, order.status));
+  }, [customersInTrip, orderReadyForInTransit, ordersLoading]);
+
   const getStatusColor = (status: string) => {
     if (status === 'Delivered' || status === 'Complete') return 'success';
     if (status === 'Cancelled') return 'danger';
@@ -656,6 +701,23 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {allOrdersReadyForInTransit && (
+              <Button
+                type="button"
+                onClick={() => void handleMarkAllInTransit()}
+                variant="primary"
+                size="sm"
+                disabled={inTransitSubmitting}
+                className="inline-flex"
+              >
+                {inTransitSubmitting ? (
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <Navigation className="w-4 h-4 mr-2" />
+                )}
+                Mark All In Transit
+              </Button>
+            )}
             {trip.status !== 'Complete' && trip.status !== 'Cancelled' && (
               <Button
                 type="button"
@@ -692,10 +754,7 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
                 <Calendar className="w-4 h-4 text-blue-600" />
                 <span className="text-sm text-blue-800">Schedule</span>
               </div>
-              <p className="text-base font-semibold text-blue-900 leading-relaxed">{trip.scheduledDate}</p>
-              {trip.departureTime && (
-                <p className="text-sm text-blue-700 leading-relaxed">Departure: {trip.departureTime}</p>
-              )}
+              <p className="text-base font-semibold text-blue-900 leading-relaxed">{formatTripScheduleDate(trip)}</p>
               {trip.eta && (
                 <p className="text-sm text-blue-700 leading-relaxed">ETA: {trip.eta}</p>
               )}

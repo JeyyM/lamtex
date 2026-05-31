@@ -8,6 +8,7 @@ import {
   dispatchQueueStatusSelectClass,
   dispatchTableStatusBadgeVariant,
   compareTripScheduleDates,
+  formatTripScheduleDate,
   tripMatchesDispatchSearch,
   type DispatchSearchExtras,
 } from '@/src/lib/dispatchQueueUi';
@@ -253,7 +254,7 @@ export function TripsDispatchTable({
                         )}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900">{trip.departureTime || trip.scheduledDate}</div>
+                        <div className="text-sm text-gray-900">{formatTripScheduleDate(trip)}</div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm text-gray-900">
@@ -295,7 +296,7 @@ export function TripsDispatchTable({
                     </Badge>
                   </div>
                   <div className="text-xs text-gray-500">
-                    {trip.departureTime || trip.scheduledDate} • {trip.driverName || 'No driver'}
+                    {formatTripScheduleDate(trip)} • {trip.driverName || 'No driver'}
                   </div>
                 </div>
               ))}

@@ -99,6 +99,7 @@ import {
   getDispatchVehicleColor,
   tripMatchesDispatchSearch,
   compareTripScheduleDates,
+  formatTripScheduleDate,
 } from '@/src/lib/dispatchQueueUi';
 
 type ViewMode = 'dispatch' | 'fleet' | 'routes' | 'shipments';
@@ -1187,7 +1188,7 @@ export function LogisticsPage() {
                           )}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="text-sm text-gray-900">{trip.departureTime || trip.scheduledDate}</div>
+                          <div className="text-sm text-gray-900">{formatTripScheduleDate(trip)}</div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="text-sm text-gray-900">{trip.orders.length} order{trip.orders.length !== 1 ? 's' : ''}</div>
@@ -1244,7 +1245,7 @@ export function LogisticsPage() {
                       </div>
                       <div>
                         <p className="text-xs text-gray-500">Schedule</p>
-                        <p className="text-gray-900">{trip.departureTime || trip.scheduledDate}</p>
+                        <p className="text-gray-900">{formatTripScheduleDate(trip)}</p>
                       </div>
                       <div className="col-span-2">
                         <p className="text-xs text-gray-500">Capacity</p>

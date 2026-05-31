@@ -152,3 +152,25 @@ export function compareTripScheduleDates(a: Trip, b: Trip, dir: 'asc' | 'desc'):
   const diff = ta - tb;
   return dir === 'asc' ? diff : -diff;
 }
+
+/** Date-only label for dispatch tables (hides departure time until scheduling is time-precise). */
+export function formatTripScheduleDate(trip: Trip): string {
+  const iso = (trip.scheduledDate ?? '').trim().slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
+
+  const dep = trip.departureTime?.trim();
+  if (dep) {
+    const commaIdx = dep.indexOf(',');
+    if (commaIdx > 0) return dep.slice(0, commaIdx).trim();
+    const ms = Date.parse(dep);
+    if (Number.isFinite(ms)) {
+      return new Date(ms).toLocaleDateString(undefined, {
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric',
+      });
+    }
+  }
+
+  return trip.scheduledDate?.trim() || '—';
+}
