@@ -74,10 +74,10 @@ export function DriverTripMapExplorer({
 
   const sortedTrips = useMemo(() => {
     return [...trips].sort((a, b) => {
-      const da = a.scheduledDate ?? '9999-12-31';
-      const db = b.scheduledDate ?? '9999-12-31';
-      if (da !== db) return da.localeCompare(db);
-      return a.tripNumber.localeCompare(b.tripNumber);
+      const da = a.scheduledDate ?? '';
+      const db = b.scheduledDate ?? '';
+      if (da !== db) return db.localeCompare(da);
+      return b.tripNumber.localeCompare(a.tripNumber);
     });
   }, [trips]);
 
