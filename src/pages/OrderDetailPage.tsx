@@ -3405,6 +3405,10 @@ export function OrderDetailPage() {
   const allPaymentStatuses = ['Unbilled', 'Invoiced', 'Partially Paid', 'Paid', 'Overdue', 'On Credit'];
 
   const canUseLogisticsUi = perms.scheduling || perms.deliveries;
+  /** Request-phase orders: agents set required date / delivery type at creation; logistics edits them later. */
+  const canEditOrderDeliveryFields =
+    perms.deliveries ||
+    (perms.creation && ['Draft', 'Pending', 'Rejected'].includes(order.status));
   const LOGISTICS_FLOW_STEPS: OrderStatus[] = [
     'Approved',
     'Scheduled',
@@ -4113,7 +4117,7 @@ export function OrderDetailPage() {
               </div>
               <div className="flex flex-col gap-1 sm:flex-row sm:justify-between sm:items-center">
                 <span className="text-gray-600">Required Date:</span>
-                {isEditing && editedOrder && perms.deliveries ? (
+                {isEditing && editedOrder && canEditOrderDeliveryFields ? (
                   <input
                     type="date"
                     className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm font-medium text-gray-900 w-full sm:w-auto max-w-[12rem]"
@@ -4152,7 +4156,7 @@ export function OrderDetailPage() {
               )}
               <div className="flex flex-col gap-1 sm:flex-row sm:justify-between sm:items-center">
                 <span className="text-gray-600">Delivery Type:</span>
-                {isEditing && editedOrder && perms.deliveries ? (
+                {isEditing && editedOrder && canEditOrderDeliveryFields ? (
                   branchHasShips === false ? (
                     <span className="font-medium text-gray-900">Truck</span>
                   ) : (
