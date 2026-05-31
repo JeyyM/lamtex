@@ -231,8 +231,12 @@ export function Topbar() {
           <Menu className="w-5 h-5" />
         </button>
 
-        <Link to="/" title="Go to Dashboard" className="lg:hidden flex items-center rounded-md hover:opacity-90 transition-opacity">
-          <img src={lamtexLogo} alt="Lamtex Logo" className="h-8 w-auto" />
+        <Link to="/" title="Go to Dashboard" className="lg:hidden flex min-w-0 flex-1 items-center rounded-md hover:opacity-90 transition-opacity">
+          <img
+            src={lamtexLogo}
+            alt="Lamtex Logo"
+            className="max-h-8 w-auto max-w-full object-contain object-left"
+          />
         </Link>
 
         <div className="flex-1"></div>

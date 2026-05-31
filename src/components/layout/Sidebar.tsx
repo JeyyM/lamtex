@@ -183,24 +183,28 @@ export function Sidebar() {
         "lg:translate-x-0",
         isSidebarCollapsed ? "lg:w-16" : "lg:w-64"
       )}>
-        <div className="h-16 flex items-center justify-between px-4 border-b border-gray-200">
+        <div className="h-16 flex items-center gap-2 px-4 border-b border-gray-200">
           {/* Logo - hidden when collapsed on desktop */}
           <Link
             to="/"
             title="Go to Dashboard"
             onClick={() => setIsMobileMenuOpen(false)}
             className={cn(
-              'flex items-center gap-2 rounded-md hover:opacity-90 transition-opacity',
+              'flex-1 min-w-0 flex items-center rounded-md hover:opacity-90 transition-opacity',
               isSidebarCollapsed && 'lg:hidden',
             )}
           >
-            <img src={lamtexLogo} alt="Lamtex Logo" className="h-10 w-auto" />
+            <img
+              src={lamtexLogo}
+              alt="Lamtex Logo"
+              className="max-h-10 w-auto max-w-full object-contain object-left"
+            />
           </Link>
-          
-          {/* Button group - pushed to right */}
+
+          {/* Collapse / close controls */}
           <div className={cn(
-            "ml-auto flex items-center",
-            isSidebarCollapsed && "lg:mx-auto"
+            'flex shrink-0 items-center',
+            isSidebarCollapsed && 'lg:mx-auto',
           )}>
             {/* Close button (mobile only) - closes the drawer */}
             <button

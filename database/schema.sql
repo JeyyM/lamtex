@@ -11190,6 +11190,153 @@ INSERT INTO payment_method_fees (method, gateway_fee_percent, gateway_fee_fixed,
 ON CONFLICT (method) DO NOTHING;
 
 
+-- Public catalogue read (anon) — Source: database/public_catalog_read.sql
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'product_categories'
+      AND policyname = 'anon_select_public_product_categories'
+  ) THEN
+    CREATE POLICY anon_select_public_product_categories
+      ON public.product_categories
+      FOR SELECT
+      TO anon
+      USING (is_active = true);
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'products'
+      AND policyname = 'anon_select_public_products'
+  ) THEN
+    CREATE POLICY anon_select_public_products
+      ON public.products
+      FOR SELECT
+      TO anon
+      USING (
+        NOT is_hidden
+        AND status = 'Active'::product_status
+        AND category_id IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM public.product_categories pc
+          WHERE pc.id = products.category_id AND pc.is_active = true
+        )
+      );
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'product_variants'
+      AND policyname = 'anon_select_public_product_variants'
+  ) THEN
+    CREATE POLICY anon_select_public_product_variants
+      ON public.product_variants
+      FOR SELECT
+      TO anon
+      USING (
+        NOT is_hidden
+        AND status = 'Active'::product_status
+        AND EXISTS (
+          SELECT 1 FROM public.products p
+          WHERE p.id = product_variants.product_id
+            AND NOT p.is_hidden
+            AND p.status = 'Active'::product_status
+        )
+      );
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'branches'
+      AND policyname = 'anon_select_public_branches'
+  ) THEN
+    CREATE POLICY anon_select_public_branches
+      ON public.branches
+      FOR SELECT
+      TO anon
+      USING (is_active = true);
+  END IF;
+END $$;
+
+-- Public catalogue company read (anon) — Source: database/public_catalog_company_read.sql
+CREATE OR REPLACE VIEW public.public_catalog_branches AS
+SELECT b.id, b.code, b.name
+FROM public.branches b
+WHERE b.is_active = true;
+
+DROP VIEW IF EXISTS public.public_catalog_branch_company;
+
+CREATE VIEW public.public_catalog_branch_company AS
+SELECT
+  cs.id AS settings_id,
+  cs.branch_id,
+  b.code AS branch_code,
+  b.name AS branch_name,
+  cs.company_name,
+  cs.logo_url,
+  cs.primary_email,
+  cs.primary_phone,
+  cs.website,
+  cs.company_description,
+  cs.hq_latitude,
+  cs.hq_longitude,
+  cs.hq_location_label,
+  cs.hq_street,
+  cs.hq_city,
+  cs.hq_province,
+  cs.hq_postal_code,
+  cs.hq_country,
+  cs.metadata
+FROM public.company_settings cs
+INNER JOIN public.branches b ON b.id = cs.branch_id AND b.is_active = true;
+
+CREATE OR REPLACE VIEW public.public_catalog_company_addresses AS
+SELECT
+  ca.id,
+  ca.settings_id,
+  cs.branch_id,
+  ca.address_type,
+  ca.label,
+  ca.street,
+  ca.city,
+  ca.province,
+  ca.postal_code,
+  ca.country,
+  ca.latitude,
+  ca.longitude,
+  ca.is_primary
+FROM public.company_addresses ca
+INNER JOIN public.company_settings cs ON cs.id = ca.settings_id
+WHERE EXISTS (
+  SELECT 1 FROM public.branches b
+  WHERE b.id = cs.branch_id AND b.is_active = true
+);
+
+CREATE OR REPLACE VIEW public.public_catalog_company_contacts AS
+SELECT
+  cc.id,
+  cc.settings_id,
+  cs.branch_id,
+  cc.contact_type,
+  cc.name,
+  cc.position,
+  cc.email,
+  cc.phone,
+  cc.is_primary
+FROM public.company_contacts cc
+INNER JOIN public.company_settings cs ON cs.id = cc.settings_id
+WHERE EXISTS (
+  SELECT 1 FROM public.branches b
+  WHERE b.id = cs.branch_id AND b.is_active = true
+);
+
+GRANT SELECT ON public.public_catalog_branches TO anon, authenticated;
+GRANT SELECT ON public.public_catalog_branch_company TO anon, authenticated;
+GRANT SELECT ON public.public_catalog_company_addresses TO anon, authenticated;
+GRANT SELECT ON public.public_catalog_company_contacts TO anon, authenticated;
+
+
 -- ============================================================================
 -- SCHEMA COMPLETE
 -- Total: ~72 tables, ~120 enums, ~155 indexes, ~10 RPC functions, 1 view,
