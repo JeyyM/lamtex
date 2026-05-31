@@ -83,6 +83,11 @@ import {
   type TripDriverAssignedEmailPayload,
 } from './email/tripDriverAssignedEmail';
 import {
+  buildTripDelayedEmailHtml,
+  tripDelayedSubject,
+  type TripDelayedEmailPayload,
+} from './email/tripDelayedEmail';
+import {
   buildProductStockAlertEmailHtml,
   type ProductStockAlertEmailPayload,
 } from './email/productStockAlertEmail';
@@ -1613,6 +1618,54 @@ app.post('/api/notifications/trip-driver-assigned', async (req, res) => {
       return;
     }
     console.error('[notify-server] trip-driver-assigned', err);
+    res.status(502).json({ error: message });
+  }
+});
+
+app.post('/api/notifications/trip-delayed', async (req, res) => {
+  try {
+    const payload = req.body as TripDelayedEmailPayload;
+    if (!payload?.tripId || !payload?.tripNumber || !payload?.notifyTarget) {
+      res.status(400).json({ error: 'Missing tripId, tripNumber, or notifyTarget' });
+      return;
+    }
+
+    const subject = tripDelayedSubject(payload);
+    const html = buildTripDelayedEmailHtml(payload);
+
+    if (payload.notifyTarget === 'logistics') {
+      const emails = (payload.logisticsEmails ?? []).map((e) => e?.trim()).filter(Boolean) as string[];
+      const targets = emails.length > 0 ? emails : [null];
+      const uniqueRecipients = [...new Set(targets.map((email) => resolveRecipient(email)))];
+      const sent: Array<{ id?: string; sentTo: string }> = [];
+      for (const sentTo of uniqueRecipients) {
+        const { id } = await sendViaResend({
+          to: sentTo,
+          subject,
+          html,
+          entityRef: emailEntityRef(payload.tripId, 'trip-delayed-logistics'),
+        });
+        sent.push({ id, sentTo });
+      }
+      res.json({ ok: true, subject, sentCount: sent.length, sent, notifyTarget: payload.notifyTarget });
+      return;
+    }
+
+    const sentTo = resolveRecipient(payload.agentEmail);
+    const { id } = await sendViaResend({
+      to: sentTo,
+      subject,
+      html,
+      entityRef: emailEntityRef(payload.orderId ?? payload.tripId, 'trip-delayed-agent'),
+    });
+    res.json({ ok: true, id, sentTo, subject, notifyTarget: payload.notifyTarget });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Internal error';
+    if (message.includes('RESEND_API_KEY')) {
+      res.status(503).json({ error: message });
+      return;
+    }
+    console.error('[notify-server] trip-delayed', err);
     res.status(502).json({ error: message });
   }
 });

@@ -664,14 +664,14 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
     };
   }, [isOpen, trip.id, trip.orders.join('|')]);
 
+  const allOrdersReadyForInTransit = React.useMemo(() => {
+    if (!isOpen || ordersLoading || ordersData.length === 0) return false;
+    return ordersData.every(({ order }) => orderReadyForInTransit(order.id, order.status));
+  }, [isOpen, ordersData, orderReadyForInTransit, ordersLoading]);
+
   if (!isOpen) return null;
 
   const customersInTrip = ordersData;
-
-  const allOrdersReadyForInTransit = React.useMemo(() => {
-    if (ordersLoading || customersInTrip.length === 0) return false;
-    return customersInTrip.every(({ order }) => orderReadyForInTransit(order.id, order.status));
-  }, [customersInTrip, orderReadyForInTransit, ordersLoading]);
 
   const getStatusColor = (status: string) => {
     if (status === 'Delivered' || status === 'Complete') return 'success';

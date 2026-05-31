@@ -122,10 +122,7 @@ export function buildOrderDeliveryProofUploadedEmailHtml(
 
   const logisticsRows = isOther || isPayment
     ? ''
-    : [
-        p.deliveryType ? detailRow('Delivery type', p.deliveryType) : '',
-        p.deliveryAddress ? detailRow('Delivery address', p.deliveryAddress) : '',
-      ]
+    : [p.deliveryAddress ? detailRow('Delivery address', p.deliveryAddress) : '']
         .filter(Boolean)
         .join('');
 

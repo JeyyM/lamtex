@@ -31,6 +31,8 @@ import type {
   OrderRevisedNotifyPayload,
   OrderScheduledNotifyPayload,
   TripDriverAssignedNotifyPayload,
+  TripDelayedNotifyPayload,
+  TripDelayedAffectedOrderNotify,
   ProductStockAlertEmailRequestPayload,
   ProductStockAlertSeverity,
   ProductStockAlertAudience,
@@ -3563,6 +3565,207 @@ export async function notifyDriverTripAssigned(
   }
 
   await sendTripDriverAssignedNotificationEmail(payload);
+}
+
+const TRIP_DELAY_SKIP_ORDER_STATUSES = new Set([
+  'Delivered',
+  'Partially Fulfilled',
+  'Completed',
+  'Cancelled',
+]);
+
+export async function buildTripDelayedNotifyPayload(
+  tripId: string,
+  opts: { delayReason: string; reportedBy?: string | null },
+): Promise<TripDelayedNotifyPayload | null> {
+  const { data: trip, error } = await supabase
+    .from('trips')
+    .select(`
+      id, trip_number, vehicle_name, driver_name, branch_id, order_ids,
+      branches(name)
+    `)
+    .eq('id', tripId)
+    .maybeSingle();
+
+  if (error || !trip) {
+    console.warn('[notifications] Could not load trip for delay notify', error);
+    return null;
+  }
+
+  const t = trip as Record<string, unknown>;
+  const orderIds = Array.isArray(t.order_ids) ? (t.order_ids as string[]) : [];
+  if (!orderIds.length) return null;
+
+  const { data: orders, error: ordersErr } = await supabase
+    .from('orders')
+    .select('id, order_number, customer_name, status, required_date, total_amount, agent_id')
+    .in('id', orderIds);
+
+  if (ordersErr) {
+    console.warn('[notifications] Could not load trip orders for delay notify', ordersErr);
+    return null;
+  }
+
+  const pendingRows = (orders ?? []).filter(
+    (row) => !TRIP_DELAY_SKIP_ORDER_STATUSES.has(String((row as { status?: string }).status ?? '').trim()),
+  );
+
+  const agentIds = [
+    ...new Set(
+      pendingRows
+        .map((row) => String((row as { agent_id?: string | null }).agent_id ?? '').trim())
+        .filter(Boolean),
+    ),
+  ];
+  const agentById = new Map<string, { name: string | null; email: string | null }>();
+  if (agentIds.length) {
+    const { data: agents } = await supabase
+      .from('employees')
+      .select('id, name, email')
+      .in('id', agentIds);
+    for (const agent of agents ?? []) {
+      const a = agent as { id?: string; name?: string | null; email?: string | null };
+      if (a.id) {
+        agentById.set(String(a.id), {
+          name: a.name?.trim() || null,
+          email: a.email?.trim() || null,
+        });
+      }
+    }
+  }
+
+  const affectedOrders: TripDelayedAffectedOrderNotify[] = pendingRows
+    .map((row) => {
+      const r = row as {
+        id?: string;
+        order_number?: string | null;
+        customer_name?: string | null;
+        status?: string | null;
+        required_date?: string | null;
+        total_amount?: number | null;
+        agent_id?: string | null;
+      };
+      const agent = r.agent_id ? agentById.get(String(r.agent_id)) : undefined;
+      return {
+        orderId: String(r.id ?? ''),
+        orderNumber: String(r.order_number ?? ''),
+        customerName: r.customer_name?.trim() || null,
+        status: String(r.status ?? '').trim() || 'Scheduled',
+        requiredDate: r.required_date ? String(r.required_date).slice(0, 10) : null,
+        totalAmount: r.total_amount != null ? Number(r.total_amount) : undefined,
+        agentEmail: agent?.email ?? null,
+        agentName: agent?.name ?? null,
+      };
+    })
+    .filter((o) => o.orderId && o.orderNumber);
+
+  if (!affectedOrders.length) return null;
+
+  const branchId = (t.branch_id as string | null)?.trim() || null;
+  const logisticsEmails = branchId ? await fetchBranchLogisticsEmails(branchId) : [];
+  const branchName = (t.branches as { name?: string } | null)?.name ?? null;
+
+  return {
+    tripId,
+    tripNumber: String(t.trip_number ?? ''),
+    delayReason: opts.delayReason.trim(),
+    reportedBy: opts.reportedBy ?? null,
+    vehicleName: (t.vehicle_name as string | null) ?? null,
+    driverName: (t.driver_name as string | null) ?? null,
+    branchName,
+    logisticsEmails,
+    affectedOrders,
+  };
+}
+
+async function sendTripDelayedNotificationEmail(
+  payload: TripDelayedNotifyPayload & {
+    notifyTarget: 'logistics' | 'agent';
+    orderId?: string;
+    orderNumber?: string;
+    customerName?: string | null;
+    status?: string;
+    requiredDate?: string | null;
+    totalAmount?: number;
+    agentEmail?: string | null;
+    agentName?: string | null;
+  },
+): Promise<void> {
+  try {
+    const res = await notifyFetch('/api/notifications/trip-delayed', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tripId: payload.tripId,
+        tripNumber: payload.tripNumber,
+        delayReason: payload.delayReason,
+        reportedBy: payload.reportedBy,
+        vehicleName: payload.vehicleName,
+        driverName: payload.driverName,
+        branchName: payload.branchName,
+        affectedOrders: payload.affectedOrders.map((o) => ({
+          orderId: o.orderId,
+          orderNumber: o.orderNumber,
+          customerName: o.customerName,
+          status: o.status,
+          requiredDate: o.requiredDate,
+          totalAmount: o.totalAmount,
+        })),
+        notifyTarget: payload.notifyTarget,
+        logisticsEmails: payload.logisticsEmails,
+        orderId: payload.orderId,
+        orderNumber: payload.orderNumber,
+        customerName: payload.customerName,
+        status: payload.status,
+        requiredDate: payload.requiredDate,
+        totalAmount: payload.totalAmount,
+        agentEmail: payload.agentEmail,
+        agentName: payload.agentName,
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      console.warn('[notifications] Trip delayed email failed', body);
+    }
+  } catch (e) {
+    console.warn('[notifications] Trip delayed email API unreachable', e);
+  }
+}
+
+export async function notifyTripDelayed(
+  tripId: string,
+  opts: { delayReason: string; reportedBy?: string | null },
+): Promise<void> {
+  const { error: rpcError } = await supabase.rpc('notify_trip_delayed', {
+    p_trip_id: tripId,
+    p_delay_reason: opts.delayReason,
+    p_reported_by: opts.reportedBy ?? null,
+  });
+  if (rpcError) {
+    console.error('[notifications] RPC notify_trip_delayed failed', rpcError);
+  }
+
+  const payload = await buildTripDelayedNotifyPayload(tripId, opts);
+  if (payload) {
+    await sendTripDelayedNotificationEmail({ ...payload, notifyTarget: 'logistics' });
+    for (const order of payload.affectedOrders) {
+      if (!order.agentEmail?.trim()) continue;
+      await sendTripDelayedNotificationEmail({
+        ...payload,
+        notifyTarget: 'agent',
+        orderId: order.orderId,
+        orderNumber: order.orderNumber,
+        customerName: order.customerName,
+        status: order.status,
+        requiredDate: order.requiredDate,
+        totalAmount: order.totalAmount,
+        agentEmail: order.agentEmail,
+        agentName: order.agentName,
+      });
+    }
+  }
+
+  window.dispatchEvent(new Event('lamtex:notifications-refresh'));
 }
 
 // ───────────────────────────────────────────────────────────────────────────

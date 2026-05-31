@@ -1,4 +1,13 @@
 import { supabase } from '@/src/lib/supabase';
+import { notifyTripDelayed } from '@/src/lib/notifications/notificationsData';
+
+/** Order workflow statuses excluded from trip-delay alerts and delivery_status flagging. */
+export const TRIP_DELAY_TERMINAL_ORDER_STATUSES = new Set([
+  'Delivered',
+  'Partially Fulfilled',
+  'Completed',
+  'Cancelled',
+]);
 
 /** Workflow statuses where a trip delay should surface on the order list. */
 const DELAY_ELIGIBLE_ORDER_STATUSES = new Set([
@@ -7,7 +16,6 @@ const DELAY_ELIGIBLE_ORDER_STATUSES = new Set([
   'Packed',
   'Ready',
   'In Transit',
-  'Partially Fulfilled',
 ]);
 
 const DELAY_EXCEPTION_TYPES = new Set([
@@ -160,10 +168,39 @@ export async function reportTripDelay(params: {
 
   if (tripErr) return { ok: false, error: tripErr.message };
 
-  const orderIds = [...new Set((params.orderIds ?? []).map((id) => id.trim()).filter(Boolean))];
-  if (orderIds.length) {
+  const rawOrderIds = [...new Set((params.orderIds ?? []).map((id) => id.trim()).filter(Boolean))];
+  let affectedOrderIds = rawOrderIds;
+  let orderNumbers = params.orderNumbers ?? [];
+  let customerNames = params.customerNames ?? [];
+
+  if (rawOrderIds.length) {
+    const { data: orderRows, error: orderLookupErr } = await supabase
+      .from('orders')
+      .select('id, order_number, customer_name, status')
+      .in('id', rawOrderIds);
+    if (orderLookupErr) {
+      if (import.meta.env.DEV) console.warn('[delay] order lookup failed:', orderLookupErr.message);
+    } else {
+      const affected = (orderRows ?? []).filter(
+        (row) => !TRIP_DELAY_TERMINAL_ORDER_STATUSES.has(String(row.status ?? '').trim()),
+      );
+      affectedOrderIds = affected.map((row) => String(row.id));
+      orderNumbers = affected
+        .map((row) => String(row.order_number ?? '').trim())
+        .filter(Boolean);
+      customerNames = [
+        ...new Set(
+          affected
+            .map((row) => String(row.customer_name ?? '').trim())
+            .filter(Boolean),
+        ),
+      ];
+    }
+  }
+
+  if (affectedOrderIds.length) {
     try {
-      await markOrdersDelayedForTrip(orderIds);
+      await markOrdersDelayedForTrip(affectedOrderIds);
     } catch (ordErr) {
       if (import.meta.env.DEV) console.warn('[delay] could not flag orders delayed:', ordErr);
     }
@@ -175,8 +212,15 @@ export async function reportTripDelay(params: {
     branchId: params.branchId,
     delayReason: reason,
     owner: params.owner,
-    orderNumbers: params.orderNumbers,
-    customerNames: params.customerNames,
+    orderNumbers,
+    customerNames,
+  });
+
+  void notifyTripDelayed(params.tripId, {
+    delayReason: reason,
+    reportedBy: params.owner ?? null,
+  }).catch((notifyErr) => {
+    if (import.meta.env.DEV) console.warn('[delay] trip delayed notify failed:', notifyErr);
   });
 
   return { ok: true };

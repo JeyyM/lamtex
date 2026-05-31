@@ -162,6 +162,29 @@ export interface TripDriverAssignedNotifyPayload {
   destinationLabel?: string | null;
 }
 
+export interface TripDelayedAffectedOrderNotify {
+  orderId: string;
+  orderNumber: string;
+  customerName: string | null;
+  status: string;
+  requiredDate?: string | null;
+  totalAmount?: number;
+  agentEmail?: string | null;
+  agentName?: string | null;
+}
+
+export interface TripDelayedNotifyPayload {
+  tripId: string;
+  tripNumber: string;
+  delayReason: string;
+  reportedBy: string | null;
+  vehicleName?: string | null;
+  driverName?: string | null;
+  branchName?: string | null;
+  logisticsEmails: string[];
+  affectedOrders: TripDelayedAffectedOrderNotify[];
+}
+
 export interface OrderScheduledNotifyPayload extends OrderCreatedNotifyPayload {
   scheduledBy: string | null;
   tripNumber?: string | null;
