@@ -2155,6 +2155,7 @@ CREATE INDEX IF NOT EXISTS idx_ibr_logs_request ON inter_branch_request_logs(int
 CREATE TABLE IF NOT EXISTS inter_branch_delivery_proofs (
   id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   inter_branch_request_id  UUID NOT NULL REFERENCES inter_branch_requests(id) ON DELETE CASCADE,
+  proof_type               TEXT NOT NULL DEFAULT 'delivery',
   file_url                 TEXT NOT NULL,
   file_name                TEXT NOT NULL,
   file_size                INTEGER,
@@ -2163,7 +2164,15 @@ CREATE TABLE IF NOT EXISTS inter_branch_delivery_proofs (
   created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+DO $$ BEGIN
+  ALTER TABLE inter_branch_delivery_proofs
+    ADD CONSTRAINT inter_branch_delivery_proofs_type_check
+    CHECK (proof_type IN ('delivery', 'other'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
 CREATE INDEX IF NOT EXISTS idx_ibr_delivery_proofs_request ON inter_branch_delivery_proofs(inter_branch_request_id);
+CREATE INDEX IF NOT EXISTS idx_ibr_delivery_proofs_type
+  ON inter_branch_delivery_proofs(inter_branch_request_id, proof_type);
 
 -- FKs: IBR → PO/PR and back-references
 DO $$ BEGIN

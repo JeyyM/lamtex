@@ -49,6 +49,8 @@ import type { DriverOption, Trip, Vehicle } from '@/src/types/logistics';
 import { TripScheduleModal } from '@/src/components/logistics/TripScheduleModal';
 import { MarkIbrInTransitModal } from '@/src/components/interBranch/MarkIbrInTransitModal';
 import { RecordIbrDeliveryModal } from '@/src/components/interBranch/RecordIbrDeliveryModal';
+import IbrDocumentsProofs from '@/src/components/interBranch/IbrDocumentsProofs';
+import { fileNameFromProofUrl } from '@/src/lib/ibrProofDocuments';
 import type { FulfillmentData } from '@/src/components/orders/FulfillOrderModal';
 import RawMaterialPickerModal from '@/src/components/products/RawMaterialPickerModal';
 import {
@@ -581,7 +583,10 @@ function buildIbrLogLaymanSections(log: IbrLogRow): IbrLogLaymanSection[] {
 
   if (log.action === 'proof_uploaded' && meta) {
     const lines: string[] = [];
-    if (typeof meta.count === 'number') lines.push(`${meta.count} delivery photo(s) were added.`);
+    if (typeof meta.count === 'number') {
+      const kind = meta.type === 'other' ? 'other' : 'delivery';
+      lines.push(`${meta.count} ${kind} proof file(s) were added.`);
+    }
     const names = strVal(meta.fileNames);
     if (names) lines.push(`File names: ${names}.`);
     if (lines.length) out.push({ heading: 'Proof of delivery', lines });
@@ -700,14 +705,6 @@ function IbrActivityLogHumanDetails({ log }: { log: IbrLogRow }) {
     </div>
   );
 }
-
-type IbrDeliveryProofRow = {
-  id: string;
-  file_url: string;
-  file_name: string;
-  created_at: string;
-  uploaded_by: string | null;
-};
 
 const logRoleMap: Record<string, string> = {
   Executive: 'Admin',
@@ -1058,8 +1055,8 @@ export function InterBranchRequestDetailPage() {
   const [showResubmitIbrModal, setShowResubmitIbrModal] = useState(false);
   /** False when DB has no `quantity_shipped` / `quantity_delivered` columns (migration not applied). */
   const [ibrShipmentTrackingAvailable, setIbrShipmentTrackingAvailable] = useState<boolean | null>(null);
-  const [deliveryProofs, setDeliveryProofs] = useState<IbrDeliveryProofRow[]>([]);
   const [ibrLogs, setIbrLogs] = useState<IbrLogRow[]>([]);
+  const [ibrProofListVersion, setIbrProofListVersion] = useState(0);
   const [ibrLogPage, setIbrLogPage] = useState(1);
 
   const loadRefs = useCallback(async () => {
@@ -1376,18 +1373,11 @@ export function InterBranchRequestDetailPage() {
       setNotes(header.notes ?? '');
       setIbrShipmentTrackingAvailable(supportsShipmentTracking);
 
-      const [logsRes, proofsRes] = await Promise.all([
-        supabase
-          .from('inter_branch_request_logs')
-          .select('id, action, performed_by, performed_by_role, description, created_at, old_value, new_value, metadata')
-          .eq('inter_branch_request_id', requestId)
-          .order('created_at', { ascending: false }),
-        supabase
-          .from('inter_branch_delivery_proofs')
-          .select('id, file_url, file_name, created_at, uploaded_by')
-          .eq('inter_branch_request_id', requestId)
-          .order('created_at', { ascending: false }),
-      ]);
+      const logsRes = await supabase
+        .from('inter_branch_request_logs')
+        .select('id, action, performed_by, performed_by_role, description, created_at, old_value, new_value, metadata')
+        .eq('inter_branch_request_id', requestId)
+        .order('created_at', { ascending: false });
       if (!logsRes.error) {
         const rawLogs = (logsRes.data ?? []) as IbrLogRow[];
         setIbrLogs(
@@ -1399,12 +1389,10 @@ export function InterBranchRequestDetailPage() {
           })),
         );
       } else setIbrLogs([]);
-      if (!proofsRes.error) setDeliveryProofs((proofsRes.data ?? []) as IbrDeliveryProofRow[]);
-      else setDeliveryProofs([]);
+      setIbrProofListVersion((v) => v + 1);
     } catch (e: unknown) {
       setIbrShipmentTrackingAvailable(null);
       setIbrLogs([]);
-      setDeliveryProofs([]);
       setError(e instanceof Error ? e.message : 'Failed to load');
     } finally {
       setLoading(false);
@@ -2349,15 +2337,10 @@ export function InterBranchRequestDetailPage() {
       if (proofImageUrls.length > 0) {
         for (let i = 0; i < proofImageUrls.length; i++) {
           const url = proofImageUrls[i]!;
-          const raw = url.split('/').pop()?.split('?')[0] ?? `delivery-proof-${i}`;
-          let fileName = raw;
-          try {
-            fileName = decodeURIComponent(raw);
-          } catch {
-            fileName = raw;
-          }
+          const fileName = fileNameFromProofUrl(url, `delivery-proof-${i}`);
           const { error: pe } = await supabase.from('inter_branch_delivery_proofs').insert({
             inter_branch_request_id: id,
+            proof_type: 'delivery',
             file_url: url,
             file_name: fileName,
             uploaded_by: performedBy,
@@ -2365,21 +2348,14 @@ export function InterBranchRequestDetailPage() {
           if (pe) throw pe;
         }
         const names = proofImageUrls
-          .map((u, i) => {
-            const raw = u.split('/').pop()?.split('?')[0] ?? `image-${i}`;
-            try {
-              return decodeURIComponent(raw);
-            } catch {
-              return raw;
-            }
-          })
+          .map((u, i) => fileNameFromProofUrl(u, `image-${i}`))
           .join(', ');
         await insertIbrLog(
           'proof_uploaded',
-          `Proof of delivery: ${proofImageUrls.length} image(s) — ${names}`,
+          `Delivery proof: ${proofImageUrls.length} image(s) — ${names}`,
           null,
           null,
-          { count: proofImageUrls.length, fileNames: names, source: 'image_gallery' },
+          { count: proofImageUrls.length, fileNames: names, source: 'record_delivery', type: 'delivery' },
         );
       }
 
@@ -2713,6 +2689,10 @@ export function InterBranchRequestDetailPage() {
     !isEditing &&
     !['Cancelled', 'Rejected', 'Completed', 'Fulfilled'].includes(ibr.status) &&
     perms.creation;
+  const canUploadIbrProofs =
+    perms.documents &&
+    !isEditing &&
+    !['Draft', 'Pending', 'Rejected', 'Cancelled'].includes(ibr.status);
 
   if (!perms.pageAccess) {
     return <ModuleAccessDenied moduleName="Inter-branch Requests" />;
@@ -3724,52 +3704,16 @@ export function InterBranchRequestDetailPage() {
             </CardContent>
           </Card>
 
-          {perms.documents && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <ImageIcon className="w-5 h-5" />
-                Proof of delivery
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {deliveryProofs.length === 0 ? (
-                <p className="text-sm text-gray-500 text-center py-6">No proof photos yet.</p>
-              ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                  {deliveryProofs.map((p) => (
-                    <a
-                      key={p.id}
-                      href={p.file_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="group relative rounded-xl overflow-hidden border border-gray-200 bg-gray-50 aspect-square"
-                    >
-                      <img
-                        src={p.file_url}
-                        alt=""
-                        className="w-full h-full object-cover"
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).style.display = 'none';
-                        }}
-                      />
-                      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent px-2 py-1.5">
-                        <p className="text-white text-[10px] truncate">{p.file_name}</p>
-                        <p className="text-white/70 text-[9px]">
-                          {new Date(p.created_at).toLocaleDateString('en-PH', {
-                            month: 'short',
-                            day: 'numeric',
-                            year: 'numeric',
-                          })}
-                          {p.uploaded_by ? ` · ${p.uploaded_by}` : ''}
-                        </p>
-                      </div>
-                    </a>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
+          {perms.documents && id && (
+            <IbrDocumentsProofs
+              requestId={id}
+              ibrNumber={ibr.ibr_number}
+              canUpload={canUploadIbrProofs}
+              employeeName={employeeName}
+              sessionEmail={session?.user?.email ?? null}
+              refreshToken={ibrProofListVersion}
+              onInsertLog={insertIbrLog}
+            />
           )}
 
           {perms.activityLog && (
