@@ -51,6 +51,10 @@ import {
   type OrderCustomerUnscheduledEmailPayload,
 } from './email/orderCustomerUnscheduledEmail';
 import {
+  buildOrderCustomerTripCancelledEmailHtml,
+  type OrderCustomerTripCancelledEmailPayload,
+} from './email/orderCustomerTripCancelledEmail';
+import {
   buildOrderCustomerCancelledEmailHtml,
   orderCustomerCancelledSubject,
   type OrderCustomerCancelledEmailPayload,
@@ -180,6 +184,7 @@ import {
   orderCustomerApprovedSubject,
   orderCustomerScheduledSubject,
   orderCustomerUnscheduledSubject,
+  orderCustomerTripCancelledSubject,
   orderCustomerPortalShareSubject,
   orderDeliveryProofUploadedAgentSubject,
   orderOtherProofUploadedAgentSubject,
@@ -1480,6 +1485,35 @@ app.post('/api/notifications/order-unscheduled-customer', async (req, res) => {
       return;
     }
     console.error('[notify-server] order-unscheduled-customer', err);
+    res.status(502).json({ error: message });
+  }
+});
+
+app.post('/api/notifications/order-customer-trip-cancelled', async (req, res) => {
+  try {
+    const payload = req.body as OrderCustomerTripCancelledEmailPayload;
+    if (!payload?.orderId || !payload?.orderNumber || !payload?.customerEmail?.trim()) {
+      res.status(400).json({ error: 'Missing orderId, orderNumber, or customerEmail' });
+      return;
+    }
+
+    const subject = orderCustomerTripCancelledSubject(payload);
+    const html = buildOrderCustomerTripCancelledEmailHtml(payload);
+    const sentTo = resolveRecipient(payload.customerEmail);
+    const { id } = await sendViaResend({
+      to: sentTo,
+      subject,
+      html,
+      entityRef: emailEntityRef(payload.orderId, 'customer-trip-cancelled'),
+    });
+    res.json({ ok: true, id, sentTo, subject });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Internal error';
+    if (message.includes('RESEND_API_KEY')) {
+      res.status(503).json({ error: message });
+      return;
+    }
+    console.error('[notify-server] order-customer-trip-cancelled', err);
     res.status(502).json({ error: message });
   }
 });

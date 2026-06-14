@@ -81,6 +81,10 @@ export function TripsDispatchTable({
           av = a.vehicleName.toLowerCase();
           bv = b.vehicleName.toLowerCase();
           break;
+        case 'tripNumber':
+          av = (a.tripNumber || a.id).toLowerCase();
+          bv = (b.tripNumber || b.id).toLowerCase();
+          break;
         case 'orders':
           av = a.orders.length;
           bv = b.orders.length;
@@ -138,7 +142,7 @@ export function TripsDispatchTable({
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input
               type="text"
-              placeholder="Search trip, driver, customer, order ID, destination…"
+              placeholder="Search trip ID, driver, customer, order ID, destination…"
               value={searchQuery}
               onChange={(e) => onSearchQueryChange(e.target.value)}
               disabled={loading}
@@ -172,12 +176,12 @@ export function TripsDispatchTable({
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
                     <th
-                      onClick={() => handleSort('vehicleName')}
+                      onClick={() => handleSort('tripNumber')}
                       className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100"
                     >
                       <span className="inline-flex items-center">
-                        Vehicle & Driver
-                        <SortIcon active={sortKey === 'vehicleName'} dir={sortDir} />
+                        Trip · Vehicle & Driver
+                        <SortIcon active={sortKey === 'tripNumber' || sortKey === 'vehicleName'} dir={sortDir} />
                       </span>
                     </th>
                     <th
@@ -236,6 +240,7 @@ export function TripsDispatchTable({
                         <div className="flex items-center gap-2">
                           <Truck className="w-4 h-4 text-gray-400" />
                           <div>
+                            <div className="text-xs font-semibold text-gray-700 font-mono tracking-tight">{trip.tripNumber}</div>
                             <div className="text-sm font-medium text-gray-900">{trip.vehicleName}</div>
                             <div className="text-xs text-gray-500">{trip.driverName || '—'}</div>
                           </div>
@@ -285,11 +290,9 @@ export function TripsDispatchTable({
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-gray-900 break-words">{trip.vehicleName}</p>
-                      <p className="text-xs text-gray-500 mt-1 break-words">
-                        {trip.customerLabel ?? trip.destinations[0] ?? '—'} • {trip.orders.length} order
-                        {trip.orders.length !== 1 ? 's' : ''}
-                      </p>
+                      <p className="text-xs font-semibold text-gray-700 font-mono tracking-tight">{trip.tripNumber}</p>
+                      <p className="text-sm font-medium text-gray-900 break-words mt-0.5">{trip.vehicleName}</p>
+                      <p className="text-xs text-gray-500 mt-1 break-words">{trip.driverName || 'No driver'}</p>
                     </div>
                     <Badge variant={dispatchTableStatusBadgeVariant(resolveStatus(trip))} className="flex-shrink-0">
                       {resolveStatus(trip)}

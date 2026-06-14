@@ -215,6 +215,8 @@ export function LogisticsPage() {
   /** Prefer trip-level Delayed so reporting a delay is not hidden by orders still marked In Transit. */
   const lowestOrderStatus = (tripId: string, tripStatus: string) => {
     if (tripStatus === 'Delayed') return 'Delayed';
+    if (tripStatus === 'Cancelled') return 'Cancelled';
+    if (tripStatus === 'Complete') return 'Complete';
     return tripLowestOrderStatus[tripId] ?? tripStatus;
   };
 
@@ -318,6 +320,10 @@ export function LogisticsPage() {
         const perTripMap: Record<string, Record<string, string>> = {};
         for (const trip of tripsResult.trips) {
           if (!trip.orders.length) continue;
+          if (trip.status === 'Cancelled' || trip.status === 'Delayed' || trip.status === 'Complete') {
+            lowest[trip.id] = trip.status;
+            continue;
+          }
           let lowestRank = Infinity;
           let lowestSt: string = trip.status;
           perTripMap[trip.id] = {};
@@ -672,6 +678,10 @@ export function LogisticsPage() {
         case 'vehicleName':
           av = a.vehicleName.toLowerCase();
           bv = b.vehicleName.toLowerCase();
+          break;
+        case 'tripNumber':
+          av = (a.tripNumber || a.id).toLowerCase();
+          bv = (b.tripNumber || b.id).toLowerCase();
           break;
         case 'driverName':
           av = (a.driverName || '').toLowerCase();
@@ -1060,7 +1070,7 @@ export function LogisticsPage() {
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                     <input
                       type="text"
-                      placeholder={isInterIsland ? 'Search shipment, container, customer, order ID, route…' : 'Search trip, driver, customer, order ID, destination…'}
+                      placeholder={isInterIsland ? 'Search trip ID, container, customer, order ID, route…' : 'Search trip ID, driver, customer, order ID, destination…'}
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                       disabled={logisticsLoading}
@@ -1109,10 +1119,10 @@ export function LogisticsPage() {
                   <thead className="bg-gray-50 border-b border-gray-200">
                     <tr>
                       <th
-                        onClick={() => handleTripSort('vehicleName')}
+                        onClick={() => handleTripSort('tripNumber')}
                         className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
                       >
-                        <span className="inline-flex items-center">{isInterIsland ? 'Container & route' : 'Vehicle & Driver'}{tripSortIcon('vehicleName')}</span>
+                        <span className="inline-flex items-center">{isInterIsland ? 'Trip · Container & route' : 'Trip · Vehicle & Driver'}{tripSortIcon('tripNumber')}</span>
                       </th>
                       <th
                         onClick={() => handleTripSort('customer')}
@@ -1174,9 +1184,10 @@ export function LogisticsPage() {
                               <Truck className="w-4 h-4 text-gray-400" />
                             )}
                             <div>
+                              <div className="text-xs font-semibold text-gray-700 font-mono tracking-tight">{trip.tripNumber}</div>
                               <div className="text-sm font-medium text-gray-900">{trip.vehicleName}</div>
                               <div className="text-xs text-gray-500">
-                                {isInterIsland ? (trip.destinations[0] || trip.tripNumber) : (trip.driverName || '—')}
+                                {isInterIsland ? (trip.destinations[0] || '—') : (trip.driverName || '—')}
                               </div>
                             </div>
                           </div>
@@ -1228,9 +1239,10 @@ export function LogisticsPage() {
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0 flex-1">
-                        <p className="text-sm font-medium text-gray-900 break-words">{trip.vehicleName}</p>
+                        <p className="text-xs font-semibold text-gray-700 font-mono tracking-tight">{trip.tripNumber}</p>
+                        <p className="text-sm font-medium text-gray-900 break-words mt-0.5">{trip.vehicleName}</p>
                         <p className="text-xs text-gray-500 mt-1 break-words">
-                          {trip.customerLabel ?? trip.destinations[0] ?? '—'} • {trip.orders.length} order{trip.orders.length !== 1 ? 's' : ''}
+                          {isInterIsland ? (trip.destinations[0] || '—') : (trip.driverName || '—')} • {trip.orders.length} order{trip.orders.length !== 1 ? 's' : ''}
                         </p>
                       </div>
                       <Badge variant={getStatusColor(lowestOrderStatus(trip.id, trip.status))} className="flex-shrink-0">
@@ -1696,6 +1708,9 @@ export function LogisticsPage() {
             });
           }}
           onTripStatusChange={(tripId, newStatus, extra) => {
+            if (newStatus === 'Cancelled') {
+              setTripLowestOrderStatus((s) => ({ ...s, [tripId]: 'Cancelled' }));
+            }
             setScheduleTrips((prev) => prev.map((t) =>
               t.id === tripId
                 ? {

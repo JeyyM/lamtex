@@ -30,6 +30,7 @@ export function tripMatchesDispatchSearch(
   };
 
   if (matchText(trip.tripNumber)) return true;
+  if (matchText(trip.id)) return true;
   if (matchText(trip.driverName)) return true;
   if (matchText(trip.vehicleName)) return true;
   if (matchText(trip.plateNumber)) return true;

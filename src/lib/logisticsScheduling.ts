@@ -11,6 +11,7 @@ import {
   notifyLogisticsOrderLoading,
   notifyOrdersScheduled,
   notifyOrdersUnscheduledFromTripCancel,
+  notifyCustomerOrdersTripCancelled,
   notifyTripCancelled,
 } from '@/src/lib/notifications/notificationsData';
 import { fetchOrderLoadByOrderId, orderLoadWithFallback } from '@/src/lib/orderLoadMetrics';
@@ -371,6 +372,8 @@ export function tripStatusBadgeClass(status: string): string {
     case 'Complete':
     case 'Delivered':
       return 'bg-emerald-100 text-emerald-900 border-emerald-400';
+    case 'Cancelled':
+      return 'bg-red-100 text-red-900 border-red-400 ring-1 ring-red-200/80';
     default:
       return 'bg-amber-50 text-amber-950 border-amber-300';
   }
@@ -1472,6 +1475,9 @@ export async function cancelTrip(params: {
   }
 
   const tripNumber = String(tripRow.trip_number ?? '');
+  const tripScheduledDate = tripRow.scheduled_date
+    ? String(tripRow.scheduled_date).slice(0, 10)
+    : null;
 
   void notifyTripCancelled(params.tripId, {
     cancelledBy: params.cancelledBy ?? null,
@@ -1479,6 +1485,16 @@ export async function cancelTrip(params: {
   }).catch((e) => {
     console.warn('[logisticsScheduling] trip cancelled notification failed', e);
   });
+
+  if (orderIds.length > 0) {
+    void notifyCustomerOrdersTripCancelled(orderIds, {
+      tripNumber,
+      tripScheduledDate,
+      cancellationReason: params.cancellationReason ?? null,
+    }).catch((e) => {
+      console.warn('[logisticsScheduling] customer trip cancelled notifications failed', e);
+    });
+  }
 
   if (revertedOrderIds.length > 0) {
     void notifyOrdersUnscheduledFromTripCancel(revertedOrderIds, {

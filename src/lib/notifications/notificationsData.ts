@@ -18,6 +18,7 @@ import type {
   OrderCustomerDeliveryRecordedNotifyPayload,
   OrderCustomerPaymentRecordedNotifyPayload,
   OrderCustomerUnscheduledNotifyPayload,
+  OrderCustomerTripCancelledNotifyPayload,
   OrderCustomerPortalShareNotifyPayload,
   OrderDecisionNotifyPayload,
   OrderLogisticsReadyNotifyPayload,
@@ -3679,10 +3680,83 @@ export async function notifyOrderUnscheduledFromTrip(
   if (payload.agentEmail?.trim()) {
     await sendOrderUnscheduledFromTripNotificationEmail(payload, 'agent');
   }
+}
 
-  await notifyCustomerOrderUnscheduled(orderUuid, {
-    previousScheduledDate: payload.previousScheduledDate,
-  });
+export async function buildOrderCustomerTripCancelledNotifyPayload(
+  orderUuid: string,
+  opts: {
+    tripNumber?: string | null;
+    tripScheduledDate?: string | null;
+    cancellationReason?: string | null;
+  },
+): Promise<OrderCustomerTripCancelledNotifyPayload | null> {
+  const order = await fetchOrderDetailSnapshotForNotify(orderUuid);
+  if (!order) return null;
+
+  const base = await buildOrderCustomerNotifyPayload(order, orderUuid, { status: order.status });
+  if (!base) return null;
+
+  return {
+    ...base,
+    tripNumber: opts.tripNumber ?? null,
+    tripScheduledDate: opts.tripScheduledDate ?? null,
+    cancellationReason: opts.cancellationReason ?? null,
+  };
+}
+
+async function sendOrderCustomerTripCancelledNotificationEmail(
+  payload: OrderCustomerTripCancelledNotifyPayload,
+): Promise<boolean> {
+  try {
+    const res = await notifyFetch('/api/notifications/order-customer-trip-cancelled', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      console.warn('[notifications] Customer trip cancelled email failed', body);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn('[notifications] Customer trip cancelled email API unreachable', e);
+    return false;
+  }
+}
+
+export async function notifyCustomerOrderTripCancelled(
+  orderUuid: string,
+  opts: {
+    tripNumber?: string | null;
+    tripScheduledDate?: string | null;
+    cancellationReason?: string | null;
+  },
+): Promise<void> {
+  const payload = await buildOrderCustomerTripCancelledNotifyPayload(orderUuid, opts);
+  if (!payload?.customerEmail?.trim()) return;
+
+  const sent = await sendOrderCustomerTripCancelledNotificationEmail(payload);
+  if (sent && payload.portalId) {
+    await recordOrderPortalEmailSent(payload.portalId, payload.customerEmail);
+  }
+}
+
+export async function notifyCustomerOrdersTripCancelled(
+  orderUuids: string[],
+  opts: {
+    tripNumber?: string | null;
+    tripScheduledDate?: string | null;
+    cancellationReason?: string | null;
+  },
+): Promise<void> {
+  for (const orderUuid of orderUuids) {
+    try {
+      await notifyCustomerOrderTripCancelled(orderUuid, opts);
+    } catch (e) {
+      console.warn('[notifications] customer trip cancelled notify failed', orderUuid, e);
+    }
+  }
 }
 
 export async function notifyOrdersUnscheduledFromTripCancel(

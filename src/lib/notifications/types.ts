@@ -153,6 +153,12 @@ export interface OrderCustomerUnscheduledNotifyPayload extends OrderCustomerAppr
   previousScheduledDate?: string | null;
 }
 
+export interface OrderCustomerTripCancelledNotifyPayload extends OrderCustomerApprovedNotifyPayload {
+  tripNumber?: string | null;
+  tripScheduledDate?: string | null;
+  cancellationReason?: string | null;
+}
+
 export interface OrderCustomerPortalShareNotifyPayload extends OrderCreatedNotifyPayload {
   customerEmail: string;
   customerContactPerson?: string | null;

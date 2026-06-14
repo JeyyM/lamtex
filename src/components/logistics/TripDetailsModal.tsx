@@ -100,7 +100,9 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
     'Partially Fulfilled': 5,
   };
   const displayTripStatus = React.useMemo(() => {
+    if (trip.status === 'Cancelled') return 'Cancelled';
     if (trip.status === 'Delayed') return 'Delayed';
+    if (trip.status === 'Complete') return 'Complete';
     const vals = Object.values(orderStatuses) as string[];
     if (!vals.length) return trip.status as string;
     let lowestRank = Infinity; let lowestSt: string = trip.status;
@@ -1413,8 +1415,8 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
             <div className="p-5 flex-1 overflow-y-auto space-y-3">
               <p className="text-sm text-gray-600 leading-relaxed">
                 Trip <strong>{trip.tripNumber}</strong> will be marked <strong>Cancelled</strong>. Active orders on
-                this trip return to <strong>Approved</strong> and re-enter the dispatch queue. Customers, agents,
-                warehouse, logistics, and the assigned driver are notified.
+                this trip return to <strong>Approved</strong> and re-enter the dispatch queue. Every customer on this
+                trip receives an email update, along with agents, warehouse, logistics, and the assigned driver.
               </p>
               <label htmlFor="cancel-trip-reason" className="block text-sm font-semibold text-gray-800">
                 Reason (optional)

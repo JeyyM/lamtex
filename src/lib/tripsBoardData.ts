@@ -40,6 +40,8 @@ function isTerminalTripStatus(status: string): boolean {
 
 export function resolveTripDisplayStatus(tripId: string, tripStatus: string, tripLowestOrderStatus: Record<string, string>): string {
   if (tripStatus === 'Delayed') return 'Delayed';
+  if (tripStatus === 'Cancelled') return 'Cancelled';
+  if (tripStatus === 'Complete') return 'Complete';
   return tripLowestOrderStatus[tripId] ?? tripStatus;
 }
 
@@ -127,6 +129,10 @@ export async function loadTripsBoard(branchName: string): Promise<TripsBoardData
 
     for (const trip of trips) {
       if (!trip.orders.length) continue;
+      if (trip.status === 'Cancelled' || trip.status === 'Delayed' || trip.status === 'Complete') {
+        tripLowestOrderStatus[trip.id] = trip.status;
+        continue;
+      }
       let lowestRank = Infinity;
       let lowestSt = trip.status;
       tripOrderStatusMap[trip.id] = {};

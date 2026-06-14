@@ -274,6 +274,13 @@ export function orderCustomerUnscheduledSubject(p: Pick<OrderRef, 'orderNumber'>
   return notificationSubject('Customer', `Update on your order ${p.orderNumber} delivery schedule`);
 }
 
+export function orderCustomerTripCancelledSubject(
+  p: Pick<OrderRef, 'orderNumber'> & { tripNumber?: string | null },
+): string {
+  const tripSuffix = p.tripNumber?.trim() ? ` — trip ${p.tripNumber.trim()} cancelled` : ' — delivery trip cancelled';
+  return notificationSubject('Customer', `Order ${p.orderNumber}${tripSuffix}`);
+}
+
 export function orderCustomerPortalShareSubject(p: Pick<OrderRef, 'orderNumber'>): string {
   return notificationSubject('Customer', `View your order ${p.orderNumber} online`);
 }
