@@ -15,6 +15,7 @@ import {
   notifyTripCancelled,
 } from '@/src/lib/notifications/notificationsData';
 import { fetchOrderLoadByOrderId, orderLoadWithFallback } from '@/src/lib/orderLoadMetrics';
+import { removeOrArchiveTrip } from '@/src/lib/deletePolicy';
 import type { OrderReadyForDispatch, Trip, DriverOption } from '@/src/types/logistics';
 
 const QUEUE_STATUSES = ['Approved', 'Partially Fulfilled'] as const;
@@ -1620,8 +1621,17 @@ export async function updateTrip(params: {
         .in('id', removed);
       fireOrderUnscheduledFromTripNotifications(removed, previousDates);
     }
-    const { error: delErr } = await supabase.from('trips').delete().eq('id', params.tripId);
-    if (delErr) return { ok: false, error: delErr.message };
+    const { data: tripRow } = await supabase
+      .from('trips')
+      .select('status, departure_time')
+      .eq('id', params.tripId)
+      .maybeSingle();
+    const removedTrip = await removeOrArchiveTrip(
+      params.tripId,
+      (tripRow ?? {}) as { status?: string; departure_time?: string | null },
+      params.scheduledBy ?? 'System',
+    );
+    if (!removedTrip.ok) return { ok: false, error: removedTrip.error ?? 'Could not remove trip' };
     return { ok: true };
   }
 
@@ -1810,11 +1820,15 @@ export async function releaseOrderFromActiveTrips(orderId: string): Promise<Rele
     const remaining = orderIds.filter((id) => id !== oid);
 
     if (remaining.length === 0) {
-      const { error: delErr } = await supabase.from('trips').delete().eq('id', tripId);
-      if (delErr) {
-        return { ok: false, error: delErr.message, tripsUpdated, tripsDeleted, tripIds };
+      const removed = await removeOrArchiveTrip(tripId, {
+        status: String(row.status ?? ''),
+        departure_time: row.departure_time != null ? String(row.departure_time) : null,
+      }, 'System');
+      if (!removed.ok) {
+        return { ok: false, error: removed.error ?? 'Could not remove trip', tripsUpdated, tripsDeleted, tripIds };
       }
-      tripsDeleted += 1;
+      if (removed.archived) tripsUpdated += 1;
+      else tripsDeleted += 1;
       continue;
     }
 

@@ -7,8 +7,14 @@
  * - Returns a new File whose size is typically 80-95% smaller than the original
  */
 
-const MAX_DIMENSION = 1280;   // px — longest edge
-const TARGET_QUALITY = 0.82;  // 0–1 (WebP quality)
+import {
+  IMAGE_MAX_DIMENSION,
+  IMAGE_OUTPUT_EXT,
+  IMAGE_TARGET_QUALITY,
+} from '@/src/lib/imageOptimizationConfig';
+
+const MAX_DIMENSION = IMAGE_MAX_DIMENSION;
+const TARGET_QUALITY = IMAGE_TARGET_QUALITY;
 
 export interface OptimizeResult {
   file: File;
@@ -55,7 +61,7 @@ export async function optimizeImage(original: File): Promise<OptimizeResult> {
       const mimeType = canvas.toDataURL('image/webp').startsWith('data:image/webp')
         ? 'image/webp'
         : 'image/jpeg';
-      const ext = mimeType === 'image/webp' ? '.webp' : '.jpg';
+      const ext = mimeType === 'image/webp' ? IMAGE_OUTPUT_EXT : '.jpg';
 
       canvas.toBlob(
         (blob) => {

@@ -307,8 +307,27 @@ export function poProofFileIsImageName(fileName: string): boolean {
   return /\.(jpe?g|png|gif|webp|bmp|svg|heic|heif)$/i.test(fileName);
 }
 
-export async function deletePurchaseOrderProof(proofId: string): Promise<{ error: string | null }> {
+export async function deletePurchaseOrderProof(
+  proofId: string,
+  opts?: { voidedBy?: string; verified?: boolean },
+): Promise<{ error: string | null }> {
+  if (opts?.verified) {
+    const { voidPurchaseOrderProofDocument } = await import('@/src/lib/deletePolicy');
+    const r = await voidPurchaseOrderProofDocument({
+      proofId,
+      voidedBy: opts.voidedBy ?? 'User',
+    });
+    return { error: r.ok ? null : r.error ?? 'Void failed' };
+  }
   const { error } = await supabase.from('purchase_order_proof_documents').delete().eq('id', proofId);
+  if (error && /not permitted|42501/i.test(error.message)) {
+    const { voidPurchaseOrderProofDocument } = await import('@/src/lib/deletePolicy');
+    const r = await voidPurchaseOrderProofDocument({
+      proofId,
+      voidedBy: opts?.voidedBy ?? 'User',
+    });
+    return { error: r.ok ? null : r.error ?? error.message };
+  }
   return { error: error?.message ?? null };
 }
 

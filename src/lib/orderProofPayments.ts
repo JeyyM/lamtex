@@ -51,6 +51,10 @@ type ProofRow = {
   commission_paid_by?: string | null;
 };
 
+function isProofVoidedRow(r: ProofRow): boolean {
+  return r.status === 'voided';
+}
+
 export function proofRowToDocument(row: ProofRow, orderNumber: string): ProofDocument {
   const t = row.type;
   const type: ProofType =
@@ -68,7 +72,9 @@ export function proofRowToDocument(row: ProofRow, orderNumber: string): ProofDoc
       ? row.uploaded_by_role
       : 'Agent') as ProofDocument['uploadedByRole'],
     uploadedAt: row.uploaded_at,
-    status: (row.status === 'pending' || row.status === 'rejected' ? row.status : 'verified') as ProofDocument['status'],
+    status: (row.status === 'pending' || row.status === 'rejected' || row.status === 'voided'
+      ? row.status
+      : 'verified') as ProofDocument['status'],
     verifiedBy: row.verified_by ?? undefined,
     verifiedAt: row.verified_at ?? undefined,
     rejectionReason: row.rejection_reason ?? undefined,
@@ -302,6 +308,7 @@ export function sumPaymentProofRows(proofRows: ProofRow[]): {
   let totalCash = 0;
   let totalCredit = 0;
   for (const r of proofRows) {
+    if (isProofVoidedRow(r)) continue;
     const { cash, credit, adj } = proofPaymentParts(r);
     totalCash += cash + adj;
     totalCredit += credit;

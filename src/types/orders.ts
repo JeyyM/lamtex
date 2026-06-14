@@ -180,7 +180,7 @@ export interface ApprovalRule {
 
 export type ProofType = 'delivery' | 'payment' | 'other';
 
-export type ProofStatus = 'pending' | 'verified' | 'rejected';
+export type ProofStatus = 'pending' | 'verified' | 'rejected' | 'voided';
 
 export interface ProofDocument {
   id: string;

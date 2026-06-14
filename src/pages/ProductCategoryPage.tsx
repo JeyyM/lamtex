@@ -26,16 +26,7 @@ import {
   UNCATEGORIZED_CATEGORY_SLUG,
   uncategorizedCategorySlugForBranchName,
 } from '../lib/productRoutes';
-
-// Local image fallbacks
-import hdpePipeImg    from '../assets/product-images/HDPE Pipe.webp';
-import elbowPipeImg   from '../assets/product-images/Elbow Pipe.webp';
-import sanitaryPipeImg from '../assets/product-images/Sanitary Pipe.webp';
-import pipesImg       from '../assets/product-images/Pipes.webp';
-import inHouseImg     from '../assets/product-images/In House Pipe.webp';
-import pressureImg    from '../assets/product-images/Pressure Line Pipe.webp';
-
-const fallbackImages = [hdpePipeImg, elbowPipeImg, sanitaryPipeImg, pipesImg, inHouseImg, pressureImg];
+import { archiveProductFamily, countOrderLinesForProduct } from '../lib/deletePolicy';
 
 interface VariantStockRow {
   branch_id: string | null;
@@ -571,27 +562,52 @@ export default function ProductCategoryPage() {
 
   const handleDeleteProduct = async () => {
     if (!editingProductId) return;
-    if (!window.confirm(`Delete "${editingProduct?.name}"?\n\nAll variants will also be deleted. Cannot be undone.`)) return;
     setSaving(true);
     try {
       const actorName = employeeName || session?.user?.email || 'User';
       const actorRole = mapAppRoleToLogRole(role);
       const delName = editingProduct?.name ?? '';
-      await insertProductLog(supabase, {
-        productId: editingProductId,
-        action: 'product_deleted',
-        description: `Product "${delName}" deleted from catalog.`,
-        performedBy: actorName,
-        performedByRole: actorRole,
-        oldValue: { name: delName },
-        newValue: null,
-      });
-      const { error } = await supabase.from('products').delete().eq('id', editingProductId);
-      if (error) throw error;
+      const lineCount = await countOrderLinesForProduct(editingProductId);
+
+      if (lineCount > 0) {
+        if (!window.confirm(
+          `"${delName}" appears on ${lineCount} order line(s). It will be archived (Discontinued) instead of deleted.`,
+        )) {
+          setSaving(false);
+          return;
+        }
+        const archived = await archiveProductFamily(editingProductId, actorName);
+        if (!archived.ok) throw new Error(archived.error ?? 'Archive failed');
+        await insertProductLog(supabase, {
+          productId: editingProductId,
+          action: 'product_updated',
+          description: `Product "${delName}" archived — referenced on ${lineCount} order line(s).`,
+          performedBy: actorName,
+          performedByRole: actorRole,
+          oldValue: { name: delName, status: 'Active' },
+          newValue: { status: 'Discontinued', is_hidden: true },
+        });
+      } else {
+        if (!window.confirm(`Delete "${delName}"?\n\nAll variants will also be removed. Cannot be undone.`)) {
+          setSaving(false);
+          return;
+        }
+        await insertProductLog(supabase, {
+          productId: editingProductId,
+          action: 'product_deleted',
+          description: `Product "${delName}" deleted from catalog.`,
+          performedBy: actorName,
+          performedByRole: actorRole,
+          oldValue: { name: delName },
+          newValue: null,
+        });
+        const { error } = await supabase.from('products').delete().eq('id', editingProductId);
+        if (error) throw error;
+      }
       await fetchData();
       handleCloseModal();
     } catch (err: any) {
-      alert(`Failed to delete: ${err.message ?? 'Unknown error'}`);
+      alert(`Failed: ${err.message ?? 'Unknown error'}`);
     } finally {
       setSaving(false);
     }
@@ -812,12 +828,16 @@ export default function ProductCategoryPage() {
               <Card className="hover:shadow-xl transition-all duration-200 border-2 hover:border-red-500 h-full">
                 <Link to={`/products/category/${categorySlug}/family/${p.id}${branchFromQuery ? `?branch=${encodeURIComponent(branchFromQuery)}` : ''}`} className="block h-full">
                 <CardContent className="p-0">
-                  <div className="h-48 bg-gray-100 overflow-hidden border-b">
+                  <div className="h-48 bg-gray-100 overflow-hidden border-b flex items-center justify-center">
+                    {p.image_url ? (
                     <img
-                      src={p.image_url ?? fallbackImages[idx % fallbackImages.length]}
+                      src={p.image_url}
                       alt={p.name}
                       className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
                     />
+                    ) : (
+                      <Package className="w-12 h-12 text-gray-300" aria-hidden />
+                    )}
                   </div>
                   <div className="p-6 space-y-4">
                     <div>
@@ -897,18 +917,16 @@ export default function ProductCategoryPage() {
       )}
 
       {/* Add / Edit Product Modal */}
-      {showAddProductModal && (
-        <AddProductModal
-          isOpen={showAddProductModal}
-          onClose={handleCloseModal}
-          onSave={handleSaveProduct}
-          onDelete={isEditMode ? handleDeleteProduct : undefined}
-          categoryName={categoryTitle}
-          categoryOptions={categoryOptions}
-          initialData={editingProduct || undefined}
-          isEditMode={isEditMode}
-        />
-      )}
+      <AddProductModal
+        isOpen={showAddProductModal}
+        onClose={handleCloseModal}
+        onSave={handleSaveProduct}
+        onDelete={isEditMode ? handleDeleteProduct : undefined}
+        categoryName={categoryTitle}
+        categoryOptions={categoryOptions}
+        initialData={editingProduct || undefined}
+        isEditMode={isEditMode}
+      />
     </div>
   );
 }

@@ -36,6 +36,7 @@ function mapPortalRow(row: Record<string, unknown>): OrderCustomerPortalRow {
     customerEmail: row.customer_email ? String(row.customer_email) : null,
     sentViaEmail: Boolean(row.sent_via_email),
     lastEmailSent: row.last_email_sent ? String(row.last_email_sent) : null,
+    revokedAt: row.revoked_at ? String(row.revoked_at) : null,
     createdAt: String(row.created_at),
   };
 }

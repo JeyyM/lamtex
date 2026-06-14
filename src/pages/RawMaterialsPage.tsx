@@ -34,29 +34,6 @@ import { useSupplierPermissions } from '@/src/lib/permissions/supplierPermission
 import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
 import { materialCategoryHref } from '@/src/lib/productRoutes';
 
-// Import raw material images (local fallbacks)
-import whitePelletsImg from '@/src/assets/raw-materials/White Pellets.webp';
-import resinPowderImg from '@/src/assets/raw-materials/Resin Powder.avif';
-import pvcImg from '@/src/assets/raw-materials/Polyvinyl-Chloride.avif';
-import polypropyleneImg from '@/src/assets/raw-materials/Polypropylene.jpg';
-import petImg from '@/src/assets/raw-materials/Polyethylene Terephthalate.jpg';
-import ldpeImg from '@/src/assets/raw-materials/Low Density Polyethylene.jpg';
-import j70Img from '@/src/assets/raw-materials/J-70.jfif';
-
-// Fallback image map: slug → local image asset
-const categoryImageMap: Record<string, string> = {
-  'pvc-resin': pvcImg,
-  'hdpe-resin': ldpeImg,
-  'ppr-resin': polypropyleneImg,
-  'stabilizers': whitePelletsImg,
-  'plasticizers': j70Img,
-  'lubricants': resinPowderImg,
-  'colorants': petImg,
-  'additives': whitePelletsImg,
-  'packaging-materials': resinPowderImg,
-  'other': pvcImg,
-};
-
 // Supabase row shape
 interface MaterialCategoryRow {
   id: string;
@@ -291,18 +268,14 @@ export function RawMaterialsPage() {
     return cats;
   }, [inventoryBranch, categories, scopedCategoryIds]);
 
-  // Resolve image: use image_url from DB if set, otherwise fall back to local asset map
-  const getCategoryImage = (cat: MaterialCategoryRow): string => {
-    if (cat.image_url) return cat.image_url;
-    return categoryImageMap[cat.slug] ?? pvcImg;
-  };
+  const getCategoryImage = (cat: MaterialCategoryRow): string | null => cat.image_url;
 
   // Handler functions for category management
   const handleEditCategory = (category: MaterialCategoryRow) => {
     const categoryData: MaterialCategoryFormData = {
       name: category.name,
       description: category.description || '',
-      imageUrl: category.image_url || getCategoryImage(category),
+      imageUrl: category.image_url ?? '',
       icon: 'inventory_2',
     };
     setEditingCategory(categoryData);
@@ -385,20 +358,16 @@ export function RawMaterialsPage() {
 
   const handleDeleteCategory = async () => {
     if (!editingCategoryId) return;
+    if (!window.confirm(`Archive category "${editingCategory?.name}"?\n\nMaterials stay in the catalog but the category will be hidden.`)) return;
     setSaving(true);
     try {
-      const { error } = await supabase
-        .from('material_categories')
-        .delete()
-        .eq('id', editingCategoryId);
-
+      const { error } = await supabase.from('material_categories').update({ is_active: false }).eq('id', editingCategoryId);
       if (error) throw error;
-
       await fetchCategories();
       handleCloseModal();
     } catch (err: any) {
-      console.error('Failed to delete material category:', err);
-      alert(`Failed to delete category: ${err.message ?? 'Unknown error'}`);
+      console.error('Failed to archive material category:', err);
+      alert(`Failed to archive category: ${err.message ?? 'Unknown error'}`);
     } finally {
       setSaving(false);
     }
@@ -715,12 +684,16 @@ export function RawMaterialsPage() {
                     className="block w-full text-left"
                   >
                     {/* Category Image */}
-                    <div className="aspect-video w-full overflow-hidden bg-gray-100">
+                    <div className="aspect-video w-full overflow-hidden bg-gray-100 flex items-center justify-center">
+                      {getCategoryImage(category) ? (
                       <img 
-                        src={getCategoryImage(category)} 
+                        src={getCategoryImage(category)!} 
                         alt={category.name}
                         className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
                       />
+                      ) : (
+                        <Package className="w-12 h-12 text-gray-300" aria-hidden />
+                      )}
                     </div>
                     
                     {/* Category Info */}

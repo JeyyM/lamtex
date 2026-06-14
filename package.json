@@ -12,7 +12,8 @@
     "start:notify": "tsx server/index.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "seed:catalog-images": "tsx scripts/seedCatalogImages.ts"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
@@ -47,6 +48,7 @@
     "@vercel/node": "^5.3.0",
     "autoprefixer": "^10.4.21",
     "concurrently": "^9.2.1",
+    "sharp": "^0.35.1",
     "tailwindcss": "^4.1.14",
     "tsup": "^8.5.1",
     "tsx": "^4.21.0",

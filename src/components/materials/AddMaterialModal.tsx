@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Upload, Image as ImageIcon, Trash2, Loader2, Plus } from 'lucide-react';
 import ImageGalleryModal from '../ImageGalleryModal';
+import { RAW_MATERIAL_CATALOG_IMAGES_FOLDER } from '@/src/lib/catalogImageStorage';
 
 interface AddMaterialModalProps {
   isOpen: boolean;
@@ -565,7 +566,8 @@ const AddMaterialModal: React.FC<AddMaterialModalProps> = ({
         onSelectImage={handleSelectImage}
         currentImageUrl={formData.imageUrl}
         maxImages={1}
-        folder="raw-materials"
+        folder={RAW_MATERIAL_CATALOG_IMAGES_FOLDER}
+        stackOnTopOfModal
       />
     </>
   );

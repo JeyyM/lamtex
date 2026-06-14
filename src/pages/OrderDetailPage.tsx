@@ -115,6 +115,12 @@ import {
   uploadOrderProofBinary,
   tryExtractStoragePathFromPublicUrl,
 } from '@/src/lib/orderProofPayments';
+import {
+  canHardDeleteOrderProof,
+  orderAllowsLineItemReplace,
+  updateOrderLineItemsInPlace,
+  voidOrderProofDocument,
+} from '@/src/lib/deletePolicy';
 import { orderStatusBadgeVariant, paymentStatusBadgeVariant } from '@/src/lib/orderStatusBadges';
 import { useOrderPermissions } from '@/src/lib/permissions/orderPermissions';
 import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
@@ -2022,44 +2028,70 @@ export function OrderDetailPage() {
       console.warn('Order saved but could not re-read header:', headerReadErr.message);
     }
 
-    // Delete existing line items and re-insert
-    await supabase.from('order_line_items').delete().eq('order_id', id);
+    // Line items: replace only on Draft/Pending/Rejected; in-place updates otherwise
+    if (orderAllowsLineItemReplace(oldOrder.status)) {
+      await supabase.from('order_line_items').delete().eq('order_id', id);
 
-    if (editedOrder.items.length > 0) {
-      const rows = editedOrder.items.map(item => {
-        // Apply any pending delivery draft for this item
-        const draftVal = deliveredDrafts[item.id];
-        const quantityDelivered = draftVal !== undefined
-          ? Math.max(0, Math.min(Math.round(Number(draftVal) || 0), item.quantity))
-          : (item.quantityDelivered ?? null);
-        return {
-          order_id: id,
-          sku: item.sku,
-          variant_id: item.variantId ?? null,
-          product_name: item.productName,
-          variant_description: item.variantDescription,
-          quantity: item.quantity,
-          unit_price: item.unitPrice,
-          original_price: item.originalPrice ?? item.unitPrice,
-          negotiated_price: item.negotiatedPrice ?? item.unitPrice,
-          discount_percent: item.discountPercent ?? 0,
-          discount_amount: item.discountAmount ?? 0,
-          line_total: item.lineTotal,
-          stock_hint: item.stockHint ?? 'Available',
-          available_stock: item.availableStock ?? null,
-          discounts_breakdown:
-            item.discountsBreakdown && item.discountsBreakdown.length > 0
-              ? item.discountsBreakdown.map((d) => ({
-                  name: d.name,
-                  percentage: Number(d.percentage),
-                }))
-              : null,
-          quantity_shipped: item.quantityShipped ?? null,
-          quantity_delivered: quantityDelivered,
-        };
-      });
-      const { error: itemsErr } = await supabase.from('order_line_items').insert(rows);
-      if (itemsErr) { alert('Order header saved but items failed: ' + itemsErr.message); return; }
+      if (editedOrder.items.length > 0) {
+        const rows = editedOrder.items.map(item => {
+          const draftVal = deliveredDrafts[item.id];
+          const quantityDelivered = draftVal !== undefined
+            ? Math.max(0, Math.min(Math.round(Number(draftVal) || 0), item.quantity))
+            : (item.quantityDelivered ?? null);
+          return {
+            order_id: id,
+            sku: item.sku,
+            variant_id: item.variantId ?? null,
+            product_name: item.productName,
+            variant_description: item.variantDescription,
+            quantity: item.quantity,
+            unit_price: item.unitPrice,
+            original_price: item.originalPrice ?? item.unitPrice,
+            negotiated_price: item.negotiatedPrice ?? item.unitPrice,
+            discount_percent: item.discountPercent ?? 0,
+            discount_amount: item.discountAmount ?? 0,
+            line_total: item.lineTotal,
+            stock_hint: item.stockHint ?? 'Available',
+            available_stock: item.availableStock ?? null,
+            discounts_breakdown:
+              item.discountsBreakdown && item.discountsBreakdown.length > 0
+                ? item.discountsBreakdown.map((d) => ({
+                    name: d.name,
+                    percentage: Number(d.percentage),
+                  }))
+                : null,
+            quantity_shipped: item.quantityShipped ?? null,
+            quantity_delivered: quantityDelivered,
+          };
+        });
+        const { error: itemsErr } = await supabase.from('order_line_items').insert(rows);
+        if (itemsErr) { alert('Order header saved but items failed: ' + itemsErr.message); return; }
+      }
+    } else {
+      const inPlace = await updateOrderLineItemsInPlace(
+        id,
+        editedOrder.items.map((item) => {
+          const draftVal = deliveredDrafts[item.id];
+          const quantityDelivered = draftVal !== undefined
+            ? Math.max(0, Math.min(Math.round(Number(draftVal) || 0), item.quantity))
+            : (item.quantityDelivered ?? null);
+          return {
+            id: item.id,
+            quantity: item.quantity,
+            lineTotal: item.lineTotal,
+            unitPrice: item.unitPrice,
+            discountPercent: item.discountPercent,
+            discountAmount: item.discountAmount,
+            quantityDelivered,
+            quantityShipped: item.quantityShipped ?? null,
+          };
+        }),
+        oldOrder.items,
+      );
+      if (!inPlace.ok) {
+        alert(inPlace.error);
+        return;
+      }
     }
 
     // ── Generate activity logs ──────────────────────────────────────────────
@@ -3028,35 +3060,74 @@ export function OrderDetailPage() {
 
   const handleRemoveProof = async (proof: ProofDocument) => {
     if (!id || !order) return;
-    if (!window.confirm(`Remove "${proof.title || proof.fileName}" from this order?`)) return;
+    const guard = canHardDeleteOrderProof(proof);
+    const isVoid = proof.status === 'voided';
+    if (isVoid) {
+      alert('This proof is already voided.');
+      return;
+    }
+    const actionLabel = guard.allowed ? 'Remove' : 'Void';
+    const confirmMsg = guard.allowed
+      ? `Remove "${proof.title || proof.fileName}" from this order?`
+      : `Void "${proof.title || proof.fileName}"? The file stays on record for audit; payment totals will be recalculated.`;
+    if (!window.confirm(confirmMsg)) return;
+
     let creditBefore: number | undefined;
     if (proof.type === 'payment') {
       const agg = await fetchPaymentProofAggregates(id);
       creditBefore = agg.totalCredit;
     }
-    const storagePath = tryExtractStoragePathFromPublicUrl(proof.fileUrl);
-    const { error: delErr } = await supabase.from('order_proof_documents').delete().eq('id', proof.id);
-    if (delErr) {
-      alert(delErr.message);
-      return;
+
+    const actor = employeeName || session?.user?.email || 'User';
+
+    if (guard.allowed) {
+      const storagePath = tryExtractStoragePathFromPublicUrl(proof.fileUrl);
+      const { error: delErr } = await supabase.from('order_proof_documents').delete().eq('id', proof.id);
+      if (delErr) {
+        if (/not permitted|42501/i.test(delErr.message)) {
+          const voidRes = await voidOrderProofDocument({
+            proofId: proof.id,
+            orderUuid: id,
+            voidedBy: actor,
+            creditAppliedBefore: creditBefore,
+          });
+          if (!voidRes.ok) {
+            alert(voidRes.error);
+            return;
+          }
+        } else {
+          alert(delErr.message);
+          return;
+        }
+      } else {
+        if (storagePath) {
+          await supabase.storage.from('images').remove([storagePath]).catch(() => undefined);
+        }
+      }
+    } else {
+      const voidRes = await voidOrderProofDocument({
+        proofId: proof.id,
+        orderUuid: id,
+        voidedBy: actor,
+        creditAppliedBefore: creditBefore,
+      });
+      if (!voidRes.ok) {
+        alert(voidRes.error ?? guard.reason);
+        return;
+      }
     }
-    if (storagePath) {
-      await supabase.storage.from('images').remove([storagePath]).catch(() => undefined);
-    }
+
     await insertOrderLog(
       'proof_removed',
-      `Removed ${proof.type} proof: ${proof.fileName}`,
+      guard.allowed
+        ? `Removed ${proof.type} proof: ${proof.fileName}`
+        : `Voided ${proof.type} proof: ${proof.fileName}`,
       { proofId: proof.id, type: proof.type },
       null,
       { proofId: proof.id, fileName: proof.fileName },
     );
     if (proof.type === 'payment' && creditBefore !== undefined) {
-      const s = await syncOrderPaymentsFromProofs(id, { creditAppliedBefore: creditBefore });
-      if (s.ok === false) {
-        alert(s.error);
-      } else {
-        await refreshOrderPaymentFieldsFromDb();
-      }
+      await refreshOrderPaymentFieldsFromDb();
       if (order.customerId) {
         await loadCustomerCreditSummary(order.customerId);
       }
@@ -5145,10 +5216,15 @@ export function OrderDetailPage() {
                       variant="outline"
                       size="sm"
                       className="text-red-700 border-red-200 hover:bg-red-50"
+                      disabled={proof.status === 'voided'}
                       onClick={() => void handleRemoveProof(proof)}
                     >
                       <Trash2 className="w-3.5 h-3.5 mr-1" />
-                      Remove
+                      {proof.status === 'voided'
+                        ? 'Voided'
+                        : canHardDeleteOrderProof(proof).allowed
+                          ? 'Remove'
+                          : 'Void'}
                     </Button>
                   </div>
                 </div>

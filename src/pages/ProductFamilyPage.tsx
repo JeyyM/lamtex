@@ -16,9 +16,7 @@ import {
   Save, X, Plus, Trash2, ChevronLeft, ChevronRight, Edit3, Loader2, Download, CalendarRange,
 } from 'lucide-react';
 
-import hdpePipeImg    from '../assets/product-images/HDPE Pipe.webp';
-import pipesImg       from '../assets/product-images/Pipes.webp';
-import pressureLineImg from '../assets/product-images/Pressure Line Pipe.webp';
+import { PRODUCT_CATALOG_IMAGES_FOLDER } from '@/src/lib/catalogImageStorage';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
@@ -35,6 +33,7 @@ import { insertProductLog, mapAppRoleToLogRole } from '../lib/domainActivityLog'
 import type { EntityActivityLogRow } from '../components/domain/EntityActivityLogCard';
 import { EntityActivityLogCard } from '../components/domain/EntityActivityLogCard';
 import { isProductFamilyCatalogHidden, CATALOG_HIDDEN_CLASS } from '../lib/productCatalogVisibility';
+import { archiveProductVariant, countOrderLinesForVariant } from '../lib/deletePolicy';
 import { downloadVariantsComparisonWorkbook } from '../lib/productFamilyExport';
 import { useProductPermissions } from '../lib/permissions/productPermissions';
 import { useProductionRequestPermissions } from '../lib/permissions/productionRequestPermissions';
@@ -644,7 +643,7 @@ export default function ProductFamilyPage() {
     ? product.images
     : product?.image_url
     ? [product.image_url]
-    : [hdpePipeImg, pipesImg, pressureLineImg];
+    : [];
 
   const handlePreviousImage = () =>
     setCurrentImageIndex(p => (p === 0 ? productImages.length - 1 : p - 1));
@@ -652,7 +651,7 @@ export default function ProductFamilyPage() {
     setCurrentImageIndex(p => (p === productImages.length - 1 ? 0 : p + 1));
 
   const handleSelectImages = async (imageUrls: string[]) => {
-    if (!familyId || imageUrls.length === 0) {
+    if (!familyId) {
       setShowImageGalleryModal(false);
       return;
     }
@@ -663,21 +662,27 @@ export default function ProductFamilyPage() {
     setSaving(true);
     try {
       const { error } = await supabase.from('products').update({
-        image_url: imageUrls[0],
-        images: imageUrls,
+        image_url: imageUrls[0] ?? null,
+        images: imageUrls.length > 0 ? imageUrls : null,
         updated_at: new Date().toISOString(),
       }).eq('id', familyId);
       if (error) throw error;
-      setProduct(prev => prev ? { ...prev, image_url: imageUrls[0], images: imageUrls } : prev);
+      setProduct(prev => prev ? {
+        ...prev,
+        image_url: imageUrls[0] ?? null,
+        images: imageUrls.length > 0 ? imageUrls : [],
+      } : prev);
       setCurrentImageIndex(0);
       await insertProductLog(supabase, {
         productId: familyId,
         action: 'images_updated',
-        description: `Product images updated (${imageUrls.length} image(s)).`,
+        description: imageUrls.length === 0
+          ? 'Product images cleared.'
+          : `Product images updated (${imageUrls.length} image(s)).`,
         performedBy: actorName,
         performedByRole: actorRole,
         oldValue: { image_url: prevPrimary, gallery_count: prevCount },
-        newValue: { image_url: imageUrls[0], gallery_count: imageUrls.length },
+        newValue: { image_url: imageUrls[0] ?? null, gallery_count: imageUrls.length },
       });
       void fetchProductLogs();
     } catch (err: any) {
@@ -897,7 +902,6 @@ export default function ProductFamilyPage() {
 
   const handleDeleteVariant = async () => {
     if (!selectedVariant || !familyId) return;
-    if (!window.confirm(`Delete variant "${selectedVariant.variantName}" (${selectedVariant.sku})?\n\nThis cannot be undone.`)) return;
     const actorName = employeeName || session?.user?.email || 'User';
     const actorRole = mapAppRoleToLogRole(role);
     const deletedId = selectedVariant.id;
@@ -905,6 +909,40 @@ export default function ProductFamilyPage() {
     const deletedLabel = selectedVariant.variantName;
     setSaving(true);
     try {
+      const lineCount = await countOrderLinesForVariant(deletedId);
+      if (lineCount > 0) {
+        if (!window.confirm(
+          `Variant "${deletedLabel}" appears on ${lineCount} order line(s). It will be archived instead of deleted.`,
+        )) {
+          setSaving(false);
+          return;
+        }
+        const archived = await archiveProductVariant(deletedId, actorName);
+        if (!archived.ok) throw new Error(archived.error ?? 'Archive failed');
+        const remaining = variants.filter(v => v.id !== deletedId);
+        setVariants(remaining);
+        setSelectedVariant(remaining[0] ?? null);
+        setIsEditingVariant(false);
+        setEditedVariant(null);
+        await insertProductLog(supabase, {
+          productId: familyId,
+          variantId: deletedId,
+          action: 'variant_updated',
+          description: `Variant archived: ${deletedLabel} (${deletedSku}) — on ${lineCount} order line(s).`,
+          performedBy: actorName,
+          performedByRole: actorRole,
+          oldValue: { variant_id: deletedId, sku: deletedSku },
+          newValue: { status: 'Discontinued', is_hidden: true },
+        });
+        void fetchProductLogs();
+        setSaving(false);
+        return;
+      }
+
+      if (!window.confirm(`Delete variant "${deletedLabel}" (${deletedSku})?\n\nThis cannot be undone.`)) {
+        setSaving(false);
+        return;
+      }
       const { error: delErr } = await supabase.from('product_variants').delete().eq('id', deletedId);
       if (delErr) throw delErr;
       const remaining = variants.filter(v => v.id !== deletedId);
@@ -1336,12 +1374,16 @@ export default function ProductFamilyPage() {
             {/* Image Carousel */}
             <div className="lg:col-span-1">
               <div className="relative group">
-                <div className="aspect-square rounded-lg overflow-hidden bg-gray-100 border-2 border-gray-200">
+                <div className="aspect-square rounded-lg overflow-hidden bg-gray-100 border-2 border-gray-200 flex items-center justify-center">
+                  {productImages.length > 0 ? (
                   <img
                     src={productImages[currentImageIndex]}
                     alt={`${product?.name} - Image ${currentImageIndex + 1}`}
                     className="w-full h-full object-cover"
                   />
+                  ) : (
+                    <Package className="w-16 h-16 text-gray-300" aria-hidden />
+                  )}
                 </div>
                 <button
                   onClick={() => setShowImageGalleryModal(true)}
@@ -1350,18 +1392,23 @@ export default function ProductFamilyPage() {
                 >
                   <Edit className="w-4 h-4 text-gray-700" />
                 </button>
+                {productImages.length > 1 && (
                 <button
                   onClick={handlePreviousImage}
                   className="absolute left-2 top-1/2 -translate-y-1/2 bg-white/90 hover:bg-white p-2 rounded-full shadow-lg opacity-0 group-hover:opacity-100 transition-opacity"
                 >
                   <ChevronLeft className="w-5 h-5 text-gray-700" />
                 </button>
+                )}
+                {productImages.length > 1 && (
                 <button
                   onClick={handleNextImage}
                   className="absolute right-2 top-1/2 -translate-y-1/2 bg-white/90 hover:bg-white p-2 rounded-full shadow-lg opacity-0 group-hover:opacity-100 transition-opacity"
                 >
                   <ChevronRight className="w-5 h-5 text-gray-700" />
                 </button>
+                )}
+                {productImages.length > 1 && (
                 <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-2">
                   {productImages.map((_, index) => (
                     <button
@@ -1371,6 +1418,7 @@ export default function ProductFamilyPage() {
                     />
                   ))}
                 </div>
+                )}
               </div>
             </div>
 
@@ -2331,7 +2379,10 @@ export default function ProductFamilyPage() {
         onClose={() => setShowImageGalleryModal(false)}
         onSelectImages={handleSelectImages}
         maxImages={999}
-        currentImages={productImages as string[]}
+        currentImages={productImages}
+        catalogScope="product"
+        folder={PRODUCT_CATALOG_IMAGES_FOLDER}
+        stackOnTopOfModal
       />
       <RawMaterialPickerModal
         isOpen={showMaterialPickerModal}

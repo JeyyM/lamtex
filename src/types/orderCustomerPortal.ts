@@ -8,6 +8,7 @@ export type OrderCustomerPortalRow = {
   customerEmail: string | null;
   sentViaEmail: boolean;
   lastEmailSent: string | null;
+  revokedAt: string | null;
   createdAt: string;
 };
 

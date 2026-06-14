@@ -3,7 +3,11 @@ import { createPortal } from 'react-dom';
 import { X, Upload, Search, Loader2, AlertTriangle, RefreshCw, Zap } from 'lucide-react';
 import { supabase } from '@/src/lib/supabase';
 import { optimizeImage, formatBytes } from '@/src/lib/imageOptimizer';
-import { fetchGalleryImages, IMAGE_GALLERY_BUCKET, type GalleryImage } from '@/src/lib/imageGalleryStorage';
+import { fetchGalleryImages, IMAGE_GALLERY_BUCKET, mergeGalleryWithAssigned, type GalleryImage } from '@/src/lib/imageGalleryStorage';
+import {
+  PRODUCT_CATALOG_IMAGES_FOLDER,
+  RAW_MATERIAL_CATALOG_IMAGES_FOLDER,
+} from '@/src/lib/catalogImageStorage';
 
 interface ImageGalleryModalProps {
   isOpen: boolean;
@@ -15,6 +19,8 @@ interface ImageGalleryModalProps {
   maxImages?: number;
   currentImages?: string[];
   folder?: string; // Supabase Storage folder inside the "images" bucket
+  /** Fallback when folder is omitted — product families, categories, etc. */
+  catalogScope?: 'product' | 'material';
   /** Opened from another modal: higher z-index + near full-viewport panel */
   stackOnTopOfModal?: boolean;
 }
@@ -33,8 +39,16 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
   maxImages = 1,
   currentImages = [],
   folder = '',
+  catalogScope,
   stackOnTopOfModal = false,
 }) => {
+  // Product-family pages use multi-select; default them to the product catalog folder.
+  const storageFolder =
+    folder.trim()
+    || (catalogScope === 'product' ? PRODUCT_CATALOG_IMAGES_FOLDER : '')
+    || (catalogScope === 'material' ? RAW_MATERIAL_CATALOG_IMAGES_FOLDER : '')
+    || (onSelectImages ? PRODUCT_CATALOG_IMAGES_FOLDER : '');
+
   const [images, setImages] = useState<StorageImage[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -46,13 +60,26 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
 
   const isMultiSelect = maxImages > 1;
 
+  const assignedUrls = React.useMemo(() => {
+    const urls = [...currentImages];
+    if (currentImageUrl?.trim() && !urls.includes(currentImageUrl)) {
+      urls.unshift(currentImageUrl);
+    }
+    return urls.filter(Boolean);
+  }, [currentImages, currentImageUrl]);
+
+  const displayImages = React.useMemo(
+    () => mergeGalleryWithAssigned(images, assignedUrls),
+    [images, assignedUrls],
+  );
+
   // Fetch images from Supabase Storage
   const fetchImages = useCallback(async () => {
     setLoading(true);
     setError(null);
 
     try {
-      const mapped = await fetchGalleryImages(folder);
+      const mapped = await fetchGalleryImages(storageFolder);
       setImages(mapped);
     } catch (err: unknown) {
       console.error('Failed to load images from storage:', err);
@@ -66,7 +93,7 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [folder]);
+  }, [storageFolder]);
 
   // Load images when the modal opens or when the storage folder changes (different order / proof type / etc.).
   useEffect(() => {
@@ -76,7 +103,7 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
     setSelectedImage(currentImageUrl || null);
     setSearchQuery('');
     setUploadStatus(null);
-  }, [isOpen, folder, fetchImages]);
+  }, [isOpen, storageFolder, fetchImages, currentImages, currentImageUrl]);
 
   // Upload handler with client-side optimization
   const handleFileSelect = async () => {
@@ -104,7 +131,7 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
         );
 
         // Step 2 — Upload the compressed file
-        const filePath = folder ? `${folder}/${result.file.name}` : result.file.name;
+        const filePath = storageFolder ? `${storageFolder}/${result.file.name}` : result.file.name;
         const { error: uploadError } = await supabase.storage
           .from(BUCKET)
           .upload(filePath, result.file, { cacheControl: '3600', upsert: true });
@@ -154,6 +181,22 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
     }
   };
 
+  const handleRemoveSelected = (imageUrl: string) => {
+    if (isMultiSelect) {
+      setSelectedImagesOrder((prev) => prev.filter((url) => url !== imageUrl));
+    } else if (selectedImage === imageUrl) {
+      setSelectedImage(null);
+    }
+  };
+
+  const handleClearSelection = () => {
+    if (isMultiSelect) {
+      setSelectedImagesOrder([]);
+    } else {
+      setSelectedImage(null);
+    }
+  };
+
   const getImageSelectionIndex = (imageUrl: string): number => {
     return selectedImagesOrder.indexOf(imageUrl);
   };
@@ -165,9 +208,15 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
     return selectedImage === imageUrl;
   };
 
-  const filteredImages = images.filter(img =>
+  const filteredImages = displayImages.filter(img =>
     img.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  const selectedPreview = isMultiSelect
+    ? selectedImagesOrder
+    : selectedImage
+    ? [selectedImage]
+    : [];
 
   if (!isOpen) return null;
 
@@ -188,7 +237,7 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
             <div>
               <h2 className="text-xl sm:text-2xl font-bold text-gray-900">Image Gallery</h2>
               <p className="text-sm text-gray-500 mt-1">
-                {folder ? `Browsing: ${folder}` : 'Select an image'}
+                {storageFolder ? `Browsing: ${storageFolder}` : 'Select an image'}
               </p>
             </div>
             <button 
@@ -238,6 +287,38 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
 
         {/* Gallery Grid */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+          {selectedPreview.length > 0 && (
+            <div className="mb-5 pb-5 border-b border-gray-200">
+              <div className="flex items-center justify-between gap-3 mb-3">
+                <p className="text-sm font-semibold text-gray-900">
+                  {isMultiSelect ? 'Selected images' : 'Selected image'}
+                </p>
+                <button
+                  type="button"
+                  onClick={handleClearSelection}
+                  className="text-xs font-medium text-red-600 hover:text-red-700"
+                >
+                  Clear{isMultiSelect ? ' all' : ''}
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-3">
+                {selectedPreview.map((url) => (
+                  <div key={url} className="relative w-20 h-20 rounded-lg overflow-hidden ring-2 ring-red-500">
+                    <img src={url} alt="" className="w-full h-full object-cover" />
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveSelected(url)}
+                      className="absolute top-1 right-1 h-6 w-6 rounded-full bg-black/70 text-white flex items-center justify-center hover:bg-black"
+                      title="Remove from selection"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {loading ? (
             <div className="flex items-center justify-center h-64">
               <div className="text-center">
@@ -264,10 +345,14 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
                 <Search className="w-8 h-8 text-gray-400" />
               </div>
               <h3 className="text-lg font-semibold text-gray-900 mb-2">
-                {searchQuery ? 'No images found' : 'No images available'}
+                {searchQuery ? 'No images found' : 'No library images yet'}
               </h3>
               <p className="text-gray-500 mb-4">
-                {searchQuery ? 'Try a different search term' : 'Upload your first product image to get started'}
+                {searchQuery
+                  ? 'Try a different search term'
+                  : storageFolder
+                  ? `Upload to the ${storageFolder} folder or pick from selected images above`
+                  : 'Upload your first product image to get started'}
               </p>
               {!searchQuery && (
                 <button 
@@ -288,7 +373,7 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
                 
                 return (
                   <div
-                    key={image.name}
+                    key={image.url}
                     onClick={() => handleImageClick(image.url)}
                     className={`group relative aspect-square rounded-lg overflow-hidden cursor-pointer transition-all ${
                       isSelected
@@ -362,11 +447,13 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
             </button>
             <button 
               onClick={handleConfirm}
-              disabled={isMultiSelect ? selectedImagesOrder.length === 0 : !selectedImage}
+              disabled={!isMultiSelect && !selectedImage}
               className="w-full sm:w-auto px-5 py-2.5 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isMultiSelect 
-                ? `Use ${selectedImagesOrder.length} Image${selectedImagesOrder.length !== 1 ? 's' : ''}`
+                ? selectedImagesOrder.length === 0
+                  ? 'Remove all images'
+                  : `Use ${selectedImagesOrder.length} Image${selectedImagesOrder.length !== 1 ? 's' : ''}`
                 : 'Use Selected Image'
               }
             </button>

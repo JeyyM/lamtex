@@ -8,6 +8,8 @@ import {
   ensureOrderCustomerPortal,
 } from '@/src/lib/orderCustomerPortal';
 import { sendOrderCustomerPortalShareEmail } from '@/src/lib/notifications/notificationsData';
+import { revokeOrderCustomerPortal } from '@/src/lib/deletePolicy';
+import { useAppContext } from '@/src/store/AppContext';
 import type { OrderCustomerPortalRow } from '@/src/types/orderCustomerPortal';
 import { Copy, Check, Mail, ExternalLink, QrCode, Loader2 } from 'lucide-react';
 
@@ -17,6 +19,7 @@ type Props = {
 };
 
 export function OrderCustomerPortalCard({ orderUuid, customerEmail }: Props) {
+  const { employeeName, session } = useAppContext();
   const [portal, setPortal] = useState<OrderCustomerPortalRow | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -25,6 +28,7 @@ export function OrderCustomerPortalCard({ orderUuid, customerEmail }: Props) {
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [sendSuccess, setSendSuccess] = useState<string | null>(null);
+  const [revoking, setRevoking] = useState(false);
 
   useEffect(() => {
     setEmailInput(customerEmail ?? '');
@@ -73,6 +77,21 @@ export function OrderCustomerPortalCard({ orderUuid, customerEmail }: Props) {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const handleRevoke = async () => {
+    if (!portal || portal.revokedAt) return;
+    if (!window.confirm('Revoke this customer link? The customer will no longer be able to open it.')) return;
+    setRevoking(true);
+    const actor = employeeName || session?.user?.email || 'User';
+    const r = await revokeOrderCustomerPortal({ portalId: portal.id, revokedBy: actor });
+    setRevoking(false);
+    if (!r.ok) {
+      setSendError(r.error ?? 'Could not revoke link.');
+      return;
+    }
+    setPortal({ ...portal, revokedAt: new Date().toISOString() });
+    setSendSuccess('Customer link revoked.');
+  };
+
   const handleSendEmail = async () => {
     const email = emailInput.trim();
     if (!email) return;
@@ -108,13 +127,17 @@ export function OrderCustomerPortalCard({ orderUuid, customerEmail }: Props) {
         <div className="flex-1 min-w-0 space-y-4">
           <div>
             <h4 className="text-sm font-semibold text-gray-900">Customer order page</h4>
-            {portal.sentViaEmail && (
+            {portal.revokedAt ? (
+              <Badge variant="danger" className="text-xs mt-2">
+                Link revoked
+              </Badge>
+            ) : portal.sentViaEmail ? (
               <div className="mt-2">
                 <Badge variant="success" className="text-xs">
                   Email sent
                 </Badge>
               </div>
-            )}
+            ) : null}
           </div>
 
           <div className="flex gap-2">
@@ -130,6 +153,17 @@ export function OrderCustomerPortalCard({ orderUuid, customerEmail }: Props) {
             <Button variant="outline" size="sm" onClick={() => window.open(url, '_blank')} title="Open">
               <ExternalLink className="w-4 h-4" />
             </Button>
+            {!portal.revokedAt && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-red-700 border-red-200"
+                disabled={revoking}
+                onClick={() => void handleRevoke()}
+              >
+                {revoking ? 'Revoking…' : 'Revoke link'}
+              </Button>
+            )}
           </div>
 
           <div className="flex flex-col sm:flex-row gap-2">

@@ -28,54 +28,6 @@ import { useProductionRequestPermissions } from '@/src/lib/permissions/productio
 import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
 import { productCategoryHref } from '@/src/lib/productRoutes';
 
-// Local fallback images per category slug
-import hdpePipeImg     from '@/src/assets/product-images/HDPE Pipe.webp';
-import elbowPipeImg    from '@/src/assets/product-images/Elbow Pipe.webp';
-import sanitaryPipeImg from '@/src/assets/product-images/Sanitary Pipe.webp';
-import electricImg     from '@/src/assets/product-images/Electric Conduit Pipe.webp';
-import inHouseImg      from '@/src/assets/product-images/In House Pipe.webp';
-import pressureImg     from '@/src/assets/product-images/Pressure Line Pipe.webp';
-import pipesImg        from '@/src/assets/product-images/Pipes.webp';
-import teePipeImg      from '@/src/assets/product-images/Tee Pipe.webp';
-import gardenHoseImg   from '@/src/assets/product-images/Garden Hose.webp';
-import couplingImg     from '@/src/assets/product-images/Coupling.webp';
-import pvcCementImg    from '@/src/assets/product-images/PVC Cement.webp';
-
-
-const categoryImageMap: Record<string, string> = {
-  // old slugs
-  'hdpe-pipes':         hdpePipeImg,
-  'hdpe-fittings':      elbowPipeImg,
-  'upvc-sanitary':      sanitaryPipeImg,
-  'upvc-electrical':    electricImg,
-  'upvc-potable-water': inHouseImg,
-  'upvc-pressurized':   pressureImg,
-  'ppr-pipes':          pipesImg,
-  'ppr-fittings':       teePipeImg,
-  'telecom-pipes':      gardenHoseImg,
-  'garden-hoses':       gardenHoseImg,
-  'flexible-hoses':     couplingImg,
-  'others':             pvcCementImg,
-  // Manila slugs
-  'm-hdpe-pipes':       hdpePipeImg,
-  'm-hdpe-fittings':    elbowPipeImg,
-  'm-upvc-sanitary':    sanitaryPipeImg,
-  'm-upvc-electrical':  electricImg,
-  'm-pressure-line':    pressureImg,
-  'm-ppr-pipes':        pipesImg,
-  // Cebu slugs
-  'c-hdpe-pipes':       hdpePipeImg,
-  'c-pvc-conduits':     electricImg,
-  'c-sanitary-fittings': sanitaryPipeImg,
-  'c-garden-hoses':     gardenHoseImg,
-  // Batangas slugs
-  'b-industrial-pipes': pipesImg,
-  'b-hdpe-fittings':    elbowPipeImg,
-  'b-chemical-pvc':     pvcCementImg,
-  'b-drainage-systems': inHouseImg,
-  'b-flexible-hoses':   couplingImg,
-};
-
 interface CategoryRow {
   id: string;
   name: string;
@@ -406,8 +358,7 @@ export function ProductsPage() {
     return new Set(productStats.map(p => p.category_id).filter(Boolean) as string[]);
   }, [productStats, scopedProductIds]);
 
-  const getCategoryImage = (cat: CategoryRow) =>
-    cat.image_url ?? categoryImageMap[cat.slug] ?? hdpePipeImg;
+  const getCategoryImage = (cat: CategoryRow) => cat.image_url;
 
   const getStatsForCategory = (catId: string) => {
     const rows = productStats.filter(p => p.category_id === catId);
@@ -670,12 +621,16 @@ export function ProductsPage() {
                       to={productCategoryHref(cat.slug, cat.name, cat.branch)}
                       className="w-full text-left block"
                     >
-                      <div className="aspect-video w-full min-h-[120px] overflow-hidden bg-gray-100">
+                      <div className="aspect-video w-full min-h-[120px] overflow-hidden bg-gray-100 flex items-center justify-center">
+                        {getCategoryImage(cat) ? (
                         <img
-                          src={getCategoryImage(cat)}
+                          src={getCategoryImage(cat)!}
                           alt={cat.name}
                           className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
                         />
+                        ) : (
+                          <Package className="w-12 h-12 text-gray-300" aria-hidden />
+                        )}
                       </div>
                       <div className="p-3 sm:p-4">
                         <div className="flex items-start justify-between gap-2">

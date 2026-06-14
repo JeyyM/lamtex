@@ -1,7 +1,8 @@
 import { supabase } from '@/src/lib/supabase';
 import { ORDER_PROOF_GALLERY_FOLDER } from '@/src/lib/orderProofPayments';
+import { IMAGE_GALLERY_BUCKET } from '@/src/lib/storageConstants';
 
-export const IMAGE_GALLERY_BUCKET = 'images';
+export { IMAGE_GALLERY_BUCKET };
 
 export type GalleryImage = {
   name: string;
@@ -98,7 +99,7 @@ async function listOrderProofImagesFromDb(orderId: string, proofType: string): P
     }));
 }
 
-function dedupeGalleryImages(images: GalleryImage[]): GalleryImage[] {
+export function dedupeGalleryImages(images: GalleryImage[]): GalleryImage[] {
   const seen = new Set<string>();
   const out: GalleryImage[] = [];
   for (const img of images) {
@@ -107,6 +108,42 @@ function dedupeGalleryImages(images: GalleryImage[]): GalleryImage[] {
     out.push(img);
   }
   return out.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+}
+
+/** Build a gallery entry from a public URL (e.g. row already saved in the DB). */
+export function galleryImageFromUrl(url: string): GalleryImage {
+  const rawName = url.split('/').pop() ?? 'assigned-image';
+  let name = rawName;
+  try {
+    name = decodeURIComponent(rawName);
+  } catch {
+    /* keep raw segment */
+  }
+  return {
+    name,
+    url,
+    created_at: new Date(0).toISOString(),
+    size: 0,
+  };
+}
+
+/**
+ * Include URLs already assigned on the record even when they are not returned by
+ * storage.list (different folder, legacy path, or upload outside the folder).
+ */
+export function mergeGalleryWithAssigned(
+  storageImages: GalleryImage[],
+  assignedUrls: string[],
+): GalleryImage[] {
+  const seen = new Set(storageImages.map((img) => img.url));
+  const extras: GalleryImage[] = [];
+  for (const url of assignedUrls) {
+    const trimmed = url?.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    extras.push(galleryImageFromUrl(trimmed));
+  }
+  return dedupeGalleryImages([...extras, ...storageImages]);
 }
 
 /** Load gallery images from storage; order-proof folders also merge proof rows from the DB. */

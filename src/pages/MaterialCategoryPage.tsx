@@ -29,6 +29,7 @@ import {
   setMaterialTotalStockDirect,
 } from '../lib/rawMaterialStock';
 import { insertRawMaterialLog, mapAppRoleToLogRole } from '../lib/domainActivityLog';
+import { archiveRawMaterial, countOrderLinesForMaterial } from '../lib/deletePolicy';
 import { scopedMaterialIdList } from '../lib/warehouseScope';
 import {
   normalizeProductCategorySlugParam,
@@ -368,24 +369,46 @@ export default function MaterialCategoryPage() {
     const delName = editingMaterial?.name ?? materials.find(m => m.id === editingMaterialId)?.name ?? '';
     setSaving(true);
     try {
-      await insertRawMaterialLog(supabase, {
-        rawMaterialId: editingMaterialId,
-        action: 'material_deleted',
-        description: `Raw material "${delName}" deleted.`,
-        performedBy: actorName,
-        performedByRole: actorRole,
-        oldValue: { name: delName },
-        newValue: null,
-      });
-      const { error } = await supabase
-        .from('raw_materials')
-        .delete()
-        .eq('id', editingMaterialId);
-      if (error) throw error;
+      const refCount = await countOrderLinesForMaterial(editingMaterialId);
+      if (refCount > 0) {
+        if (!window.confirm(
+          `"${delName}" is on ${refCount} purchase order line(s). It will be archived instead of deleted.`,
+        )) {
+          setSaving(false);
+          return;
+        }
+        const archived = await archiveRawMaterial(editingMaterialId, actorName);
+        if (!archived.ok) throw new Error(archived.error ?? 'Archive failed');
+        await insertRawMaterialLog(supabase, {
+          rawMaterialId: editingMaterialId,
+          action: 'material_updated',
+          description: `Raw material "${delName}" archived — referenced on PO lines.`,
+          performedBy: actorName,
+          performedByRole: actorRole,
+          oldValue: { name: delName },
+          newValue: { status: 'Discontinued' },
+        });
+      } else {
+        if (!window.confirm(`Delete "${delName}"?\n\nThis cannot be undone.`)) {
+          setSaving(false);
+          return;
+        }
+        await insertRawMaterialLog(supabase, {
+          rawMaterialId: editingMaterialId,
+          action: 'material_deleted',
+          description: `Raw material "${delName}" deleted.`,
+          performedBy: actorName,
+          performedByRole: actorRole,
+          oldValue: { name: delName },
+          newValue: null,
+        });
+        const { error } = await supabase.from('raw_materials').delete().eq('id', editingMaterialId);
+        if (error) throw error;
+      }
       await fetchMaterials();
       handleCloseModal();
     } catch (err: any) {
-      alert(`Failed to delete material: ${err.message ?? 'Unknown error'}`);
+      alert(`Failed: ${err.message ?? 'Unknown error'}`);
     } finally {
       setSaving(false);
     }
