@@ -55,6 +55,10 @@ import {
   type OrderCustomerTripCancelledEmailPayload,
 } from './email/orderCustomerTripCancelledEmail';
 import {
+  buildOrderCustomerTripDelayedEmailHtml,
+  type OrderCustomerTripDelayedEmailPayload,
+} from './email/orderCustomerTripDelayedEmail';
+import {
   buildOrderCustomerCancelledEmailHtml,
   orderCustomerCancelledSubject,
   type OrderCustomerCancelledEmailPayload,
@@ -185,6 +189,7 @@ import {
   orderCustomerScheduledSubject,
   orderCustomerUnscheduledSubject,
   orderCustomerTripCancelledSubject,
+  orderCustomerTripDelayedSubject,
   orderCustomerPortalShareSubject,
   orderDeliveryProofUploadedAgentSubject,
   orderOtherProofUploadedAgentSubject,
@@ -1514,6 +1519,35 @@ app.post('/api/notifications/order-customer-trip-cancelled', async (req, res) =>
       return;
     }
     console.error('[notify-server] order-customer-trip-cancelled', err);
+    res.status(502).json({ error: message });
+  }
+});
+
+app.post('/api/notifications/order-customer-trip-delayed', async (req, res) => {
+  try {
+    const payload = req.body as OrderCustomerTripDelayedEmailPayload;
+    if (!payload?.orderId || !payload?.orderNumber || !payload?.customerEmail?.trim()) {
+      res.status(400).json({ error: 'Missing orderId, orderNumber, or customerEmail' });
+      return;
+    }
+
+    const subject = orderCustomerTripDelayedSubject(payload);
+    const html = buildOrderCustomerTripDelayedEmailHtml(payload);
+    const sentTo = resolveRecipient(payload.customerEmail);
+    const { id } = await sendViaResend({
+      to: sentTo,
+      subject,
+      html,
+      entityRef: emailEntityRef(payload.orderId, 'customer-trip-delayed'),
+    });
+    res.json({ ok: true, id, sentTo, subject });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Internal error';
+    if (message.includes('RESEND_API_KEY')) {
+      res.status(503).json({ error: message });
+      return;
+    }
+    console.error('[notify-server] order-customer-trip-delayed', err);
     res.status(502).json({ error: message });
   }
 });

@@ -19,6 +19,7 @@ import type {
   OrderCustomerPaymentRecordedNotifyPayload,
   OrderCustomerUnscheduledNotifyPayload,
   OrderCustomerTripCancelledNotifyPayload,
+  OrderCustomerTripDelayedNotifyPayload,
   OrderCustomerPortalShareNotifyPayload,
   OrderDecisionNotifyPayload,
   OrderLogisticsReadyNotifyPayload,
@@ -3759,6 +3760,91 @@ export async function notifyCustomerOrdersTripCancelled(
   }
 }
 
+export async function buildOrderCustomerTripDelayedNotifyPayload(
+  orderUuid: string,
+  opts: {
+    tripNumber?: string | null;
+    tripScheduledDate?: string | null;
+    delayReason?: string | null;
+    vehicleName?: string | null;
+    driverName?: string | null;
+  },
+): Promise<OrderCustomerTripDelayedNotifyPayload | null> {
+  const order = await fetchOrderDetailSnapshotForNotify(orderUuid);
+  if (!order) return null;
+
+  const base = await buildOrderCustomerNotifyPayload(order, orderUuid, { status: order.status });
+  if (!base) return null;
+
+  return {
+    ...base,
+    tripNumber: opts.tripNumber ?? null,
+    tripScheduledDate: opts.tripScheduledDate ?? null,
+    delayReason: opts.delayReason ?? null,
+    vehicleName: opts.vehicleName ?? null,
+    driverName: opts.driverName ?? null,
+  };
+}
+
+async function sendOrderCustomerTripDelayedNotificationEmail(
+  payload: OrderCustomerTripDelayedNotifyPayload,
+): Promise<boolean> {
+  try {
+    const res = await notifyFetch('/api/notifications/order-customer-trip-delayed', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      console.warn('[notifications] Customer trip delayed email failed', body);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn('[notifications] Customer trip delayed email API unreachable', e);
+    return false;
+  }
+}
+
+export async function notifyCustomerOrderTripDelayed(
+  orderUuid: string,
+  opts: {
+    tripNumber?: string | null;
+    tripScheduledDate?: string | null;
+    delayReason?: string | null;
+    vehicleName?: string | null;
+    driverName?: string | null;
+  },
+): Promise<void> {
+  const payload = await buildOrderCustomerTripDelayedNotifyPayload(orderUuid, opts);
+  if (!payload?.customerEmail?.trim()) return;
+
+  const sent = await sendOrderCustomerTripDelayedNotificationEmail(payload);
+  if (sent && payload.portalId) {
+    await recordOrderPortalEmailSent(payload.portalId, payload.customerEmail);
+  }
+}
+
+export async function notifyCustomerOrdersTripDelayed(
+  orderUuids: string[],
+  opts: {
+    tripNumber?: string | null;
+    tripScheduledDate?: string | null;
+    delayReason?: string | null;
+    vehicleName?: string | null;
+    driverName?: string | null;
+  },
+): Promise<void> {
+  for (const orderUuid of orderUuids) {
+    try {
+      await notifyCustomerOrderTripDelayed(orderUuid, opts);
+    } catch (e) {
+      console.warn('[notifications] customer trip delayed notify failed', orderUuid, e);
+    }
+  }
+}
+
 export async function notifyOrdersUnscheduledFromTripCancel(
   orderUuids: string[],
   opts: {
@@ -4157,7 +4243,7 @@ export async function buildTripDelayedNotifyPayload(
   const { data: trip, error } = await supabase
     .from('trips')
     .select(`
-      id, trip_number, vehicle_name, driver_name, branch_id, order_ids,
+      id, trip_number, vehicle_name, driver_name, branch_id, order_ids, scheduled_date,
       branches(name)
     `)
     .eq('id', tripId)
@@ -4246,6 +4332,7 @@ export async function buildTripDelayedNotifyPayload(
     tripNumber: String(t.trip_number ?? ''),
     delayReason: opts.delayReason.trim(),
     reportedBy: opts.reportedBy ?? null,
+    tripScheduledDate: t.scheduled_date ? String(t.scheduled_date).slice(0, 10) : null,
     vehicleName: (t.vehicle_name as string | null) ?? null,
     driverName: (t.driver_name as string | null) ?? null,
     branchName,
@@ -4339,6 +4426,16 @@ export async function notifyTripDelayed(
         agentName: order.agentName,
       });
     }
+    await notifyCustomerOrdersTripDelayed(
+      payload.affectedOrders.map((o) => o.orderId),
+      {
+        tripNumber: payload.tripNumber,
+        tripScheduledDate: payload.tripScheduledDate ?? null,
+        delayReason: payload.delayReason,
+        vehicleName: payload.vehicleName ?? null,
+        driverName: payload.driverName ?? null,
+      },
+    );
   }
 
   window.dispatchEvent(new Event('lamtex:notifications-refresh'));

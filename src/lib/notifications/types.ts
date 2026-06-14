@@ -159,6 +159,14 @@ export interface OrderCustomerTripCancelledNotifyPayload extends OrderCustomerAp
   cancellationReason?: string | null;
 }
 
+export interface OrderCustomerTripDelayedNotifyPayload extends OrderCustomerApprovedNotifyPayload {
+  tripNumber?: string | null;
+  tripScheduledDate?: string | null;
+  delayReason?: string | null;
+  vehicleName?: string | null;
+  driverName?: string | null;
+}
+
 export interface OrderCustomerPortalShareNotifyPayload extends OrderCreatedNotifyPayload {
   customerEmail: string;
   customerContactPerson?: string | null;
@@ -214,6 +222,7 @@ export interface TripDelayedNotifyPayload {
   tripNumber: string;
   delayReason: string;
   reportedBy: string | null;
+  tripScheduledDate?: string | null;
   vehicleName?: string | null;
   driverName?: string | null;
   branchName?: string | null;
