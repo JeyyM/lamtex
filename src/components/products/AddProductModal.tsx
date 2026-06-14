@@ -169,7 +169,7 @@ const AddProductModal: React.FC<AddProductModalProps> = ({
   const selectedCategoryLabel = useMemo(() => {
     if (!formData.categoryId) return categoryName || 'this category';
     const match = categoryOptions.find((c) => c.id === formData.categoryId);
-    return match?.name ?? categoryName || 'this category';
+    return match?.name ?? (categoryName || 'this category');
   }, [formData.categoryId, categoryOptions, categoryName]);
 
   if (!isOpen) return null;
