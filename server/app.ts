@@ -88,6 +88,10 @@ import {
   type TripDriverAssignedEmailPayload,
 } from './email/tripDriverAssignedEmail';
 import {
+  buildTripDriverUnassignedEmailHtml,
+  type TripDriverUnassignedEmailPayload,
+} from './email/tripDriverUnassignedEmail';
+import {
   buildTripDelayedEmailHtml,
   tripDelayedSubject,
   type TripDelayedEmailPayload,
@@ -211,6 +215,7 @@ import {
   interBranchCancelledSubject,
   interBranchRejectedSubject,
   tripDriverAssignedSubject,
+  tripDriverUnassignedSubject,
   productStockAlertSubject,
   materialStockAlertSubject,
 } from './email/notificationSubjects';
@@ -1623,6 +1628,35 @@ app.post('/api/notifications/trip-driver-assigned', async (req, res) => {
       return;
     }
     console.error('[notify-server] trip-driver-assigned', err);
+    res.status(502).json({ error: message });
+  }
+});
+
+app.post('/api/notifications/trip-driver-unassigned', async (req, res) => {
+  try {
+    const payload = req.body as TripDriverUnassignedEmailPayload;
+    if (!payload?.tripId || !payload?.tripNumber) {
+      res.status(400).json({ error: 'Missing tripId or tripNumber' });
+      return;
+    }
+
+    const subject = tripDriverUnassignedSubject(payload);
+    const html = buildTripDriverUnassignedEmailHtml(payload);
+    const sentTo = resolveRecipient(payload.driverEmail);
+    const { id } = await sendViaResend({
+      to: sentTo,
+      subject,
+      html,
+      entityRef: emailEntityRef(payload.tripId, 'driver-unassigned'),
+    });
+    res.json({ ok: true, id, sentTo, subject });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Internal error';
+    if (message.includes('RESEND_API_KEY')) {
+      res.status(503).json({ error: message });
+      return;
+    }
+    console.error('[notify-server] trip-driver-unassigned', err);
     res.status(502).json({ error: message });
   }
 });

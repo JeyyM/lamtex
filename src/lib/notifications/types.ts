@@ -178,6 +178,20 @@ export interface TripDriverAssignedNotifyPayload {
   destinationLabel?: string | null;
 }
 
+export interface TripDriverUnassignedNotifyPayload {
+  tripId: string;
+  tripNumber: string;
+  scheduledDate: string | null;
+  vehicleName: string | null;
+  driverName: string | null;
+  driverEmail?: string | null;
+  branchName?: string | null;
+  assignedBy: string | null;
+  newDriverName?: string | null;
+  interBranchRequestId?: string | null;
+  ibrNumber?: string | null;
+}
+
 export interface TripDelayedAffectedOrderNotify {
   orderId: string;
   orderNumber: string;

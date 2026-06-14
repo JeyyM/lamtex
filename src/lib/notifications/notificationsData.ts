@@ -33,6 +33,7 @@ import type {
   OrderRevisedNotifyPayload,
   OrderScheduledNotifyPayload,
   TripDriverAssignedNotifyPayload,
+  TripDriverUnassignedNotifyPayload,
   TripDelayedNotifyPayload,
   TripDelayedAffectedOrderNotify,
   ProductStockAlertEmailRequestPayload,
@@ -3598,43 +3599,82 @@ export async function notifyOrdersScheduled(
   }
 }
 
-async function fetchDriverEmail(driverId: string): Promise<string | null> {
-  const { data, error } = await supabase
-    .from('employees')
-    .select('email')
-    .eq('id', driverId)
-    .maybeSingle();
-  if (error) {
-    console.warn('[notifications] Could not load driver email', error);
-    return null;
+async function fetchEmployeeNotifyContact(employeeId: string): Promise<{
+  name: string | null;
+  email: string | null;
+}> {
+  const [empRes, contactRes] = await Promise.all([
+    supabase.from('employees').select('employee_name, email').eq('id', employeeId).maybeSingle(),
+    supabase
+      .from('employee_contact_info')
+      .select('work_email, personal_email')
+      .eq('employee_id', employeeId)
+      .maybeSingle(),
+  ]);
+
+  if (empRes.error) {
+    console.warn('[notifications] Could not load employee profile for notify', empRes.error);
+    return { name: null, email: null };
   }
-  return (data as { email?: string | null } | null)?.email?.trim() || null;
+
+  const emp = empRes.data as { employee_name?: string | null; email?: string | null } | null;
+  const contact = contactRes.data as {
+    work_email?: string | null;
+    personal_email?: string | null;
+  } | null;
+
+  const email =
+    contact?.work_email?.trim() ||
+    contact?.personal_email?.trim() ||
+    emp?.email?.trim() ||
+    null;
+
+  return {
+    name: emp?.employee_name?.trim() || null,
+    email,
+  };
 }
 
 export async function buildTripDriverAssignedNotifyPayload(
   tripId: string,
   opts: { assignedBy?: string | null },
 ): Promise<TripDriverAssignedNotifyPayload | null> {
-  const { data: trip, error } = await supabase
-    .from('trips')
-    .select(`
+  const tripSelectFull = `
       id, trip_number, scheduled_date, vehicle_name, driver_id, driver_name, order_ids, destinations,
       inter_branch_request_id, branch_id,
       branches(name)
-    `)
+    `;
+  const tripSelectBase = `
+      id, trip_number, scheduled_date, vehicle_name, driver_id, driver_name, order_ids, destinations,
+      branch_id,
+      branches(name)
+    `;
+
+  let trip: Record<string, unknown> | null = null;
+  let { data, error } = await supabase
+    .from('trips')
+    .select(tripSelectFull)
     .eq('id', tripId)
     .maybeSingle();
 
-  if (error || !trip) {
+  if (error) {
+    ({ data, error } = await supabase
+      .from('trips')
+      .select(tripSelectBase)
+      .eq('id', tripId)
+      .maybeSingle());
+  }
+
+  if (error || !data) {
     console.warn('[notifications] Could not load trip for driver notify', error);
     return null;
   }
+  trip = data as Record<string, unknown>;
 
-  const t = trip as Record<string, unknown>;
-  const driverId = (t.driver_id as string | null)?.trim();
+  const driverId = (trip.driver_id as string | null)?.trim();
   if (!driverId) return null;
 
-  const orderIds = Array.isArray(t.order_ids) ? (t.order_ids as string[]) : [];
+  const orderIds = Array.isArray(trip.order_ids) ? (trip.order_ids as string[]) : [];
   let orderNumbers: string[] = [];
   if (orderIds.length > 0) {
     const { data: orders } = await supabase
@@ -3650,8 +3690,8 @@ export async function buildTripDriverAssignedNotifyPayload(
     orderNumbers = orderIds.map((id) => byId.get(id) || id).filter(Boolean);
   }
 
-  const interBranchRequestId = (t.inter_branch_request_id as string | null)?.trim() || null;
-  const destArr = Array.isArray(t.destinations) ? (t.destinations as string[]) : [];
+  const interBranchRequestId = (trip.inter_branch_request_id as string | null)?.trim() || null;
+  const destArr = Array.isArray(trip.destinations) ? (trip.destinations as string[]) : [];
   const destinationLabel = destArr[0]?.trim() || null;
   let ibrNumber: string | null = null;
   if (interBranchRequestId) {
@@ -3663,16 +3703,16 @@ export async function buildTripDriverAssignedNotifyPayload(
     ibrNumber = (ibrRow as { ibr_number?: string } | null)?.ibr_number?.trim() || null;
   }
 
-  const driverEmail = await fetchDriverEmail(driverId);
-  const branchName = (t.branches as { name?: string } | null)?.name ?? null;
+  const driverContact = await fetchEmployeeNotifyContact(driverId);
+  const branchName = (trip.branches as { name?: string } | null)?.name ?? null;
 
   return {
     tripId,
-    tripNumber: String(t.trip_number ?? ''),
-    scheduledDate: t.scheduled_date ? String(t.scheduled_date).slice(0, 10) : null,
-    vehicleName: (t.vehicle_name as string | null) ?? null,
-    driverName: (t.driver_name as string | null) ?? null,
-    driverEmail,
+    tripNumber: String(trip.trip_number ?? ''),
+    scheduledDate: trip.scheduled_date ? String(trip.scheduled_date).slice(0, 10) : null,
+    vehicleName: (trip.vehicle_name as string | null) ?? null,
+    driverName: (trip.driver_name as string | null)?.trim() || driverContact.name,
+    driverEmail: driverContact.email,
     branchName,
     orderCount: orderIds.length,
     orderNumbers,
@@ -3705,18 +3745,119 @@ export async function notifyDriverTripAssigned(
   tripId: string,
   opts: { assignedBy?: string | null },
 ): Promise<void> {
-  const payload = await buildTripDriverAssignedNotifyPayload(tripId, opts);
-  if (!payload) return;
-
   const { error: rpcError } = await supabase.rpc('notify_driver_trip_assigned', {
-    p_trip_id: payload.tripId,
-    p_assigned_by: payload.assignedBy,
+    p_trip_id: tripId,
+    p_assigned_by: opts.assignedBy ?? null,
   });
   if (rpcError) {
     console.error('[notifications] RPC notify_driver_trip_assigned failed', rpcError);
   }
 
-  await sendTripDriverAssignedNotificationEmail(payload);
+  const payload = await buildTripDriverAssignedNotifyPayload(tripId, opts);
+  if (payload) {
+    await sendTripDriverAssignedNotificationEmail(payload);
+  }
+}
+
+export async function notifyDriverTripUnassigned(
+  tripId: string,
+  previousDriverId: string,
+  opts: { assignedBy?: string | null; newDriverName?: string | null },
+): Promise<void> {
+  const { error: rpcError } = await supabase.rpc('notify_driver_trip_unassigned', {
+    p_trip_id: tripId,
+    p_previous_driver_id: previousDriverId,
+    p_assigned_by: opts.assignedBy ?? null,
+    p_new_driver_name: opts.newDriverName ?? null,
+  });
+  if (rpcError) {
+    console.error('[notifications] RPC notify_driver_trip_unassigned failed', rpcError);
+  }
+
+  const payload = await buildTripDriverUnassignedNotifyPayload(tripId, previousDriverId, opts);
+  if (payload) {
+    await sendTripDriverUnassignedNotificationEmail(payload);
+  }
+}
+
+async function buildTripDriverUnassignedNotifyPayload(
+  tripId: string,
+  previousDriverId: string,
+  opts: { assignedBy?: string | null; newDriverName?: string | null },
+): Promise<TripDriverUnassignedNotifyPayload | null> {
+  const tripSelectFull = `
+      id, trip_number, scheduled_date, vehicle_name, branch_id,
+      inter_branch_request_id,
+      branches(name)
+    `;
+  const tripSelectBase = `
+      id, trip_number, scheduled_date, vehicle_name, branch_id,
+      branches(name)
+    `;
+
+  let { data, error } = await supabase
+    .from('trips')
+    .select(tripSelectFull)
+    .eq('id', tripId)
+    .maybeSingle();
+
+  if (error) {
+    ({ data, error } = await supabase
+      .from('trips')
+      .select(tripSelectBase)
+      .eq('id', tripId)
+      .maybeSingle());
+  }
+
+  if (error || !data) {
+    console.warn('[notifications] Could not load trip for driver unassigned email', error);
+    return null;
+  }
+
+  const trip = data as Record<string, unknown>;
+  const driverContact = await fetchEmployeeNotifyContact(previousDriverId);
+  const interBranchRequestId = (trip.inter_branch_request_id as string | null)?.trim() || null;
+  let ibrNumber: string | null = null;
+  if (interBranchRequestId) {
+    const { data: ibrRow } = await supabase
+      .from('inter_branch_requests')
+      .select('ibr_number')
+      .eq('id', interBranchRequestId)
+      .maybeSingle();
+    ibrNumber = (ibrRow as { ibr_number?: string } | null)?.ibr_number?.trim() || null;
+  }
+
+  return {
+    tripId,
+    tripNumber: String(trip.trip_number ?? ''),
+    scheduledDate: trip.scheduled_date ? String(trip.scheduled_date).slice(0, 10) : null,
+    vehicleName: (trip.vehicle_name as string | null) ?? null,
+    driverName: driverContact.name,
+    driverEmail: driverContact.email,
+    branchName: (trip.branches as { name?: string } | null)?.name ?? null,
+    assignedBy: opts.assignedBy ?? null,
+    newDriverName: opts.newDriverName ?? null,
+    interBranchRequestId,
+    ibrNumber,
+  };
+}
+
+async function sendTripDriverUnassignedNotificationEmail(
+  payload: TripDriverUnassignedNotifyPayload,
+): Promise<void> {
+  try {
+    const res = await notifyFetch('/api/notifications/trip-driver-unassigned', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      console.warn('[notifications] Driver trip unassigned email failed', body);
+    }
+  } catch (e) {
+    console.warn('[notifications] Driver trip unassigned email API unreachable', e);
+  }
 }
 
 const TRIP_DELAY_SKIP_ORDER_STATUSES = new Set([

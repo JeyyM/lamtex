@@ -391,6 +391,18 @@ export function tripDriverAssignedSubject(p: {
   return notificationSubject('Driver', `Trip ${p.tripNumber} assigned to you${datePart}`);
 }
 
+export function tripDriverUnassignedSubject(p: {
+  tripNumber: string;
+  scheduledDate?: string | null;
+  newDriverName?: string | null;
+}): string {
+  const datePart = p.scheduledDate?.trim() ? ` — ${p.scheduledDate.trim()}` : '';
+  if (p.newDriverName?.trim()) {
+    return notificationSubject('Driver', `Trip ${p.tripNumber} reassigned${datePart}`);
+  }
+  return notificationSubject('Driver', `Trip ${p.tripNumber} assignment removed${datePart}`);
+}
+
 export function productStockAlertSubject(p: {
   sku: string;
   productName: string;

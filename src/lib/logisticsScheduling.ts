@@ -5,7 +5,13 @@
 import { supabase } from '@/src/lib/supabase';
 import { resolveBranchIdByName } from '@/src/lib/branchCompanySettings';
 import { fetchBranchDepotPinByBranchName } from '@/src/lib/companyAddressesSettings';
-import { notifyCustomerOrdersUnscheduledFromTrip, notifyDriverTripAssigned, notifyLogisticsOrderLoading, notifyOrdersScheduled } from '@/src/lib/notifications/notificationsData';
+import {
+  notifyCustomerOrdersUnscheduledFromTrip,
+  notifyDriverTripAssigned,
+  notifyDriverTripUnassigned,
+  notifyLogisticsOrderLoading,
+  notifyOrdersScheduled,
+} from '@/src/lib/notifications/notificationsData';
 import { fetchOrderLoadByOrderId, orderLoadWithFallback } from '@/src/lib/orderLoadMetrics';
 import type { OrderReadyForDispatch, Trip, DriverOption } from '@/src/types/logistics';
 
@@ -102,6 +108,33 @@ function fireDriverTripAssignedNotification(
   void notifyDriverTripAssigned(tripId, opts).catch((e) => {
     console.warn('[logisticsScheduling] driver trip assigned notification failed', e);
   });
+}
+
+function fireDriverTripUnassignedNotification(
+  tripId: string,
+  previousDriverId: string,
+  opts: { assignedBy?: string | null; newDriverName?: string | null },
+): void {
+  void notifyDriverTripUnassigned(tripId, previousDriverId, opts).catch((e) => {
+    console.warn('[logisticsScheduling] driver trip unassigned notification failed', e);
+  });
+}
+
+/** Notify the previous and/or new truck driver when a trip assignment changes. */
+export function handleTripDriverChangeNotifications(
+  tripId: string,
+  previousDriverId: string | null | undefined,
+  newDriverId: string | null | undefined,
+  opts: { assignedBy?: string | null; newDriverName?: string | null },
+): void {
+  const prev = previousDriverId?.trim() || null;
+  const next = newDriverId?.trim() || null;
+  if (prev && prev !== next) {
+    fireDriverTripUnassignedNotification(tripId, prev, opts);
+  }
+  if (next && next !== prev) {
+    fireDriverTripAssignedNotification(tripId, { assignedBy: opts.assignedBy ?? null });
+  }
 }
 
 const ORDER_QUEUE_SELECT_FULL =
@@ -1249,8 +1282,11 @@ export async function createTripFromPlanning(params: {
     driverName: params.driverName ?? null,
   });
 
-  if (params.driverUuid && tripId) {
-    fireDriverTripAssignedNotification(tripId, { assignedBy: params.scheduledBy ?? null });
+  if (tripId) {
+    handleTripDriverChangeNotifications(tripId, null, params.driverUuid, {
+      assignedBy: params.scheduledBy ?? null,
+      newDriverName: params.driverName ?? null,
+    });
   }
 
   return { ok: true, tripId, tripNumber };
@@ -1517,9 +1553,10 @@ export async function updateTrip(params: {
     });
   }
 
-  if (params.driverUuid && params.driverUuid !== previousDriverId) {
-    fireDriverTripAssignedNotification(params.tripId, { assignedBy: params.scheduledBy ?? null });
-  }
+  handleTripDriverChangeNotifications(params.tripId, previousDriverId, params.driverUuid, {
+    assignedBy: params.scheduledBy ?? null,
+    newDriverName: params.driverName ?? null,
+  });
 
   return { ok: true };
 }
@@ -1827,9 +1864,10 @@ export async function createOrUpdateIbrTrip(params: IbrTripScheduleParams): Prom
       })
       .eq('id', params.existingTripId);
     if (updErr) return { ok: false, error: updErr.message };
-    if (params.driverUuid && params.driverUuid !== previousDriverId) {
-      fireDriverTripAssignedNotification(params.existingTripId, { assignedBy: params.scheduledBy ?? null });
-    }
+    handleTripDriverChangeNotifications(params.existingTripId, previousDriverId, params.driverUuid, {
+      assignedBy: params.scheduledBy ?? null,
+      newDriverName: params.driverName ?? null,
+    });
     return { ok: true, tripId: params.existingTripId };
   }
 
@@ -1885,8 +1923,11 @@ export async function createOrUpdateIbrTrip(params: IbrTripScheduleParams): Prom
     console.warn('[logistics] could not store linked_trip_id on IBR', linkErr.message);
   }
 
-  if (params.driverUuid && tripId) {
-    fireDriverTripAssignedNotification(tripId, { assignedBy: params.scheduledBy ?? null });
+  if (tripId) {
+    handleTripDriverChangeNotifications(tripId, null, params.driverUuid, {
+      assignedBy: params.scheduledBy ?? null,
+      newDriverName: params.driverName ?? null,
+    });
   }
 
   return { ok: true, tripId, tripNumber };
