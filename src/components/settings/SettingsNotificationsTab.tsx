@@ -46,6 +46,21 @@ function Toggle({
   );
 }
 
+function ChannelHeaderRow() {
+  return (
+    <div className="hidden sm:flex items-center justify-end gap-6 px-4 pb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">
+      <div className="flex items-center gap-2 w-[88px] justify-end">
+        <Bell className="w-3.5 h-3.5" aria-hidden />
+        In-app
+      </div>
+      <div className="flex items-center gap-2 w-[88px] justify-end">
+        <Mail className="w-3.5 h-3.5" aria-hidden />
+        Email
+      </div>
+    </div>
+  );
+}
+
 function NotificationRow({
   entry,
   prefs,
@@ -65,11 +80,11 @@ function NotificationRow({
         <p className="font-medium text-gray-900">{entry.label}</p>
         <p className="text-sm text-gray-500 mt-1">{entry.description}</p>
       </div>
-      <div className="flex items-center gap-6 shrink-0">
-        {entry.supports.in_app && (
-          <div className="flex items-center gap-2">
-            <Bell className="w-4 h-4 text-gray-500" aria-hidden />
-            <span className="text-xs font-medium text-gray-600 w-12">In-app</span>
+      <div className="flex items-center gap-6 shrink-0 sm:w-[192px] sm:justify-end">
+        {entry.supports.in_app ? (
+          <div className="flex items-center gap-2 sm:w-[88px] sm:justify-end">
+            <Bell className="w-4 h-4 text-gray-500 sm:hidden" aria-hidden />
+            <span className="text-xs font-medium text-gray-600 w-12 sm:sr-only">In-app</span>
             <Toggle
               checked={row.in_app}
               disabled={disabled}
@@ -77,11 +92,13 @@ function NotificationRow({
               onChange={(next) => onChange(entry.key, 'in_app', next)}
             />
           </div>
+        ) : (
+          <div className="hidden sm:block sm:w-[88px]" aria-hidden />
         )}
-        {entry.supports.email && (
-          <div className="flex items-center gap-2">
-            <Mail className="w-4 h-4 text-gray-500" aria-hidden />
-            <span className="text-xs font-medium text-gray-600 w-12">Email</span>
+        {entry.supports.email ? (
+          <div className="flex items-center gap-2 sm:w-[88px] sm:justify-end">
+            <Mail className="w-4 h-4 text-gray-500 sm:hidden" aria-hidden />
+            <span className="text-xs font-medium text-gray-600 w-12 sm:sr-only">Email</span>
             <Toggle
               checked={row.email}
               disabled={disabled}
@@ -89,6 +106,8 @@ function NotificationRow({
               onChange={(next) => onChange(entry.key, 'email', next)}
             />
           </div>
+        ) : (
+          <div className="hidden sm:block sm:w-[88px]" aria-hidden />
         )}
       </div>
     </div>
@@ -177,6 +196,8 @@ export function SettingsNotificationsTab({
     }
   };
 
+  const roleLabel = roles.length === 1 ? roles[0] : roles.join(', ');
+
   if (!employeeId) {
     return (
       <Card>
@@ -193,13 +214,14 @@ export function SettingsNotificationsTab({
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Bell className="w-5 h-5 text-red-600" />
-            Notification preferences
+            Notification Preferences
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
           <p className="text-sm text-gray-600 leading-relaxed">
-            Control which notifications you receive by email and in the app bell. Defaults match
-            your role&apos;s current setup. Customer emails are always sent and cannot be turned off
+            Choose which staff notifications you receive by email and in the app bell. This list
+            covers every notification type for your role ({roleLabel}). Defaults match your
+            role&apos;s current setup. Customer emails are always sent and cannot be turned off
             here.
           </p>
 
@@ -218,6 +240,11 @@ export function SettingsNotificationsTab({
             <p className="text-sm text-gray-500 py-6">No configurable notifications for your role.</p>
           ) : (
             <div className="space-y-8">
+              <p className="text-sm text-gray-500">
+                {catalogItems.length} notification{catalogItems.length === 1 ? '' : 's'} for your
+                role
+              </p>
+              <ChannelHeaderRow />
               {[...grouped.entries()].map(([group, items]) => (
                 <div key={group} className="space-y-3">
                   <h3 className="font-semibold text-gray-900 border-b border-gray-200 pb-2">{group}</h3>
@@ -249,34 +276,34 @@ export function SettingsNotificationsTab({
               Reset to defaults
             </Button>
             <div className="flex flex-col-reverse sm:flex-row gap-3">
-            <Button
-              type="button"
-              variant="outline"
-              className="w-full sm:w-auto"
-              disabled={saving || loading || !dirty}
-              onClick={handleCancel}
-            >
-              <XCircle className="w-4 h-4 mr-2" />
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              className="bg-red-600 hover:bg-red-700 w-full sm:w-auto"
-              disabled={saving || loading || !dirty}
-              onClick={() => void handleSave()}
-            >
-              {saving ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Saving…
-                </>
-              ) : (
-                <>
-                  <Save className="w-4 h-4 mr-2" />
-                  Save preferences
-                </>
-              )}
-            </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full sm:w-auto"
+                disabled={saving || loading || !dirty}
+                onClick={handleCancel}
+              >
+                <XCircle className="w-4 h-4 mr-2" />
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                className="bg-red-600 hover:bg-red-700 w-full sm:w-auto"
+                disabled={saving || loading || !dirty}
+                onClick={() => void handleSave()}
+              >
+                {saving ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Saving…
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-4 h-4 mr-2" />
+                    Save preferences
+                  </>
+                )}
+              </Button>
             </div>
           </div>
         </CardContent>

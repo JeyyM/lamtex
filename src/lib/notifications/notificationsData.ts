@@ -1789,8 +1789,10 @@ function materialStockAlertPrefKey(severity: MaterialStockAlertSeverity): Notifi
 
 function ibrStatusEmailPrefKey(status: string): NotificationPrefKey {
   if (status === 'In Transit') return 'ibr_in_transit';
-  if (status === 'Scheduled') return 'ibr_approved';
-  if (status === 'Loading' || status === 'Packed' || status === 'Ready') return 'ibr_loading';
+  if (status === 'Scheduled') return 'ibr_scheduled';
+  if (status === 'Packed') return 'ibr_packed';
+  if (status === 'Ready') return 'ibr_ready';
+  if (status === 'Loading') return 'ibr_loading';
   return 'ibr_loading';
 }
 

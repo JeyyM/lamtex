@@ -55,6 +55,7 @@ export const NOTIFICATION_CATALOG: NotificationCatalogItem[] = [
   item('order_other_proof_uploaded', 'Other document uploaded', 'When a non-delivery document is uploaded on an order.', 'Orders — Fulfillment', ['Agent']),
 
   item('order_payment_proof_uploaded', 'Payment proof uploaded', 'When payment proof is uploaded on an order.', 'Orders — Payments', ['Agent']),
+  item('order_payment_completed', 'Order paid in full', 'When an order you sold is fully paid.', 'Orders — Payments', ['Agent']),
   item('order_payment_recorded', 'Payment recorded', 'When a payment is recorded on an order.', 'Orders — Payments', ['Executive']),
   item('order_payment_overdue', 'Payment overdue', 'When an order passes its payment due date.', 'Orders — Payments', ['Executive', 'Agent']),
   item('order_commission_paid', 'Commission paid', 'When commission is released on your order.', 'Orders — Payments', ['Agent']),
@@ -76,6 +77,7 @@ export const NOTIFICATION_CATALOG: NotificationCatalogItem[] = [
   item('purchase_order_confirmed', 'PO confirmed', 'When a purchase order is confirmed with a supplier.', 'Purchase orders', ['Executive', 'Warehouse']),
   item('purchase_order_received', 'PO received', 'When a purchase order is marked received.', 'Purchase orders', ['Executive', 'Warehouse']),
   item('purchase_order_payment_recorded', 'PO payment recorded', 'When payment is recorded on a purchase order.', 'Purchase orders', ['Executive']),
+  item('purchase_order_payment_completed', 'PO paid in full', 'When a purchase order is fully paid.', 'Purchase orders', ['Executive']),
   item('purchase_order_delivery_proof_uploaded', 'PO delivery proof uploaded', 'When delivery proof is uploaded on a PO.', 'Purchase orders', ['Executive']),
   item('purchase_order_payment_proof_uploaded', 'PO payment proof uploaded', 'When payment proof is uploaded on a PO.', 'Purchase orders', ['Executive']),
   item('purchase_order_other_proof_uploaded', 'PO other proof uploaded', 'When other proof is uploaded on a PO.', 'Purchase orders', ['Executive']),
@@ -90,7 +92,10 @@ export const NOTIFICATION_CATALOG: NotificationCatalogItem[] = [
 
   item('ibr_submitted_for_approval', 'Inter-branch request submitted', 'When an IBR needs executive approval.', 'Inter-branch requests', ['Executive']),
   item('ibr_approved', 'Inter-branch request approved', 'When an IBR is approved.', 'Inter-branch requests', ['Warehouse', 'Logistics']),
+  item('ibr_scheduled', 'Inter-branch scheduled', 'When an IBR is scheduled for delivery.', 'Inter-branch requests', ['Warehouse']),
   item('ibr_loading', 'Inter-branch loading', 'IBR logistics milestone: loading.', 'Inter-branch requests', ['Warehouse', 'Logistics']),
+  item('ibr_packed', 'Inter-branch packed', 'IBR logistics milestone: packed.', 'Inter-branch requests', ['Warehouse', 'Logistics']),
+  item('ibr_ready', 'Inter-branch ready', 'IBR logistics milestone: ready for dispatch.', 'Inter-branch requests', ['Warehouse', 'Logistics']),
   item('ibr_in_transit', 'Inter-branch in transit', 'IBR logistics milestone: in transit.', 'Inter-branch requests', ['Warehouse', 'Logistics']),
   item('ibr_delivery_recorded', 'Inter-branch delivery recorded', 'When IBR delivery is recorded.', 'Inter-branch requests', ['Warehouse']),
   item('ibr_fulfilled', 'Inter-branch request fulfilled', 'When an IBR is fully fulfilled.', 'Inter-branch requests', ['Executive', 'Warehouse']),
