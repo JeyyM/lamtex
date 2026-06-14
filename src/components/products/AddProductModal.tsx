@@ -1,6 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { X, Upload, Image as ImageIcon, Trash2 } from 'lucide-react';
 import ImageGalleryModal from '../ImageGalleryModal';
+
+export interface ProductCategoryOption {
+  id: string;
+  name: string;
+  slug?: string;
+}
 
 interface AddProductModalProps {
   isOpen: boolean;
@@ -10,6 +16,8 @@ interface AddProductModalProps {
   initialData?: ProductFormData;
   isEditMode?: boolean;
   categoryName?: string;
+  /** Branch-scoped categories for edit-mode reassignment (includes Uncategorized). */
+  categoryOptions?: ProductCategoryOption[];
 }
 
 export interface ProductFormData {
@@ -18,6 +26,7 @@ export interface ProductFormData {
   description: string;
   imageUrl: string;
   category: string;
+  categoryId?: string;
 }
 
 const AddProductModal: React.FC<AddProductModalProps> = ({
@@ -27,7 +36,8 @@ const AddProductModal: React.FC<AddProductModalProps> = ({
   onDelete,
   initialData,
   isEditMode = false,
-  categoryName = ''
+  categoryName = '',
+  categoryOptions = [],
 }) => {
   const [formData, setFormData] = useState<ProductFormData>({
     name: '',
@@ -35,6 +45,7 @@ const AddProductModal: React.FC<AddProductModalProps> = ({
     description: '',
     imageUrl: '',
     category: categoryName,
+    categoryId: '',
   });
 
   // Update form data when initialData changes (for edit mode)
@@ -51,6 +62,7 @@ const AddProductModal: React.FC<AddProductModalProps> = ({
         description: '',
         imageUrl: '',
         category: categoryName,
+        categoryId: '',
       });
     }
   }, [initialData, isEditMode, isOpen, categoryName]);
@@ -94,6 +106,10 @@ const AddProductModal: React.FC<AddProductModalProps> = ({
       newErrors.description = 'Description must be at least 10 characters';
     }
 
+    if (isEditMode && categoryOptions.length > 0 && !formData.categoryId?.trim()) {
+      newErrors.categoryId = 'Category is required';
+    }
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -119,6 +135,7 @@ const AddProductModal: React.FC<AddProductModalProps> = ({
       description: '',
       imageUrl: '',
       category: categoryName,
+      categoryId: '',
     });
     setErrors({});
   };
@@ -149,6 +166,12 @@ const AddProductModal: React.FC<AddProductModalProps> = ({
     }
   };
 
+  const selectedCategoryLabel = useMemo(() => {
+    if (!formData.categoryId) return categoryName || 'this category';
+    const match = categoryOptions.find((c) => c.id === formData.categoryId);
+    return match?.name ?? categoryName || 'this category';
+  }, [formData.categoryId, categoryOptions, categoryName]);
+
   if (!isOpen) return null;
 
   return (
@@ -163,8 +186,8 @@ const AddProductModal: React.FC<AddProductModalProps> = ({
                   {isEditMode ? 'Edit Product Family' : 'Add New Product Family'}
                 </h2>
                 <p className="text-sm text-gray-500 mt-1">
-                  {isEditMode 
-                    ? `Update product family details in ${categoryName || 'this category'}`
+                  {isEditMode
+                    ? `Update product family details${selectedCategoryLabel ? ` · ${selectedCategoryLabel}` : ''}`
                     : `Create a new product family in ${categoryName || 'this category'}`
                   }
                 </p>
@@ -220,6 +243,36 @@ const AddProductModal: React.FC<AddProductModalProps> = ({
                 Use a unique identifier for this product family
               </p>
             </div>
+
+            {isEditMode && categoryOptions.length > 0 && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Category <span className="text-red-600">*</span>
+                </label>
+                <select
+                  value={formData.categoryId ?? ''}
+                  onChange={(e) => handleInputChange('categoryId', e.target.value)}
+                  className={`w-full px-4 py-2.5 rounded-lg border bg-white ${
+                    errors.categoryId ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-red-500'
+                  } focus:ring-2 focus:border-transparent outline-none transition-all`}
+                >
+                  <option value="" disabled>
+                    Select a category…
+                  </option>
+                  {categoryOptions.map((cat) => (
+                    <option key={cat.id} value={cat.id}>
+                      {cat.name}
+                    </option>
+                  ))}
+                </select>
+                {errors.categoryId && (
+                  <p className="text-red-600 text-sm mt-1">{errors.categoryId}</p>
+                )}
+                <p className="text-gray-500 text-xs mt-1">
+                  Move this family to another category, including Uncategorized.
+                </p>
+              </div>
+            )}
 
             {/* Description */}
             <div>

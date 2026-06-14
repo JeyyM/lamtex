@@ -5,7 +5,7 @@ import { StatKpiCard } from '../components/ui/StatKpiCard';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { useAppContext } from '../store/AppContext';
-import AddProductModal, { ProductFormData } from '../components/products/AddProductModal';
+import AddProductModal, { ProductFormData, type ProductCategoryOption } from '../components/products/AddProductModal';
 import {
   Package, ArrowLeft, AlertTriangle, TrendingUp,
   Search, Filter, DollarSign, Plus, Edit, Loader2, Download,
@@ -332,13 +332,14 @@ export default function ProductCategoryPage() {
   const [editingProductId, setEditingProductId]       = useState<string | null>(null);
   const [isEditMode, setIsEditMode]                   = useState(false);
   const [exportingCategory, setExportingCategory]     = useState(false);
+  const [categoryOptions, setCategoryOptions]         = useState<ProductCategoryOption[]>([]);
 
   // â”€â”€ Fetch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const fetchData = async () => {
     setLoading(true);
     const { data: catData } = await supabase
       .from('product_categories')
-      .select('id, name, is_active')
+      .select('id, name, is_active, branch, slug')
       .eq('slug', categoryName)
       .single();
 
@@ -346,6 +347,15 @@ export default function ProductCategoryPage() {
       setCategoryId(catData.id);
       setCategoryTitle(catData.name);
       setCategoryActive(catData.is_active !== false);
+
+      const branchFilter = catData.branch ?? inventoryBranch ?? null;
+      let catQ = supabase
+        .from('product_categories')
+        .select('id, name, slug')
+        .order('sort_order', { ascending: true });
+      if (branchFilter) catQ = catQ.eq('branch', branchFilter);
+      const { data: allCats } = await catQ;
+      setCategoryOptions(allCats ?? []);
 
       let q = supabase
         .from('products')
@@ -375,6 +385,7 @@ export default function ProductCategoryPage() {
       description: p.description ?? '',
       imageUrl: p.image_url ?? '',
       category: categoryTitle,
+      categoryId: p.category_id,
     });
     setEditingProductId(p.id);
     setIsEditMode(true);
@@ -396,10 +407,12 @@ export default function ProductCategoryPage() {
     try {
       if (isEditMode && editingProductId) {
         const oldRow = products.find(p => p.id === editingProductId);
+        const nextCategoryId = formData.categoryId?.trim() || oldRow?.category_id || categoryId;
         const { error } = await supabase.from('products').update({
           name: formData.name.trim(),
           description: formData.description.trim() || null,
           image_url: formData.imageUrl || null,
+          category_id: nextCategoryId,
           updated_at: new Date().toISOString(),
         }).eq('id', editingProductId);
         if (error) throw error;
@@ -413,11 +426,13 @@ export default function ProductCategoryPage() {
             name: oldRow?.name,
             description: oldRow?.description ?? null,
             image_url: oldRow?.image_url ?? null,
+            category_id: oldRow?.category_id ?? null,
           },
           newValue: {
             name: formData.name.trim(),
             description: formData.description.trim() || null,
             image_url: formData.imageUrl || null,
+            category_id: nextCategoryId ?? null,
           },
         });
       } else {
@@ -795,6 +810,7 @@ export default function ProductCategoryPage() {
           onSave={handleSaveProduct}
           onDelete={isEditMode ? handleDeleteProduct : undefined}
           categoryName={categoryTitle}
+          categoryOptions={categoryOptions}
           initialData={editingProduct || undefined}
           isEditMode={isEditMode}
         />

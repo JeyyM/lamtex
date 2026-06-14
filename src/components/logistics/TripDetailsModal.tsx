@@ -27,12 +27,9 @@ function displayFieldOrDash(value: string | null | undefined): string {
   return trimmed ? trimmed : '—';
 }
 
-async function fetchDriverContactAndLicense(driverId: string): Promise<{
-  contactPhone: string | null;
-  licenseNumber: string | null;
-}> {
+async function fetchDriverContactPhone(driverId: string): Promise<string | null> {
   const id = driverId.trim();
-  if (!id) return { contactPhone: null, licenseNumber: null };
+  if (!id) return null;
 
   const [{ data: employee }, { data: contact }] = await Promise.all([
     supabase.from('employees').select('phone').eq('id', id).maybeSingle(),
@@ -43,42 +40,12 @@ async function fetchDriverContactAndLicense(driverId: string): Promise<{
       .maybeSingle(),
   ]);
 
-  const contactPhone =
+  return (
     (contact?.primary_phone as string | null | undefined)?.trim() ||
     (employee?.phone as string | null | undefined)?.trim() ||
     (contact?.secondary_phone as string | null | undefined)?.trim() ||
-    null;
-
-  const { data: certifications } = await supabase
-    .from('employee_certifications')
-    .select('certification_name, credential_id')
-    .eq('employee_id', id);
-
-  let licenseNumber: string | null = null;
-  for (const row of certifications ?? []) {
-    const name = String(row.certification_name ?? '').toLowerCase();
-    if (name.includes('driver') || name.includes('license')) {
-      licenseNumber =
-        (row.credential_id as string | null | undefined)?.trim() ||
-        String(row.certification_name ?? '').trim() ||
-        null;
-      break;
-    }
-  }
-
-  if (!licenseNumber) {
-    const { data: gov } = await supabase
-      .from('employee_government_ids')
-      .select('gov_id_type, gov_id_number')
-      .eq('employee_id', id)
-      .maybeSingle();
-    const govType = String(gov?.gov_id_type ?? '').toLowerCase();
-    if (govType.includes('driver') || govType.includes('license')) {
-      licenseNumber = (gov?.gov_id_number as string | null | undefined)?.trim() || null;
-    }
-  }
-
-  return { contactPhone, licenseNumber };
+    null
+  );
 }
 
 interface OrderLineItem {
@@ -190,13 +157,11 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
   const [cancelTarget, setCancelTarget] = useState<{ id: string; orderNumber: string; customer: string; totalAmount: number } | null>(null);
 
   const [driverContactPhone, setDriverContactPhone] = useState<string | null>(null);
-  const [driverLicenseNumber, setDriverLicenseNumber] = useState<string | null>(null);
   const [driverProfileLoading, setDriverProfileLoading] = useState(false);
 
   useEffect(() => {
     if (!isOpen) {
       setDriverContactPhone(null);
-      setDriverLicenseNumber(null);
       setDriverProfileLoading(false);
       return;
     }
@@ -204,7 +169,6 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
     const driverId = trip.driverId?.trim();
     if (!driverId) {
       setDriverContactPhone(null);
-      setDriverLicenseNumber(null);
       setDriverProfileLoading(false);
       return;
     }
@@ -212,16 +176,14 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
     let cancelled = false;
     setDriverProfileLoading(true);
 
-    void fetchDriverContactAndLicense(driverId)
-      .then(({ contactPhone, licenseNumber }) => {
+    void fetchDriverContactPhone(driverId)
+      .then((contactPhone) => {
         if (cancelled) return;
         setDriverContactPhone(contactPhone);
-        setDriverLicenseNumber(licenseNumber);
       })
       .catch(() => {
         if (cancelled) return;
         setDriverContactPhone(null);
-        setDriverLicenseNumber(null);
       })
       .finally(() => {
         if (!cancelled) setDriverProfileLoading(false);
@@ -1279,14 +1241,6 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
                     {driverProfileLoading
                       ? '…'
                       : displayFieldOrDash(driverContactPhone)}
-                  </span>
-                </div>
-                <div className="flex flex-col sm:flex-row sm:justify-between gap-1">
-                  <span className="text-gray-500">License:</span>
-                  <span className="text-gray-900 break-words text-left sm:text-right">
-                    {driverProfileLoading
-                      ? '…'
-                      : displayFieldOrDash(driverLicenseNumber)}
                   </span>
                 </div>
               </div>
