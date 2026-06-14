@@ -18,6 +18,7 @@ import { remainingToShipForLine } from '@/src/lib/orderShipmentQuantities';
 import { reportTripDelay } from '@/src/lib/orderTripDelay';
 import { resolveBranchIdByName } from '@/src/lib/branchCompanySettings';
 import { releaseOrderFromActiveTrips, tryCompleteTripIfAllOrdersDelivered, tryCompleteTripsForDeliveredOrder, cancelTrip } from '@/src/lib/logisticsScheduling';
+import { canOfferTripCancelRestock, restockShippedOrderItems } from '@/src/lib/orderShippedRestock';
 import { attachOrderDeliveryProofsAndNotify } from '@/src/lib/notifications/notificationsData';
 import { formatTripScheduleDate } from '@/src/lib/dispatchQueueUi';
 
@@ -91,6 +92,7 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
 
   const [showCancelTripModal, setShowCancelTripModal] = useState(false);
   const [cancelTripReason, setCancelTripReason] = useState('');
+  const [cancelTripRestockByOrderId, setCancelTripRestockByOrderId] = useState<Record<string, boolean>>({});
   const [cancelTripSaving, setCancelTripSaving] = useState(false);
 
   // Derived trip badge: lowest order status wins
@@ -447,53 +449,17 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
       throw new Error(`Failed to cancel order: ${orderErr.message}`);
     }
 
-    // Return stock if requested — only if items were already shipped (In Transit or later)
     if (data.restockItems) {
       const target = ordersData.find((o) => o.order.id === orderId);
       const currentStatus = orderStatuses[orderId] ?? target?.order.status ?? '';
-      const stockedStatuses = ['In Transit', 'Delivered', 'Partially Fulfilled'];
-      if (stockedStatuses.includes(currentStatus)) {
-        // Fetch order line items with variant ids to restore stock
-        const { data: lineRows } = await supabase
-          .from('order_line_items')
-          .select('id, variant_id, product_name, sku, quantity_shipped')
-          .eq('order_id', orderId);
-        for (const li of (lineRows ?? [])) {
-          if (!li.variant_id || !li.quantity_shipped) continue;
-          const shipped = Number(li.quantity_shipped);
-          if (shipped <= 0) continue;
-          // Restore branch stock (best-effort — use the trip's branch context)
-          const { data: pvsList } = await supabase
-            .from('product_variant_stock')
-            .select('id, quantity, branch_id')
-            .eq('variant_id', li.variant_id);
-          // Pick first matching branch row (trips are single-branch)
-          const pvs = pvsList?.[0];
-          if (pvs) {
-            await supabase.from('product_variant_stock')
-              .update({ quantity: Number(pvs.quantity) + shipped, updated_at: now })
-              .eq('id', pvs.id);
-          }
-          const { data: vrow } = await supabase
-            .from('product_variants').select('total_stock, sku').eq('id', li.variant_id).maybeSingle();
-          if (vrow) {
-            await supabase.from('product_variants')
-              .update({ total_stock: Number(vrow.total_stock ?? 0) + shipped, updated_at: now })
-              .eq('id', li.variant_id);
-          }
-          await supabase.from('product_stock_movements').insert({
-            variant_id: li.variant_id,
-            variant_sku: vrow?.sku ?? li.sku,
-            product_name: li.product_name,
-            movement_type: 'In',
-            quantity: shipped,
-            reason: `Order cancelled — stock returned (${data.reason})`,
-            performed_by: actorName,
-            reference_number: orderNumber,
-            timestamp: now,
-          });
-        }
-      }
+      await restockShippedOrderItems({
+        orderId,
+        orderNumber,
+        orderStatus: currentStatus,
+        reason: data.reason,
+        performedBy: actorName,
+        context: 'order',
+      });
     }
 
     addAuditLog?.(`Cancelled order ${orderNumber} (Trip ${trip.tripNumber}): ${data.reason}`, 'order');
@@ -530,6 +496,88 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
     setDelayExplanation((trip.delayReason ?? '').trim());
   }, [showReportDelayModal, trip.delayReason]);
 
+  useEffect(() => {
+    if (!showCancelTripModal) return;
+    const next: Record<string, boolean> = {};
+    for (const row of ordersData) {
+      const st = orderStatuses[row.order.id] ?? row.order.status;
+      if (canOfferTripCancelRestock(st)) {
+        next[row.order.id] = true;
+      }
+    }
+    setCancelTripRestockByOrderId(next);
+  }, [showCancelTripModal, ordersData, orderStatuses]);
+
+  const handleCancelTrip = useCallback(async () => {
+    setCancelTripSaving(true);
+    try {
+      const actorName = employeeName || session?.user?.email || role || null;
+      const reason = cancelTripReason.trim() || 'Trip cancelled';
+
+      for (const row of ordersData) {
+        const orderId = row.order.id;
+        if (!cancelTripRestockByOrderId[orderId]) continue;
+        const currentStatus = orderStatuses[orderId] ?? row.order.status;
+        await restockShippedOrderItems({
+          orderId,
+          orderNumber: row.order.orderNumber,
+          orderStatus: currentStatus,
+          reason,
+          performedBy: actorName,
+          context: 'trip',
+        });
+      }
+
+      const result = await cancelTrip({
+        tripId: trip.id,
+        cancelledBy: actorName,
+        cancellationReason: cancelTripReason.trim() || null,
+      });
+      if (!result.ok) {
+        window.alert(result.error ?? 'Could not cancel trip.');
+        return;
+      }
+      addAuditLog?.(
+        'Cancelled trip',
+        'trip',
+        `${trip.tripNumber}${cancelTripReason.trim() ? `: ${cancelTripReason.trim()}` : ''}`,
+      );
+      onTripStatusChange?.(trip.id, 'Cancelled');
+      setShowCancelTripModal(false);
+      setCancelTripReason('');
+      setCancelTripRestockByOrderId({});
+      const reverted = result.revertedOrderIds ?? [];
+      if (reverted.length > 0) {
+        setOrderStatuses((prev) => {
+          const next = { ...prev };
+          for (const id of reverted) next[id] = 'Approved';
+          return next;
+        });
+        setOrdersData((prev) =>
+          prev.map((row) =>
+            reverted.includes(row.order.id)
+              ? { ...row, order: { ...row.order, status: 'Approved' } }
+              : row,
+          ),
+        );
+      }
+    } finally {
+      setCancelTripSaving(false);
+    }
+  }, [
+    trip.id,
+    trip.tripNumber,
+    employeeName,
+    session,
+    role,
+    cancelTripReason,
+    cancelTripRestockByOrderId,
+    ordersData,
+    orderStatuses,
+    addAuditLog,
+    onTripStatusChange,
+  ]);
+
   const handleSubmitReportDelay = useCallback(async () => {
     const text = delayExplanation.trim();
     if (!text) {
@@ -565,56 +613,6 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
       setDelaySaving(false);
     }
   }, [delayExplanation, trip.id, trip.tripNumber, trip.orders, branch, ordersData, employeeName, session, role, addAuditLog, onTripStatusChange]);
-
-  const handleCancelTrip = useCallback(async () => {
-    setCancelTripSaving(true);
-    try {
-      const actorName = employeeName || session?.user?.email || role || null;
-      const result = await cancelTrip({
-        tripId: trip.id,
-        cancelledBy: actorName,
-        cancellationReason: cancelTripReason.trim() || null,
-      });
-      if (!result.ok) {
-        window.alert(result.error ?? 'Could not cancel trip.');
-        return;
-      }
-      addAuditLog?.(
-        'Cancelled trip',
-        'trip',
-        `${trip.tripNumber}${cancelTripReason.trim() ? `: ${cancelTripReason.trim()}` : ''}`,
-      );
-      onTripStatusChange?.(trip.id, 'Cancelled');
-      setShowCancelTripModal(false);
-      setCancelTripReason('');
-      const reverted = result.revertedOrderIds ?? [];
-      if (reverted.length > 0) {
-        setOrderStatuses((prev) => {
-          const next = { ...prev };
-          for (const id of reverted) next[id] = 'Approved';
-          return next;
-        });
-        setOrdersData((prev) =>
-          prev.map((row) =>
-            reverted.includes(row.order.id)
-              ? { ...row, order: { ...row.order, status: 'Approved' } }
-              : row,
-          ),
-        );
-      }
-    } finally {
-      setCancelTripSaving(false);
-    }
-  }, [
-    trip.id,
-    trip.tripNumber,
-    employeeName,
-    session,
-    role,
-    cancelTripReason,
-    addAuditLog,
-    onTripStatusChange,
-  ]);
 
   // Fetch real orders whenever the modal opens or the trip changes
   useEffect(() => {
@@ -1393,7 +1391,7 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
       {showCancelTripModal && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/40">
           <div
-            className="bg-white rounded-xl shadow-xl max-w-lg w-full max-h-[90vh] flex flex-col border border-gray-200"
+            className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] flex flex-col border border-gray-200"
             role="dialog"
             aria-modal="true"
             aria-labelledby="cancel-trip-title"
@@ -1412,24 +1410,87 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
                 <X className="w-5 h-5 text-gray-500" />
               </button>
             </div>
-            <div className="p-5 flex-1 overflow-y-auto space-y-3">
+            <div className="p-5 flex-1 overflow-y-auto space-y-4">
               <p className="text-sm text-gray-600 leading-relaxed">
                 Trip <strong>{trip.tripNumber}</strong> will be marked <strong>Cancelled</strong>. Active orders on
                 this trip return to <strong>Approved</strong> and re-enter the dispatch queue. Every customer on this
                 trip receives an email update, along with agents, warehouse, logistics, and the assigned driver.
               </p>
-              <label htmlFor="cancel-trip-reason" className="block text-sm font-semibold text-gray-800">
-                Reason (optional)
-              </label>
-              <textarea
-                id="cancel-trip-reason"
-                rows={4}
-                value={cancelTripReason}
-                onChange={(e) => setCancelTripReason(e.target.value)}
-                disabled={cancelTripSaving}
-                placeholder="e.g. Truck breakdown; customer rescheduled all deliveries."
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-red-500 focus:border-red-400 focus:outline-none resize-y min-h-[96px] disabled:opacity-60"
-              />
+
+              {ordersData.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-sm font-semibold text-gray-800">Orders on this trip</p>
+                  <ul className="border border-gray-200 rounded-lg divide-y divide-gray-200">
+                    {ordersData.map((row) => {
+                      const orderId = row.order.id;
+                      const status = orderStatuses[orderId] ?? row.order.status;
+                      const customerName = row.customer?.name ?? row.order.customer;
+                      const canRestock = canOfferTripCancelRestock(status);
+                      const checkboxId = `cancel-trip-restock-${orderId}`;
+
+                      return (
+                        <li key={orderId} className="px-3 py-3 bg-gray-50/50 first:rounded-t-lg last:rounded-b-lg">
+                          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium text-gray-900 truncate">{customerName}</p>
+                              <p className="text-xs text-gray-500">
+                                {row.order.orderNumber}
+                                <span className="mx-1.5">·</span>
+                                {status}
+                              </p>
+                            </div>
+                            {canRestock ? (
+                              <label
+                                htmlFor={checkboxId}
+                                className="flex items-start gap-2 text-sm text-gray-700 shrink-0 cursor-pointer"
+                              >
+                                <input
+                                  id={checkboxId}
+                                  type="checkbox"
+                                  checked={cancelTripRestockByOrderId[orderId] ?? false}
+                                  disabled={cancelTripSaving}
+                                  onChange={(e) =>
+                                    setCancelTripRestockByOrderId((prev) => ({
+                                      ...prev,
+                                      [orderId]: e.target.checked,
+                                    }))
+                                  }
+                                  className="w-4 h-4 mt-0.5 text-red-600 border-gray-300 rounded focus:ring-red-500"
+                                />
+                                <span>
+                                  Return items to inventory
+                                  <span className="block text-xs text-gray-500 font-normal">
+                                    (if items have been shipped)
+                                  </span>
+                                </span>
+                              </label>
+                            ) : (
+                              <p className="text-xs text-gray-500 sm:text-right shrink-0">
+                                Already {status.toLowerCase()} — stock cannot be returned
+                              </p>
+                            )}
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              )}
+
+              <div>
+                <label htmlFor="cancel-trip-reason" className="block text-sm font-semibold text-gray-800 mb-2">
+                  Reason (optional)
+                </label>
+                <textarea
+                  id="cancel-trip-reason"
+                  rows={4}
+                  value={cancelTripReason}
+                  onChange={(e) => setCancelTripReason(e.target.value)}
+                  disabled={cancelTripSaving}
+                  placeholder="e.g. Truck breakdown; customer rescheduled all deliveries."
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-red-500 focus:border-red-400 focus:outline-none resize-y min-h-[96px] disabled:opacity-60"
+                />
+              </div>
             </div>
             <div className="flex flex-col-reverse sm:flex-row justify-end gap-2 px-5 py-4 border-t border-gray-200 bg-gray-50 rounded-b-xl">
               <Button
