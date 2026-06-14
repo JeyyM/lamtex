@@ -13,7 +13,6 @@ import {
   syncCustomerDormantStatuses,
 } from '@/src/lib/customerDormancy';
 import { employeeProfilePathFromAgent } from '@/src/lib/agentAnalytics';
-import { getOrdersByCustomer } from '@/src/mock/orders';
 import {
   User,
   Building2,
@@ -36,7 +35,6 @@ import {
   Plus,
   Eye,
   Star,
-  ShoppingCart,
   CreditCard,
   Activity,
   MessageSquare,
@@ -322,12 +320,6 @@ export function CustomersPage() {
   const handleViewCustomer = (customer: CustomerRow) => {
     addAuditLog('Viewed Customer', 'Customer', `Viewed customer ${customer.name}`);
     navigate(`/customers/${customer.id}`);
-  };
-
-  const handleCreateOrder = (customer: CustomerRow) => {
-    alert(`Creating order for ${customer.name} (Coming soon)`);
-    addAuditLog('Initiated Order Creation', 'Order', `Started creating order for ${customer.name}`);
-    navigate('/orders');
   };
 
   const getRiskBadgeVariant = (level: string) => {

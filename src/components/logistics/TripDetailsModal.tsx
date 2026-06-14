@@ -22,6 +22,65 @@ import { canOfferTripCancelRestock, restockShippedOrderItems } from '@/src/lib/o
 import { attachOrderDeliveryProofsAndNotify } from '@/src/lib/notifications/notificationsData';
 import { formatTripScheduleDate } from '@/src/lib/dispatchQueueUi';
 
+function displayFieldOrDash(value: string | null | undefined): string {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : '—';
+}
+
+async function fetchDriverContactAndLicense(driverId: string): Promise<{
+  contactPhone: string | null;
+  licenseNumber: string | null;
+}> {
+  const id = driverId.trim();
+  if (!id) return { contactPhone: null, licenseNumber: null };
+
+  const [{ data: employee }, { data: contact }] = await Promise.all([
+    supabase.from('employees').select('phone').eq('id', id).maybeSingle(),
+    supabase
+      .from('employee_contact_info')
+      .select('primary_phone, secondary_phone')
+      .eq('employee_id', id)
+      .maybeSingle(),
+  ]);
+
+  const contactPhone =
+    (contact?.primary_phone as string | null | undefined)?.trim() ||
+    (employee?.phone as string | null | undefined)?.trim() ||
+    (contact?.secondary_phone as string | null | undefined)?.trim() ||
+    null;
+
+  const { data: certifications } = await supabase
+    .from('employee_certifications')
+    .select('certification_name, credential_id')
+    .eq('employee_id', id);
+
+  let licenseNumber: string | null = null;
+  for (const row of certifications ?? []) {
+    const name = String(row.certification_name ?? '').toLowerCase();
+    if (name.includes('driver') || name.includes('license')) {
+      licenseNumber =
+        (row.credential_id as string | null | undefined)?.trim() ||
+        String(row.certification_name ?? '').trim() ||
+        null;
+      break;
+    }
+  }
+
+  if (!licenseNumber) {
+    const { data: gov } = await supabase
+      .from('employee_government_ids')
+      .select('gov_id_type, gov_id_number')
+      .eq('employee_id', id)
+      .maybeSingle();
+    const govType = String(gov?.gov_id_type ?? '').toLowerCase();
+    if (govType.includes('driver') || govType.includes('license')) {
+      licenseNumber = (gov?.gov_id_number as string | null | undefined)?.trim() || null;
+    }
+  }
+
+  return { contactPhone, licenseNumber };
+}
+
 interface OrderLineItem {
   id: string;
   productName: string;
@@ -129,6 +188,49 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
 
   // Cancel order modal state
   const [cancelTarget, setCancelTarget] = useState<{ id: string; orderNumber: string; customer: string; totalAmount: number } | null>(null);
+
+  const [driverContactPhone, setDriverContactPhone] = useState<string | null>(null);
+  const [driverLicenseNumber, setDriverLicenseNumber] = useState<string | null>(null);
+  const [driverProfileLoading, setDriverProfileLoading] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setDriverContactPhone(null);
+      setDriverLicenseNumber(null);
+      setDriverProfileLoading(false);
+      return;
+    }
+
+    const driverId = trip.driverId?.trim();
+    if (!driverId) {
+      setDriverContactPhone(null);
+      setDriverLicenseNumber(null);
+      setDriverProfileLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setDriverProfileLoading(true);
+
+    void fetchDriverContactAndLicense(driverId)
+      .then(({ contactPhone, licenseNumber }) => {
+        if (cancelled) return;
+        setDriverContactPhone(contactPhone);
+        setDriverLicenseNumber(licenseNumber);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setDriverContactPhone(null);
+        setDriverLicenseNumber(null);
+      })
+      .finally(() => {
+        if (!cancelled) setDriverProfileLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, trip.driverId]);
 
   /** Advance one step at a time until Packed; confirm loaded qty + In Transit is a separate action. */
   const ORDER_DISPATCH_STAGES = ['Scheduled', 'Loading', 'Packed'] as const;
@@ -1173,11 +1275,19 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
                 </div>
                 <div className="flex flex-col sm:flex-row sm:justify-between gap-1">
                   <span className="text-gray-500">Contact:</span>
-                  <span className="text-gray-900 break-words text-left sm:text-right">+63 917 XXX XXXX</span>
+                  <span className="text-gray-900 break-words text-left sm:text-right">
+                    {driverProfileLoading
+                      ? '…'
+                      : displayFieldOrDash(driverContactPhone)}
+                  </span>
                 </div>
                 <div className="flex flex-col sm:flex-row sm:justify-between gap-1">
                   <span className="text-gray-500">License:</span>
-                  <span className="text-gray-900 break-words text-left sm:text-right">DL-XXXXXXX</span>
+                  <span className="text-gray-900 break-words text-left sm:text-right">
+                    {driverProfileLoading
+                      ? '…'
+                      : displayFieldOrDash(driverLicenseNumber)}
+                  </span>
                 </div>
               </div>
             </div>
