@@ -48,14 +48,14 @@ function Toggle({
 
 function GroupSectionHeader({ title }: { title: string }) {
   return (
-    <div className="flex items-center justify-between gap-4 border-b border-gray-200 pb-2">
-      <h3 className="font-semibold text-gray-900">{title}</h3>
-      <div className="hidden sm:flex items-center gap-6 shrink-0 text-xs font-semibold uppercase tracking-wide text-gray-500">
-        <div className="flex items-center gap-2 w-[88px] justify-end">
+    <div className="flex items-center justify-between gap-3 border-b border-gray-200 pb-2">
+      <h3 className="font-semibold text-gray-900 shrink-0">{title}</h3>
+      <div className="flex items-center gap-4 sm:gap-6 shrink-0 text-[10px] sm:text-xs font-semibold uppercase tracking-wide text-gray-500">
+        <div className="flex items-center gap-1.5 sm:gap-2 w-[72px] sm:w-[88px] justify-end">
           <Bell className="w-3.5 h-3.5" aria-hidden />
           In-app
         </div>
-        <div className="flex items-center gap-2 w-[88px] justify-end">
+        <div className="flex items-center gap-1.5 sm:gap-2 w-[72px] sm:w-[88px] justify-end">
           <Mail className="w-3.5 h-3.5" aria-hidden />
           Email
         </div>
@@ -127,11 +127,12 @@ export function SettingsNotificationsTab({
   const assignableRolesKey = (assignableDashboardRoles ?? []).filter(Boolean).join('|');
 
   const roles = useMemo<UserRole[]>(() => {
+    // Active dashboard role (incl. executive simulation) determines which toggles appear.
+    if (role) return [role as UserRole];
     const fromAssignable = (assignableDashboardRoles ?? []).filter(Boolean) as UserRole[];
     if (fromAssignable.length) return [...new Set(fromAssignable)];
-    if (role) return [role as UserRole];
     return isExecutiveUser ? (['Executive'] as UserRole[]) : [];
-  }, [assignableRolesKey, role, isExecutiveUser]);
+  }, [role, assignableRolesKey, isExecutiveUser]);
 
   const rolesKey = useMemo(() => [...roles].sort().join('|'), [roles]);
 

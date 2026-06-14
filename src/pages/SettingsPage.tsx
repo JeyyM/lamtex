@@ -128,7 +128,7 @@ const MOCK_PAYMENT_PROFILES: PaymentProfile[] = [
 ];
 
 export default function SettingsPage() {
-  const { selectedBranch, setBranch, addAuditLog } = useAppContext();
+  const { selectedBranch, setBranch, addAuditLog, role } = useAppContext();
   const settingsPerms = useSettingsPermissions();
   const [viewMode, setViewMode] = useState<ViewMode>('company');
   const [resolvedBranchId, setResolvedBranchId] = useState<string | null>(null);
@@ -658,7 +658,7 @@ export default function SettingsPage() {
 
       {/* NOTIFICATIONS */}
       {viewMode === 'notifications' && (
-        <SettingsNotificationsTab addAuditLog={addAuditLog} />
+        <SettingsNotificationsTab key={role} addAuditLog={addAuditLog} />
       )}
 
       {/* SECURITY — gated by SHOW_SETTINGS_SECURITY_TAB */}
