@@ -25,6 +25,7 @@ import {
   attachOrderDeliveryProofsAndNotify,
   notifyAgentOrderProofUploaded,
   notifyOrderPaymentProofRecorded,
+  processNewlyOverdueOrders,
 } from '@/src/lib/notifications/notificationsData';
 import { deductVariantBranchStock } from '@/src/lib/productVariantStock';
 import { finishedGoodProductHref } from '@/src/lib/productRoutes';
@@ -396,6 +397,13 @@ export function OrderDetailPage() {
       if (!prev) return prev;
       const next = typeof patch === 'function' ? patch(prev) : patch;
       return { ...prev, ...next };
+    });
+  };
+
+  /** Bell + email when payment terms / delivery / balance now qualify as overdue. */
+  const runPaymentOverdueCheck = () => {
+    void processNewlyOverdueOrders().catch((err) => {
+      console.warn('[OrderDetailPage] payment overdue notification check failed', err);
     });
   };
 
@@ -1133,6 +1141,9 @@ export function OrderDetailPage() {
           console.warn('[OrderDetailPage] logistics loading notification failed', notifyErr);
         });
       }
+      if (extra?.actual_delivery !== undefined || logisticsDueDate) {
+        runPaymentOverdueCheck();
+      }
       return true;
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : 'Update failed');
@@ -1578,7 +1589,17 @@ export function OrderDetailPage() {
     }
 
     const updatePayload: Record<string, unknown> = { status: newStatus, updated_at: now };
-    if (isOrderDeliveryComplete) updatePayload.actual_delivery = today;
+    let deliveryDueDate: string | null = null;
+    if (isOrderDeliveryComplete) {
+      updatePayload.actual_delivery = today;
+      deliveryDueDate = deriveOrderDueDateForPersistence({
+        order_date: order.orderDate,
+        actual_delivery: today,
+        payment_terms: order.paymentTerms,
+        customer_payment_terms: null,
+      });
+      if (deliveryDueDate) updatePayload.due_date = deliveryDueDate;
+    }
 
     const { error } = await supabase
       .from('orders')
@@ -1658,7 +1679,9 @@ export function OrderDetailPage() {
         if (!fd) return l;
         return { ...l, quantityDelivered: (l.quantityDelivered ?? 0) + fd.deliveredQuantity };
       }),
-      ...(isOrderDeliveryComplete ? { actualDelivery: now } : {}),
+      ...(isOrderDeliveryComplete
+        ? { actualDelivery: today, ...(deliveryDueDate ? { dueDate: deliveryDueDate } : {}) }
+        : {}),
     });
     setEditedOrder((prev) =>
       prev
@@ -1670,7 +1693,9 @@ export function OrderDetailPage() {
               if (!fd) return l;
               return { ...l, quantityDelivered: (l.quantityDelivered ?? 0) + fd.deliveredQuantity };
             }),
-            ...(isOrderDeliveryComplete ? { actualDelivery: now } : {}),
+            ...(isOrderDeliveryComplete
+              ? { actualDelivery: today, ...(deliveryDueDate ? { dueDate: deliveryDueDate } : {}) }
+              : {}),
           }
         : prev,
     );
@@ -1682,6 +1707,8 @@ export function OrderDetailPage() {
     }).catch((notifyErr) => {
       console.warn('[OrderDetailPage] delivery recorded notification failed', notifyErr);
     });
+
+    runPaymentOverdueCheck();
 
     void tryCompleteTripsForDeliveredOrder(id).catch((err) => {
       if (import.meta.env.DEV) console.warn('[OrderDetailPage] trip auto-complete failed', err);
@@ -1965,6 +1992,7 @@ export function OrderDetailPage() {
         delivery_type: editedOrder.deliveryType,
         payment_terms: editedOrder.paymentTerms,
         payment_method: editedOrder.paymentMethod,
+        actual_delivery: editedOrder.actualDelivery || null,
         customer_id: editedOrder.customerId || null,
         customer_name: editedOrder.customer?.trim() ? editedOrder.customer : null,
         branch_id: branchIdToSave,
@@ -2217,6 +2245,7 @@ export function OrderDetailPage() {
       await syncOrderPaymentsFromProofs(id);
       await refreshOrderPaymentFieldsFromDb();
     }
+    runPaymentOverdueCheck();
     setDeliveredDrafts({});
     setIsEditing(false);
     setEditedOrder(null);
