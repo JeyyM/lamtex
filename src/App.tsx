@@ -6,11 +6,9 @@ import { Dashboard } from './pages/Dashboard';
 import { OrdersPage } from './pages/OrdersPage';
 import { OrderDetailPage } from './pages/OrderDetailPage';
 import { ProductsPage } from './pages/ProductsPage';
-import { ProductDetailPage } from './pages/ProductDetailPage';
-import { ProductFormPage } from './pages/ProductFormPage';
+import { ProductLegacyRedirect } from './pages/ProductLegacyRedirect';
 import { RawMaterialsPage } from './pages/RawMaterialsPage';
 import { MaterialDetailPage } from './pages/MaterialDetailPage';
-import { MaterialFormPage } from './pages/MaterialFormPage';
 import MaterialCategoryPage from './pages/MaterialCategoryPage';
 import ProductCategoryPage from './pages/ProductCategoryPage';
 import ProductFamilyPage from './pages/ProductFamilyPage';
@@ -31,7 +29,7 @@ import { PaymentSuccessPage } from './pages/PaymentSuccessPage';
 import { ReceiptPage } from './pages/ReceiptPage';
 import { OrderCustomerViewPage } from './pages/OrderCustomerViewPage';
 import AgentAnalyticsPage from './pages/AgentAnalyticsPage';
-import AgentProfilePage from './pages/AgentProfilePage';
+import { AgentLegacyRedirect } from './pages/AgentLegacyRedirect';
 import EmployeesPage from './pages/EmployeesPage';
 import EmployeeNewPage from './pages/EmployeeNewPage';
 import EmployeeDetailPage from './pages/EmployeeDetailPage';
@@ -107,17 +105,13 @@ function AppRoutes() {
             <Route path="orders" element={<OrdersPage />} />
             <Route path="orders/:id" element={<OrderDetailPage />} />
             <Route path="products" element={<ProductsPage />} />
-            <Route path="products/new" element={<ProductFormPage />} />
             <Route path="products/category/:categoryName" element={<ProductCategoryPage />} />
             <Route path="products/category/:categoryName/family/:familyId" element={<ProductFamilyPage />} />
-            <Route path="products/:id" element={<ProductDetailPage />} />
-            <Route path="products/:id/edit" element={<ProductFormPage />} />
+            <Route path="products/:id" element={<ProductLegacyRedirect />} />
             <Route path="materials" element={<RawMaterialsPage />} />
-            <Route path="materials/new" element={<MaterialFormPage />} />
             <Route path="materials/category/:categoryName" element={<MaterialCategoryPage />} />
             <Route path="materials/category/:categoryName/details/:id" element={<MaterialDetailPage />} />
             <Route path="materials/:id" element={<MaterialDetailPage />} />
-            <Route path="materials/:id/edit" element={<MaterialFormPage />} />
             <Route path="logistics" element={<LogisticsPage />} />
             <Route path="logistics/:vehicleId" element={<TruckDetailPage />} />
             <Route path="trips" element={<TripsPage />} />
@@ -133,7 +127,7 @@ function AppRoutes() {
             <Route path="employees/new" element={<EmployeeNewPage />} />
             <Route path="employees/:employeeId" element={<EmployeeDetailPage />} />
             <Route path="agents" element={<AgentAnalyticsPage />} />
-            <Route path="agents/:agentId" element={<AgentProfilePage />} />
+            <Route path="agents/:agentId" element={<AgentLegacyRedirect />} />
             <Route path="reports" element={<ReportsPage />} />
             {/* <Route path="forecasts" element={<ForecastsPage />} /> hidden for now */}
             <Route path="settings" element={<SettingsPage />} />

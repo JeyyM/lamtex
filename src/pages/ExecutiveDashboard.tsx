@@ -971,7 +971,7 @@ function TopProductsCard(props: {
               >
                 <div className="min-w-0 flex-1">
                   <DashLink
-                    to={`/products/${p.productId}`}
+                    to={finishedGoodProductHref(p.productId, p.categorySlug, p.productBranch)}
                     className={`${DASH_LINK_CLASS} text-sm block truncate`}
                     title={p.productName}
                   >

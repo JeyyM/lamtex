@@ -122,19 +122,32 @@ export function SettingsNotificationsTab({
 }: {
   addAuditLog: (action: string, entityType: string, details?: string) => void;
 }) {
-  const { employeeId, role, assignableDashboardRoles, isExecutiveUser } = useAppContext();
+  const {
+    employeeId,
+    role,
+    employeeRole,
+    assignableDashboardRoles,
+    isExecutiveUser,
+    profileLoaded,
+  } = useAppContext();
 
   const assignableRolesKey = (assignableDashboardRoles ?? []).filter(Boolean).join('|');
 
-  const roles = useMemo<UserRole[]>(() => {
-    // Active dashboard role (incl. executive simulation) determines which toggles appear.
-    if (role) return [role as UserRole];
-    const fromAssignable = (assignableDashboardRoles ?? []).filter(Boolean) as UserRole[];
-    if (fromAssignable.length) return [...new Set(fromAssignable)];
-    return isExecutiveUser ? (['Executive'] as UserRole[]) : [];
-  }, [role, assignableRolesKey, isExecutiveUser]);
+  /** Stable dashboard role — avoids stale default `Executive` before profile hydrates. */
+  const activeRole = useMemo<UserRole | null>(() => {
+    if (!profileLoaded) return null;
+    if (isExecutiveUser) return role ?? null;
+    if (role && role !== 'Executive' && assignableDashboardRoles.includes(role)) return role;
+    if (employeeRole) return employeeRole;
+    return assignableDashboardRoles[0] ?? null;
+  }, [profileLoaded, isExecutiveUser, role, employeeRole, assignableRolesKey, assignableDashboardRoles]);
 
-  const rolesKey = useMemo(() => [...roles].sort().join('|'), [roles]);
+  const roles = useMemo<UserRole[]>(() => {
+    if (activeRole) return [activeRole];
+    return [];
+  }, [activeRole]);
+
+  const rolesKey = activeRole ?? '';
 
   const catalogItems = useMemo(() => catalogItemsForRoles(roles), [roles]);
   const grouped = useMemo(() => groupCatalogItems(catalogItems), [catalogItems]);
@@ -151,32 +164,41 @@ export function SettingsNotificationsTab({
   const [error, setError] = useState<string | null>(null);
   const loadedForKeyRef = useRef<string | null>(null);
 
-  const load = useCallback(async () => {
-    if (!employeeId) {
-      setLoading(false);
-      return;
-    }
+  const load = useCallback(
+    async (opts?: { force?: boolean }) => {
+      if (!employeeId || !activeRole) {
+        setLoading(false);
+        return;
+      }
 
-    const fetchKey = `${employeeId}:${rolesKey}`;
-    const isInitialLoad = loadedForKeyRef.current !== fetchKey;
-    if (isInitialLoad) setLoading(true);
-    setError(null);
+      const fetchKey = `${employeeId}:${rolesKey}`;
+      const alreadyLoaded = loadedForKeyRef.current === fetchKey;
+      if (alreadyLoaded && !opts?.force) {
+        return;
+      }
 
-    try {
-      const merged = await fetchEmployeeNotificationPreferences(employeeId, roles);
-      setPrefs(merged);
-      setSavedPrefs(merged);
-      loadedForKeyRef.current = fetchKey;
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not load notification preferences.');
-    } finally {
-      if (isInitialLoad) setLoading(false);
-    }
-  }, [employeeId, roles, rolesKey]);
+      const isInitialLoad = !alreadyLoaded;
+      if (isInitialLoad) setLoading(true);
+      setError(null);
+
+      try {
+        const merged = await fetchEmployeeNotificationPreferences(employeeId, roles);
+        setPrefs(merged);
+        setSavedPrefs(merged);
+        loadedForKeyRef.current = fetchKey;
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Could not load notification preferences.');
+      } finally {
+        if (isInitialLoad) setLoading(false);
+      }
+    },
+    [employeeId, activeRole, roles, rolesKey],
+  );
 
   useEffect(() => {
+    if (!profileLoaded) return;
     void load();
-  }, [load]);
+  }, [profileLoaded, load]);
 
   const dirty = !notificationPrefsEqual(prefs, savedPrefs);
   const atDefaults = notificationPrefsEqual(prefs, defaultPrefs);
@@ -202,6 +224,7 @@ export function SettingsNotificationsTab({
     try {
       await saveEmployeeNotificationPreferences(employeeId, prefs);
       setSavedPrefs(prefs);
+      loadedForKeyRef.current = `${employeeId}:${rolesKey}`;
       addAuditLog('Updated notification preferences', 'Settings');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not save notification preferences.');
@@ -215,6 +238,17 @@ export function SettingsNotificationsTab({
       <Card>
         <CardContent className="py-8 text-sm text-gray-500">
           Sign in with a linked employee account to manage notification preferences.
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (!profileLoaded || !activeRole) {
+    return (
+      <Card>
+        <CardContent className="flex items-center justify-center gap-2 py-12 text-gray-500">
+          <Loader2 className="w-5 h-5 animate-spin" />
+          Loading preferences…
         </CardContent>
       </Card>
     );

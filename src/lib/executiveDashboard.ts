@@ -171,6 +171,8 @@ export interface ExecutiveTopProductRow {
   productId: string;
   productName: string;
   categoryName: string | null;
+  categorySlug: string | null;
+  productBranch: string | null;
   revenueMTD: number;
   unitsSoldMTD: number;
   variantCount: number;
@@ -904,7 +906,7 @@ async function fetchTopProductsMTD(branchId: string | null): Promise<ExecutiveTo
       .select(
         `quantity, line_total, variant_id,
          orders!inner(branch_id, status, order_date),
-         product_variants(product_id, products(id, name, product_categories(name)))`,
+         product_variants(product_id, products(id, name, branch, product_categories(name, slug)))`,
       )
       .gte('orders.order_date', mtdFrom)
       .lt('orders.order_date', mtdTo)
@@ -928,6 +930,11 @@ async function fetchTopProductsMTD(branchId: string | null): Promise<ExecutiveTo
       if (!productId) continue;
       const variantId = toStr(r.variant_id);
       const categoryName = nestedName((product as Record<string, unknown>).product_categories);
+      const categoryObj = (product as Record<string, unknown>).product_categories;
+      const categorySlug = Array.isArray(categoryObj)
+        ? toStr((categoryObj[0] as { slug?: unknown } | undefined)?.slug)
+        : toStr((categoryObj as { slug?: unknown } | null | undefined)?.slug);
+      const productBranch = toStr((product as { branch?: unknown }).branch);
       const productName = toStr(product.name) ?? '—';
       const qty = toNumber(r.quantity);
       const revenue = toNumber(r.line_total);
@@ -936,6 +943,8 @@ async function fetchTopProductsMTD(branchId: string | null): Promise<ExecutiveTo
         productId,
         productName,
         categoryName,
+        categorySlug,
+        productBranch,
         revenueMTD: 0,
         unitsSoldMTD: 0,
         variantCount: 0,
