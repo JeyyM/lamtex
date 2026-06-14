@@ -19,17 +19,6 @@ export function materialCategoryHref(categorySlug?: string | null, categoryName?
   return `/materials/category/${encodeURIComponent(normalizeCategorySlug(categorySlug, categoryName))}`;
 }
 
-function normalizeCategorySlug(slug?: string | null, name?: string | null): string {
-  const fromSlug = (slug ?? '').trim();
-  if (fromSlug) return fromSlug;
-  const fromName = (name ?? '')
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  return fromName || 'uncategorized';
-}
-
 /** Branch code → uncategorized category slug (matches DB `branch_uncategorized_slug`). */
 export function uncategorizedCategorySlugForBranchCode(branchCode?: string | null): string {
   const code = (branchCode ?? '').trim().toUpperCase();
