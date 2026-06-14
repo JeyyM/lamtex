@@ -14,9 +14,16 @@ export type TripDelayedAffectedOrder = {
   orderId: string;
   orderNumber: string;
   customerName: string | null;
+  customerEmail?: string | null;
+  customerContactPerson?: string | null;
   status: string;
   requiredDate?: string | null;
+  orderDate?: string | null;
   totalAmount?: number;
+  deliveryType?: string | null;
+  deliveryAddress?: string | null;
+  agentEmail?: string | null;
+  agentName?: string | null;
 };
 
 export interface TripDelayedEmailPayload {
@@ -27,8 +34,9 @@ export interface TripDelayedEmailPayload {
   vehicleName?: string | null;
   driverName?: string | null;
   branchName?: string | null;
+  tripScheduledDate?: string | null;
   affectedOrders: TripDelayedAffectedOrder[];
-  notifyTarget: 'logistics' | 'agent';
+  notifyTarget: 'logistics' | 'agent' | 'customer';
   logisticsEmails?: string[];
   agentEmail?: string | null;
   /** Single order context when notifyTarget is agent */

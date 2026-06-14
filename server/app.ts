@@ -56,6 +56,7 @@ import {
 } from './email/orderCustomerTripCancelledEmail';
 import {
   buildOrderCustomerTripDelayedEmailHtml,
+  buildCustomerTripDelayedEmailPayloadFromTrip,
   type OrderCustomerTripDelayedEmailPayload,
 } from './email/orderCustomerTripDelayedEmail';
 import {
@@ -1866,7 +1867,57 @@ app.post('/api/notifications/trip-delayed', async (req, res) => {
         });
         sent.push({ id, sentTo });
       }
-      res.json({ ok: true, subject, sentCount: sent.length, sent, notifyTarget: payload.notifyTarget });
+
+      const customerSent: Array<{ orderId: string; orderNumber: string; id?: string; sentTo: string; subject: string }> = [];
+      for (const order of payload.affectedOrders ?? []) {
+        const customerPayload = buildCustomerTripDelayedEmailPayloadFromTrip(payload, order);
+        if (!customerPayload) continue;
+        const customerSubject = orderCustomerTripDelayedSubject(customerPayload);
+        const customerHtml = buildOrderCustomerTripDelayedEmailHtml(customerPayload);
+        const sentTo = resolveRecipient(customerPayload.customerEmail);
+        const { id } = await sendViaResend({
+          to: sentTo,
+          subject: customerSubject,
+          html: customerHtml,
+          entityRef: emailEntityRef(customerPayload.orderId, 'customer-trip-delayed'),
+        });
+        customerSent.push({
+          orderId: customerPayload.orderId,
+          orderNumber: customerPayload.orderNumber,
+          id,
+          sentTo,
+          subject: customerSubject,
+        });
+      }
+
+      res.json({
+        ok: true,
+        subject,
+        sentCount: sent.length,
+        sent,
+        customerSentCount: customerSent.length,
+        customerSent,
+        notifyTarget: payload.notifyTarget,
+      });
+      return;
+    }
+
+    if (payload.notifyTarget === 'customer') {
+      const customerPayload = req.body as OrderCustomerTripDelayedEmailPayload;
+      if (!customerPayload?.orderId || !customerPayload?.orderNumber || !customerPayload?.customerEmail?.trim()) {
+        res.status(400).json({ error: 'Missing orderId, orderNumber, or customerEmail' });
+        return;
+      }
+      const customerSubject = orderCustomerTripDelayedSubject(customerPayload);
+      const customerHtml = buildOrderCustomerTripDelayedEmailHtml(customerPayload);
+      const sentTo = resolveRecipient(customerPayload.customerEmail);
+      const { id } = await sendViaResend({
+        to: sentTo,
+        subject: customerSubject,
+        html: customerHtml,
+        entityRef: emailEntityRef(customerPayload.orderId, 'customer-trip-delayed'),
+      });
+      res.json({ ok: true, id, sentTo, subject: customerSubject, notifyTarget: payload.notifyTarget });
       return;
     }
 

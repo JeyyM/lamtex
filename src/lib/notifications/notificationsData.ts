@@ -3818,7 +3818,10 @@ export async function notifyCustomerOrderTripDelayed(
   },
 ): Promise<void> {
   const payload = await buildOrderCustomerTripDelayedNotifyPayload(orderUuid, opts);
-  if (!payload?.customerEmail?.trim()) return;
+  if (!payload?.customerEmail?.trim()) {
+    console.warn('[notifications] Skipping customer trip delayed email — no customer email for order', orderUuid);
+    return;
+  }
 
   const sent = await sendOrderCustomerTripDelayedNotificationEmail(payload);
   if (sent && payload.portalId) {
@@ -4260,7 +4263,11 @@ export async function buildTripDelayedNotifyPayload(
 
   const { data: orders, error: ordersErr } = await supabase
     .from('orders')
-    .select('id, order_number, customer_name, status, required_date, total_amount, agent_id')
+    .select(`
+      id, order_number, customer_name, customer_id, status, required_date, order_date,
+      total_amount, agent_id, delivery_type, delivery_address,
+      customers ( email, contact_person )
+    `)
     .in('id', orderIds);
 
   if (ordersErr) {
@@ -4304,17 +4311,27 @@ export async function buildTripDelayedNotifyPayload(
         customer_name?: string | null;
         status?: string | null;
         required_date?: string | null;
+        order_date?: string | null;
         total_amount?: number | null;
         agent_id?: string | null;
+        delivery_type?: string | null;
+        delivery_address?: string | null;
+        customers?: { email?: string | null; contact_person?: string | null } | null;
       };
       const agent = r.agent_id ? agentById.get(String(r.agent_id)) : undefined;
+      const customerEmail = r.customers?.email?.trim() || null;
       return {
         orderId: String(r.id ?? ''),
         orderNumber: String(r.order_number ?? ''),
         customerName: r.customer_name?.trim() || null,
+        customerEmail,
+        customerContactPerson: r.customers?.contact_person?.trim() || null,
         status: String(r.status ?? '').trim() || 'Scheduled',
         requiredDate: r.required_date ? String(r.required_date).slice(0, 10) : null,
+        orderDate: r.order_date ? String(r.order_date).slice(0, 10) : null,
         totalAmount: r.total_amount != null ? Number(r.total_amount) : undefined,
+        deliveryType: r.delivery_type ? String(r.delivery_type) : null,
+        deliveryAddress: r.delivery_address?.trim() || null,
         agentEmail: agent?.email ?? null,
         agentName: agent?.name ?? null,
       };
@@ -4363,6 +4380,7 @@ async function sendTripDelayedNotificationEmail(
         tripNumber: payload.tripNumber,
         delayReason: payload.delayReason,
         reportedBy: payload.reportedBy,
+        tripScheduledDate: payload.tripScheduledDate ?? null,
         vehicleName: payload.vehicleName,
         driverName: payload.driverName,
         branchName: payload.branchName,
@@ -4370,9 +4388,16 @@ async function sendTripDelayedNotificationEmail(
           orderId: o.orderId,
           orderNumber: o.orderNumber,
           customerName: o.customerName,
+          customerEmail: o.customerEmail ?? null,
+          customerContactPerson: o.customerContactPerson ?? null,
           status: o.status,
           requiredDate: o.requiredDate,
+          orderDate: o.orderDate ?? null,
           totalAmount: o.totalAmount,
+          deliveryType: o.deliveryType ?? null,
+          deliveryAddress: o.deliveryAddress ?? null,
+          agentEmail: o.agentEmail ?? null,
+          agentName: o.agentName ?? null,
         })),
         notifyTarget: payload.notifyTarget,
         logisticsEmails: payload.logisticsEmails,
@@ -4426,16 +4451,7 @@ export async function notifyTripDelayed(
         agentName: order.agentName,
       });
     }
-    await notifyCustomerOrdersTripDelayed(
-      payload.affectedOrders.map((o) => o.orderId),
-      {
-        tripNumber: payload.tripNumber,
-        tripScheduledDate: payload.tripScheduledDate ?? null,
-        delayReason: payload.delayReason,
-        vehicleName: payload.vehicleName ?? null,
-        driverName: payload.driverName ?? null,
-      },
-    );
+    // Customer emails are sent by the notify server when the logistics email is sent.
   }
 
   window.dispatchEvent(new Event('lamtex:notifications-refresh'));

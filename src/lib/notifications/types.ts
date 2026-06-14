@@ -210,9 +210,14 @@ export interface TripDelayedAffectedOrderNotify {
   orderId: string;
   orderNumber: string;
   customerName: string | null;
+  customerEmail?: string | null;
+  customerContactPerson?: string | null;
   status: string;
   requiredDate?: string | null;
+  orderDate?: string | null;
   totalAmount?: number;
+  deliveryType?: string | null;
+  deliveryAddress?: string | null;
   agentEmail?: string | null;
   agentName?: string | null;
 }

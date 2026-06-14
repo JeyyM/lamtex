@@ -1,5 +1,6 @@
 import type { OrderCustomerApprovedEmailPayload } from './orderCustomerApprovedEmail';
 import { agentContactCard, customerPortalUrl } from './orderCustomerApprovedEmail';
+import type { TripDelayedAffectedOrder, TripDelayedEmailPayload } from './tripDelayedEmail';
 import {
   badge,
   detailRow,
@@ -87,4 +88,51 @@ export function buildOrderCustomerTripDelayedEmailHtml(
   </table>
 </body>
 </html>`;
+}
+
+/** Build a customer delay email payload from a trip-delay notification request. */
+export function buildCustomerTripDelayedEmailPayloadFromTrip(
+  trip: Pick<
+    TripDelayedEmailPayload,
+    | 'tripNumber'
+    | 'tripScheduledDate'
+    | 'delayReason'
+    | 'vehicleName'
+    | 'driverName'
+    | 'branchName'
+  >,
+  order: TripDelayedAffectedOrder,
+): OrderCustomerTripDelayedEmailPayload | null {
+  const customerEmail = order.customerEmail?.trim();
+  if (!customerEmail) return null;
+
+  return {
+    orderId: order.orderId,
+    orderNumber: order.orderNumber,
+    customerEmail,
+    customerName: order.customerName ?? null,
+    customerContactPerson: order.customerContactPerson ?? null,
+    agentName: order.agentName ?? null,
+    branchName: trip.branchName ?? null,
+    orderDate: order.orderDate ?? '',
+    requiredDate: order.requiredDate ?? null,
+    deliveryAddress: order.deliveryAddress ?? null,
+    urgency: 'Medium',
+    status: 'Delayed',
+    subtotal: order.totalAmount ?? 0,
+    totalAmount: order.totalAmount ?? 0,
+    items: [],
+    lineCount: 0,
+    deliveryType: order.deliveryType ?? null,
+    agent: {
+      name: order.agentName?.trim() || 'Your sales agent',
+      phone: null,
+      email: order.agentEmail ?? null,
+    },
+    tripNumber: trip.tripNumber,
+    tripScheduledDate: trip.tripScheduledDate ?? null,
+    delayReason: trip.delayReason,
+    vehicleName: trip.vehicleName,
+    driverName: trip.driverName,
+  };
 }
