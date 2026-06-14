@@ -322,7 +322,7 @@ export function TruckDetailPage() {
           tripId: trip.tripId,
           tripNumber: trip.tripNumber,
           driverName: trip.driverName,
-          vehicleName,
+          vehicleName: vehicleLabel,
           route: trip.route,
         },
         tripSearchQuery,
