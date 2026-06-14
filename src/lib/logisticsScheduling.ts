@@ -6,11 +6,12 @@ import { supabase } from '@/src/lib/supabase';
 import { resolveBranchIdByName } from '@/src/lib/branchCompanySettings';
 import { fetchBranchDepotPinByBranchName } from '@/src/lib/companyAddressesSettings';
 import {
-  notifyCustomerOrdersUnscheduledFromTrip,
   notifyDriverTripAssigned,
   notifyDriverTripUnassigned,
   notifyLogisticsOrderLoading,
   notifyOrdersScheduled,
+  notifyOrdersUnscheduledFromTripCancel,
+  notifyTripCancelled,
 } from '@/src/lib/notifications/notificationsData';
 import { fetchOrderLoadByOrderId, orderLoadWithFallback } from '@/src/lib/orderLoadMetrics';
 import type { OrderReadyForDispatch, Trip, DriverOption } from '@/src/types/logistics';
@@ -1389,6 +1390,111 @@ export async function createContainerShipmentFromPlanning(params: {
 }
 
 /**
+ * Cancel a trip: mark trip Cancelled, revert active orders to Approved, notify all parties.
+ */
+export async function cancelTrip(params: {
+  tripId: string;
+  cancelledBy?: string | null;
+  cancellationReason?: string | null;
+}): Promise<{ ok: boolean; error?: string; revertedOrderIds?: string[] }> {
+  const { data: tripRow, error: tripErr } = await supabase
+    .from('trips')
+    .select('id, trip_number, status, order_ids, scheduled_date, vehicle_name, driver_name')
+    .eq('id', params.tripId)
+    .maybeSingle();
+
+  if (tripErr || !tripRow) {
+    return { ok: false, error: tripErr?.message ?? 'Trip not found' };
+  }
+
+  const currentStatus = mapDbTripStatus(String(tripRow.status ?? ''));
+  if (currentStatus === 'Cancelled') {
+    return { ok: true, revertedOrderIds: [] };
+  }
+  if (currentStatus === 'Complete' || currentStatus === 'Delivered') {
+    return { ok: false, error: 'Completed trips cannot be cancelled.' };
+  }
+
+  const orderIds = ((tripRow.order_ids ?? []) as string[]).filter(Boolean);
+  let revertedOrderIds: string[] = [];
+  const previousDatesByOrderId: Record<string, string | null> = {};
+
+  if (orderIds.length > 0) {
+    const { data: orderRows, error: ordersErr } = await supabase
+      .from('orders')
+      .select('id, status, scheduled_departure_date')
+      .in('id', orderIds);
+
+    if (ordersErr) {
+      return { ok: false, error: ordersErr.message };
+    }
+
+    revertedOrderIds = (orderRows ?? [])
+      .filter((row) => {
+        const st = String((row as { status?: string }).status ?? '').trim();
+        return (ORDER_TRIP_LINKED_STATUSES as readonly string[]).includes(st);
+      })
+      .map((row) => String((row as { id?: string }).id ?? ''))
+      .filter(Boolean);
+
+    for (const row of orderRows ?? []) {
+      const r = row as { id?: string; scheduled_departure_date?: string | null };
+      if (!r.id) continue;
+      previousDatesByOrderId[r.id] = r.scheduled_departure_date
+        ? String(r.scheduled_departure_date).slice(0, 10)
+        : null;
+    }
+
+    if (revertedOrderIds.length > 0) {
+      const now = new Date().toISOString();
+      const { error: revertErr } = await supabase
+        .from('orders')
+        .update({ status: 'Approved', scheduled_departure_date: null, updated_at: now })
+        .in('id', revertedOrderIds);
+      if (revertErr) {
+        return { ok: false, error: revertErr.message };
+      }
+    }
+  }
+
+  const now = new Date().toISOString();
+  const { error: tripUpdErr } = await supabase
+    .from('trips')
+    .update({
+      status: toDbTripStatus('Cancelled'),
+      delay_reason: null,
+      updated_at: now,
+    })
+    .eq('id', params.tripId);
+
+  if (tripUpdErr) {
+    return { ok: false, error: tripUpdErr.message };
+  }
+
+  const tripNumber = String(tripRow.trip_number ?? '');
+
+  void notifyTripCancelled(params.tripId, {
+    cancelledBy: params.cancelledBy ?? null,
+    cancellationReason: params.cancellationReason ?? null,
+  }).catch((e) => {
+    console.warn('[logisticsScheduling] trip cancelled notification failed', e);
+  });
+
+  if (revertedOrderIds.length > 0) {
+    void notifyOrdersUnscheduledFromTripCancel(revertedOrderIds, {
+      unscheduledBy: params.cancelledBy ?? null,
+      tripNumber,
+      previousDatesByOrderId,
+      cancellationReason: params.cancellationReason ?? null,
+    }).catch((e) => {
+      console.warn('[logisticsScheduling] order unscheduled from trip cancel notifications failed', e);
+    });
+  }
+
+  return { ok: true, revertedOrderIds };
+}
+
+/**
  * Update an existing trip: change status, vehicle, driver, orders, delay text, and logistics notes.
  * Automatically resets removed orders to 'Approved' and marks added orders as 'Scheduled'.
  */
@@ -1410,6 +1516,22 @@ export async function updateTrip(params: {
   orderStatuses?: Record<string, string>;
   scheduledBy?: string | null;
 }): Promise<{ ok: boolean; error?: string }> {
+  if (params.status === 'Cancelled') {
+    const { data: existing } = await supabase
+      .from('trips')
+      .select('status')
+      .eq('id', params.tripId)
+      .maybeSingle();
+    const currentStatus = mapDbTripStatus(String(existing?.status ?? ''));
+    if (currentStatus !== 'Cancelled') {
+      return cancelTrip({
+        tripId: params.tripId,
+        cancelledBy: params.scheduledBy ?? null,
+      });
+    }
+    return { ok: true };
+  }
+
   const { data: prevTrip } = await supabase
     .from('trips')
     .select('driver_id')

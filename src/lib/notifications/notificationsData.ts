@@ -32,6 +32,8 @@ import type {
   OrderCommissionPaidNotifyPayload,
   OrderRevisedNotifyPayload,
   OrderScheduledNotifyPayload,
+  OrderUnscheduledFromTripNotifyPayload,
+  TripCancelledNotifyPayload,
   TripDriverAssignedNotifyPayload,
   TripDriverUnassignedNotifyPayload,
   TripDelayedNotifyPayload,
@@ -3596,6 +3598,213 @@ export async function notifyOrdersScheduled(
     } catch (e) {
       console.warn('[notifications] order scheduled notify failed', orderUuid, e);
     }
+  }
+}
+
+export async function buildOrderUnscheduledFromTripNotifyPayload(
+  orderUuid: string,
+  opts: {
+    unscheduledBy?: string | null;
+    tripNumber?: string | null;
+    previousScheduledDate?: string | null;
+    cancellationReason?: string | null;
+  },
+): Promise<OrderUnscheduledFromTripNotifyPayload | null> {
+  const order = await fetchOrderDetailSnapshotForNotify(orderUuid);
+  if (!order) return null;
+
+  const branchId = order.branchId?.trim();
+  const warehouseEmails = branchId ? await fetchBranchWarehouseEmails(branchId) : [];
+  const agentEmail = order.agentId?.trim() ? await fetchAgentEmail(order.agentId) : null;
+
+  const base = buildOrderNotifyPayload({ ...order, status: 'Approved' }, orderUuid);
+  return {
+    ...base,
+    unscheduledBy: opts.unscheduledBy ?? null,
+    tripNumber: opts.tripNumber ?? null,
+    previousScheduledDate: opts.previousScheduledDate ?? order.scheduledDepartureDate ?? null,
+    cancellationReason: opts.cancellationReason ?? null,
+    branchId: branchId ?? null,
+    warehouseEmails,
+    agentEmail,
+  };
+}
+
+async function sendOrderUnscheduledFromTripNotificationEmail(
+  payload: OrderUnscheduledFromTripNotifyPayload,
+  notifyTarget: 'executive' | 'warehouse' | 'agent',
+): Promise<void> {
+  try {
+    const res = await notifyFetch('/api/notifications/order-unscheduled-from-trip', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...payload, notifyTarget }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      console.warn('[notifications] Order unscheduled from trip email failed', notifyTarget, body);
+    }
+  } catch (e) {
+    console.warn('[notifications] Order unscheduled from trip email API unreachable', notifyTarget, e);
+  }
+}
+
+export async function notifyOrderUnscheduledFromTrip(
+  orderUuid: string,
+  opts: {
+    unscheduledBy?: string | null;
+    tripNumber?: string | null;
+    previousScheduledDate?: string | null;
+    cancellationReason?: string | null;
+  },
+): Promise<void> {
+  const payload = await buildOrderUnscheduledFromTripNotifyPayload(orderUuid, opts);
+  if (!payload) return;
+
+  const { error: rpcError } = await supabase.rpc('notify_order_unscheduled_from_trip', {
+    p_order_id: payload.orderId,
+    p_trip_number: payload.tripNumber,
+    p_previous_scheduled_date: payload.previousScheduledDate,
+    p_unscheduled_by: payload.unscheduledBy,
+    p_cancellation_reason: payload.cancellationReason,
+  });
+  if (rpcError) {
+    console.error('[notifications] RPC notify_order_unscheduled_from_trip failed', rpcError);
+  }
+
+  await sendOrderUnscheduledFromTripNotificationEmail(payload, 'executive');
+  if (payload.warehouseEmails?.length) {
+    await sendOrderUnscheduledFromTripNotificationEmail(payload, 'warehouse');
+  }
+  if (payload.agentEmail?.trim()) {
+    await sendOrderUnscheduledFromTripNotificationEmail(payload, 'agent');
+  }
+
+  await notifyCustomerOrderUnscheduled(orderUuid, {
+    previousScheduledDate: payload.previousScheduledDate,
+  });
+}
+
+export async function notifyOrdersUnscheduledFromTripCancel(
+  orderUuids: string[],
+  opts: {
+    unscheduledBy?: string | null;
+    tripNumber?: string | null;
+    previousDatesByOrderId?: Record<string, string | null | undefined>;
+    cancellationReason?: string | null;
+  },
+): Promise<void> {
+  for (const orderUuid of orderUuids) {
+    try {
+      await notifyOrderUnscheduledFromTrip(orderUuid, {
+        unscheduledBy: opts.unscheduledBy ?? null,
+        tripNumber: opts.tripNumber ?? null,
+        previousScheduledDate: opts.previousDatesByOrderId?.[orderUuid] ?? null,
+        cancellationReason: opts.cancellationReason ?? null,
+      });
+    } catch (e) {
+      console.warn('[notifications] order unscheduled from trip cancel failed', orderUuid, e);
+    }
+  }
+}
+
+export async function buildTripCancelledNotifyPayload(
+  tripId: string,
+  opts: { cancelledBy?: string | null; cancellationReason?: string | null },
+): Promise<TripCancelledNotifyPayload | null> {
+  const { data, error } = await supabase
+    .from('trips')
+    .select(`
+      id, trip_number, scheduled_date, vehicle_name, driver_id, driver_name, order_ids, branch_id,
+      branches(name)
+    `)
+    .eq('id', tripId)
+    .maybeSingle();
+
+  if (error || !data) {
+    console.warn('[notifications] Could not load trip for cancel notify', error);
+    return null;
+  }
+
+  const trip = data as Record<string, unknown>;
+  const orderIds = Array.isArray(trip.order_ids) ? (trip.order_ids as string[]) : [];
+  let orderNumbers: string[] = [];
+  if (orderIds.length > 0) {
+    const { data: orders } = await supabase
+      .from('orders')
+      .select('id, order_number')
+      .in('id', orderIds);
+    const byId = new Map(
+      (orders ?? []).map((row) => {
+        const r = row as { id?: string; order_number?: string | null };
+        return [String(r.id ?? ''), String(r.order_number ?? '')] as const;
+      }),
+    );
+    orderNumbers = orderIds.map((id) => byId.get(id) || id).filter(Boolean);
+  }
+
+  const branchId = (trip.branch_id as string | null)?.trim() || null;
+  const logisticsEmails = branchId ? await fetchBranchLogisticsEmails(branchId) : [];
+  const driverId = (trip.driver_id as string | null)?.trim() || null;
+  const driverContact = driverId ? await fetchEmployeeNotifyContact(driverId) : { name: null, email: null };
+
+  return {
+    tripId,
+    tripNumber: String(trip.trip_number ?? ''),
+    scheduledDate: trip.scheduled_date ? String(trip.scheduled_date).slice(0, 10) : null,
+    vehicleName: (trip.vehicle_name as string | null) ?? null,
+    driverName: (trip.driver_name as string | null)?.trim() || driverContact.name,
+    driverEmail: driverContact.email,
+    branchName: (trip.branches as { name?: string } | null)?.name ?? null,
+    branchId,
+    logisticsEmails,
+    orderCount: orderIds.length,
+    orderNumbers,
+    cancelledBy: opts.cancelledBy ?? null,
+    cancellationReason: opts.cancellationReason ?? null,
+  };
+}
+
+async function sendTripCancelledNotificationEmail(
+  payload: TripCancelledNotifyPayload,
+  notifyTarget: 'logistics' | 'driver',
+): Promise<void> {
+  try {
+    const res = await notifyFetch('/api/notifications/trip-cancelled', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...payload, notifyTarget }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      console.warn('[notifications] Trip cancelled email failed', notifyTarget, body);
+    }
+  } catch (e) {
+    console.warn('[notifications] Trip cancelled email API unreachable', notifyTarget, e);
+  }
+}
+
+export async function notifyTripCancelled(
+  tripId: string,
+  opts: { cancelledBy?: string | null; cancellationReason?: string | null },
+): Promise<void> {
+  const { error: rpcError } = await supabase.rpc('notify_trip_cancelled', {
+    p_trip_id: tripId,
+    p_cancelled_by: opts.cancelledBy ?? null,
+    p_cancellation_reason: opts.cancellationReason ?? null,
+  });
+  if (rpcError) {
+    console.error('[notifications] RPC notify_trip_cancelled failed', rpcError);
+  }
+
+  const payload = await buildTripCancelledNotifyPayload(tripId, opts);
+  if (!payload) return;
+
+  if (payload.logisticsEmails.length) {
+    await sendTripCancelledNotificationEmail(payload, 'logistics');
+  }
+  if (payload.driverEmail?.trim() || payload.driverName?.trim()) {
+    await sendTripCancelledNotificationEmail(payload, 'driver');
   }
 }
 

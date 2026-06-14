@@ -17,7 +17,7 @@ import type { OrderLineItem as OrdersLineItem } from '@/src/types/orders';
 import { remainingToShipForLine } from '@/src/lib/orderShipmentQuantities';
 import { reportTripDelay } from '@/src/lib/orderTripDelay';
 import { resolveBranchIdByName } from '@/src/lib/branchCompanySettings';
-import { releaseOrderFromActiveTrips, tryCompleteTripIfAllOrdersDelivered, tryCompleteTripsForDeliveredOrder } from '@/src/lib/logisticsScheduling';
+import { releaseOrderFromActiveTrips, tryCompleteTripIfAllOrdersDelivered, tryCompleteTripsForDeliveredOrder, cancelTrip } from '@/src/lib/logisticsScheduling';
 import { attachOrderDeliveryProofsAndNotify } from '@/src/lib/notifications/notificationsData';
 import { formatTripScheduleDate } from '@/src/lib/dispatchQueueUi';
 
@@ -88,6 +88,10 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
   const [showReportDelayModal, setShowReportDelayModal] = useState(false);
   const [delayExplanation, setDelayExplanation] = useState('');
   const [delaySaving, setDelaySaving] = useState(false);
+
+  const [showCancelTripModal, setShowCancelTripModal] = useState(false);
+  const [cancelTripReason, setCancelTripReason] = useState('');
+  const [cancelTripSaving, setCancelTripSaving] = useState(false);
 
   // Derived trip badge: lowest order status wins
   const ORDER_STATUS_RANK: Record<string, number> = {
@@ -560,6 +564,56 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
     }
   }, [delayExplanation, trip.id, trip.tripNumber, trip.orders, branch, ordersData, employeeName, session, role, addAuditLog, onTripStatusChange]);
 
+  const handleCancelTrip = useCallback(async () => {
+    setCancelTripSaving(true);
+    try {
+      const actorName = employeeName || session?.user?.email || role || null;
+      const result = await cancelTrip({
+        tripId: trip.id,
+        cancelledBy: actorName,
+        cancellationReason: cancelTripReason.trim() || null,
+      });
+      if (!result.ok) {
+        window.alert(result.error ?? 'Could not cancel trip.');
+        return;
+      }
+      addAuditLog?.(
+        'Cancelled trip',
+        'trip',
+        `${trip.tripNumber}${cancelTripReason.trim() ? `: ${cancelTripReason.trim()}` : ''}`,
+      );
+      onTripStatusChange?.(trip.id, 'Cancelled');
+      setShowCancelTripModal(false);
+      setCancelTripReason('');
+      const reverted = result.revertedOrderIds ?? [];
+      if (reverted.length > 0) {
+        setOrderStatuses((prev) => {
+          const next = { ...prev };
+          for (const id of reverted) next[id] = 'Approved';
+          return next;
+        });
+        setOrdersData((prev) =>
+          prev.map((row) =>
+            reverted.includes(row.order.id)
+              ? { ...row, order: { ...row.order, status: 'Approved' } }
+              : row,
+          ),
+        );
+      }
+    } finally {
+      setCancelTripSaving(false);
+    }
+  }, [
+    trip.id,
+    trip.tripNumber,
+    employeeName,
+    session,
+    role,
+    cancelTripReason,
+    addAuditLog,
+    onTripStatusChange,
+  ]);
+
   // Fetch real orders whenever the modal opens or the trip changes
   useEffect(() => {
     if (!isOpen) return;
@@ -726,6 +780,18 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
                   <Navigation className="w-4 h-4 mr-2" />
                 )}
                 Mark All In Transit
+              </Button>
+            )}
+            {trip.status !== 'Complete' && trip.status !== 'Cancelled' && (
+              <Button
+                type="button"
+                onClick={() => setShowCancelTripModal(true)}
+                variant="outline"
+                size="sm"
+                className="inline-flex border-red-300 text-red-900 hover:bg-red-50"
+              >
+                <Ban className="w-4 h-4 mr-2" />
+                Cancel Trip
               </Button>
             )}
             {trip.status !== 'Complete' && trip.status !== 'Cancelled' && (
@@ -1315,6 +1381,77 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
                   </>
                 ) : (
                   'Save delay report'
+                )}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showCancelTripModal && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/40">
+          <div
+            className="bg-white rounded-xl shadow-xl max-w-lg w-full max-h-[90vh] flex flex-col border border-gray-200"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="cancel-trip-title"
+          >
+            <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-gray-200">
+              <h3 id="cancel-trip-title" className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                <Ban className="w-5 h-5 text-red-600 shrink-0" />
+                Cancel trip
+              </h3>
+              <button
+                type="button"
+                onClick={() => !cancelTripSaving && setShowCancelTripModal(false)}
+                className="p-2 rounded-lg hover:bg-gray-100"
+                aria-label="Close"
+              >
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+            <div className="p-5 flex-1 overflow-y-auto space-y-3">
+              <p className="text-sm text-gray-600 leading-relaxed">
+                Trip <strong>{trip.tripNumber}</strong> will be marked <strong>Cancelled</strong>. Active orders on
+                this trip return to <strong>Approved</strong> and re-enter the dispatch queue. Customers, agents,
+                warehouse, logistics, and the assigned driver are notified.
+              </p>
+              <label htmlFor="cancel-trip-reason" className="block text-sm font-semibold text-gray-800">
+                Reason (optional)
+              </label>
+              <textarea
+                id="cancel-trip-reason"
+                rows={4}
+                value={cancelTripReason}
+                onChange={(e) => setCancelTripReason(e.target.value)}
+                disabled={cancelTripSaving}
+                placeholder="e.g. Truck breakdown; customer rescheduled all deliveries."
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-red-500 focus:border-red-400 focus:outline-none resize-y min-h-[96px] disabled:opacity-60"
+              />
+            </div>
+            <div className="flex flex-col-reverse sm:flex-row justify-end gap-2 px-5 py-4 border-t border-gray-200 bg-gray-50 rounded-b-xl">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => !cancelTripSaving && setShowCancelTripModal(false)}
+                disabled={cancelTripSaving}
+              >
+                Keep trip
+              </Button>
+              <Button
+                type="button"
+                variant="primary"
+                onClick={() => void handleCancelTrip()}
+                disabled={cancelTripSaving}
+                className="bg-red-600 hover:bg-red-700 border-red-600"
+              >
+                {cancelTripSaving ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Cancelling…
+                  </>
+                ) : (
+                  'Cancel trip'
                 )}
               </Button>
             </div>

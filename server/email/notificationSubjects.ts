@@ -519,3 +519,29 @@ export function orderScheduledSubject(
   }
   return notificationSubject('Executive', `Order ${p.orderNumber} scheduled — ${p.customerName ?? 'Customer'}`);
 }
+
+export function orderUnscheduledFromTripSubject(
+  p: OrderRef & { tripNumber?: string | null },
+  notifyTarget: 'executive' | 'warehouse' | 'agent',
+): string {
+  const tripSuffix = p.tripNumber?.trim() ? ` — trip ${p.tripNumber.trim()} cancelled` : ' — trip cancelled';
+  if (notifyTarget === 'warehouse') {
+    return notificationSubject('Warehouse', `Order ${p.orderNumber} unscheduled${tripSuffix}`);
+  }
+  if (notifyTarget === 'agent') {
+    return notificationSubject('Agent', `Order ${p.orderNumber} unscheduled for ${p.customerName ?? 'your customer'}`);
+  }
+  return notificationSubject('Executive', `Order ${p.orderNumber} unscheduled${tripSuffix}`);
+}
+
+export function tripCancelledSubject(p: {
+  tripNumber: string;
+  scheduledDate?: string | null;
+  notifyTarget?: 'logistics' | 'driver';
+}): string {
+  const datePart = p.scheduledDate?.trim() ? ` — ${p.scheduledDate.trim()}` : '';
+  if (p.notifyTarget === 'driver') {
+    return notificationSubject('Driver', `Trip ${p.tripNumber} cancelled${datePart}`);
+  }
+  return notificationSubject('Logistics', `Trip ${p.tripNumber} cancelled${datePart}`);
+}

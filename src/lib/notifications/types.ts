@@ -226,6 +226,32 @@ export interface OrderScheduledNotifyPayload extends OrderCreatedNotifyPayload {
   agentEmail?: string | null;
 }
 
+export interface OrderUnscheduledFromTripNotifyPayload extends OrderCreatedNotifyPayload {
+  unscheduledBy: string | null;
+  tripNumber?: string | null;
+  previousScheduledDate?: string | null;
+  cancellationReason?: string | null;
+  branchId?: string | null;
+  warehouseEmails?: string[];
+  agentEmail?: string | null;
+}
+
+export interface TripCancelledNotifyPayload {
+  tripId: string;
+  tripNumber: string;
+  scheduledDate: string | null;
+  vehicleName: string | null;
+  driverName: string | null;
+  driverEmail?: string | null;
+  branchName?: string | null;
+  branchId?: string | null;
+  logisticsEmails: string[];
+  orderCount: number;
+  orderNumbers: string[];
+  cancelledBy: string | null;
+  cancellationReason?: string | null;
+}
+
 export interface OrderInTransitNotifyPayload extends OrderCreatedNotifyPayload {
   markedBy: string | null;
   tripNumber?: string | null;

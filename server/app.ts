@@ -92,6 +92,14 @@ import {
   type TripDriverUnassignedEmailPayload,
 } from './email/tripDriverUnassignedEmail';
 import {
+  buildOrderUnscheduledFromTripEmailHtml,
+  type OrderUnscheduledFromTripEmailPayload,
+} from './email/orderUnscheduledFromTripEmail';
+import {
+  buildTripCancelledEmailHtml,
+  type TripCancelledEmailPayload,
+} from './email/tripCancelledEmail';
+import {
   buildTripDelayedEmailHtml,
   tripDelayedSubject,
   type TripDelayedEmailPayload,
@@ -216,6 +224,8 @@ import {
   interBranchRejectedSubject,
   tripDriverAssignedSubject,
   tripDriverUnassignedSubject,
+  orderUnscheduledFromTripSubject,
+  tripCancelledSubject,
   productStockAlertSubject,
   materialStockAlertSubject,
 } from './email/notificationSubjects';
@@ -1657,6 +1667,108 @@ app.post('/api/notifications/trip-driver-unassigned', async (req, res) => {
       return;
     }
     console.error('[notify-server] trip-driver-unassigned', err);
+    res.status(502).json({ error: message });
+  }
+});
+
+app.post('/api/notifications/order-unscheduled-from-trip', async (req, res) => {
+  try {
+    const payload = req.body as OrderUnscheduledFromTripEmailPayload;
+    if (!payload?.orderId || !payload?.orderNumber || !payload?.notifyTarget) {
+      res.status(400).json({ error: 'Missing orderId, orderNumber, or notifyTarget' });
+      return;
+    }
+
+    const subject = orderUnscheduledFromTripSubject(payload, payload.notifyTarget);
+    const html = buildOrderUnscheduledFromTripEmailHtml(payload);
+
+    if (payload.notifyTarget === 'warehouse') {
+      const emails = (payload.warehouseEmails ?? []).map((e) => e?.trim()).filter(Boolean) as string[];
+      const targets = emails.length > 0 ? emails : [null];
+      const uniqueRecipients = [...new Set(targets.map((email) => resolveRecipient(email)))];
+      const sent: Array<{ id?: string; sentTo: string }> = [];
+      for (const sentTo of uniqueRecipients) {
+        const { id } = await sendViaResend({
+          to: sentTo,
+          subject,
+          html,
+          entityRef: emailEntityRef(payload.orderId, `unscheduled-${payload.notifyTarget}`),
+        });
+        sent.push({ id, sentTo });
+      }
+      res.json({ ok: true, sent, subject });
+      return;
+    }
+
+    const intended =
+      payload.notifyTarget === 'agent' ? payload.agentEmail : null;
+    const sentTo = resolveRecipient(intended);
+    const { id } = await sendViaResend({
+      to: sentTo,
+      subject,
+      html,
+      entityRef: emailEntityRef(payload.orderId, `unscheduled-${payload.notifyTarget}`),
+    });
+    res.json({ ok: true, id, sentTo, subject });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Internal error';
+    if (message.includes('RESEND_API_KEY')) {
+      res.status(503).json({ error: message });
+      return;
+    }
+    console.error('[notify-server] order-unscheduled-from-trip', err);
+    res.status(502).json({ error: message });
+  }
+});
+
+app.post('/api/notifications/trip-cancelled', async (req, res) => {
+  try {
+    const payload = req.body as TripCancelledEmailPayload;
+    if (!payload?.tripId || !payload?.tripNumber || !payload?.notifyTarget) {
+      res.status(400).json({ error: 'Missing tripId, tripNumber, or notifyTarget' });
+      return;
+    }
+
+    const subject = tripCancelledSubject({
+      tripNumber: payload.tripNumber,
+      scheduledDate: payload.scheduledDate,
+      notifyTarget: payload.notifyTarget,
+    });
+    const html = buildTripCancelledEmailHtml(payload);
+
+    if (payload.notifyTarget === 'logistics') {
+      const emails = (payload.logisticsEmails ?? []).map((e) => e?.trim()).filter(Boolean) as string[];
+      const targets = emails.length > 0 ? emails : [null];
+      const uniqueRecipients = [...new Set(targets.map((email) => resolveRecipient(email)))];
+      const sent: Array<{ id?: string; sentTo: string }> = [];
+      for (const sentTo of uniqueRecipients) {
+        const { id } = await sendViaResend({
+          to: sentTo,
+          subject,
+          html,
+          entityRef: emailEntityRef(payload.tripId, 'trip-cancelled-logistics'),
+        });
+        sent.push({ id, sentTo });
+      }
+      res.json({ ok: true, sent, subject });
+      return;
+    }
+
+    const sentTo = resolveRecipient(payload.driverEmail);
+    const { id } = await sendViaResend({
+      to: sentTo,
+      subject,
+      html,
+      entityRef: emailEntityRef(payload.tripId, 'trip-cancelled-driver'),
+    });
+    res.json({ ok: true, id, sentTo, subject });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Internal error';
+    if (message.includes('RESEND_API_KEY')) {
+      res.status(503).json({ error: message });
+      return;
+    }
+    console.error('[notify-server] trip-cancelled', err);
     res.status(502).json({ error: message });
   }
 });
