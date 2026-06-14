@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Bell, Loader2, Mail, RotateCcw, Save, XCircle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Button } from '@/src/components/ui/Button';
@@ -46,16 +46,19 @@ function Toggle({
   );
 }
 
-function ChannelHeaderRow() {
+function GroupSectionHeader({ title }: { title: string }) {
   return (
-    <div className="hidden sm:flex items-center justify-end gap-6 px-4 pb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">
-      <div className="flex items-center gap-2 w-[88px] justify-end">
-        <Bell className="w-3.5 h-3.5" aria-hidden />
-        In-app
-      </div>
-      <div className="flex items-center gap-2 w-[88px] justify-end">
-        <Mail className="w-3.5 h-3.5" aria-hidden />
-        Email
+    <div className="flex items-center justify-between gap-4 border-b border-gray-200 pb-2">
+      <h3 className="font-semibold text-gray-900">{title}</h3>
+      <div className="hidden sm:flex items-center gap-6 shrink-0 text-xs font-semibold uppercase tracking-wide text-gray-500">
+        <div className="flex items-center gap-2 w-[88px] justify-end">
+          <Bell className="w-3.5 h-3.5" aria-hidden />
+          In-app
+        </div>
+        <div className="flex items-center gap-2 w-[88px] justify-end">
+          <Mail className="w-3.5 h-3.5" aria-hidden />
+          Email
+        </div>
       </div>
     </div>
   );
@@ -121,12 +124,16 @@ export function SettingsNotificationsTab({
 }) {
   const { employeeId, role, assignableDashboardRoles, isExecutiveUser } = useAppContext();
 
+  const assignableRolesKey = (assignableDashboardRoles ?? []).filter(Boolean).join('|');
+
   const roles = useMemo<UserRole[]>(() => {
     const fromAssignable = (assignableDashboardRoles ?? []).filter(Boolean) as UserRole[];
     if (fromAssignable.length) return [...new Set(fromAssignable)];
     if (role) return [role as UserRole];
     return isExecutiveUser ? (['Executive'] as UserRole[]) : [];
-  }, [assignableDashboardRoles, role, isExecutiveUser]);
+  }, [assignableRolesKey, role, isExecutiveUser]);
+
+  const rolesKey = useMemo(() => [...roles].sort().join('|'), [roles]);
 
   const catalogItems = useMemo(() => catalogItemsForRoles(roles), [roles]);
   const grouped = useMemo(() => groupCatalogItems(catalogItems), [catalogItems]);
@@ -141,24 +148,30 @@ export function SettingsNotificationsTab({
     mergeNotificationPrefs(roles, null),
   );
   const [error, setError] = useState<string | null>(null);
+  const loadedForKeyRef = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     if (!employeeId) {
       setLoading(false);
       return;
     }
-    setLoading(true);
+
+    const fetchKey = `${employeeId}:${rolesKey}`;
+    const isInitialLoad = loadedForKeyRef.current !== fetchKey;
+    if (isInitialLoad) setLoading(true);
     setError(null);
+
     try {
       const merged = await fetchEmployeeNotificationPreferences(employeeId, roles);
       setPrefs(merged);
       setSavedPrefs(merged);
+      loadedForKeyRef.current = fetchKey;
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not load notification preferences.');
     } finally {
-      setLoading(false);
+      if (isInitialLoad) setLoading(false);
     }
-  }, [employeeId, roles]);
+  }, [employeeId, roles, rolesKey]);
 
   useEffect(() => {
     void load();
@@ -196,8 +209,6 @@ export function SettingsNotificationsTab({
     }
   };
 
-  const roleLabel = roles.length === 1 ? roles[0] : roles.join(', ');
-
   if (!employeeId) {
     return (
       <Card>
@@ -218,13 +229,6 @@ export function SettingsNotificationsTab({
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
-          <p className="text-sm text-gray-600 leading-relaxed">
-            Choose which staff notifications you receive by email and in the app bell. This list
-            covers every notification type for your role ({roleLabel}). Defaults match your
-            role&apos;s current setup. Customer emails are always sent and cannot be turned off
-            here.
-          </p>
-
           {error && (
             <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
               {error}
@@ -240,14 +244,9 @@ export function SettingsNotificationsTab({
             <p className="text-sm text-gray-500 py-6">No configurable notifications for your role.</p>
           ) : (
             <div className="space-y-8">
-              <p className="text-sm text-gray-500">
-                {catalogItems.length} notification{catalogItems.length === 1 ? '' : 's'} for your
-                role
-              </p>
-              <ChannelHeaderRow />
               {[...grouped.entries()].map(([group, items]) => (
                 <div key={group} className="space-y-3">
-                  <h3 className="font-semibold text-gray-900 border-b border-gray-200 pb-2">{group}</h3>
+                  <GroupSectionHeader title={group} />
                   <div className="space-y-3">
                     {items.map((entry) => (
                       <NotificationRow
