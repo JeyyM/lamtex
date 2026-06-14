@@ -26,6 +26,7 @@ import { computeStockStatus } from '@/src/lib/stockStatus';
 import { useProductPermissions } from '@/src/lib/permissions/productPermissions';
 import { useProductionRequestPermissions } from '@/src/lib/permissions/productionRequestPermissions';
 import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
+import { productCategoryHref } from '@/src/lib/productRoutes';
 
 // Local fallback images per category slug
 import hdpePipeImg     from '@/src/assets/product-images/HDPE Pipe.webp';
@@ -79,6 +80,7 @@ interface CategoryRow {
   id: string;
   name: string;
   slug: string;
+  branch: string | null;
   category_code: string | null;
   description: string | null;
   image_url: string | null;
@@ -665,7 +667,7 @@ export function ProductsPage() {
                     </button>
                     )}
                     <Link
-                      to={`/products/category/${cat.slug}`}
+                      to={productCategoryHref(cat.slug, cat.name, cat.branch)}
                       className="w-full text-left block"
                     >
                       <div className="aspect-video w-full min-h-[120px] overflow-hidden bg-gray-100">

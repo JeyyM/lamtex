@@ -9,13 +9,9 @@ import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import {
   Package,
-  Search,
-  Filter,
   Plus,
   DollarSign,
   AlertTriangle,
-  TrendingDown,
-  FileText,
   Download,
   RefreshCw,
   ShoppingCart,
@@ -25,8 +21,6 @@ import {
   ChevronDown,
   ChevronUp,
 } from 'lucide-react';
-import { getAllRawMaterials } from '@/src/mock/rawMaterials';
-import type { MaterialCategory, MaterialStatus, StockOutRisk } from '@/src/types/materials';
 import AddMaterialCategoryModal, { MaterialCategoryFormData } from '@/src/components/materials/AddMaterialCategoryModal';
 import { supabase } from '@/src/lib/supabase';
 import {
@@ -37,6 +31,7 @@ import { useMaterialPermissions } from '@/src/lib/permissions/materialPermission
 import { usePurchaseOrderPermissions } from '@/src/lib/permissions/purchaseOrderPermissions';
 import { useSupplierPermissions } from '@/src/lib/permissions/supplierPermissions';
 import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
+import { materialCategoryHref } from '@/src/lib/productRoutes';
 
 // Import raw material images (local fallbacks)
 import whitePelletsImg from '@/src/assets/raw-materials/White Pellets.webp';
@@ -76,9 +71,6 @@ interface MaterialCategoryRow {
 
 export function RawMaterialsPage() {
   const navigate = useNavigate();
-  const [searchQuery, setSearchQuery] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState<string>('All');
-  const [riskFilter, setRiskFilter] = useState<string>('All');
   const { role, branch, addAuditLog, warehouseScope, warehouseScopeLoading } = useAppContext();
   const perms = useMaterialPermissions();
   const poPerms = usePurchaseOrderPermissions();
@@ -130,8 +122,6 @@ export function RawMaterialsPage() {
   const [alertsLoading, setAlertsLoading] = useState(true);
   const [stockAlertsExpanded, setStockAlertsExpanded] = useState(true);
   const [exportingMaterials, setExportingMaterials] = useState(false);
-
-  const allMaterials = getAllRawMaterials();
 
   // Fetch material categories from Supabase (branch-aware)
   const fetchCategories = async () => {
@@ -306,33 +296,6 @@ export function RawMaterialsPage() {
     return categoryImageMap[cat.slug] ?? pvcImg;
   };
 
-  // Apply search and category filters first
-  const filteredBySearchAndCategory = allMaterials.filter(material => {
-    const matchesSearch = 
-      material.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      material.sku.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      material.description.toLowerCase().includes(searchQuery.toLowerCase());
-    
-    const matchesCategory = categoryFilter === 'All' || material.category === categoryFilter;
-    
-    return matchesSearch && matchesCategory;
-  });
-
-  const getStatusColor = (status: string): 'success' | 'warning' | 'danger' | 'default' => {
-    if (status === 'Active') return 'success';
-    if (status === 'Low Stock') return 'warning';
-    if (status === 'Out of Stock' || status === 'Discontinued' || status === 'Expired') return 'danger';
-    return 'default';
-  };
-
-  const getRiskBadgeVariant = (risk: StockOutRisk): 'success' | 'warning' | 'danger' => {
-    if (risk === 'Critical') return 'danger';
-    if (risk === 'Risky') return 'warning';
-    return 'success';
-  };
-
-  const riskLevels: (StockOutRisk | 'All')[] = ['All', 'OK', 'Risky', 'Critical'];
-
   // Handler functions for category management
   const handleEditCategory = (category: MaterialCategoryRow) => {
     const categoryData: MaterialCategoryFormData = {
@@ -439,59 +402,6 @@ export function RawMaterialsPage() {
       setSaving(false);
     }
   };
-
-  // Derived calculations for enhanced materials (immutable operations)
-  const enhancedMaterials = filteredBySearchAndCategory.map((material) => {
-    // ⚠ DEMO MODE: Simulating high consumption for specific material
-    // Use stable material ID instead of array position to avoid mutation on filter changes
-    const isDemoMaterial = material.id === 'MAT-001';
-
-    const adjustedMonthlyConsumption = isDemoMaterial
-      ? (material.monthlyConsumption || 0) * 8
-      : material.monthlyConsumption || 0;
-
-    const adjustedStockBranchA = isDemoMaterial
-      ? 20
-      : material.stockBranchA || 0;
-
-    const totalStock =
-      adjustedStockBranchA +
-      (material.stockBranchB || 0) +
-      (material.stockBranchC || 0);
-
-    const monthlyConsumption = adjustedMonthlyConsumption;
-
-    const avgDailyUsage =
-      monthlyConsumption > 0 ? monthlyConsumption / 30 : 0;
-
-    const daysOfCover =
-      avgDailyUsage > 0 ? totalStock / avgDailyUsage : Infinity;
-
-    // Use operationally-focused risk thresholds
-    let stockRisk: StockOutRisk = 'OK';
-    if (daysOfCover <= 30) stockRisk = 'Critical';
-    else if (daysOfCover <= 90) stockRisk = 'Risky';
-
-    const projectedStockOutDate =
-      avgDailyUsage > 0
-        ? new Date(Date.now() + daysOfCover * 24 * 60 * 60 * 1000)
-        : null;
-
-    return {
-      ...material,
-      totalStock,
-      avgDailyUsage,
-      daysOfCover,
-      stockRisk,
-      projectedStockOutDate,
-    };
-  });
-
-  // Apply risk filter (immutable operation)
-  const filteredMaterials = enhancedMaterials.filter(material => {
-    const matchesRisk = riskFilter === 'All' || material.stockRisk === riskFilter;
-    return matchesRisk;
-  });
 
   const criticalAlerts = [...dbAlertMaterials]
     .filter(m => m.alertLevel === 'critical')
@@ -800,7 +710,7 @@ export function RawMaterialsPage() {
 
                   {/* Category Card - Clickable Area */}
                   <Link
-                    to={`/materials/category/${category.slug}`}
+                    to={materialCategoryHref(category.slug, category.name, category.branches?.name ?? inventoryBranch)}
                     className="block w-full text-left"
                   >
                     {/* Category Image */}

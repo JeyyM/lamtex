@@ -9,6 +9,7 @@ import {
   fetchPublicOrderSummary,
   publicOrderErrorMessage,
 } from '@/src/lib/orderCustomerPortal';
+import { EntityNotFound, NOT_FOUND_COPY } from '@/src/components/ui/NotFound';
 import { orderStatusBadgeVariant, paymentStatusBadgeVariant } from '@/src/lib/orderStatusBadges';
 import type { PublicOrderSummary } from '@/src/types/orderCustomerPortal';
 
@@ -119,12 +120,11 @@ export function OrderCustomerViewPage() {
 
   if (!summary?.ok) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
-        <div className="bg-white rounded-lg shadow-md p-8 max-w-md text-center">
-          <p className="text-gray-900 font-semibold text-lg">Order unavailable</p>
-          <p className="text-gray-600 mt-2 text-sm">{publicOrderErrorMessage(summary?.error)}</p>
-        </div>
-      </div>
+      <EntityNotFound
+        {...NOT_FOUND_COPY.orderSummary}
+        description={publicOrderErrorMessage(summary?.error) ?? NOT_FOUND_COPY.orderSummary.description}
+        standalone
+      />
     );
   }
 

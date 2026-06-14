@@ -257,6 +257,7 @@ import {
 } from '@/src/lib/permissions/settingsPermissions';
 import { useEmployeesPermissions } from '@/src/lib/permissions/employeesPermissions';
 import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
+import { EntityNotFound, NOT_FOUND_COPY } from '@/src/components/ui/NotFound';
 import {
   ALL_PRODUCTION_REQUEST_PERMISSIONS_GRANTED,
   type ProductionRequestPermissionSet,
@@ -3148,18 +3149,10 @@ export default function EmployeeDetailPage() {
 
   if (error || !employee) {
     return (
-      <div className="p-6 max-w-lg mx-auto">
-        <div className="rounded-xl border border-gray-200 bg-white p-8 text-center shadow-sm">
-          <h1 className="text-xl font-bold text-gray-900 mb-2">Employee not found</h1>
-          <p className="text-gray-600 mb-6">
-            {error ?? 'This employee does not exist or is not available in the directory.'}
-          </p>
-          <Button variant="outline" onClick={() => navigate('/employees')}>
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            Back to Employees
-          </Button>
-        </div>
-      </div>
+      <EntityNotFound
+        {...NOT_FOUND_COPY.employee}
+        description={error ?? NOT_FOUND_COPY.employee.description}
+      />
     );
   }
 

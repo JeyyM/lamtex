@@ -25,6 +25,7 @@ import {
 import { useMaterialPermissions } from '@/src/lib/permissions/materialPermissions';
 import { usePurchaseOrderPermissions } from '@/src/lib/permissions/purchaseOrderPermissions';
 import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
+import { EntityNotFound, looksLikeMissingEntityMessage, NOT_FOUND_COPY } from '@/src/components/ui/NotFound';
 import {
   Package,
   ArrowLeft,
@@ -753,16 +754,16 @@ export function MaterialDetailPage() {
   }
 
   if (error || !material) {
+    const missing = !material || looksLikeMissingEntityMessage(error);
     return (
-      <div className="flex items-center justify-center h-96">
-        <div className="text-center">
-          <Package className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-          <p className="text-gray-500">{error ?? 'Material not found'}</p>
-          <Button variant="outline" className="mt-4" onClick={() => navigate(categoryName ? `/materials/category/${categoryName}` : '/materials')}>
-            Back to Materials
-          </Button>
-        </div>
-      </div>
+      <EntityNotFound
+        {...NOT_FOUND_COPY.material}
+        description={missing ? NOT_FOUND_COPY.material.description : (error ?? NOT_FOUND_COPY.material.description)}
+        variant={missing ? 'missing' : 'error'}
+        errorDetail={missing ? undefined : error}
+        onBack={() => navigate(categoryName ? `/materials/category/${categoryName}` : '/materials')}
+        backLabel="Back to Materials"
+      />
     );
   }
 

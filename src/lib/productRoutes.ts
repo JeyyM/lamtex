@@ -1,3 +1,5 @@
+export const UNCATEGORIZED_CATEGORY_SLUG = 'uncategorized';
+
 function normalizeCategorySlug(slug?: string | null, name?: string | null): string {
   const fromSlug = (slug ?? '').trim();
   if (fromSlug) return fromSlug;
@@ -6,38 +8,59 @@ function normalizeCategorySlug(slug?: string | null, name?: string | null): stri
     .trim()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
-  return fromName || 'uncategorized';
+  return fromName || UNCATEGORIZED_CATEGORY_SLUG;
 }
 
 /** Product category list page — `:categoryName` is `product_categories.slug`. */
-export function productCategoryHref(categorySlug?: string | null, categoryName?: string | null): string {
-  return `/products/category/${encodeURIComponent(normalizeCategorySlug(categorySlug, categoryName))}`;
+export function productCategoryHref(
+  categorySlug?: string | null,
+  categoryName?: string | null,
+  branchName?: string | null,
+): string {
+  const slug = normalizeCategorySlug(categorySlug, categoryName);
+  if (isUncategorizedProductCategorySlug(slug) && branchName?.trim()) {
+    return `/products/category/${encodeURIComponent(UNCATEGORIZED_CATEGORY_SLUG)}?branch=${encodeURIComponent(branchName.trim())}`;
+  }
+  return `/products/category/${encodeURIComponent(slug)}`;
 }
 
 /** Material category list page — `:categoryName` is `material_categories.slug`. */
-export function materialCategoryHref(categorySlug?: string | null, categoryName?: string | null): string {
-  return `/materials/category/${encodeURIComponent(normalizeCategorySlug(categorySlug, categoryName))}`;
+export function materialCategoryHref(
+  categorySlug?: string | null,
+  categoryName?: string | null,
+  branchName?: string | null,
+): string {
+  const slug = normalizeCategorySlug(categorySlug, categoryName);
+  if (isUncategorizedProductCategorySlug(slug) && branchName?.trim()) {
+    return `/materials/category/${encodeURIComponent(UNCATEGORIZED_CATEGORY_SLUG)}?branch=${encodeURIComponent(branchName.trim())}`;
+  }
+  return `/materials/category/${encodeURIComponent(slug)}`;
 }
 
-/** Branch code → uncategorized category slug (matches DB `branch_uncategorized_slug`). */
-export function uncategorizedCategorySlugForBranchCode(branchCode?: string | null): string {
-  const code = (branchCode ?? '').trim().toUpperCase();
-  if (code === 'MNL') return 'm-uncategorized';
-  if (code === 'CEB') return 'c-uncategorized';
-  if (code === 'BTG') return 'b-uncategorized';
-  if (!code) return 'm-uncategorized';
-  return `${code.toLowerCase()}-uncategorized`;
+/** Uncategorized slug is the same on every branch (`branch` / `branch_id` disambiguates). */
+export function uncategorizedCategorySlugForBranchCode(_branchCode?: string | null): string {
+  return UNCATEGORIZED_CATEGORY_SLUG;
 }
 
-/** Infer uncategorized slug from branch display name or product branch string. */
-export function uncategorizedCategorySlugForBranchName(branchName?: string | null): string {
-  const b = (branchName ?? '').trim().toLowerCase();
-  if (!b) return 'm-uncategorized';
-  if (b.startsWith('manila') || b === 'ncr') return 'm-uncategorized';
-  if (b.startsWith('cebu') || b.includes('visayas')) return 'c-uncategorized';
-  if (b.startsWith('batangas') || b.includes('calabarzon')) return 'b-uncategorized';
-  if (b.startsWith('quezon') || b === 'qzn') return 'qzn-uncategorized';
-  return 'm-uncategorized';
+export function uncategorizedCategorySlugForBranchName(_branchName?: string | null): string {
+  return UNCATEGORIZED_CATEGORY_SLUG;
+}
+
+export function isUncategorizedProductCategorySlug(slug?: string | null): boolean {
+  const s = (slug ?? '').trim().toLowerCase();
+  return s === UNCATEGORIZED_CATEGORY_SLUG || s.endsWith('-uncategorized');
+}
+
+/** Map legacy slugs (m-uncategorized, etc.) to the standard route slug. */
+export function normalizeProductCategorySlugParam(slug?: string | null): string {
+  if (isUncategorizedProductCategorySlug(slug)) return UNCATEGORIZED_CATEGORY_SLUG;
+  return (slug ?? '').trim();
+}
+
+/** Friendly label for category pickers. */
+export function productCategoryOptionLabel(name: string, slug?: string | null): string {
+  if (isUncategorizedProductCategorySlug(slug)) return 'Uncategorized';
+  return name;
 }
 
 /** Matches ProductCategoryPage navigation: `family` id is the product row id. */
@@ -46,9 +69,9 @@ export function finishedGoodProductHref(
   categorySlug?: string | null,
   branchName?: string | null,
 ): string {
-  let slug = normalizeCategorySlug(categorySlug);
-  if (slug === 'uncategorized') {
-    slug = uncategorizedCategorySlugForBranchName(branchName);
+  const slug = normalizeProductCategorySlugParam(normalizeCategorySlug(categorySlug));
+  if (slug === UNCATEGORIZED_CATEGORY_SLUG && branchName?.trim()) {
+    return `/products/category/${encodeURIComponent(slug)}/family/${productId}?branch=${encodeURIComponent(branchName.trim())}`;
   }
   return `/products/category/${encodeURIComponent(slug)}/family/${productId}`;
 }
@@ -59,9 +82,9 @@ export function rawMaterialDetailHref(
   categorySlug?: string | null,
   branchName?: string | null,
 ): string {
-  let slug = normalizeCategorySlug(categorySlug);
-  if (slug === 'uncategorized') {
-    slug = uncategorizedCategorySlugForBranchName(branchName);
+  const slug = normalizeProductCategorySlugParam(normalizeCategorySlug(categorySlug));
+  if (slug === UNCATEGORIZED_CATEGORY_SLUG && branchName?.trim()) {
+    return `/materials/category/${encodeURIComponent(slug)}/details/${materialId}?branch=${encodeURIComponent(branchName.trim())}`;
   }
   return `/materials/category/${encodeURIComponent(slug)}/details/${materialId}`;
 }

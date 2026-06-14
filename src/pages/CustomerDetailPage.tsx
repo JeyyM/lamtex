@@ -46,6 +46,7 @@ import {
   fetchCustomerOrdersForExport,
 } from '@/src/lib/customerDetailExport';
 import { employeeProfilePathFromAgent } from '@/src/lib/agentAnalytics';
+import { EntityNotFound, NOT_FOUND_COPY } from '@/src/components/ui/NotFound';
 
 function formatPeso(amount: number): string {
   return amount.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -403,17 +404,7 @@ export function CustomerDetailPage() {
   }
 
   if (notFound || !customer) {
-    return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="text-center">
-          <p className="text-xl font-semibold text-gray-900">Customer not found</p>
-          <Button variant="outline" className="mt-4" onClick={() => navigate('/customers')}>
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            Back to Customers
-          </Button>
-        </div>
-      </div>
-    );
+    return <EntityNotFound {...NOT_FOUND_COPY.customer} />;
   }
 
   return (

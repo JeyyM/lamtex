@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { X, Upload, Image as ImageIcon, Trash2 } from 'lucide-react';
 import ImageGalleryModal from '../ImageGalleryModal';
+import { productCategoryOptionLabel } from '@/src/lib/productRoutes';
 
 export interface ProductCategoryOption {
   id: string;
@@ -261,7 +262,7 @@ const AddProductModal: React.FC<AddProductModalProps> = ({
                   </option>
                   {categoryOptions.map((cat) => (
                     <option key={cat.id} value={cat.id}>
-                      {cat.name}
+                      {productCategoryOptionLabel(cat.name, cat.slug)}
                     </option>
                   ))}
                 </select>

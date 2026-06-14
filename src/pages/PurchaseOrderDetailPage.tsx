@@ -16,6 +16,12 @@ import { poLogCardHeadline, PoActivityLogHumanDetails } from '@/src/components/p
 import { useAppContext } from '@/src/store/AppContext';
 import { usePurchaseOrderPermissions } from '@/src/lib/permissions/purchaseOrderPermissions';
 import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
+import {
+  EntityNotFound,
+  isSupabaseNotFoundError,
+  looksLikeMissingEntityMessage,
+  NOT_FOUND_COPY,
+} from '@/src/components/ui/NotFound';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
@@ -365,8 +371,15 @@ export function PurchaseOrderDetailPage() {
         if (import.meta.env.DEV) console.warn('[PO logs]', logsRes.error.message);
         setPoLogs([]);
       }
-    } catch (e: any) {
-      setError(e.message ?? 'Failed to load purchase order');
+    } catch (e: unknown) {
+      if (isSupabaseNotFoundError(e)) {
+        setPO(null);
+        setItems([]);
+        setPoLogs([]);
+        setError('Purchase order not found');
+      } else {
+        setError(e instanceof Error ? e.message : 'Failed to load purchase order');
+      }
     } finally {
       setLoading(false);
     }
@@ -1319,17 +1332,15 @@ export function PurchaseOrderDetailPage() {
   }
 
   if (error || !po) {
+    const missing = looksLikeMissingEntityMessage(error);
     return (
-      <div className="flex items-center justify-center h-96">
-        <div className="text-center">
-          <AlertTriangle className="w-12 h-12 text-orange-500 mx-auto mb-3" />
-          <p className="text-gray-800 font-semibold mb-1">Failed to load purchase order</p>
-          <p className="text-sm text-gray-500 mb-4">{error}</p>
-          <Button variant="outline" onClick={fetchPO} className="gap-2">
-            <RefreshCw className="w-4 h-4" /> Retry
-          </Button>
-        </div>
-      </div>
+      <EntityNotFound
+        {...NOT_FOUND_COPY.purchaseOrder}
+        variant={missing ? 'missing' : 'error'}
+        description={missing ? NOT_FOUND_COPY.purchaseOrder.description : 'Could not load this purchase order.'}
+        errorDetail={missing ? undefined : error}
+        onRetry={missing ? undefined : fetchPO}
+      />
     );
   }
 

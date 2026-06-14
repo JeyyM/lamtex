@@ -6,6 +6,11 @@ import { useInterBranchRequestPermissions } from '@/src/lib/permissions/interBra
 import { useProductionRequestPermissions } from '@/src/lib/permissions/productionRequestPermissions';
 import { usePurchaseOrderPermissions } from '@/src/lib/permissions/purchaseOrderPermissions';
 import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
+import {
+  EntityNotFound,
+  looksLikeMissingEntityMessage,
+  NOT_FOUND_COPY,
+} from '@/src/components/ui/NotFound';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
@@ -1321,7 +1326,7 @@ export function InterBranchRequestDetailPage() {
       }
       if (q0) throw q0;
       if (!data) {
-        setError('Not found');
+        setError('Inter-branch request not found');
         setIbr(null);
         return;
       }
@@ -2621,31 +2626,22 @@ export function InterBranchRequestDetailPage() {
     );
   }
   if (error && !ibr) {
+    const missing = looksLikeMissingEntityMessage(error);
     return (
-      <div className="flex items-center justify-center h-96">
-        <div className="text-center max-w-md px-4">
-          <AlertTriangle className="w-12 h-12 text-orange-500 mx-auto mb-3" />
-          <p className="text-gray-800 font-semibold mb-1">Failed to load inter-branch request</p>
-          <p className="text-sm text-gray-500 mb-4">{error}</p>
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-2">
-            <Button
-              variant="outline"
-              onClick={() => {
+      <EntityNotFound
+        {...NOT_FOUND_COPY.interBranchRequest}
+        variant={missing ? 'missing' : 'error'}
+        description={missing ? NOT_FOUND_COPY.interBranchRequest.description : 'Could not load this inter-branch request.'}
+        errorDetail={missing ? undefined : error}
+        onRetry={
+          missing
+            ? undefined
+            : () => {
                 const rid = id ?? routeId;
                 if (rid && rid !== 'new') void loadRequest(rid);
-              }}
-              className="gap-2 w-full sm:w-auto"
-            >
-              <RefreshCw className="w-4 h-4" />
-              Retry
-            </Button>
-            <Button variant="outline" onClick={() => navigate('/inter-branch-requests')} className="gap-2 w-full sm:w-auto">
-              <ArrowLeft className="w-4 h-4" />
-              Back to list
-            </Button>
-          </div>
-        </div>
-      </div>
+              }
+        }
+      />
     );
   }
   if (!ibr || !id) {

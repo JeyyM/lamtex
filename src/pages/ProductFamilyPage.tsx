@@ -42,6 +42,7 @@ import { useOrderPermissions } from '../lib/permissions/orderPermissions';
 import { ProductProductionRequestHistoryCard } from '../components/products/ProductProductionRequestHistoryCard';
 import { ProductOrderHistoryCard } from '../components/products/ProductOrderHistoryCard';
 import { ModuleAccessDenied } from '../components/permissions/ModuleAccessDenied';
+import { EntityNotFound, NOT_FOUND_COPY } from '../components/ui/NotFound';
 import {
   DATE_PERIOD_OPTIONS,
   avgDailyUsage as periodAvgDailyUsage,
@@ -379,6 +380,9 @@ export default function ProductFamilyPage() {
     if (!familyId) return;
     (async () => {
       setLoading(true);
+      setProduct(null);
+      setVariants([]);
+      setSelectedVariant(null);
       // Product family info
       const { data: prod } = await supabase
         .from('products')
@@ -1115,6 +1119,16 @@ export default function ProductFamilyPage() {
         <Loader2 className="w-6 h-6 animate-spin" />
         <span>Loading product data...</span>
       </div>
+    );
+  }
+
+  if (!product) {
+    return (
+      <EntityNotFound
+        {...NOT_FOUND_COPY.product}
+        onBack={() => navigate(`/products/category/${categoryName}`)}
+        backLabel="Back to Category"
+      />
     );
   }
 

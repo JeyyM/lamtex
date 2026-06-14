@@ -23,7 +23,7 @@ import { FinancePageNew } from './pages/FinancePageNew';
 import { ReportsPage } from './pages/ReportsPage';
 import SettingsPage from './pages/SettingsPage';
 import { AuditLogsPage } from './pages/AuditLogsPage';
-import { PlaceholderPage } from './pages/PlaceholderPage';
+import { PageNotFound } from './components/ui/NotFound';
 import { PaymentPage } from './pages/PaymentPage';
 import { PaymentSuccessPage } from './pages/PaymentSuccessPage';
 import { ReceiptPage } from './pages/ReceiptPage';
@@ -140,7 +140,7 @@ function AppRoutes() {
             <Route path="production-requests/:id" element={<ProductionRequestDetailPage />} />
             <Route path="inter-branch-requests" element={<InterBranchRequestsPage />} />
             <Route path="inter-branch-requests/:id" element={<InterBranchRequestDetailPage />} />
-            <Route path="*" element={<PlaceholderPage />} />
+            <Route path="*" element={<PageNotFound />} />
           </Route>
         </Routes>
   );

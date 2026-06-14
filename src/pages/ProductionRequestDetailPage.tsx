@@ -5,6 +5,12 @@ import { useAppContext } from '@/src/store/AppContext';
 import { useProductionRequestPermissions } from '@/src/lib/permissions/productionRequestPermissions';
 import { useInterBranchRequestPermissions } from '@/src/lib/permissions/interBranchRequestPermissions';
 import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
+import {
+  EntityNotFound,
+  isSupabaseNotFoundError,
+  looksLikeMissingEntityMessage,
+  NOT_FOUND_COPY,
+} from '@/src/components/ui/NotFound';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
@@ -594,7 +600,14 @@ export function ProductionRequestDetailPage() {
       setNotes(raw.notes ?? '');
       await Promise.all([fetchLogs(id), fetchLinkedOrders(id)]);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Failed to load request');
+      if (isSupabaseNotFoundError(e)) {
+        setPr(null);
+        setItems([]);
+        setInvolvedOrders([]);
+        setError('Production request not found');
+      } else {
+        setError(e instanceof Error ? e.message : 'Failed to load request');
+      }
     } finally {
       if (!silent) {
         setLoading(false);
@@ -1502,24 +1515,15 @@ export function ProductionRequestDetailPage() {
   }
 
   if (error || !pr) {
+    const missing = looksLikeMissingEntityMessage(error);
     return (
-      <div className="flex items-center justify-center h-96">
-        <div className="text-center max-w-md px-4">
-          <AlertTriangle className="w-12 h-12 text-orange-500 mx-auto mb-3" />
-          <p className="text-gray-800 font-semibold mb-1">Failed to load request</p>
-          <p className="text-sm text-gray-500 mb-4">{error ?? 'Not found'}</p>
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-2">
-            <Button variant="outline" onClick={() => void fetchPR()} className="gap-2 w-full sm:w-auto">
-              <RefreshCw className="w-4 h-4" />
-              Retry
-            </Button>
-            <Button variant="outline" onClick={() => navigate('/production-requests')} className="gap-2 w-full sm:w-auto">
-              <ArrowLeft className="w-4 h-4" />
-              Back to list
-            </Button>
-          </div>
-        </div>
-      </div>
+      <EntityNotFound
+        {...NOT_FOUND_COPY.productionRequest}
+        variant={missing ? 'missing' : 'error'}
+        description={missing ? NOT_FOUND_COPY.productionRequest.description : 'Could not load this production request.'}
+        errorDetail={missing ? undefined : error}
+        onRetry={missing ? undefined : () => void fetchPR()}
+      />
     );
   }
 

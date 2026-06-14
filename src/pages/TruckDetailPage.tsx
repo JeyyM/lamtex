@@ -39,7 +39,7 @@ import type {
   TripHistoryRecord,
   MaintenanceRecord,
   TruckAlert,
-} from '@/src/mock/truckDetails';
+} from '@/src/types/fleet';
 import {
   fetchTruckDetailBundle,
   isFleetVehicleUuid,
@@ -64,6 +64,7 @@ import {
 } from '@/src/lib/dispatchQueueUi';
 import { useLogisticsPermissions } from '@/src/lib/permissions/logisticsPermissions';
 import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
+import { EntityNotFound, looksLikeMissingEntityMessage, NOT_FOUND_COPY } from '@/src/components/ui/NotFound';
 
 const TRUCK_STATUS_OPTIONS: Vehicle['status'][] = [
   'Available',
@@ -382,20 +383,11 @@ export function TruckDetailPage() {
 
   if (!truck) {
     return (
-      <div className="flex items-center justify-center h-96">
-        <div className="text-center max-w-md px-4">
-          <Truck className="w-16 h-16 mx-auto text-gray-400 mb-4" />
-          <p className="text-xl font-semibold text-gray-900">Truck Not Found</p>
-          {loadError && (
-            <p className="text-sm text-red-600 mt-2">{loadError}</p>
-          )}
-          <p className="text-gray-500 mt-2">The truck you&apos;re looking for doesn&apos;t exist or is not a fleet truck.</p>
-          <Button variant="primary" className="mt-4" onClick={() => navigate('/logistics')}>
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            Back to Fleet
-          </Button>
-        </div>
-      </div>
+      <EntityNotFound
+        {...NOT_FOUND_COPY.truck}
+        errorDetail={loadError}
+        variant={loadError && !looksLikeMissingEntityMessage(loadError) ? 'error' : 'missing'}
+      />
     );
   }
 

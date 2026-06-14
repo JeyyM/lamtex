@@ -58,6 +58,7 @@ import {
 } from '@/src/pages/supplierModel';
 import RawMaterialPickerModal from '@/src/components/products/RawMaterialPickerModal';
 import { useAppContext } from '@/src/store/AppContext';
+import { EntityNotFound, NOT_FOUND_COPY } from '@/src/components/ui/NotFound';
 
 function formatCurrency(amount: number) {
   if (amount == null || Number.isNaN(amount)) return '—';
@@ -570,22 +571,7 @@ export function SupplierDetailPage() {
   }
 
   if (notFound || !supplier) {
-    return (
-      <div className="space-y-4 max-w-xl mx-auto">
-        <Button variant="outline" onClick={() => navigate('/suppliers')} className="gap-2">
-          <ArrowLeft className="w-4 h-4" /> Back to suppliers
-        </Button>
-        <Card>
-          <CardContent className="p-8 text-center text-gray-600">
-            {error ? (
-              <p>{error}</p>
-            ) : (
-              <p>Supplier not found.</p>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-    );
+    return <EntityNotFound {...NOT_FOUND_COPY.supplier} />;
   }
 
   return (

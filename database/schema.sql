@@ -599,7 +599,7 @@ CREATE TABLE IF NOT EXISTS supplier_materials (
 CREATE TABLE IF NOT EXISTS product_categories (
   id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   name        VARCHAR(200) NOT NULL,
-  slug        VARCHAR(200) NOT NULL UNIQUE,
+  slug        VARCHAR(200) NOT NULL,
   category_code VARCHAR(50),
   description TEXT,
   image_url   TEXT,
@@ -676,19 +676,14 @@ $$;
 REVOKE ALL ON FUNCTION public.next_category_code(TEXT, TEXT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.next_category_code(TEXT, TEXT) TO authenticated;
 
--- Uncategorized category slug per branch code — Source: database/uncategorized_categories_by_branch.sql
+-- Uncategorized category slug (same on every branch) — Source: database/uncategorized_categories_by_branch.sql
 CREATE OR REPLACE FUNCTION public.branch_uncategorized_slug(p_code TEXT)
 RETURNS TEXT
 LANGUAGE sql
 IMMUTABLE
 SET search_path = public
 AS $$
-  SELECT CASE upper(trim(COALESCE(p_code, '')))
-    WHEN 'MNL' THEN 'm-uncategorized'
-    WHEN 'CEB' THEN 'c-uncategorized'
-    WHEN 'BTG' THEN 'b-uncategorized'
-    ELSE lower(trim(p_code)) || '-uncategorized'
-  END;
+  SELECT 'uncategorized'::TEXT;
 $$;
 
 CREATE OR REPLACE FUNCTION public.trg_product_categories_assign_category_code()
@@ -737,6 +732,15 @@ CREATE TABLE IF NOT EXISTS products (
 
 -- 5b-i: Product catalog visibility — Source: database/product_catalog_visibility.sql
 ALTER TABLE products ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- 5b-ii: Product family code — Source: database/products_family_code.sql
+ALTER TABLE products ADD COLUMN IF NOT EXISTS family_code VARCHAR(50);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_products_family_code_branch_unique
+  ON products (branch, lower(trim(family_code)))
+  WHERE family_code IS NOT NULL AND trim(family_code) <> '';
+
+COMMENT ON COLUMN products.family_code IS 'Unique product family identifier within a branch (e.g. HDPE-STD).';
 
 -- 5c: Product variants (SKU level)
 CREATE TABLE IF NOT EXISTS product_variants (
@@ -867,8 +871,8 @@ CREATE TABLE IF NOT EXISTS product_logs (
 -- 6a: Material categories
 CREATE TABLE IF NOT EXISTS material_categories (
   id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  name        VARCHAR(200) NOT NULL UNIQUE,
-  slug        VARCHAR(200) NOT NULL UNIQUE,
+  name        VARCHAR(200) NOT NULL,
+  slug        VARCHAR(200) NOT NULL,
   description TEXT,
   image_url   TEXT,
   sort_order  INT DEFAULT 0,
@@ -3122,6 +3126,43 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_customers_customer_code
 CREATE UNIQUE INDEX IF NOT EXISTS idx_product_categories_category_code
   ON product_categories(category_code)
   WHERE category_code IS NOT NULL AND TRIM(category_code) <> '';
+
+ALTER TABLE product_categories DROP CONSTRAINT IF EXISTS product_categories_slug_key;
+ALTER TABLE product_categories DROP CONSTRAINT IF EXISTS product_categories_branch_slug_unique;
+DROP INDEX IF EXISTS product_categories_slug_key;
+DROP INDEX IF EXISTS idx_product_categories_branch_slug;
+-- Constraint added by database/uncategorized_categories_by_branch.sql (run that migration on live DB).
+-- Bootstrap idempotent add (no-op if already applied):
+DO $$ BEGIN
+  ALTER TABLE product_categories
+    ADD CONSTRAINT product_categories_branch_slug_unique UNIQUE (branch, slug);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+ALTER TABLE material_categories DROP CONSTRAINT IF EXISTS material_categories_name_key;
+ALTER TABLE material_categories DROP CONSTRAINT IF EXISTS material_categories_slug_key;
+ALTER TABLE material_categories DROP CONSTRAINT IF EXISTS material_categories_branch_slug_unique;
+ALTER TABLE material_categories DROP CONSTRAINT IF EXISTS material_categories_branch_name_unique;
+DROP INDEX IF EXISTS idx_material_categories_branch_name;
+DROP INDEX IF EXISTS idx_material_categories_branch_slug;
+DROP INDEX IF EXISTS idx_material_categories_global_name;
+DROP INDEX IF EXISTS idx_material_categories_global_slug;
+DO $$ BEGIN
+  ALTER TABLE material_categories
+    ADD CONSTRAINT material_categories_branch_slug_unique UNIQUE (branch_id, slug);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+DO $$ BEGIN
+  ALTER TABLE material_categories
+    ADD CONSTRAINT material_categories_branch_name_unique UNIQUE (branch_id, name);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_material_categories_global_name
+  ON material_categories (name)
+  WHERE branch_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_material_categories_global_slug
+  ON material_categories (slug)
+  WHERE branch_id IS NULL;
 CREATE INDEX IF NOT EXISTS idx_customers_agent ON customers(assigned_agent_id);
 CREATE INDEX IF NOT EXISTS idx_customers_branch ON customers(branch_id);
 CREATE INDEX IF NOT EXISTS idx_customers_risk ON customers(risk_level);
@@ -12202,20 +12243,18 @@ ON CONFLICT (slug) DO NOTHING;
 -- Per-branch uncategorized product categories — Source: database/uncategorized_categories_by_branch.sql
 INSERT INTO product_categories (name, slug, description, sort_order, is_active, branch)
 SELECT
-  b.code || ' — Uncategorized',
-  public.branch_uncategorized_slug(b.code),
+  'Uncategorized',
+  'uncategorized',
   'Default category for products without an assigned category',
   9999,
   true,
   b.name
 FROM branches b
 WHERE b.is_active IS DISTINCT FROM false
-ON CONFLICT (slug) DO UPDATE SET
-  branch      = EXCLUDED.branch,
-  name        = EXCLUDED.name,
-  description = EXCLUDED.description,
-  sort_order  = EXCLUDED.sort_order,
-  is_active   = true;
+  AND NOT EXISTS (
+    SELECT 1 FROM product_categories pc
+    WHERE pc.branch = b.name AND pc.slug = 'uncategorized'
+  );
 
 -- Material categories
 INSERT INTO material_categories (name, slug, sort_order) VALUES
@@ -12234,20 +12273,18 @@ ON CONFLICT (name) DO NOTHING;
 -- Per-branch uncategorized material categories — Source: database/uncategorized_categories_by_branch.sql
 INSERT INTO material_categories (name, slug, description, sort_order, is_active, branch_id)
 SELECT
-  b.code || ' — Uncategorized',
-  public.branch_uncategorized_slug(b.code),
+  'Uncategorized',
+  'uncategorized',
   'Default category for raw materials without an assigned category',
   9999,
   true,
   b.id
 FROM branches b
 WHERE b.is_active IS DISTINCT FROM false
-ON CONFLICT (slug) DO UPDATE SET
-  branch_id   = EXCLUDED.branch_id,
-  name        = EXCLUDED.name,
-  description = EXCLUDED.description,
-  sort_order  = EXCLUDED.sort_order,
-  is_active   = true;
+  AND NOT EXISTS (
+    SELECT 1 FROM material_categories mc
+    WHERE mc.branch_id = b.id AND mc.slug = 'uncategorized'
+  );
 
 -- Backfill products/materials missing category_id into branch uncategorized buckets
 UPDATE products p
@@ -12256,7 +12293,7 @@ SET category_id = pc.id,
 FROM product_categories pc
 JOIN branches b ON b.name = pc.branch
 WHERE p.category_id IS NULL
-  AND pc.slug = public.branch_uncategorized_slug(b.code)
+  AND pc.slug = 'uncategorized'
   AND (
     (p.branch IS NOT NULL AND trim(p.branch) = b.name)
     OR (p.branch IS NULL AND b.code = 'MNL')
@@ -12266,7 +12303,7 @@ UPDATE products p
 SET category_id = pc.id,
     updated_at  = NOW()
 FROM branches b
-JOIN product_categories pc ON pc.slug = public.branch_uncategorized_slug(b.code)
+JOIN product_categories pc ON pc.branch = b.name AND pc.slug = 'uncategorized'
 WHERE p.category_id IS NULL
   AND p.branch IS NOT NULL
   AND (b.name ILIKE p.branch || '%' OR p.branch ILIKE split_part(b.name, ' ', 1) || '%');
@@ -12282,7 +12319,7 @@ FROM (
   JOIN branches b ON b.id = ms.branch_id
   JOIN material_categories mc
     ON mc.branch_id = b.id
-   AND mc.slug = public.branch_uncategorized_slug(b.code)
+   AND mc.slug = 'uncategorized'
   ORDER BY ms.material_id, ms.quantity DESC NULLS LAST
 ) picked
 WHERE rm.id = picked.material_id
@@ -12292,8 +12329,10 @@ UPDATE raw_materials rm
 SET category_id = pc.id,
     updated_at  = NOW()
 FROM material_categories pc
+JOIN branches b ON b.id = pc.branch_id
 WHERE rm.category_id IS NULL
-  AND pc.slug = 'm-uncategorized';
+  AND pc.slug = 'uncategorized'
+  AND b.code = 'MNL';
 
 -- Payment method fees (default configuration)
 INSERT INTO payment_method_fees (method, gateway_fee_percent, gateway_fee_fixed, service_fee_percent, service_fee_fixed, enabled, description) VALUES

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useNavigate, useParams, Link } from 'react-router-dom';
+import { useNavigate, useParams, Link, useSearchParams } from 'react-router-dom';
 import { Card, CardContent } from '../components/ui/Card';
 import { StatKpiCard } from '../components/ui/StatKpiCard';
 import { Badge } from '../components/ui/Badge';
@@ -31,11 +31,16 @@ import {
 import { insertRawMaterialLog, mapAppRoleToLogRole } from '../lib/domainActivityLog';
 import { scopedMaterialIdList } from '../lib/warehouseScope';
 import {
+  normalizeProductCategorySlugParam,
+  UNCATEGORIZED_CATEGORY_SLUG,
+} from '../lib/productRoutes';
+import {
   downloadMaterialCategoryWorkbook,
   fetchMaterialCategoryForExport,
 } from '../lib/rawMaterialsExport';
 import { useMaterialPermissions } from '../lib/permissions/materialPermissions';
 import { ModuleAccessDenied } from '../components/permissions/ModuleAccessDenied';
+import { EntityNotFound, looksLikeMissingEntityMessage, NOT_FOUND_COPY } from '../components/ui/NotFound';
 import { overwriteMaterialStock } from '../lib/rawMaterialStock';
 
 // ── Supabase row shape ───────────────────────────────────────────────────────
@@ -71,6 +76,9 @@ function getMaterialStockForBranch(m: RawMaterialRow, branchLabel: string): numb
 export default function MaterialCategoryPage() {
   const navigate = useNavigate();
   const { categoryName } = useParams<{ categoryName: string }>();
+  const [searchParams] = useSearchParams();
+  const branchFromQuery = searchParams.get('branch')?.trim() || null;
+  const categorySlug = normalizeProductCategorySlugParam(categoryName);
   const { selectedBranch, setHideBranchSelector, employeeName, role, session, addAuditLog, warehouseScope } = useAppContext();
 
   useEffect(() => {
@@ -95,7 +103,9 @@ export default function MaterialCategoryPage() {
   // Supabase state
   const [categoryId, setCategoryId] = useState<string | null>(null);
   const [categoryTitle, setCategoryTitle] = useState<string>(
-    categoryName
+    categorySlug === UNCATEGORIZED_CATEGORY_SLUG
+      ? 'Uncategorized'
+      : categoryName
       ? categoryName.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
       : 'Materials'
   );
@@ -104,21 +114,40 @@ export default function MaterialCategoryPage() {
   const [error, setError] = useState<string | null>(null);
   const [exportingCategory, setExportingCategory] = useState(false);
 
+  useEffect(() => {
+    if (!categoryName) return;
+    const normalized = normalizeProductCategorySlugParam(categoryName);
+    if (normalized !== categoryName) {
+      const qs = branchFromQuery ? `?branch=${encodeURIComponent(branchFromQuery)}` : '';
+      navigate(`/materials/category/${normalized}${qs}`, { replace: true });
+    }
+  }, [categoryName, branchFromQuery, navigate]);
+
   // ── Fetch category row (to get its UUID) then fetch its materials ───────────
   const fetchMaterials = useCallback(async () => {
-    if (!categoryName) return;
+    if (!categorySlug) return;
     setLoading(true);
     setError(null);
     try {
-      // 1. Resolve category UUID from slug
-      const { data: catData, error: catError } = await supabase
+      let catQ = supabase
         .from('material_categories')
         .select('id, name')
-        .eq('slug', categoryName)
-        .single();
+        .eq('slug', categorySlug);
+      if (categorySlug === UNCATEGORIZED_CATEGORY_SLUG) {
+        const branchName = branchFromQuery ?? selectedBranch ?? null;
+        if (branchName) {
+          const { data: branchRow } = await supabase
+            .from('branches')
+            .select('id')
+            .eq('name', branchName)
+            .maybeSingle();
+          if (branchRow?.id) catQ = catQ.eq('branch_id', branchRow.id);
+        }
+      }
+      const { data: catData, error: catError } = await catQ.maybeSingle();
 
       if (catError || !catData) {
-        setError(`Category "${categoryName}" not found`);
+        setError(`Category "${categorySlug}" not found`);
         setLoading(false);
         return;
       }
@@ -141,7 +170,7 @@ export default function MaterialCategoryPage() {
     } finally {
       setLoading(false);
     }
-  }, [categoryName, scopedMaterialIds?.join('|') ?? '']);
+  }, [categorySlug, branchFromQuery, selectedBranch, scopedMaterialIds?.join('|') ?? '']);
 
   useEffect(() => { fetchMaterials(); }, [fetchMaterials]);
 
@@ -576,16 +605,17 @@ export default function MaterialCategoryPage() {
       )}
 
       {error && !loading && (
-        <Card>
-          <CardContent className="p-12 text-center">
-            <AlertTriangle className="w-12 h-12 text-orange-500 mx-auto mb-3" />
-            <h3 className="text-lg font-semibold text-gray-900 mb-1">Failed to load materials</h3>
-            <p className="text-sm text-gray-500 mb-4">{error}</p>
-            <button onClick={fetchMaterials} className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg mx-auto hover:bg-red-700 transition-all">
-              <RefreshCw className="w-4 h-4" /> Retry
-            </button>
-          </CardContent>
-        </Card>
+        <EntityNotFound
+          {...NOT_FOUND_COPY.materialCategory}
+          description={
+            looksLikeMissingEntityMessage(error)
+              ? `The material category "${categorySlug}" does not exist or may have been removed.`
+              : (error ?? NOT_FOUND_COPY.materialCategory.description)
+          }
+          variant={looksLikeMissingEntityMessage(error) ? 'missing' : 'error'}
+          errorDetail={looksLikeMissingEntityMessage(error) ? undefined : error}
+          onRetry={looksLikeMissingEntityMessage(error) ? undefined : fetchMaterials}
+        />
       )}
 
       {!loading && !error && (

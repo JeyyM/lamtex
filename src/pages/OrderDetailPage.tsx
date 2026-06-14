@@ -121,6 +121,7 @@ import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDen
 import { deriveOrderDueDateForPersistence, parseProofNotes } from '@/src/lib/financeData';
 import { cumulativeShippedForLine, remainingToShipForLine } from '@/src/lib/orderShipmentQuantities';
 import { ACTIVITY_LOG_PAGE_SIZE, TablePagination } from '@/src/components/ui/TablePagination';
+import { EntityNotFound, NOT_FOUND_COPY } from '@/src/components/ui/NotFound';
 
 /** Local proof uploads: images + common business documents (allowlist). */
 const ORDER_PROOF_UPLOAD_EXT =
@@ -1440,21 +1441,7 @@ export function OrderDetailPage() {
   }
 
   if (!order) {
-    return (
-      <div className="p-8">
-        <Card>
-          <CardContent className="p-12 text-center">
-            <FileText className="w-16 h-16 mx-auto mb-4 text-gray-400" />
-            <h2 className="text-xl font-semibold text-gray-900 mb-2">Order Not Found</h2>
-            <p className="text-gray-500 mb-6">The order you're looking for doesn't exist.</p>
-            <Button onClick={() => navigate('/orders')}>
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back to Orders
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
-    );
+    return <EntityNotFound {...NOT_FOUND_COPY.order} />;
   }
 
   const getStatusBadgeVariant = (status: OrderStatus) => orderStatusBadgeVariant(status);

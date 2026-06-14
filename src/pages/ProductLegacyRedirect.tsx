@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, Navigate } from 'react-router-dom';
-import { Loader2, Package } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { supabase } from '@/src/lib/supabase';
 import { finishedGoodProductHref } from '@/src/lib/productRoutes';
-import { Button } from '@/src/components/ui/Button';
+import { EntityNotFound, NOT_FOUND_COPY } from '@/src/components/ui/NotFound';
 
 /** Redirects legacy `/products/:id` URLs to the family detail page. */
 export function ProductLegacyRedirect() {
@@ -48,17 +48,7 @@ export function ProductLegacyRedirect() {
   }
 
   if (missing) {
-    return (
-      <div className="flex items-center justify-center h-96">
-        <div className="text-center">
-          <Package className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-          <p className="text-gray-500">Product not found</p>
-          <Button variant="outline" className="mt-4" onClick={() => window.history.back()}>
-            Go back
-          </Button>
-        </div>
-      </div>
-    );
+    return <EntityNotFound {...NOT_FOUND_COPY.product} />;
   }
 
   return (

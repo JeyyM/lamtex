@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate, useParams, Link } from 'react-router-dom';
+import { useNavigate, useParams, Link, useSearchParams } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
 import { StatKpiCard } from '../components/ui/StatKpiCard';
 import { Badge } from '../components/ui/Badge';
@@ -15,9 +15,17 @@ import { insertProductLog, mapAppRoleToLogRole } from '../lib/domainActivityLog'
 import { isCategoryCatalogHidden, isProductFamilyCatalogHidden, CATALOG_HIDDEN_CLASS } from '../lib/productCatalogVisibility';
 import { useProductPermissions } from '../lib/permissions/productPermissions';
 import { ModuleAccessDenied } from '../components/permissions/ModuleAccessDenied';
+import { EntityNotFound, NOT_FOUND_COPY } from '../components/ui/NotFound';
 import { scopedProductIdList } from '../lib/warehouseScope';
 import { effectiveInventoryBranch } from '../lib/inventoryAccess';
 import { computeStockStatus } from '../lib/stockStatus';
+import {
+  isUncategorizedProductCategorySlug,
+  normalizeProductCategorySlugParam,
+  productCategoryOptionLabel,
+  UNCATEGORIZED_CATEGORY_SLUG,
+  uncategorizedCategorySlugForBranchName,
+} from '../lib/productRoutes';
 
 // Local image fallbacks
 import hdpePipeImg    from '../assets/product-images/HDPE Pipe.webp';
@@ -47,6 +55,7 @@ interface ProductRow {
   id: string;
   name: string;
   category_id: string;
+  family_code: string | null;
   description: string | null;
   image_url: string | null;
   status: string;
@@ -113,6 +122,45 @@ function deriveFamilyStockStatus(p: ProductRow, inventoryBranch: string | null):
     }
   }
   return worst;
+}
+
+interface CategoryOptionRow {
+  id: string;
+  name: string;
+  slug: string;
+  sort_order: number | null;
+}
+
+async function fetchBranchProductCategoryOptions(
+  branchName: string | null,
+): Promise<ProductCategoryOption[]> {
+  let catQ = supabase
+    .from('product_categories')
+    .select('id, name, slug, sort_order')
+    .order('sort_order', { ascending: true });
+  if (branchName) catQ = catQ.eq('branch', branchName);
+  const { data: allCats } = await catQ;
+
+  const merged: CategoryOptionRow[] = [...((allCats ?? []) as CategoryOptionRow[])];
+  const uncatSlug = uncategorizedCategorySlugForBranchName(branchName);
+  if (!merged.some((c) => c.slug === uncatSlug)) {
+    const { data: uncat } = await supabase
+      .from('product_categories')
+      .select('id, name, slug, sort_order')
+      .eq('slug', uncatSlug)
+      .maybeSingle();
+    if (uncat) merged.push(uncat as CategoryOptionRow);
+  }
+
+  merged.sort((a, b) => {
+    const aUncat = isUncategorizedProductCategorySlug(a.slug);
+    const bUncat = isUncategorizedProductCategorySlug(b.slug);
+    if (aUncat && !bUncat) return 1;
+    if (!aUncat && bUncat) return -1;
+    return (a.sort_order ?? 0) - (b.sort_order ?? 0);
+  });
+
+  return merged.map(({ id, name, slug }) => ({ id, name, slug }));
 }
 
 interface ProductFamilyExportRow {
@@ -303,6 +351,9 @@ async function downloadCategoryWorkbook(
 export default function ProductCategoryPage() {
   const navigate = useNavigate();
   const { categoryName } = useParams<{ categoryName: string }>();
+  const [searchParams] = useSearchParams();
+  const branchFromQuery = searchParams.get('branch')?.trim() || null;
+  const categorySlug = normalizeProductCategorySlugParam(categoryName);
   const { branch, setHideBranchSelector, employeeName, role, session, addAuditLog, warehouseScope } = useAppContext();
   const perms = useProductPermissions();
   const inventoryBranch = effectiveInventoryBranch(role, branch);
@@ -317,12 +368,15 @@ export default function ProductCategoryPage() {
   const [categoryId, setCategoryId]     = useState<string | null>(null);
   const [categoryActive, setCategoryActive] = useState(true);
   const [categoryTitle, setCategoryTitle] = useState(
-    categoryName
+    categorySlug === UNCATEGORIZED_CATEGORY_SLUG
+      ? 'Uncategorized'
+      : categoryName
       ? categoryName.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
       : 'Category'
   );
   const [products, setProducts]         = useState<ProductRow[]>([]);
   const [loading, setLoading]           = useState(true);
+  const [categoryNotFound, setCategoryNotFound] = useState(false);
   const [saving, setSaving]             = useState(false);
   const [searchQuery, setSearchQuery]   = useState('');
   const [sortBy, setSortBy]             = useState<'name' | 'stock' | 'revenue'>('name');
@@ -334,14 +388,28 @@ export default function ProductCategoryPage() {
   const [exportingCategory, setExportingCategory]     = useState(false);
   const [categoryOptions, setCategoryOptions]         = useState<ProductCategoryOption[]>([]);
 
-  // â”€â”€ Fetch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  useEffect(() => {
+    if (!categoryName) return;
+    const normalized = normalizeProductCategorySlugParam(categoryName);
+    if (normalized !== categoryName) {
+      const qs = branchFromQuery ? `?branch=${encodeURIComponent(branchFromQuery)}` : '';
+      navigate(`/products/category/${normalized}${qs}`, { replace: true });
+    }
+  }, [categoryName, branchFromQuery, navigate]);
+
+  // ── Fetch ─────────────────────────────────────────────────────────────────
   const fetchData = async () => {
     setLoading(true);
-    const { data: catData } = await supabase
+    setCategoryNotFound(false);
+    let catQ = supabase
       .from('product_categories')
       .select('id, name, is_active, branch, slug')
-      .eq('slug', categoryName)
-      .single();
+      .eq('slug', categorySlug);
+    if (categorySlug === UNCATEGORIZED_CATEGORY_SLUG) {
+      const branchFilter = branchFromQuery ?? inventoryBranch ?? branch ?? null;
+      if (branchFilter) catQ = catQ.eq('branch', branchFilter);
+    }
+    const { data: catData } = await catQ.maybeSingle();
 
     if (catData) {
       setCategoryId(catData.id);
@@ -349,18 +417,13 @@ export default function ProductCategoryPage() {
       setCategoryActive(catData.is_active !== false);
 
       const branchFilter = catData.branch ?? inventoryBranch ?? null;
-      let catQ = supabase
-        .from('product_categories')
-        .select('id, name, slug')
-        .order('sort_order', { ascending: true });
-      if (branchFilter) catQ = catQ.eq('branch', branchFilter);
-      const { data: allCats } = await catQ;
-      setCategoryOptions(allCats ?? []);
+      const options = await fetchBranchProductCategoryOptions(branchFilter);
+      setCategoryOptions(options);
 
       let q = supabase
         .from('products')
         .select(
-          `id, name, category_id, description, image_url, status, total_variants,
+          `id, name, category_id, family_code, description, image_url, status, total_variants,
            total_stock, avg_price, total_revenue, total_units_sold, branch,
            product_variants(id, is_hidden, total_stock, reorder_point,
              product_variant_stock(branch_id, quantity, branches(name)))`,
@@ -370,18 +433,23 @@ export default function ProductCategoryPage() {
       if (scopedProductIds) q = q.in('id', scopedProductIds);
       const { data: prodData } = await q;
       setProducts((prodData ?? []) as ProductRow[]);
+    } else {
+      setCategoryId(null);
+      setProducts([]);
+      setCategoryOptions([]);
+      setCategoryNotFound(true);
     }
     setLoading(false);
   };
 
-  useEffect(() => { fetchData(); }, [categoryName, inventoryBranch, scopedProductIds?.join('|') ?? '']);
+  useEffect(() => { void fetchData(); }, [categorySlug, branchFromQuery, inventoryBranch, branch, scopedProductIds?.join('|') ?? '']);
 
   // â”€â”€ Product CRUD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const handleEditProduct = (p: ProductRow, e: React.MouseEvent) => {
     e.stopPropagation();
     setEditingProduct({
       name: p.name,
-      familyCode: '',
+      familyCode: p.family_code?.trim() ?? '',
       description: p.description ?? '',
       imageUrl: p.image_url ?? '',
       category: categoryTitle,
@@ -408,14 +476,21 @@ export default function ProductCategoryPage() {
       if (isEditMode && editingProductId) {
         const oldRow = products.find(p => p.id === editingProductId);
         const nextCategoryId = formData.categoryId?.trim() || oldRow?.category_id || categoryId;
+        const nextFamilyCode = formData.familyCode.trim().toUpperCase() || null;
         const { error } = await supabase.from('products').update({
           name: formData.name.trim(),
+          family_code: nextFamilyCode,
           description: formData.description.trim() || null,
           image_url: formData.imageUrl || null,
           category_id: nextCategoryId,
           updated_at: new Date().toISOString(),
         }).eq('id', editingProductId);
-        if (error) throw error;
+        if (error) {
+          if (error.code === '23505') {
+            throw new Error('Family code already exists for this branch. Choose a different code.');
+          }
+          throw error;
+        }
         await insertProductLog(supabase, {
           productId: editingProductId,
           action: 'product_updated',
@@ -424,20 +499,24 @@ export default function ProductCategoryPage() {
           performedByRole: actorRole,
           oldValue: {
             name: oldRow?.name,
+            family_code: oldRow?.family_code ?? null,
             description: oldRow?.description ?? null,
             image_url: oldRow?.image_url ?? null,
             category_id: oldRow?.category_id ?? null,
           },
           newValue: {
             name: formData.name.trim(),
+            family_code: nextFamilyCode,
             description: formData.description.trim() || null,
             image_url: formData.imageUrl || null,
             category_id: nextCategoryId ?? null,
           },
         });
       } else {
+        const nextFamilyCode = formData.familyCode.trim().toUpperCase() || null;
         const { data: newProduct, error } = await supabase.from('products').insert({
           name: formData.name.trim(),
+          family_code: nextFamilyCode,
           description: formData.description.trim() || null,
           image_url: formData.imageUrl || null,
           category_id: categoryId,
@@ -445,7 +524,12 @@ export default function ProductCategoryPage() {
           status: 'Active',
           total_variants: 1,
         }).select('id').single();
-        if (error) throw error;
+        if (error) {
+          if (error.code === '23505') {
+            throw new Error('Family code already exists for this branch. Choose a different code.');
+          }
+          throw error;
+        }
         // Auto-create a default variant so the product page is usable immediately
         if (newProduct?.id) {
           const baseName = formData.name.trim().replace(/\s+/g, '-').toUpperCase().slice(0, 10);
@@ -469,6 +553,7 @@ export default function ProductCategoryPage() {
             performedByRole: actorRole,
             newValue: {
               name: formData.name.trim(),
+              family_code: nextFamilyCode,
               category_id: categoryId,
               branch: branch || null,
             },
@@ -544,6 +629,15 @@ export default function ProductCategoryPage() {
   // ── Render ──
   if (!perms.pageAccess) {
     return <ModuleAccessDenied moduleName="Products" />;
+  }
+
+  if (!loading && categoryNotFound) {
+    return (
+      <EntityNotFound
+        {...NOT_FOUND_COPY.productCategory}
+        description={`The product category "${categorySlug}" does not exist or may have been removed.`}
+      />
+    );
   }
 
   return (
@@ -716,7 +810,7 @@ export default function ProductCategoryPage() {
               )}
 
               <Card className="hover:shadow-xl transition-all duration-200 border-2 hover:border-red-500 h-full">
-                <Link to={`/products/category/${categoryName}/family/${p.id}`} className="block h-full">
+                <Link to={`/products/category/${categorySlug}/family/${p.id}${branchFromQuery ? `?branch=${encodeURIComponent(branchFromQuery)}` : ''}`} className="block h-full">
                 <CardContent className="p-0">
                   <div className="h-48 bg-gray-100 overflow-hidden border-b">
                     <img

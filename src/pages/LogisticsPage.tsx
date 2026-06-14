@@ -58,12 +58,6 @@ import {
   CalendarRange,
 } from 'lucide-react';
 import {
-  getTripsByBranch,
-  getVehiclesByBranch,
-  getDeliveriesByBranch,
-  getOrdersReadyByBranch,
-} from '@/src/mock/logisticsDashboard';
-import {
   fetchLogisticsOrderQueue,
   fetchTripsForBranch,
   createTripFromPlanning,
@@ -348,7 +342,7 @@ export function LogisticsPage() {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Could not load logistics data.';
       if (import.meta.env.DEV) console.error('[logistics] refresh failed:', err);
-      setScheduleTrips(getTripsByBranch(branch));
+      setScheduleTrips([]);
       setPlanningOrders([]);
       setLogisticsFromDb(false);
       setLogisticsLoadError(message);
@@ -484,11 +478,9 @@ export function LogisticsPage() {
     };
   }, [branch]);
 
-  const trips = logisticsFromDb ? scheduleTrips : getTripsByBranch(branch ?? '');
-  const vehicles = getVehiclesByBranch(branch ?? '');
-  const deliveries = getDeliveriesByBranch(branch ?? '');
-  const ordersReady = liveDispatch ? planningOrders : getOrdersReadyByBranch(branch ?? '');
-  const vehiclesForStats = fleetTrucks.length > 0 ? fleetTrucks : vehicles;
+  const trips = scheduleTrips;
+  const ordersReady = liveDispatch ? planningOrders : [];
+  const vehiclesForStats = fleetTrucks;
 
   const nextFourteenCalendarDays = useMemo(() => {
     const out: { date: string; day: string; dayNum: number; isToday: boolean }[] = [];
@@ -909,7 +901,7 @@ export function LogisticsPage() {
             <StatKpiCard label="Orders Ready" value={String(ordersReady.length)} tone="emerald" icon={<Package />} />
             <StatKpiCard
               label={isInterIsland ? 'Available Containers' : 'Available Trucks'}
-              value={String(vehiclesForStats.filter((v) => v.status === 'Available').length)}
+              value={fleetLoading ? '…' : String(vehiclesForStats.filter((v) => v.status === 'Available').length)}
               tone="teal"
               icon={<CheckCircle />}
             />
@@ -1627,7 +1619,7 @@ export function LogisticsPage() {
         <RoutePlanningView
           ordersReady={ordersReady}
           ordersLoading={ordersLoading}
-          vehicles={fleetTrucks.length > 0 ? fleetTrucks : vehicles}
+          vehicles={fleetTrucks}
           existingTrips={trips}
           drivers={planningDrivers}
           initialSelectedOrderIds={routePlanningPrefill.orderIds}
@@ -1661,8 +1653,7 @@ export function LogisticsPage() {
             }
             void refreshLogistics();
             void loadFleet();
-            const vehicleList = fleetTrucks.length > 0 ? fleetTrucks : vehicles;
-            const v = vehicleList.find((x) => x.id === vehicleId);
+            const v = fleetTrucks.find((x) => x.id === vehicleId);
             const sorted = [...new Set(scheduledDates.map((d) => d.trim().slice(0, 10)).filter(Boolean))].sort();
             const start = sorted[0] ?? '';
             const end = sorted.length > 1 ? sorted[sorted.length - 1] : undefined;

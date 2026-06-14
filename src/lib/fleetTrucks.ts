@@ -7,7 +7,7 @@ import type {
   TripHistoryRecord,
   CalendarBooking,
   TruckAlert,
-} from '@/src/mock/truckDetails';
+} from '@/src/types/fleet';
 
 // ─── Vehicle ↔ Trip sync ──────────────────────────────────────────────────────
 
