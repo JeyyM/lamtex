@@ -5805,7 +5805,7 @@ export function OrderDetailPage() {
           customerName={order.customer}
           orderAmount={order.totalAmount}
           onClose={() => setShowCancelModal(false)}
-          onConfirm={(data) => void handleCancelOrder(data)}
+          onConfirm={handleCancelOrder}
         />
       )}
 

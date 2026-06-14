@@ -431,13 +431,15 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
     const now = new Date().toISOString();
     const actorName = employeeName || session?.user?.email || role;
 
-    // Cancel in DB
-    await supabase.from('orders').update({
+    const { error: orderErr } = await supabase.from('orders').update({
       status: 'Cancelled',
       cancelled_at: now,
       cancellation_reason: data.reason,
       updated_at: now,
     }).eq('id', orderId);
+    if (orderErr) {
+      throw new Error(`Failed to cancel order: ${orderErr.message}`);
+    }
 
     // Return stock if requested — only if items were already shipped (In Transit or later)
     if (data.restockItems) {
@@ -506,14 +508,12 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
       if (ok) onTripStatusChange?.(trip.id, 'Complete');
     }
 
-    void notifyOrderCancelledFromTrip(orderId, {
+    await notifyOrderCancelledFromTrip(orderId, {
       cancelledBy: actorName,
       cancellationReason: data.reason,
       additionalNotes: data.additionalNotes ?? null,
       tripNumber: trip.tripNumber,
       notifyCustomer: data.notifyCustomer,
-    }).catch((notifyErr) => {
-      if (import.meta.env.DEV) console.warn('[trip] cancellation notification failed:', notifyErr);
     });
 
     setCancelTarget(null);
@@ -1252,7 +1252,7 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
           customerName={cancelTarget.customer}
           orderAmount={cancelTarget.totalAmount}
           onClose={() => setCancelTarget(null)}
-          onConfirm={(data) => void handleCancelOrderInTrip(data)}
+          onConfirm={handleCancelOrderInTrip}
         />
       )}
 

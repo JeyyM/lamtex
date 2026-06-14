@@ -14,7 +14,7 @@ interface CancelOrderModalProps {
   customerName: string;
   orderAmount: number;
   onClose: () => void;
-  onConfirm: (cancellationData: CancellationData) => void;
+  onConfirm: (cancellationData: CancellationData) => void | Promise<void>;
 }
 
 export interface CancellationData {
@@ -47,7 +47,7 @@ export function CancelOrderModal({
   const [additionalNotes, setAdditionalNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     let refundAmount = 0;
@@ -84,8 +84,14 @@ export function CancelOrderModal({
       cancellationDate: new Date().toISOString(),
     };
 
-    onConfirm(cancellationData);
-    setIsSubmitting(false);
+    try {
+      await onConfirm(cancellationData);
+    } catch (err) {
+      console.warn('[CancelOrderModal] cancellation failed', err);
+      alert(err instanceof Error ? err.message : 'Could not cancel order. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -105,8 +111,11 @@ export function CancelOrderModal({
               </div>
             </div>
             <button
+              type="button"
               onClick={onClose}
-              className="p-2 hover:bg-red-100 rounded-lg transition-colors"
+              disabled={isSubmitting}
+              className="p-2 hover:bg-red-100 rounded-lg transition-colors disabled:opacity-50 disabled:pointer-events-none"
+              aria-label="Close"
             >
               <X className="w-5 h-5 text-red-600" />
             </button>
@@ -170,6 +179,7 @@ export function CancelOrderModal({
                   type="checkbox"
                   id="refundRequired"
                   checked={refundRequired}
+                  disabled={isSubmitting}
                   onChange={(e) => {
                     const on = e.target.checked;
                     setRefundRequired(on);
@@ -193,6 +203,7 @@ export function CancelOrderModal({
                       type="text"
                       inputMode="decimal"
                       value={refundAmountStr}
+                      disabled={isSubmitting}
                       onChange={(e) => setRefundAmountStr(e.target.value)}
                       placeholder="0.00"
                       className="w-full pl-8 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
@@ -211,6 +222,7 @@ export function CancelOrderModal({
                 type="checkbox"
                 id="restockItems"
                 checked={restockItems}
+                disabled={isSubmitting}
                 onChange={(e) => setRestockItems(e.target.checked)}
                 className="w-4 h-4 text-red-600 border-gray-300 rounded focus:ring-red-500"
               />
@@ -228,6 +240,7 @@ export function CancelOrderModal({
                 type="checkbox"
                 id="notifyCustomer"
                 checked={notifyCustomer}
+                disabled={isSubmitting}
                 onChange={(e) => setNotifyCustomer(e.target.checked)}
                 className="w-4 h-4 text-red-600 border-gray-300 rounded focus:ring-red-500"
               />
@@ -244,6 +257,7 @@ export function CancelOrderModal({
               </label>
               <textarea
                 value={additionalNotes}
+                disabled={isSubmitting}
                 onChange={(e) => setAdditionalNotes(e.target.value)}
                 rows={4}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
