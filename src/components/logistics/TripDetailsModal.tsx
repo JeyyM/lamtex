@@ -114,6 +114,7 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
     }
     return lowestSt;
   }, [orderStatuses, trip.status]);
+  const tripIsCancelled = trip.status === 'Cancelled';
 
   // In Transit modal state
   const [showInTransitModal, setShowInTransitModal] = useState(false);
@@ -765,7 +766,7 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2 shrink-0">
-            {allOrdersReadyForInTransit && (
+            {allOrdersReadyForInTransit && !tripIsCancelled && (
               <Button
                 type="button"
                 onClick={() => void handleMarkAllInTransit()}
@@ -806,12 +807,14 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
                 Report Delay
               </Button>
             )}
-            <PermissionGate when={logisticsPerms.pageAccess}>
-              <Button onClick={onEdit} variant="outline" size="sm" className="hidden sm:inline-flex">
-                <Edit className="w-4 h-4 mr-2" />
-                Edit Trip Info
-              </Button>
-            </PermissionGate>
+            {!tripIsCancelled && (
+              <PermissionGate when={logisticsPerms.pageAccess}>
+                <Button onClick={onEdit} variant="outline" size="sm" className="hidden sm:inline-flex">
+                  <Edit className="w-4 h-4 mr-2" />
+                  Edit Trip Info
+                </Button>
+              </PermissionGate>
+            )}
             <button
               onClick={onClose}
               className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
@@ -935,6 +938,8 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
                           <Badge variant={order.status === 'Approved' || order.status === 'Ready' ? 'success' : order.status === 'Loading' || order.status === 'Packed' ? 'warning' : 'default'}>
                             {orderStatuses[order.id] ?? order.status}
                           </Badge>
+                          {!tripIsCancelled && (
+                          <>
                           {/* Advance Scheduled → Loading → Packed */}
                           {(() => {
                             const current = String(orderStatuses[order.id] ?? order.status ?? '').trim();
@@ -1019,6 +1024,8 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
                               <Ban className="w-3.5 h-3.5" />
                               Cancel Order
                             </button>
+                          )}
+                          </>
                           )}
                         </div>
                       </div>
@@ -1236,12 +1243,14 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
               <Button variant="outline" onClick={onClose} className="w-full sm:w-auto justify-center">
                 Close
               </Button>
-              <PermissionGate when={logisticsPerms.pageAccess}>
-                <Button variant="primary" onClick={onEdit} className="w-full sm:w-auto justify-center">
-                  <Edit className="w-4 h-4 mr-2" />
-                  Edit Trip Details
-                </Button>
-              </PermissionGate>
+              {!tripIsCancelled && (
+                <PermissionGate when={logisticsPerms.pageAccess}>
+                  <Button variant="primary" onClick={onEdit} className="w-full sm:w-auto justify-center">
+                    <Edit className="w-4 h-4 mr-2" />
+                    Edit Trip Details
+                  </Button>
+                </PermissionGate>
+              )}
             </div>
           </div>
         </div>
