@@ -127,6 +127,12 @@ const ORDER_PROOF_UPLOAD_EXT =
 
 const ORDER_URGENCY_OPTIONS: OrderUrgency[] = ['Low', 'Medium', 'High', 'Critical'];
 const ORDER_DELIVERY_TYPE_OPTIONS: DeliveryType[] = ['Truck', 'Ship'];
+
+/** YYYY-MM-DD for `<input type="date">` from DATE or timestamptz strings. */
+function orderCalendarDate(value: string | null | undefined): string {
+  if (value == null || String(value).trim() === '') return '';
+  return String(value).slice(0, 10);
+}
 const ORDER_PAYMENT_TERMS_OPTIONS: PaymentTerms[] = [
   'COD',
   '15 Days',
@@ -579,7 +585,9 @@ export function OrderDetailPage() {
         scheduledDepartureDate: (row as any).scheduled_departure_date
           ? String((row as any).scheduled_departure_date).slice(0, 10)
           : undefined,
-        actualDelivery: (row as any).actual_delivery,
+        actualDelivery: (row as any).actual_delivery
+          ? orderCalendarDate(String((row as any).actual_delivery))
+          : undefined,
         invoiceId: (row as any).invoice_id,
         invoiceDate: (row as any).invoice_date,
         dueDate: (row as any).due_date,
@@ -1961,7 +1969,7 @@ export function OrderDetailPage() {
 
     const persistedDueDate = deriveOrderDueDateForPersistence({
       order_date: editedOrder.orderDate,
-      actual_delivery: editedOrder.actualDelivery ?? null,
+      actual_delivery: orderCalendarDate(editedOrder.actualDelivery) || null,
       payment_terms: editedOrder.paymentTerms,
       customer_payment_terms: customerDefaultTerms,
     });
@@ -1992,7 +2000,7 @@ export function OrderDetailPage() {
         delivery_type: editedOrder.deliveryType,
         payment_terms: editedOrder.paymentTerms,
         payment_method: editedOrder.paymentMethod,
-        actual_delivery: editedOrder.actualDelivery || null,
+        actual_delivery: orderCalendarDate(editedOrder.actualDelivery) || null,
         customer_id: editedOrder.customerId || null,
         customer_name: editedOrder.customer?.trim() ? editedOrder.customer : null,
         branch_id: branchIdToSave,
@@ -2232,6 +2240,7 @@ export function OrderDetailPage() {
       amountPaid: savedPay.amountPaid,
       balanceDue: savedPay.balanceDue,
       dueDate: persistedDueDate ?? editedOrder.dueDate,
+      actualDelivery: orderCalendarDate(editedOrder.actualDelivery) || undefined,
       scheduledDepartureDate: clearScheduledDeparture ? undefined : editedOrder.scheduledDepartureDate,
       items: savedItems,
     });
@@ -4258,12 +4267,23 @@ export function OrderDetailPage() {
                   <span className="font-medium text-gray-900">{order.urgency ?? 'Medium'}</span>
                 )}
               </div>
-              {order.actualDelivery && (
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Actual Delivery:</span>
-                  <span className="font-medium text-gray-900">{order.actualDelivery}</span>
-                </div>
-              )}
+              <div className="flex flex-col gap-1 sm:flex-row sm:justify-between sm:items-center">
+                <span className="text-gray-600">Actual Delivery:</span>
+                {isEditing && editedOrder ? (
+                  <input
+                    type="date"
+                    className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm font-medium text-gray-900 w-full sm:w-auto max-w-[12rem]"
+                    value={orderCalendarDate(editedOrder.actualDelivery)}
+                    onChange={(e) =>
+                      patchEditedOrder({ actualDelivery: e.target.value || undefined })
+                    }
+                  />
+                ) : (
+                  <span className="font-medium text-gray-900">
+                    {orderCalendarDate(order.actualDelivery) || '—'}
+                  </span>
+                )}
+              </div>
               <div className="flex flex-col gap-1 sm:flex-row sm:justify-between sm:items-center">
                 <span className="text-gray-600">Delivery Type:</span>
                 {isEditing && editedOrder && canEditOrderDeliveryFields ? (
