@@ -1038,6 +1038,12 @@ CREATE TABLE IF NOT EXISTS employee_settings_permissions (
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS employee_notification_preferences (
+  employee_id   UUID PRIMARY KEY REFERENCES employees(id) ON DELETE CASCADE,
+  preferences   JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Add FK from BOM table to raw_materials
 DO $$ BEGIN
   ALTER TABLE product_variant_raw_materials
@@ -3530,6 +3536,7 @@ CREATE INDEX IF NOT EXISTS idx_employee_employees_permissions_updated ON employe
 CREATE INDEX IF NOT EXISTS idx_employee_agent_analytics_permissions_updated ON employee_agent_analytics_permissions(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_employee_reports_permissions_updated ON employee_reports_permissions(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_employee_settings_permissions_updated ON employee_settings_permissions(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_employee_notification_preferences_updated ON employee_notification_preferences(updated_at DESC);
 
 ALTER TABLE employee_product_assignments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE employee_material_assignments ENABLE ROW LEVEL SECURITY;
@@ -3548,6 +3555,7 @@ ALTER TABLE employee_employees_permissions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE employee_agent_analytics_permissions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE employee_reports_permissions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE employee_settings_permissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE employee_notification_preferences ENABLE ROW LEVEL SECURITY;
 
 DO $$
 DECLARE
@@ -3570,7 +3578,8 @@ BEGIN
     'employee_employees_permissions',
     'employee_agent_analytics_permissions',
     'employee_reports_permissions',
-    'employee_settings_permissions'
+    'employee_settings_permissions',
+    'employee_notification_preferences'
   ]
   LOOP
     BEGIN
@@ -8579,6 +8588,81 @@ GRANT EXECUTE ON FUNCTION notify_trip_delayed(UUID, TEXT, TEXT) TO authenticated
 
 COMMENT ON FUNCTION notify_trip_delayed(UUID, TEXT, TEXT) IS
   'Notify branch logistics and assigned agents when a trip is delayed (skips delivered/partially fulfilled/completed/cancelled orders).';
+
+CREATE OR REPLACE FUNCTION employee_notification_in_app_enabled(
+  p_employee_id UUID,
+  p_event_type TEXT
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  pref JSONB;
+  val TEXT;
+BEGIN
+  IF p_employee_id IS NULL OR p_event_type IS NULL OR trim(p_event_type) = '' THEN
+    RETURN TRUE;
+  END IF;
+
+  SELECT preferences INTO pref
+  FROM employee_notification_preferences
+  WHERE employee_id = p_employee_id;
+
+  IF pref IS NULL OR NOT (pref ? p_event_type) THEN
+    RETURN TRUE;
+  END IF;
+
+  val := pref -> p_event_type ->> 'in_app';
+  IF val IS NULL THEN
+    RETURN TRUE;
+  END IF;
+
+  RETURN val::boolean;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION employee_notification_in_app_enabled(UUID, TEXT) TO authenticated;
+
+CREATE OR REPLACE FUNCTION trg_notifications_respect_in_app_preferences()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  emp_id UUID;
+BEGIN
+  IF NEW.user_id IS NULL OR NEW.event_type IS NULL OR trim(NEW.event_type) = '' THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT e.id INTO emp_id
+  FROM employees e
+  WHERE e.auth_user_id = NEW.user_id
+    AND e.status = 'active'::employee_status
+  LIMIT 1;
+
+  IF emp_id IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  IF NOT employee_notification_in_app_enabled(emp_id, trim(NEW.event_type)) THEN
+    RETURN NULL;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS notifications_respect_in_app_preferences ON notifications;
+
+CREATE TRIGGER notifications_respect_in_app_preferences
+  BEFORE INSERT ON notifications
+  FOR EACH ROW
+  EXECUTE FUNCTION trg_notifications_respect_in_app_preferences();
 
 CREATE OR REPLACE FUNCTION notify_order_unscheduled_from_trip(
   p_order_id UUID,

@@ -1,0 +1,286 @@
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Bell, Loader2, Mail, RotateCcw, Save, XCircle } from 'lucide-react';
+import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
+import { Button } from '@/src/components/ui/Button';
+import { useAppContext } from '@/src/store/AppContext';
+import type { UserRole } from '@/src/types';
+import {
+  catalogItemsForRoles,
+  defaultNotificationPrefsForRoles,
+  groupCatalogItems,
+  mergeNotificationPrefs,
+  notificationPrefsEqual,
+  type NotificationCatalogItem,
+  type NotificationChannel,
+} from '@/src/lib/notifications/notificationCatalog';
+import {
+  fetchEmployeeNotificationPreferences,
+  saveEmployeeNotificationPreferences,
+  setNotificationPrefChannel,
+  type NotificationPreferencesMap,
+} from '@/src/lib/notifications/notificationPreferences';
+
+function Toggle({
+  checked,
+  disabled,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (next: boolean) => void;
+  label: string;
+}) {
+  return (
+    <label className="relative inline-flex items-center cursor-pointer shrink-0" title={label}>
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+        className="sr-only peer"
+        aria-label={label}
+      />
+      <div className="w-10 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-red-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-red-600 peer-disabled:opacity-50" />
+    </label>
+  );
+}
+
+function NotificationRow({
+  entry,
+  prefs,
+  disabled,
+  onChange,
+}: {
+  entry: NotificationCatalogItem;
+  prefs: NotificationPreferencesMap;
+  disabled: boolean;
+  onChange: (key: string, channel: NotificationChannel, enabled: boolean) => void;
+}) {
+  const row = prefs[entry.key] ?? { in_app: true, email: true };
+
+  return (
+    <div className="flex flex-col gap-3 p-4 bg-gray-50 rounded-lg sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0 flex-1">
+        <p className="font-medium text-gray-900">{entry.label}</p>
+        <p className="text-sm text-gray-500 mt-1">{entry.description}</p>
+      </div>
+      <div className="flex items-center gap-6 shrink-0">
+        {entry.supports.in_app && (
+          <div className="flex items-center gap-2">
+            <Bell className="w-4 h-4 text-gray-500" aria-hidden />
+            <span className="text-xs font-medium text-gray-600 w-12">In-app</span>
+            <Toggle
+              checked={row.in_app}
+              disabled={disabled}
+              label={`${entry.label} in-app`}
+              onChange={(next) => onChange(entry.key, 'in_app', next)}
+            />
+          </div>
+        )}
+        {entry.supports.email && (
+          <div className="flex items-center gap-2">
+            <Mail className="w-4 h-4 text-gray-500" aria-hidden />
+            <span className="text-xs font-medium text-gray-600 w-12">Email</span>
+            <Toggle
+              checked={row.email}
+              disabled={disabled}
+              label={`${entry.label} email`}
+              onChange={(next) => onChange(entry.key, 'email', next)}
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function SettingsNotificationsTab({
+  addAuditLog,
+}: {
+  addAuditLog: (action: string, entityType: string, details?: string) => void;
+}) {
+  const { employeeId, role, assignableDashboardRoles, isExecutiveUser } = useAppContext();
+
+  const roles = useMemo<UserRole[]>(() => {
+    const fromAssignable = (assignableDashboardRoles ?? []).filter(Boolean) as UserRole[];
+    if (fromAssignable.length) return [...new Set(fromAssignable)];
+    if (role) return [role as UserRole];
+    return isExecutiveUser ? (['Executive'] as UserRole[]) : [];
+  }, [assignableDashboardRoles, role, isExecutiveUser]);
+
+  const catalogItems = useMemo(() => catalogItemsForRoles(roles), [roles]);
+  const grouped = useMemo(() => groupCatalogItems(catalogItems), [catalogItems]);
+  const defaultPrefs = useMemo(() => defaultNotificationPrefsForRoles(roles), [roles]);
+
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [prefs, setPrefs] = useState<NotificationPreferencesMap>(() =>
+    mergeNotificationPrefs(roles, null),
+  );
+  const [savedPrefs, setSavedPrefs] = useState<NotificationPreferencesMap>(() =>
+    mergeNotificationPrefs(roles, null),
+  );
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    if (!employeeId) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const merged = await fetchEmployeeNotificationPreferences(employeeId, roles);
+      setPrefs(merged);
+      setSavedPrefs(merged);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not load notification preferences.');
+    } finally {
+      setLoading(false);
+    }
+  }, [employeeId, roles]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const dirty = !notificationPrefsEqual(prefs, savedPrefs);
+  const atDefaults = notificationPrefsEqual(prefs, defaultPrefs);
+
+  const handleChange = (key: string, channel: NotificationChannel, enabled: boolean) => {
+    setPrefs((prev) => setNotificationPrefChannel(prev, key, channel, enabled));
+  };
+
+  const handleResetToDefaults = () => {
+    setPrefs(defaultPrefs);
+    setError(null);
+  };
+
+  const handleCancel = () => {
+    setPrefs(savedPrefs);
+    setError(null);
+  };
+
+  const handleSave = async () => {
+    if (!employeeId) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await saveEmployeeNotificationPreferences(employeeId, prefs);
+      setSavedPrefs(prefs);
+      addAuditLog('Updated notification preferences', 'Settings');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not save notification preferences.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!employeeId) {
+    return (
+      <Card>
+        <CardContent className="py-8 text-sm text-gray-500">
+          Sign in with a linked employee account to manage notification preferences.
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Bell className="w-5 h-5 text-red-600" />
+            Notification preferences
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <p className="text-sm text-gray-600 leading-relaxed">
+            Control which notifications you receive by email and in the app bell. Defaults match
+            your role&apos;s current setup. Customer emails are always sent and cannot be turned off
+            here.
+          </p>
+
+          {error && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+              {error}
+            </div>
+          )}
+
+          {loading ? (
+            <div className="flex items-center justify-center gap-2 py-12 text-gray-500">
+              <Loader2 className="w-5 h-5 animate-spin" />
+              Loading preferences…
+            </div>
+          ) : catalogItems.length === 0 ? (
+            <p className="text-sm text-gray-500 py-6">No configurable notifications for your role.</p>
+          ) : (
+            <div className="space-y-8">
+              {[...grouped.entries()].map(([group, items]) => (
+                <div key={group} className="space-y-3">
+                  <h3 className="font-semibold text-gray-900 border-b border-gray-200 pb-2">{group}</h3>
+                  <div className="space-y-3">
+                    {items.map((entry) => (
+                      <NotificationRow
+                        key={entry.key}
+                        entry={entry}
+                        prefs={prefs}
+                        disabled={saving}
+                        onChange={handleChange}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3 pt-4 border-t border-gray-200">
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full sm:w-auto"
+              disabled={saving || loading || atDefaults}
+              onClick={handleResetToDefaults}
+            >
+              <RotateCcw className="w-4 h-4 mr-2" />
+              Reset to defaults
+            </Button>
+            <div className="flex flex-col-reverse sm:flex-row gap-3">
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full sm:w-auto"
+              disabled={saving || loading || !dirty}
+              onClick={handleCancel}
+            >
+              <XCircle className="w-4 h-4 mr-2" />
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              className="bg-red-600 hover:bg-red-700 w-full sm:w-auto"
+              disabled={saving || loading || !dirty}
+              onClick={() => void handleSave()}
+            >
+              {saving ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Saving…
+                </>
+              ) : (
+                <>
+                  <Save className="w-4 h-4 mr-2" />
+                  Save preferences
+                </>
+              )}
+            </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}

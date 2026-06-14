@@ -1,6 +1,11 @@
 import { formatDistanceToNow } from 'date-fns';
 import { computeProofCommissionForClientType, computeDueDateFromDelivery, formatDateOnlyLocal } from '@/src/lib/financeData';
 import { notifyFetch } from '@/src/lib/notifyApi';
+import {
+  filterStaffEmailsByNotificationPref,
+  isStaffEmailEnabledForNotification,
+} from '@/src/lib/notifications/notificationPreferences';
+import type { NotificationPrefKey } from '@/src/lib/notifications/notificationCatalog';
 import { ensureOrderCustomerPortal, recordOrderPortalEmailSent } from '@/src/lib/orderCustomerPortal';
 import { supabase } from '@/src/lib/supabase';
 import type { OrderDetail } from '@/src/types/orders';
@@ -204,7 +209,20 @@ export async function notifyExecutivesOrderCreated(payload: OrderCreatedNotifyPa
     throw rpcError;
   }
 
-  await sendOrderNotificationEmail('/api/notifications/order-created', payload);
+  await sendExecutiveOrderNotificationEmailIfEnabled(
+    'order_created',
+    '/api/notifications/order-created',
+    payload,
+  );
+}
+
+async function sendExecutiveOrderNotificationEmailIfEnabled(
+  prefKey: NotificationPrefKey,
+  endpoint: string,
+  payload: object,
+): Promise<void> {
+  if (!(await shouldSendExecutiveEmail(prefKey))) return;
+  await sendOrderNotificationEmail(endpoint, payload);
 }
 
 export async function notifyExecutivesOrderSubmittedForApproval(
@@ -226,7 +244,11 @@ export async function notifyExecutivesOrderSubmittedForApproval(
     insertedCount: parseNotificationRpcCount(data),
   });
 
-  await sendOrderNotificationEmail('/api/notifications/order-submitted-for-approval', payload);
+  await sendExecutiveOrderNotificationEmailIfEnabled(
+    'order_submitted_for_approval',
+    '/api/notifications/order-submitted-for-approval',
+    payload,
+  );
 }
 
 const PO_NOTIFY_LOG = '[PO notifications]';
@@ -458,7 +480,10 @@ async function buildPurchaseOrderRejectedNotifyPayload(
   const base = await fetchPurchaseOrderSnapshotForNotify(poId);
   if (!base) return null;
 
-  const submitterEmail = await fetchPurchaseOrderSubmitterEmail(poId);
+  const submitterEmail = await filterEmailByNotificationPref(
+    await fetchPurchaseOrderSubmitterEmail(poId),
+    'purchase_order_rejected',
+  );
   return {
     ...base,
     status: 'Rejected',
@@ -522,7 +547,7 @@ export async function notifyExecutivesPurchaseOrderSubmittedForApproval(
   }
 
   const emailPayload = await fetchPurchaseOrderSnapshotForNotify(poId);
-  if (emailPayload) {
+  if (emailPayload && (await shouldSendExecutiveEmail('purchase_order_submitted_for_approval'))) {
     await sendPurchaseOrderNotificationEmail(
       '/api/notifications/purchase-order-submitted-for-approval',
       emailPayload,
@@ -590,7 +615,10 @@ async function buildPurchaseOrderAcceptedNotifyPayload(
   const base = await fetchPurchaseOrderSnapshotForNotify(poId);
   if (!base) return null;
 
-  const submitterEmail = await fetchPurchaseOrderSubmitterEmail(poId);
+  const submitterEmail = await filterEmailByNotificationPref(
+    await fetchPurchaseOrderSubmitterEmail(poId),
+    'purchase_order_accepted',
+  );
   return {
     ...base,
     status: 'Accepted',
@@ -675,7 +703,7 @@ async function buildPurchaseOrderConfirmedNotifyPayload(
   if (!base) return null;
 
   const role = audience === 'warehouse' ? 'Warehouse' : 'Executive';
-  const recipientEmails = await fetchActiveEmployeeEmails(role);
+  const recipientEmails = await fetchActiveEmployeeEmails(role, 'purchase_order_confirmed');
   return {
     ...base,
     status: 'Confirmed',
@@ -773,7 +801,10 @@ async function buildPurchaseOrderCancelledNotifyPayload(
   const base = await fetchPurchaseOrderSnapshotForNotify(poId);
   if (!base) return null;
 
-  const submitterEmail = await fetchPurchaseOrderSubmitterEmail(poId);
+  const submitterEmail = await filterEmailByNotificationPref(
+    await fetchPurchaseOrderSubmitterEmail(poId),
+    'purchase_order_cancelled',
+  );
   return {
     ...base,
     status: 'Cancelled',
@@ -1083,7 +1114,7 @@ export async function notifyExecutivesProductionRequestSubmittedForApproval(
   }
 
   const emailPayload = await fetchProductionRequestSnapshotForNotify(prId);
-  if (emailPayload) {
+  if (emailPayload && (await shouldSendExecutiveEmail('production_request_submitted_for_approval'))) {
     await sendProductionRequestNotificationEmail(
       '/api/notifications/production-request-submitted-for-approval',
       emailPayload,
@@ -1133,7 +1164,10 @@ export async function notifyProductionRequestSubmitterCancelled(
 
   const base = await fetchProductionRequestSnapshotForNotify(prId);
   if (base) {
-    const submitterEmail = await fetchProductionRequestSubmitterEmail(prId);
+    const submitterEmail = await filterEmailByNotificationPref(
+      await fetchProductionRequestSubmitterEmail(prId),
+      'production_request_cancelled',
+    );
     const emailPayload: ProductionRequestCancelledNotifyPayload = {
       ...base,
       status: 'Cancelled',
@@ -1184,7 +1218,10 @@ export async function notifyProductionRequestSubmitterAccepted(
 
   const base = await fetchProductionRequestSnapshotForNotify(prId);
   if (base) {
-    const submitterEmail = await fetchProductionRequestSubmitterEmail(prId);
+    const submitterEmail = await filterEmailByNotificationPref(
+      await fetchProductionRequestSubmitterEmail(prId),
+      'production_request_accepted',
+    );
     const emailPayload: ProductionRequestAcceptedNotifyPayload = {
       ...base,
       status: 'Accepted',
@@ -1237,7 +1274,10 @@ export async function notifyProductionRequestSubmitterRejected(
 
   const base = await fetchProductionRequestSnapshotForNotify(prId);
   if (base) {
-    const submitterEmail = await fetchProductionRequestSubmitterEmail(prId);
+    const submitterEmail = await filterEmailByNotificationPref(
+      await fetchProductionRequestSubmitterEmail(prId),
+      'production_request_rejected',
+    );
     const emailPayload: ProductionRequestRejectedNotifyPayload = {
       ...base,
       status: 'Rejected',
@@ -1255,7 +1295,7 @@ export async function notifyProductionRequestSubmitterRejected(
   return count;
 }
 
-async function fetchEmailsForRoles(roles: string[]): Promise<string[]> {
+async function fetchEmailsForRoles(roles: string[], prefKey?: NotificationPrefKey): Promise<string[]> {
   const { data, error } = await supabase
     .from('employees')
     .select('email, user_role, status')
@@ -1265,14 +1305,22 @@ async function fetchEmailsForRoles(roles: string[]): Promise<string[]> {
     console.warn(`${PR_NOTIFY_LOG} Could not load emails for roles ${roles.join(', ')}`, error);
     return [];
   }
-  const emails = (data ?? [])
-    .map((e) => e.email?.trim())
-    .filter((e): e is string => !!e);
-  return [...new Set(emails)];
+  const emails = [...new Set(
+    (data ?? [])
+      .map((e) => e.email?.trim())
+      .filter((e): e is string => !!e),
+  )];
+  if (!prefKey) return emails;
+  return filterStaffEmailsByNotificationPref(prefKey, emails);
 }
 
-function fetchWarehouseAndExecutiveEmails(): Promise<string[]> {
-  return fetchEmailsForRoles(['Warehouse', 'Executive']);
+async function shouldSendExecutiveEmail(prefKey: NotificationPrefKey): Promise<boolean> {
+  const emails = await fetchEmailsForRoles(['Executive'], prefKey);
+  return emails.length > 0;
+}
+
+function fetchWarehouseAndExecutiveEmails(prefKey: NotificationPrefKey): Promise<string[]> {
+  return fetchEmailsForRoles(['Warehouse', 'Executive'], prefKey);
 }
 
 /** Production started: notify all active warehouse staff + executives, and email them. */
@@ -1305,7 +1353,7 @@ export async function notifyWarehouseAndExecutivesProductionRequestStarted(
 
   const base = await fetchProductionRequestSnapshotForNotify(prId);
   if (base) {
-    const recipientEmails = await fetchWarehouseAndExecutiveEmails();
+    const recipientEmails = await fetchWarehouseAndExecutiveEmails('production_request_started');
     const emailPayload: ProductionRequestStartedNotifyPayload = {
       ...base,
       status: 'In Progress',
@@ -1354,7 +1402,7 @@ export async function notifyWarehouseProductionRequestInventoryAdded(
 
   const base = await fetchProductionRequestSnapshotForNotify(prId);
   if (base) {
-    const recipientEmails = await fetchEmailsForRoles(['Warehouse']);
+    const recipientEmails = await fetchEmailsForRoles(['Warehouse'], 'production_request_inventory_added');
     const producedQuantity = base.items.reduce((sum, item) => sum + (Number(item.quantityCompleted) || 0), 0);
     const emailPayload: ProductionRequestInventoryAddedNotifyPayload = {
       ...base,
@@ -1403,7 +1451,7 @@ export async function notifyWarehouseAndExecutivesProductionRequestCompleted(
 
   const base = await fetchProductionRequestSnapshotForNotify(prId);
   if (base) {
-    const recipientEmails = await fetchWarehouseAndExecutiveEmails();
+    const recipientEmails = await fetchWarehouseAndExecutiveEmails('production_request_started');
     const producedQuantity = base.items.reduce((sum, item) => sum + (Number(item.quantityCompleted) || 0), 0);
     const emailPayload: ProductionRequestCompletedNotifyPayload = {
       ...base,
@@ -1452,7 +1500,7 @@ async function buildPurchaseOrderReceivedNotifyPayload(
   if (!base) return null;
   const { quantityReceived, quantityOrdered } = await fetchPoReceiveTotals(poId);
   const role = audience === 'warehouse' ? 'Warehouse' : 'Executive';
-  const recipientEmails = await fetchActiveEmployeeEmails(role);
+  const recipientEmails = await fetchActiveEmployeeEmails(role, 'purchase_order_received');
   return {
     ...base,
     receivedBy,
@@ -1544,7 +1592,7 @@ async function buildPurchaseOrderPaymentRecordedNotifyPayload(
   const paymentStatus = String(poRow?.payment_status ?? 'Unpaid');
   const paidInFull = amountPaid >= totalAmount && totalAmount > 0;
 
-  const recipientEmails = await fetchActiveEmployeeEmails('Executive');
+  const recipientEmails = await fetchActiveEmployeeEmails('Executive', 'purchase_order_payment_recorded');
   return {
     ...base,
     recordedBy,
@@ -1664,7 +1712,11 @@ export async function notifyExecutivesOrderRevised(payload: OrderRevisedNotifyPa
     throw rpcError;
   }
 
-  await sendOrderNotificationEmail('/api/notifications/order-revised', payload);
+  await sendExecutiveOrderNotificationEmailIfEnabled(
+    'order_revised',
+    '/api/notifications/order-revised',
+    payload,
+  );
 }
 
 async function fetchAgentEmail(agentId: string): Promise<string | null> {
@@ -1680,7 +1732,20 @@ async function fetchAgentEmail(agentId: string): Promise<string | null> {
   return data?.email?.trim() || null;
 }
 
-async function fetchBranchLogisticsEmails(branchId: string): Promise<string[]> {
+async function fetchAgentEmailForNotify(
+  agentId: string,
+  prefKey: NotificationPrefKey,
+): Promise<string | null> {
+  const email = await fetchAgentEmail(agentId);
+  if (!email) return null;
+  const ok = await isStaffEmailEnabledForNotification(email, prefKey);
+  return ok ? email : null;
+}
+
+async function fetchBranchLogisticsEmails(
+  branchId: string,
+  prefKey?: NotificationPrefKey,
+): Promise<string[]> {
   const { data, error } = await supabase
     .from('employees')
     .select('email')
@@ -1691,12 +1756,57 @@ async function fetchBranchLogisticsEmails(branchId: string): Promise<string[]> {
     console.warn('[notifications] Could not load logistics emails', error);
     return [];
   }
-  return (data ?? [])
+  const emails = (data ?? [])
     .map((row) => (row as { email?: string | null }).email?.trim())
     .filter((email): email is string => Boolean(email));
+  if (!prefKey) return emails;
+  return filterStaffEmailsByNotificationPref(prefKey, emails);
 }
 
-async function fetchBranchWarehouseEmails(branchId: string): Promise<string[]> {
+async function fetchEmployeeEmailForNotify(
+  employeeId: string,
+  prefKey: NotificationPrefKey,
+): Promise<string | null> {
+  const contact = await fetchEmployeeNotifyContact(employeeId);
+  if (!contact.email) return null;
+  const ok = await isStaffEmailEnabledForNotification(contact.email, prefKey);
+  return ok ? contact.email : null;
+}
+
+function orderProofUploadPrefKey(proofType: 'delivery' | 'other' | 'payment'): NotificationPrefKey {
+  if (proofType === 'payment') return 'order_payment_proof_uploaded';
+  if (proofType === 'other') return 'order_other_proof_uploaded';
+  return 'order_delivery_proof_uploaded';
+}
+
+function productStockAlertPrefKey(severity: ProductStockAlertSeverity): NotificationPrefKey {
+  return severity === 'out_of_stock' ? 'product_out_of_stock' : 'product_below_reorder_point';
+}
+
+function materialStockAlertPrefKey(severity: MaterialStockAlertSeverity): NotificationPrefKey {
+  return severity === 'out_of_stock' ? 'material_out_of_stock' : 'material_below_reorder_point';
+}
+
+function ibrStatusEmailPrefKey(status: string): NotificationPrefKey {
+  if (status === 'In Transit') return 'ibr_in_transit';
+  if (status === 'Scheduled') return 'ibr_approved';
+  if (status === 'Loading' || status === 'Packed' || status === 'Ready') return 'ibr_loading';
+  return 'ibr_loading';
+}
+
+async function filterEmailByNotificationPref(
+  email: string | null | undefined,
+  prefKey: NotificationPrefKey,
+): Promise<string | null> {
+  if (!email?.trim()) return null;
+  const ok = await isStaffEmailEnabledForNotification(email, prefKey);
+  return ok ? email.trim() : null;
+}
+
+async function fetchBranchWarehouseEmails(
+  branchId: string,
+  prefKey?: NotificationPrefKey,
+): Promise<string[]> {
   const { data, error } = await supabase
     .from('employees')
     .select('email')
@@ -1707,9 +1817,11 @@ async function fetchBranchWarehouseEmails(branchId: string): Promise<string[]> {
     console.warn('[notifications] Could not load warehouse emails', error);
     return [];
   }
-  return (data ?? [])
+  const emails = (data ?? [])
     .map((row) => (row as { email?: string | null }).email?.trim())
     .filter((email): email is string => Boolean(email));
+  if (!prefKey) return emails;
+  return filterStaffEmailsByNotificationPref(prefKey, emails);
 }
 
 async function fetchOrderDetailSnapshotForNotify(orderUuid: string): Promise<OrderDetail | null> {
@@ -1800,7 +1912,12 @@ export async function buildOrderDecisionNotifyPayload(
     },
     orderUuid,
   );
-  const agentEmail = order.agentId?.trim() ? await fetchAgentEmail(order.agentId) : null;
+  const agentEmail = order.agentId?.trim()
+    ? await fetchAgentEmailForNotify(
+        order.agentId,
+        opts.decision === 'approved' ? 'order_approved' : 'order_rejected',
+      )
+    : null;
   return {
     ...base,
     decision: opts.decision,
@@ -1868,7 +1985,7 @@ export async function buildOrderLogisticsReadyNotifyPayload(
     return null;
   }
   const base = buildOrderNotifyPayload({ ...order, status: 'Approved' }, orderUuid);
-  const logisticsEmails = await fetchBranchLogisticsEmails(branchId);
+  const logisticsEmails = await fetchBranchLogisticsEmails(branchId, 'order_ready_for_schedule');
   return {
     ...base,
     approvedBy: opts.approvedBy,
@@ -1922,7 +2039,7 @@ export async function buildOrderLogisticsLoadingNotifyPayload(
   }
 
   const base = buildOrderNotifyPayload({ ...order, status: 'Loading' }, orderUuid);
-  const logisticsEmails = await fetchBranchLogisticsEmails(branchId);
+  const logisticsEmails = await fetchBranchLogisticsEmails(branchId, 'order_loading');
   return {
     ...base,
     markedBy: opts.markedBy,
@@ -1980,8 +2097,10 @@ export async function buildOrderPackedNotifyPayload(
   }
 
   const base = buildOrderNotifyPayload({ ...order, status: 'Packed' }, orderUuid);
-  const logisticsEmails = await fetchBranchLogisticsEmails(branchId);
-  const agentEmail = order.agentId?.trim() ? await fetchAgentEmail(order.agentId) : null;
+  const logisticsEmails = await fetchBranchLogisticsEmails(branchId, 'order_packed');
+  const agentEmail = order.agentId?.trim()
+    ? await fetchAgentEmailForNotify(order.agentId, 'order_packed')
+    : null;
   return {
     ...base,
     markedBy: opts.markedBy,
@@ -2065,8 +2184,10 @@ export async function buildOrderInTransitNotifyPayload(
   if (!order) return null;
 
   const branchId = order.branchId?.trim();
-  const warehouseEmails = branchId ? await fetchBranchWarehouseEmails(branchId) : [];
-  const agentEmail = order.agentId?.trim() ? await fetchAgentEmail(order.agentId) : null;
+  const warehouseEmails = branchId ? await fetchBranchWarehouseEmails(branchId, 'order_in_transit') : [];
+  const agentEmail = order.agentId?.trim()
+    ? await fetchAgentEmailForNotify(order.agentId, 'order_in_transit')
+    : null;
 
   let tripNumber = opts.tripNumber ?? null;
   let vehicleName = opts.vehicleName ?? null;
@@ -2207,7 +2328,9 @@ export async function notifyOrderInTransit(
     console.error('[notifications] RPC notify_order_in_transit failed', rpcError);
   }
 
-  await sendOrderInTransitNotificationEmail(payload, 'executive');
+  if (await shouldSendExecutiveEmail('order_in_transit')) {
+    await sendOrderInTransitNotificationEmail(payload, 'executive');
+  }
   if (payload.warehouseEmails?.length) {
     await sendOrderInTransitNotificationEmail(payload, 'warehouse');
   }
@@ -2243,7 +2366,9 @@ export async function buildOrderDeliveryRecordedNotifyPayload(
     tripNumber = ctx?.tripNumber ?? null;
   }
 
-  const agentEmail = order.agentId?.trim() ? await fetchAgentEmail(order.agentId) : null;
+  const agentEmail = order.agentId?.trim()
+    ? await fetchAgentEmailForNotify(order.agentId, 'order_delivery_recorded')
+    : null;
   const base = buildOrderNotifyPayload(order, orderUuid);
   return {
     ...base,
@@ -2419,7 +2544,9 @@ export async function notifyOrderDeliveryRecorded(
     console.error('[notifications] RPC notify_order_delivery_recorded failed', rpcError);
   }
 
-  await sendOrderDeliveryRecordedNotificationEmail(payload, 'executive');
+  if (await shouldSendExecutiveEmail('order_delivery_recorded')) {
+    await sendOrderDeliveryRecordedNotificationEmail(payload, 'executive');
+  }
   if (payload.agentEmail?.trim()) {
     await sendOrderDeliveryRecordedNotificationEmail(payload, 'agent');
   }
@@ -2450,13 +2577,16 @@ export async function buildOrderDeliveryProofUploadedNotifyPayload(
   const order = await fetchOrderDetailSnapshotForNotify(orderUuid);
   if (!order) return null;
 
-  const agentEmail = order.agentId?.trim() ? await fetchAgentEmail(order.agentId) : null;
+  const proofType = opts.proofType ?? 'delivery';
+  const agentEmail = order.agentId?.trim()
+    ? await fetchAgentEmailForNotify(order.agentId, orderProofUploadPrefKey(proofType))
+    : null;
   if (!agentEmail?.trim()) return null;
 
   const base = buildOrderNotifyPayload(order, orderUuid);
   return {
     ...base,
-    proofType: opts.proofType ?? 'delivery',
+    proofType,
     uploadedBy: opts.uploadedBy ?? null,
     proofCount: Math.max(1, opts.proofCount ?? 1),
     agentEmail,
@@ -2648,7 +2778,7 @@ export async function notifyOrderPaymentProofRecorded(
     paymentCash: opts.paymentCash,
     paymentCredit: opts.paymentCredit,
   });
-  if (payload) {
+  if (payload && (await shouldSendExecutiveEmail('order_payment_recorded'))) {
     await sendOrderPaymentRecordedExecutiveEmail(payload);
   }
 
@@ -2668,7 +2798,9 @@ export async function buildOrderPaymentOverdueNotifyPayload(
 
   const dueDt = computeDueDateFromDelivery(order.actualDelivery ?? null, order.paymentTerms ?? null);
   const dueDate = dueDt ? formatDateOnlyLocal(dueDt) : null;
-  const agentEmail = order.agentId?.trim() ? await fetchAgentEmail(order.agentId) : null;
+  const agentEmail = order.agentId?.trim()
+    ? await fetchAgentEmailForNotify(order.agentId, 'order_payment_overdue')
+    : null;
   const base = buildOrderNotifyPayload({ ...order, paymentStatus: 'Overdue' }, orderUuid);
 
   return {
@@ -2749,7 +2881,7 @@ export async function notifyOrderPaymentOverdueEmails(
   daysOverdue: number,
 ): Promise<void> {
   const execPayload = await buildOrderPaymentOverdueNotifyPayload(orderUuid, daysOverdue, 'executive');
-  if (execPayload) {
+  if (execPayload && (await shouldSendExecutiveEmail('order_payment_overdue'))) {
     await sendOrderPaymentOverdueEmail(execPayload, 'executive');
   }
 
@@ -2820,7 +2952,7 @@ export async function buildOrderCommissionPaidNotifyPayload(
   const order = await fetchOrderDetailSnapshotForNotify(orderUuid);
   if (!order?.agentId?.trim()) return null;
 
-  const agentEmail = await fetchAgentEmail(order.agentId);
+  const agentEmail = await fetchAgentEmailForNotify(order.agentId, 'order_commission_paid');
   if (!agentEmail?.trim()) return null;
 
   const clientType = order.customerId?.trim()
@@ -3292,7 +3424,7 @@ export async function buildOrderCancelledNotifyPayload(
   const base = buildOrderNotifyPayload({ ...order, status: 'Cancelled' }, orderUuid);
   const agentEmail =
     notifyTarget === 'agent' && order.agentId?.trim()
-      ? await fetchAgentEmail(order.agentId)
+      ? await fetchAgentEmailForNotify(order.agentId, 'order_cancelled_by_executive')
       : null;
   return {
     ...base,
@@ -3341,6 +3473,13 @@ export async function notifyOrderCancelled(payload: OrderCancelledNotifyPayload)
       console.error('[notifications] RPC notify_agent_order_cancelled failed', rpcError);
     }
   }
+  if (payload.notifyTarget === 'agent' && !payload.agentEmail?.trim()) return;
+  if (
+    payload.notifyTarget === 'executive' &&
+    !(await shouldSendExecutiveEmail('order_cancelled_by_agent'))
+  ) {
+    return;
+  }
   await sendOrderCancelledNotificationEmail(payload);
 }
 
@@ -3357,9 +3496,13 @@ export async function buildOrderCancelledFromTripNotifyPayload(
   if (!order) return null;
 
   const branchId = order.branchId?.trim();
-  const logisticsEmails = branchId ? await fetchBranchLogisticsEmails(branchId) : [];
-  const executiveEmails = await fetchEmailsForRoles(['Executive']);
-  const agentEmail = order.agentId?.trim() ? await fetchAgentEmail(order.agentId) : null;
+  const logisticsEmails = branchId
+    ? await fetchBranchLogisticsEmails(branchId, 'order_cancelled_from_trip')
+    : [];
+  const executiveEmails = await fetchEmailsForRoles(['Executive'], 'order_cancelled_from_trip');
+  const agentEmail = order.agentId?.trim()
+    ? await fetchAgentEmailForNotify(order.agentId, 'order_cancelled_from_trip')
+    : null;
   const base = buildOrderNotifyPayload({ ...order, status: 'Cancelled' }, orderUuid);
 
   return {
@@ -3443,6 +3586,23 @@ export async function buildOrderCustomerCancelledNotifyPayload(
   };
 }
 
+export async function notifyCustomerOrderCancelled(
+  orderUuid: string,
+  opts: {
+    cancellationReason: string;
+    cancelledBy?: string | null;
+    tripNumber?: string | null;
+  },
+): Promise<void> {
+  const payload = await buildOrderCustomerCancelledNotifyPayload(orderUuid, opts);
+  if (!payload?.customerEmail?.trim()) return;
+
+  const sent = await sendOrderCustomerCancelledNotificationEmail(payload);
+  if (sent && payload.portalId) {
+    await recordOrderPortalEmailSent(payload.portalId, payload.customerEmail);
+  }
+}
+
 /** Cancel from trip: notify agent, logistics, executives in-app; email all staff + optional customer. */
 export async function notifyOrderCancelledFromTrip(
   orderUuid: string,
@@ -3478,17 +3638,11 @@ export async function notifyOrderCancelledFromTrip(
   }
 
   if (opts.notifyCustomer) {
-    const customerPayload = await buildOrderCustomerCancelledNotifyPayload(orderUuid, {
+    await notifyCustomerOrderCancelled(orderUuid, {
       cancellationReason: opts.cancellationReason,
       cancelledBy: opts.cancelledBy,
       tripNumber: opts.tripNumber,
     });
-    if (customerPayload?.customerEmail?.trim()) {
-      const sent = await sendOrderCustomerCancelledNotificationEmail(customerPayload);
-      if (sent && customerPayload.portalId) {
-        await recordOrderPortalEmailSent(customerPayload.portalId, customerPayload.customerEmail);
-      }
-    }
   }
 
   window.dispatchEvent(new Event('lamtex:notifications-refresh'));
@@ -3508,8 +3662,10 @@ export async function buildOrderScheduledNotifyPayload(
   if (!order) return null;
 
   const branchId = order.branchId?.trim();
-  const warehouseEmails = branchId ? await fetchBranchWarehouseEmails(branchId) : [];
-  const agentEmail = order.agentId?.trim() ? await fetchAgentEmail(order.agentId) : null;
+  const warehouseEmails = branchId ? await fetchBranchWarehouseEmails(branchId, 'order_scheduled') : [];
+  const agentEmail = order.agentId?.trim()
+    ? await fetchAgentEmailForNotify(order.agentId, 'order_scheduled')
+    : null;
 
   const base = buildOrderNotifyPayload({ ...order, status: 'Scheduled' }, orderUuid);
   return {
@@ -3570,7 +3726,9 @@ export async function notifyOrderScheduled(
     console.error('[notifications] RPC notify_order_scheduled failed', rpcError);
   }
 
-  await sendOrderScheduledNotificationEmail(payload, 'executive');
+  if (await shouldSendExecutiveEmail('order_scheduled')) {
+    await sendOrderScheduledNotificationEmail(payload, 'executive');
+  }
   if (payload.warehouseEmails?.length) {
     await sendOrderScheduledNotificationEmail(payload, 'warehouse');
   }
@@ -3616,8 +3774,12 @@ export async function buildOrderUnscheduledFromTripNotifyPayload(
   if (!order) return null;
 
   const branchId = order.branchId?.trim();
-  const warehouseEmails = branchId ? await fetchBranchWarehouseEmails(branchId) : [];
-  const agentEmail = order.agentId?.trim() ? await fetchAgentEmail(order.agentId) : null;
+  const warehouseEmails = branchId
+    ? await fetchBranchWarehouseEmails(branchId, 'order_unscheduled_from_trip')
+    : [];
+  const agentEmail = order.agentId?.trim()
+    ? await fetchAgentEmailForNotify(order.agentId, 'order_unscheduled_from_trip')
+    : null;
 
   const base = buildOrderNotifyPayload({ ...order, status: 'Approved' }, orderUuid);
   return {
@@ -3674,7 +3836,9 @@ export async function notifyOrderUnscheduledFromTrip(
     console.error('[notifications] RPC notify_order_unscheduled_from_trip failed', rpcError);
   }
 
-  await sendOrderUnscheduledFromTripNotificationEmail(payload, 'executive');
+  if (await shouldSendExecutiveEmail('order_unscheduled_from_trip')) {
+    await sendOrderUnscheduledFromTripNotificationEmail(payload, 'executive');
+  }
   if (payload.warehouseEmails?.length) {
     await sendOrderUnscheduledFromTripNotificationEmail(payload, 'warehouse');
   }
@@ -3907,9 +4071,13 @@ export async function buildTripCancelledNotifyPayload(
   }
 
   const branchId = (trip.branch_id as string | null)?.trim() || null;
-  const logisticsEmails = branchId ? await fetchBranchLogisticsEmails(branchId) : [];
+  const logisticsEmails = branchId ? await fetchBranchLogisticsEmails(branchId, 'trip_cancelled') : [];
   const driverId = (trip.driver_id as string | null)?.trim() || null;
   const driverContact = driverId ? await fetchEmployeeNotifyContact(driverId) : { name: null, email: null };
+  let driverEmail = driverContact.email;
+  if (driverEmail && driverId) {
+    driverEmail = await fetchEmployeeEmailForNotify(driverId, 'trip_cancelled');
+  }
 
   return {
     tripId,
@@ -3917,7 +4085,7 @@ export async function buildTripCancelledNotifyPayload(
     scheduledDate: trip.scheduled_date ? String(trip.scheduled_date).slice(0, 10) : null,
     vehicleName: (trip.vehicle_name as string | null) ?? null,
     driverName: (trip.driver_name as string | null)?.trim() || driverContact.name,
-    driverEmail: driverContact.email,
+    driverEmail,
     branchName: (trip.branches as { name?: string } | null)?.name ?? null,
     branchId,
     logisticsEmails,
@@ -4076,6 +4244,7 @@ export async function buildTripDriverAssignedNotifyPayload(
   }
 
   const driverContact = await fetchEmployeeNotifyContact(driverId);
+  const driverEmail = await fetchEmployeeEmailForNotify(driverId, 'trip_assigned_to_driver');
   const branchName = (trip.branches as { name?: string } | null)?.name ?? null;
 
   return {
@@ -4084,7 +4253,7 @@ export async function buildTripDriverAssignedNotifyPayload(
     scheduledDate: trip.scheduled_date ? String(trip.scheduled_date).slice(0, 10) : null,
     vehicleName: (trip.vehicle_name as string | null) ?? null,
     driverName: (trip.driver_name as string | null)?.trim() || driverContact.name,
-    driverEmail: driverContact.email,
+    driverEmail,
     branchName,
     orderCount: orderIds.length,
     orderNumbers,
@@ -4188,6 +4357,7 @@ async function buildTripDriverUnassignedNotifyPayload(
 
   const trip = data as Record<string, unknown>;
   const driverContact = await fetchEmployeeNotifyContact(previousDriverId);
+  const driverEmail = await fetchEmployeeEmailForNotify(previousDriverId, 'trip_unassigned_from_driver');
   const interBranchRequestId = (trip.inter_branch_request_id as string | null)?.trim() || null;
   let ibrNumber: string | null = null;
   if (interBranchRequestId) {
@@ -4205,7 +4375,7 @@ async function buildTripDriverUnassignedNotifyPayload(
     scheduledDate: trip.scheduled_date ? String(trip.scheduled_date).slice(0, 10) : null,
     vehicleName: (trip.vehicle_name as string | null) ?? null,
     driverName: driverContact.name,
-    driverEmail: driverContact.email,
+    driverEmail,
     branchName: (trip.branches as { name?: string } | null)?.name ?? null,
     assignedBy: opts.assignedBy ?? null,
     newDriverName: opts.newDriverName ?? null,
@@ -4303,7 +4473,7 @@ export async function buildTripDelayedNotifyPayload(
     }
   }
 
-  const affectedOrders: TripDelayedAffectedOrderNotify[] = pendingRows
+  const affectedOrdersRaw: TripDelayedAffectedOrderNotify[] = pendingRows
     .map((row) => {
       const r = row as {
         id?: string;
@@ -4338,10 +4508,19 @@ export async function buildTripDelayedNotifyPayload(
     })
     .filter((o) => o.orderId && o.orderNumber);
 
+  const affectedOrders = await Promise.all(
+    affectedOrdersRaw.map(async (order) => ({
+      ...order,
+      agentEmail: order.agentEmail
+        ? await filterEmailByNotificationPref(order.agentEmail, 'trip_delayed')
+        : null,
+    })),
+  );
+
   if (!affectedOrders.length) return null;
 
   const branchId = (t.branch_id as string | null)?.trim() || null;
-  const logisticsEmails = branchId ? await fetchBranchLogisticsEmails(branchId) : [];
+  const logisticsEmails = branchId ? await fetchBranchLogisticsEmails(branchId, 'trip_delayed') : [];
   const branchName = (t.branches as { name?: string } | null)?.name ?? null;
 
   return {
@@ -4535,7 +4714,10 @@ async function fetchBranchNameById(branchId: string | null): Promise<string | nu
   return typeof (data as { name?: string }).name === 'string' ? (data as { name?: string }).name ?? null : null;
 }
 
-async function fetchActiveEmployeeEmails(role: 'Executive' | 'Warehouse'): Promise<string[]> {
+async function fetchActiveEmployeeEmails(
+  role: 'Executive' | 'Warehouse',
+  prefKey?: NotificationPrefKey,
+): Promise<string[]> {
   const { data, error } = await supabase
     .from('employees')
     .select('email')
@@ -4545,10 +4727,13 @@ async function fetchActiveEmployeeEmails(role: 'Executive' | 'Warehouse'): Promi
     console.warn('[notifications] stock alert: employee email lookup failed', error);
     return [];
   }
-  const emails = (data ?? [])
-    .map((row) => (typeof (row as { email?: string }).email === 'string' ? (row as { email?: string }).email!.trim() : ''))
-    .filter((e) => e.length > 0);
-  return [...new Set(emails)];
+  const emails = [...new Set(
+    (data ?? [])
+      .map((row) => (typeof (row as { email?: string }).email === 'string' ? (row as { email?: string }).email!.trim() : ''))
+      .filter((e) => e.length > 0),
+  )];
+  if (!prefKey) return emails;
+  return filterStaffEmailsByNotificationPref(prefKey, emails);
 }
 
 async function sendProductStockAlertEmailRequest(
@@ -4603,7 +4788,7 @@ export async function notifyProductStockAlertEmails(args: {
   await Promise.all(
     audiences.map(async (audience) => {
       const role = audience === 'warehouse' ? 'Warehouse' : 'Executive';
-      const recipients = await fetchActiveEmployeeEmails(role);
+      const recipients = await fetchActiveEmployeeEmails(role, productStockAlertPrefKey(severity));
       const payload: ProductStockAlertEmailRequestPayload = {
         variantId: args.variantId,
         productId: ctx.productId,
@@ -4736,7 +4921,7 @@ export async function notifyMaterialStockAlertEmails(args: {
   await Promise.all(
     audiences.map(async (audience) => {
       const role = audience === 'warehouse' ? 'Warehouse' : 'Executive';
-      const recipients = await fetchActiveEmployeeEmails(role);
+      const recipients = await fetchActiveEmployeeEmails(role, materialStockAlertPrefKey(severity));
       const payload: MaterialStockAlertEmailRequestPayload = {
         materialId: args.materialId,
         name: ctx.name,
@@ -4977,10 +5162,11 @@ async function fetchBothBranchWarehouseRecipientGroups(
   fulfillingBranchId: string,
   requestingBranchName: string | null,
   fulfillingBranchName: string | null,
+  prefKey?: NotificationPrefKey,
 ): Promise<NonNullable<InterBranchNotifyEmailPayload['recipientGroups']>> {
   const [reqEmails, fulEmails] = await Promise.all([
-    fetchBranchWarehouseEmails(requestingBranchId),
-    fetchBranchWarehouseEmails(fulfillingBranchId),
+    fetchBranchWarehouseEmails(requestingBranchId, prefKey),
+    fetchBranchWarehouseEmails(fulfillingBranchId, prefKey),
   ]);
   const groups: NonNullable<InterBranchNotifyEmailPayload['recipientGroups']> = [];
   if (reqEmails.length) {
@@ -4995,8 +5181,9 @@ async function fetchBothBranchWarehouseRecipientGroups(
 async function fetchFulfillingBranchLogisticsEmailGroup(
   fulfillingBranchId: string,
   fulfillingBranchName: string | null,
+  prefKey?: NotificationPrefKey,
 ): Promise<NonNullable<InterBranchNotifyEmailPayload['recipientGroups']>[number] | null> {
-  const emails = await fetchBranchLogisticsEmails(fulfillingBranchId);
+  const emails = await fetchBranchLogisticsEmails(fulfillingBranchId, prefKey);
   if (!emails.length) return null;
   return { audience: 'logistics', branchName: fulfillingBranchName, emails };
 }
@@ -5005,19 +5192,21 @@ async function buildIbrMilestoneEmailRecipientGroups(
   status: string,
   base: InterBranchNotifyBase,
 ): Promise<NonNullable<InterBranchNotifyEmailPayload['recipientGroups']>> {
+  const prefKey = ibrStatusEmailPrefKey(status);
   if (status === 'In Transit') {
     return fetchBothBranchWarehouseRecipientGroups(
       base.requestingBranchId,
       base.fulfillingBranchId,
       base.requestingBranchName,
       base.fulfillingBranchName,
+      prefKey,
     );
   }
 
   const groups: NonNullable<InterBranchNotifyEmailPayload['recipientGroups']> = [];
 
   if (status === 'Scheduled') {
-    const emails = await fetchBranchWarehouseEmails(base.requestingBranchId);
+    const emails = await fetchBranchWarehouseEmails(base.requestingBranchId, prefKey);
     if (emails.length) {
       groups.push({ audience: 'warehouse', branchName: base.requestingBranchName, emails });
     }
@@ -5028,9 +5217,10 @@ async function buildIbrMilestoneEmailRecipientGroups(
     const logisticsGroup = await fetchFulfillingBranchLogisticsEmailGroup(
       base.fulfillingBranchId,
       base.fulfillingBranchName,
+      prefKey,
     );
     if (logisticsGroup) groups.push(logisticsGroup);
-    const warehouseEmails = await fetchBranchWarehouseEmails(base.fulfillingBranchId);
+    const warehouseEmails = await fetchBranchWarehouseEmails(base.fulfillingBranchId, prefKey);
     if (warehouseEmails.length) {
       groups.push({ audience: 'warehouse', branchName: base.fulfillingBranchName, emails: warehouseEmails });
     }
@@ -5041,6 +5231,7 @@ async function buildIbrMilestoneEmailRecipientGroups(
     const logisticsGroup = await fetchFulfillingBranchLogisticsEmailGroup(
       base.fulfillingBranchId,
       base.fulfillingBranchName,
+      prefKey,
     );
     if (logisticsGroup) groups.push(logisticsGroup);
   }
@@ -5105,9 +5296,12 @@ async function fetchIbrSubmitterEmail(ibrId: string): Promise<string | null> {
 }
 
 async function fetchIbrRejectedRecipientEmails(ibrId: string, requestingBranchId: string): Promise<string[]> {
-  const submitterEmail = await fetchIbrSubmitterEmail(ibrId);
+  const submitterEmail = await filterEmailByNotificationPref(
+    await fetchIbrSubmitterEmail(ibrId),
+    'ibr_rejected',
+  );
   if (submitterEmail) return [submitterEmail];
-  return fetchBranchWarehouseEmails(requestingBranchId);
+  return fetchBranchWarehouseEmails(requestingBranchId, 'ibr_rejected');
 }
 
 async function sendInterBranchWorkflowEmail(payload: InterBranchNotifyEmailPayload): Promise<boolean> {
@@ -5172,7 +5366,7 @@ export async function notifyExecutivesInterBranchSubmittedForApproval(ibrId: str
       ...base,
       eventType: 'submitted_for_approval',
       status: 'Pending',
-      recipientGroups: [{ audience: 'executive', emails: await fetchEmailsForRoles(['Executive']) }],
+      recipientGroups: [{ audience: 'executive', emails: await fetchEmailsForRoles(['Executive'], 'ibr_submitted_for_approval') }],
     }),
   );
 }
@@ -5188,10 +5382,12 @@ export async function notifyBothBranchesInterBranchApproved(ibrId: string, appro
         base.fulfillingBranchId,
         base.requestingBranchName,
         base.fulfillingBranchName,
+        'ibr_approved',
       );
       const logisticsGroup = await fetchFulfillingBranchLogisticsEmailGroup(
         base.fulfillingBranchId,
         base.fulfillingBranchName,
+        'ibr_approved',
       );
       return {
         ...base,
@@ -5247,6 +5443,7 @@ export async function notifyBothBranchesInterBranchDeliveryRecorded(
         base.fulfillingBranchId,
         base.requestingBranchName,
         base.fulfillingBranchName,
+        'ibr_delivery_recorded',
       ),
     }),
   );
@@ -5266,8 +5463,9 @@ export async function notifyBothBranchesAndExecutivesInterBranchFulfilled(
         base.fulfillingBranchId,
         base.requestingBranchName,
         base.fulfillingBranchName,
+        'ibr_fulfilled',
       );
-      const executiveEmails = await fetchEmailsForRoles(['Executive']);
+      const executiveEmails = await fetchEmailsForRoles(['Executive'], 'ibr_fulfilled');
       return {
         ...base,
         eventType: 'fulfilled',
@@ -5304,6 +5502,7 @@ export async function notifyBothBranchesInterBranchCancelled(
         base.fulfillingBranchId,
         base.requestingBranchName,
         base.fulfillingBranchName,
+        'ibr_cancelled',
       ),
     }),
   );

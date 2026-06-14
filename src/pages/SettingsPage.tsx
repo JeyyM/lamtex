@@ -40,6 +40,7 @@ import {
 } from '@/src/lib/branchCompanySettings';
 import { SettingsCompanyLocationsTab } from '@/src/components/settings/SettingsCompanyLocationsTab';
 import { SettingsSocialMediaTab } from '@/src/components/settings/SettingsSocialMediaTab';
+import { SettingsNotificationsTab } from '@/src/components/settings/SettingsNotificationsTab';
 import { createBranchRecord, notifyBranchesChanged } from '@/src/lib/branches';
 
 interface PaymentProfile {
@@ -657,69 +658,7 @@ export default function SettingsPage() {
 
       {/* NOTIFICATIONS */}
       {viewMode === 'notifications' && (
-        <div className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Bell className="w-5 h-5 text-red-600" />
-                Notification Preferences
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="space-y-4">
-                <h3 className="font-semibold text-gray-900">Email Notifications</h3>
-                {[
-                  { label: 'Order Updates', desc: 'Receive updates on new orders and order status changes' },
-                  { label: 'Inventory Alerts', desc: 'Get notified when stock levels are low or critical' },
-                  { label: 'Payment Notifications', desc: 'Alerts for received payments and overdue invoices' },
-                  { label: 'System Updates', desc: 'Updates about system maintenance and new features' },
-                  { label: 'Weekly Reports', desc: 'Receive weekly summary of sales and operations' },
-                ].map((item, index) => (
-                  <div key={index} className="flex items-start justify-between p-4 bg-gray-50 rounded-lg">
-                    <div className="flex-1">
-                      <p className="font-medium text-gray-900">{item.label}</p>
-                      <p className="text-sm text-gray-500 mt-1">{item.desc}</p>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer ml-4">
-                      <input type="checkbox" defaultChecked className="sr-only peer" />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-red-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-600"></div>
-                    </label>
-                  </div>
-                ))}
-              </div>
-
-              <div className="space-y-4 pt-4 border-t">
-                <h3 className="font-semibold text-gray-900">Push Notifications</h3>
-                {[
-                  { label: 'Urgent Alerts', desc: 'Critical system alerts and urgent notifications' },
-                  { label: 'Real-time Updates', desc: 'Live updates for orders and deliveries' },
-                ].map((item, index) => (
-                  <div key={index} className="flex items-start justify-between p-4 bg-gray-50 rounded-lg">
-                    <div className="flex-1">
-                      <p className="font-medium text-gray-900">{item.label}</p>
-                      <p className="text-sm text-gray-500 mt-1">{item.desc}</p>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer ml-4">
-                      <input type="checkbox" defaultChecked className="sr-only peer" />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-red-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-600"></div>
-                    </label>
-                  </div>
-                ))}
-              </div>
-
-              <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-4">
-                <Button variant="outline" className="w-full sm:w-auto">
-                  <XCircle className="w-4 h-4 mr-2" />
-                  Cancel
-                </Button>
-                <Button className="bg-red-600 hover:bg-red-700 w-full sm:w-auto">
-                  <Save className="w-4 h-4 mr-2" />
-                  Save Preferences
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+        <SettingsNotificationsTab addAuditLog={addAuditLog} />
       )}
 
       {/* SECURITY — gated by SHOW_SETTINGS_SECURITY_TAB */}

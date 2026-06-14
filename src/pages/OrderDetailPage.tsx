@@ -22,6 +22,7 @@ import {
   notifyOrderInTransit,
   notifyOrderDeliveryRecorded,
   notifyOrderCancelled,
+  notifyCustomerOrderCancelled,
   attachOrderDeliveryProofsAndNotify,
   notifyAgentOrderProofUploaded,
   notifyOrderPaymentProofRecorded,
@@ -1917,7 +1918,15 @@ export function OrderDetailPage() {
         additionalNotes: data.additionalNotes ?? null,
       },
     )
-      .then(notifyOrderCancelled)
+      .then(async (staffPayload) => {
+        await notifyOrderCancelled(staffPayload);
+        if (data.notifyCustomer) {
+          await notifyCustomerOrderCancelled(id, {
+            cancellationReason: data.reason,
+            cancelledBy: actorName || null,
+          });
+        }
+      })
       .catch((notifyErr) => {
         console.warn('[OrderDetailPage] cancellation notification failed', notifyErr);
       });
