@@ -48,6 +48,7 @@ import {
 } from '@/src/lib/warehouseDashboard';
 import { buildWarehouseAssignmentScope } from '@/src/lib/warehouseScope';
 import { finishedGoodProductHref } from '@/src/lib/productRoutes';
+import { OrderTripIdCell } from '@/src/components/orders/OrderTripIdCell';
 
 function formatDateShort(iso: string | null | undefined): string {
   if (!iso) return '—';
@@ -546,6 +547,7 @@ function OrdersToFulfillCard(props: { rows: OrderToFulfillRow[]; count: number }
           <thead>
             <tr className="text-xs text-gray-500 uppercase tracking-wider border-b border-gray-200">
               <th className="py-2 px-2 text-left font-semibold">Order</th>
+              <th className="py-2 px-2 text-left font-semibold">Trip ID</th>
               <th className="py-2 px-2 text-left font-semibold">Customer</th>
               <th className="py-2 px-2 text-left font-semibold">Required</th>
               <th className="py-2 px-2 text-right font-semibold">Amount</th>
@@ -568,6 +570,9 @@ function OrdersToFulfillCard(props: { rows: OrderToFulfillRow[]; count: number }
                 >
                   <td className="table-cell py-2 px-2 align-middle font-mono text-xs text-gray-900 whitespace-nowrap">
                     {r.orderNumber}
+                  </td>
+                  <td className="table-cell py-2 px-2 align-middle whitespace-nowrap">
+                    <OrderTripIdCell tripNumber={r.tripNumber} tripId={r.tripId} />
                   </td>
                   <td className="table-cell py-2 px-2 align-middle text-gray-700">
                     <span className="block truncate max-w-[140px]" title={r.customerName}>

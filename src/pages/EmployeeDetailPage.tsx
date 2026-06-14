@@ -99,6 +99,7 @@ import {
 import { fetchBranchTripHistory, fetchDriverTripHistory, type BranchTripHistoryRecord } from '@/src/lib/fleetTrucks';
 import { fetchTripById } from '@/src/lib/logisticsScheduling';
 import { dispatchTableStatusBadgeVariant, tripHistoryMatchesSearch, tripStatusDisplay } from '@/src/lib/dispatchQueueUi';
+import { OrderTripIdCell } from '@/src/components/orders/OrderTripIdCell';
 import { TripDetailsModal } from '@/src/components/logistics/TripDetailsModal';
 import type { Trip } from '@/src/types/logistics';
 import { OrderPermissionSection } from '@/src/components/employees/OrderPermissionToggles';
@@ -629,6 +630,7 @@ const WAREHOUSE_PO_PAGE_SIZE = TABLE_PAGE_SIZE;
 
 type AgentOrdersSortKey =
   | 'orderNumber'
+  | 'trip'
   | 'customer'
   | 'orderDate'
   | 'requiredDate'
@@ -1369,7 +1371,12 @@ export default function EmployeeDetailPage() {
       if (agentOrdersStatusFilter && row.status !== agentOrdersStatusFilter) return false;
       if (agentOrdersPaymentFilter && row.paymentStatus !== agentOrdersPaymentFilter) return false;
       if (!q) return true;
-      return [row.orderNumber, row.customerName].some(v => v?.toLowerCase().includes(q));
+      return [
+        row.orderNumber,
+        row.tripNumber ?? '',
+        row.tripId ?? '',
+        row.customerName,
+      ].some(v => v?.toLowerCase().includes(q));
     });
   }, [
     agentOrders,
@@ -1387,6 +1394,10 @@ export default function EmployeeDetailPage() {
         case 'orderNumber':
           av = a.orderNumber;
           bv = b.orderNumber;
+          break;
+        case 'trip':
+          av = a.tripNumber ?? a.tripId ?? '';
+          bv = b.tripNumber ?? b.tripId ?? '';
           break;
         case 'customer':
           av = (a.customerName ?? '').toLowerCase();
@@ -4656,6 +4667,12 @@ export default function EmployeeDetailPage() {
                           <span className="flex items-center">Order{agentOrdersSortIcon('orderNumber')}</span>
                         </th>
                         <th
+                          onClick={() => handleAgentOrdersSort('trip')}
+                          className="px-4 py-3 font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                        >
+                          <span className="flex items-center">Trip ID{agentOrdersSortIcon('trip')}</span>
+                        </th>
+                        <th
                           onClick={() => handleAgentOrdersSort('customer')}
                           className="px-4 py-3 font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
                         >
@@ -4735,6 +4752,9 @@ export default function EmployeeDetailPage() {
                             >
                               {row.orderNumber}
                             </Link>
+                          </td>
+                          <td className="px-4 py-3">
+                            <OrderTripIdCell tripNumber={row.tripNumber} tripId={row.tripId} />
                           </td>
                           <td className="px-4 py-3">
                             {row.customerId ? (

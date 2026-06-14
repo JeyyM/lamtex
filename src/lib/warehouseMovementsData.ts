@@ -5,6 +5,7 @@
  */
 import { supabase } from '@/src/lib/supabase';
 import { inDatePeriodRange, lastNMonthSlots, monthSlotsBetween } from '@/src/lib/datePeriodQuery';
+import { fetchTripNumbersByOrderIds } from '@/src/lib/orderTripLookup';
 
 const CHART_EXCLUDED_ORDER_STATUSES = new Set(['Cancelled', 'Rejected', 'Draft']);
 
@@ -121,6 +122,8 @@ export async function fetchVariantMonthlyUnitsFromOrders(
 export type VariantInvolvedOrderRow = {
   orderId: string;
   orderNumber: string;
+  tripId: string | null;
+  tripNumber: string | null;
   customerName: string | null;
   status: string;
   orderDate: string | null;
@@ -201,6 +204,8 @@ export async function fetchVariantInvolvedOrders(
       byOrder.set(ord.id, {
         orderId: ord.id,
         orderNumber: String(ord.order_number ?? '').trim() || ord.id.slice(0, 8),
+        tripId: null,
+        tripNumber: null,
         customerName: ord.customer_name,
         status: ord.status,
         orderDate: ord.order_date,
@@ -210,13 +215,23 @@ export async function fetchVariantInvolvedOrders(
     }
   }
 
-  return [...byOrder.values()]
+  const sorted = [...byOrder.values()]
     .sort((a, b) => {
       const ta = a.orderDate ? new Date(a.orderDate).getTime() : 0;
       const tb = b.orderDate ? new Date(b.orderDate).getTime() : 0;
       return tb - ta;
     })
     .slice(0, limit);
+
+  const tripByOrder = await fetchTripNumbersByOrderIds(sorted.map((r) => r.orderId));
+  return sorted.map((row) => {
+    const trip = tripByOrder.get(row.orderId);
+    return {
+      ...row,
+      tripId: trip?.tripId ?? null,
+      tripNumber: trip?.tripNumber ?? null,
+    };
+  });
 }
 
 export async function fetchMaterialMonthlyReceiptsFromPo(materialId: string): Promise<MonthlyMovementChartRow[]> {

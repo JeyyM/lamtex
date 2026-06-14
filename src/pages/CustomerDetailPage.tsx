@@ -47,6 +47,8 @@ import {
 } from '@/src/lib/customerDetailExport';
 import { employeeProfilePathFromAgent } from '@/src/lib/agentAnalytics';
 import { EntityNotFound, NOT_FOUND_COPY } from '@/src/components/ui/NotFound';
+import { fetchTripNumbersByOrderIds } from '@/src/lib/orderTripLookup';
+import { OrderTripIdCell } from '@/src/components/orders/OrderTripIdCell';
 
 function formatPeso(amount: number): string {
   return amount.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -89,6 +91,8 @@ interface OrderRow {
   agent_id: string | null;
   agent_name: string | null;
   agent_employee_id: string | null;
+  trip_id: string | null;
+  trip_number: string | null;
 }
 
 function formatPhp(amount: number) {
@@ -250,8 +254,7 @@ export function CustomerDetailPage() {
             setBranchHqPin({ lat: hLa, lng: hLn });
           }
         }
-        setOrders(
-          (ordersRes.data ?? []).map((o: any) => {
+        const mappedOrders = (ordersRes.data ?? []).map((o: any) => {
             const empRow = embedOne<{ employee_id?: string }>(o.employees);
             const agentId = o.agent_id ?? null;
             const agentName = typeof o.agent_name === 'string' ? o.agent_name.trim() : '';
@@ -271,6 +274,18 @@ export function CustomerDetailPage() {
               agent_id: agentId,
               agent_name: agentName || null,
               agent_employee_id: agentId && agentName ? (empRow?.employee_id ?? null) : null,
+              trip_id: null,
+              trip_number: null,
+            };
+          });
+        const tripByOrder = await fetchTripNumbersByOrderIds(mappedOrders.map((o) => o.id));
+        setOrders(
+          mappedOrders.map((order) => {
+            const trip = tripByOrder.get(order.id);
+            return {
+              ...order,
+              trip_id: trip?.tripId ?? null,
+              trip_number: trip?.tripNumber ?? null,
             };
           }),
         );
@@ -785,6 +800,12 @@ export function CustomerDetailPage() {
                         <div>
                           <div className="text-xs font-medium uppercase tracking-wide text-gray-500">Required</div>
                           <div className="font-medium text-gray-900">{requiredLabel}</div>
+                        </div>
+                        <div>
+                          <div className="text-xs font-medium uppercase tracking-wide text-gray-500">Trip ID</div>
+                          <div className="font-medium">
+                            <OrderTripIdCell tripNumber={order.trip_number} tripId={order.trip_id} />
+                          </div>
                         </div>
                         <div>
                           <div className="text-xs font-medium uppercase tracking-wide text-gray-500">Agent</div>

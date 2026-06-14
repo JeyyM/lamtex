@@ -19,6 +19,7 @@ import { CustomerDetailPage } from './pages/CustomerDetailPage';
 import { CustomerFormPage } from './pages/CustomerFormPage';
 import { SuppliersPage } from './pages/SuppliersPage';
 import { SupplierDetailPage } from './pages/SupplierDetailPage';
+import { SupplierFormPage } from './pages/SupplierFormPage';
 import { FinancePageNew } from './pages/FinancePageNew';
 import { ReportsPage } from './pages/ReportsPage';
 import SettingsPage from './pages/SettingsPage';
@@ -120,6 +121,7 @@ function AppRoutes() {
             <Route path="customers/new" element={<CustomerFormPage />} />
             <Route path="customers/:id" element={<CustomerDetailPage />} />
             <Route path="customers/:id/edit" element={<CustomerFormPage />} />
+            <Route path="suppliers/new" element={<SupplierFormPage />} />
             <Route path="suppliers/:id" element={<SupplierDetailPage />} />
             <Route path="suppliers" element={<SuppliersPage />} />
             <Route path="finance" element={<FinancePageNew />} />

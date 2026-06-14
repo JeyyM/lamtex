@@ -1,9 +1,12 @@
 import { supabase } from '@/src/lib/supabase';
+import { fetchTripNumbersByOrderIds } from '@/src/lib/orderTripLookup';
 
 export type ProductOrderHistoryRow = {
   lineId: string;
   orderId: string;
   orderNumber: string;
+  tripId: string | null;
+  tripNumber: string | null;
   customerName: string | null;
   status: string;
   orderDate: string | null;
@@ -88,6 +91,8 @@ export async function fetchProductOrderHistory(productId: string): Promise<Produ
         lineId: String(line.id ?? ''),
         orderId: String(ord.id),
         orderNumber: String(ord.order_number ?? '').trim() || ord.id.slice(0, 8),
+        tripId: null,
+        tripNumber: null,
         customerName: ord.customer_name ?? null,
         status: String(ord.status ?? ''),
         orderDate: ord.order_date ?? null,
@@ -103,10 +108,20 @@ export async function fetchProductOrderHistory(productId: string): Promise<Produ
     }
   }
 
-  return rows.sort((a, b) => {
+  rows.sort((a, b) => {
     const ta = a.orderDate ? new Date(a.orderDate).getTime() : 0;
     const tb = b.orderDate ? new Date(b.orderDate).getTime() : 0;
     if (tb !== ta) return tb - ta;
     return a.orderNumber.localeCompare(b.orderNumber, undefined, { numeric: true });
+  });
+
+  const tripByOrder = await fetchTripNumbersByOrderIds(rows.map((r) => r.orderId));
+  return rows.map((row) => {
+    const trip = tripByOrder.get(row.orderId);
+    return {
+      ...row,
+      tripId: trip?.tripId ?? null,
+      tripNumber: trip?.tripNumber ?? null,
+    };
   });
 }

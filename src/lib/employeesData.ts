@@ -2,6 +2,7 @@
  * Employees + role-aware performance from Supabase.
  */
 import { supabase } from '@/src/lib/supabase';
+import { fetchTripNumbersByOrderIds } from '@/src/lib/orderTripLookup';
 import type { UserRole } from '@/src/types';
 import type { EmployeeRole, EmployeeStatus } from '@/src/types/employee';
 import { isExecutiveDashboardRole } from '@/src/lib/resolveDashboardRole';
@@ -281,6 +282,8 @@ export type EmployeeAgentOrderRow = {
   totalAmount: number;
   amountPaid: number;
   balanceDue: number;
+  tripId: string | null;
+  tripNumber: string | null;
 };
 
 export type EmployeeFullProfile = {
@@ -1002,19 +1005,35 @@ export async function fetchAgentOrders(agentEmployeeId: string): Promise<Employe
 
   if (error) throw new Error(error.message);
 
-  return ((data ?? []) as Array<Record<string, unknown>>).map(row => ({
-    id: String(row.id),
-    orderNumber: row.order_number != null ? String(row.order_number) : String(row.id),
-    customerId: row.customer_id != null ? String(row.customer_id) : null,
-    customerName: row.customer_name != null ? String(row.customer_name) : null,
-    orderDate: row.order_date != null ? String(row.order_date) : null,
-    requiredDate: row.required_date != null ? String(row.required_date) : null,
-    status: row.status != null ? String(row.status) : '—',
-    paymentStatus: row.payment_status != null ? String(row.payment_status) : '—',
-    totalAmount: Number(row.total_amount) || 0,
-    amountPaid: Number(row.amount_paid) || 0,
-    balanceDue: Number(row.balance_due) || 0,
-  }));
+  return attachAgentOrderTrips(
+    ((data ?? []) as Array<Record<string, unknown>>).map(row => ({
+      id: String(row.id),
+      orderNumber: row.order_number != null ? String(row.order_number) : String(row.id),
+      customerId: row.customer_id != null ? String(row.customer_id) : null,
+      customerName: row.customer_name != null ? String(row.customer_name) : null,
+      orderDate: row.order_date != null ? String(row.order_date) : null,
+      requiredDate: row.required_date != null ? String(row.required_date) : null,
+      status: row.status != null ? String(row.status) : '—',
+      paymentStatus: row.payment_status != null ? String(row.payment_status) : '—',
+      totalAmount: Number(row.total_amount) || 0,
+      amountPaid: Number(row.amount_paid) || 0,
+      balanceDue: Number(row.balance_due) || 0,
+      tripId: null,
+      tripNumber: null,
+    })),
+  );
+}
+
+async function attachAgentOrderTrips(rows: EmployeeAgentOrderRow[]): Promise<EmployeeAgentOrderRow[]> {
+  const tripByOrder = await fetchTripNumbersByOrderIds(rows.map((r) => r.id));
+  return rows.map((row) => {
+    const trip = tripByOrder.get(row.id);
+    return {
+      ...row,
+      tripId: trip?.tripId ?? null,
+      tripNumber: trip?.tripNumber ?? null,
+    };
+  });
 }
 
 export type EmployeeProductionRequestRow = {

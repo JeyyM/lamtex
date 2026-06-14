@@ -64,6 +64,7 @@ import {
   markProofCommissionPaid,
 } from '@/src/lib/financeMutations';
 import { downloadOutstandingOrdersWorkbook } from '@/src/lib/outstandingOrdersExport';
+import { OrderTripIdCell } from '@/src/components/orders/OrderTripIdCell';
 import {
   DATE_PERIOD_OPTIONS,
   inDatePeriodRange,
@@ -486,7 +487,13 @@ export function FinancePageNew() {
     if (scopeToCurrentUser && employeeId) {
       rows = rows.filter((r) => outstandingOrderMatchesAgent(r, employeeId));
     }
-    if (q) rows = rows.filter((r) => [r.orderNumber, r.customerName, r.agentName].some((v) => v?.toLowerCase().includes(q)));
+    if (q) {
+      rows = rows.filter((r) =>
+        [r.orderNumber, r.customerName, r.agentName, r.tripNumber, r.tripId].some((v) =>
+          v?.toLowerCase().includes(q),
+        ),
+      );
+    }
     if (headerPaymentFilter) rows = rows.filter((r) => r.paymentStatus === headerPaymentFilter);
     if (!includePaidOrders) rows = rows.filter((r) => r.paymentStatus !== 'Paid');
     if (!exportQueryDates.invalid) {
@@ -497,6 +504,7 @@ export function FinancePageNew() {
       let bv: string | number;
       switch (sortKey) {
         case 'orderNumber': av = a.orderNumber ?? ''; bv = b.orderNumber ?? ''; break;
+        case 'trip': av = a.tripNumber ?? a.tripId ?? ''; bv = b.tripNumber ?? b.tripId ?? ''; break;
         case 'customer': av = (a.customerName ?? '').toLowerCase(); bv = (b.customerName ?? '').toLowerCase(); break;
         case 'agent': av = (a.agentName ?? '').toLowerCase(); bv = (b.agentName ?? '').toLowerCase(); break;
         case 'terms': av = a.paymentTerms ?? ''; bv = b.paymentTerms ?? ''; break;
@@ -574,7 +582,9 @@ export function FinancePageNew() {
     }
     if (q) {
       rows = rows.filter((r) =>
-        [r.orderNumber, r.customerName, r.agentName].some((v) => v?.toLowerCase().includes(q)),
+        [r.orderNumber, r.customerName, r.agentName, r.tripNumber, r.tripId].some((v) =>
+          v?.toLowerCase().includes(q),
+        ),
       );
     }
     return [...rows].sort((a, b) => {
@@ -584,6 +594,10 @@ export function FinancePageNew() {
         case 'orderNumber':
           av = a.orderNumber ?? '';
           bv = b.orderNumber ?? '';
+          break;
+        case 'trip':
+          av = a.tripNumber ?? a.tripId ?? '';
+          bv = b.tripNumber ?? b.tripId ?? '';
           break;
         case 'customer':
           av = (a.customerName ?? '').toLowerCase();
@@ -845,6 +859,9 @@ export function FinancePageNew() {
                       <th onClick={() => handleSort('orderNumber')} className="text-left py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
                         <span className="flex items-center">Order{sortIcon('orderNumber')}</span>
                       </th>
+                      <th onClick={() => handleSort('trip')} className="text-left py-2.5 px-3 font-semibold hidden lg:table-cell cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                        <span className="flex items-center">Trip ID{sortIcon('trip')}</span>
+                      </th>
                       <th onClick={() => handleSort('customer')} className="text-left py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
                         <span className="flex items-center">Customer{sortIcon('customer')}</span>
                       </th>
@@ -896,6 +913,12 @@ export function FinancePageNew() {
                               {row.orderNumber}
                             </span>
                             {rowOverlay({ primary: true })}
+                          </td>
+                          <td className="relative py-3 px-3 align-top hidden lg:table-cell">
+                            <span className={FINANCE_CELL_CONTENT}>
+                              <OrderTripIdCell tripNumber={row.tripNumber} tripId={row.tripId} />
+                            </span>
+                            {rowOverlay({})}
                           </td>
                           <td className="relative py-3 px-3 align-top max-w-[12rem]">
                             {row.customerId ? (
@@ -1060,6 +1083,9 @@ export function FinancePageNew() {
                       <th onClick={() => handleCommissionSort('orderNumber')} className="text-left py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100">
                         <span className="flex items-center">Order{commissionSortIcon('orderNumber')}</span>
                       </th>
+                      <th onClick={() => handleCommissionSort('trip')} className="text-left py-2.5 px-3 font-semibold hidden lg:table-cell cursor-pointer select-none hover:bg-gray-100">
+                        <span className="flex items-center">Trip ID{commissionSortIcon('trip')}</span>
+                      </th>
                       <th onClick={() => handleCommissionSort('customer')} className="text-left py-2.5 px-3 font-semibold cursor-pointer select-none hover:bg-gray-100">
                         <span className="flex items-center">Customer{commissionSortIcon('customer')}</span>
                       </th>
@@ -1107,6 +1133,9 @@ export function FinancePageNew() {
                         >
                           {row.orderNumber}
                         </FinanceTableCellLink>
+                        <td className="py-3 px-3 hidden lg:table-cell" onClick={(e) => e.stopPropagation()}>
+                          <OrderTripIdCell tripNumber={row.tripNumber} tripId={row.tripId} />
+                        </td>
                         {row.customerId ? (
                           <FinanceTableCellLink
                             to={`/customers/${row.customerId}`}

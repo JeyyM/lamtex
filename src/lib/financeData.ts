@@ -11,6 +11,7 @@
  */
 
 import { supabase } from '@/src/lib/supabase';
+import { fetchTripNumbersByOrderIds } from '@/src/lib/orderTripLookup';
 import {
   evaluateOrderFinanceCompletion,
   proofCashAmount,
@@ -44,6 +45,8 @@ export type OutstandingOrderRow = {
   amountPaid: number;
   balanceDue: number;
   daysOverdue: number;
+  tripId: string | null;
+  tripNumber: string | null;
 };
 
 export type CustomerCreditRow = {
@@ -84,6 +87,8 @@ export type OrderWithPaymentProofsRow = {
   lastProofAt: string | null;
   pendingCashCommissionCount: number;
   allCashCommissionsReleased: boolean;
+  tripId: string | null;
+  tripNumber: string | null;
 };
 
 export type OrderCommissionProofRow = {
@@ -478,6 +483,8 @@ export async function fetchOutstandingOrders(branchId?: string | null): Promise<
       amountPaid: num(r.amount_paid),
       balanceDue: num(r.balance_due),
       daysOverdue: due ? Math.max(0, diffDaysFromToday(due)) : 0,
+      tripId: null,
+      tripNumber: null,
     };
   });
 
@@ -489,7 +496,15 @@ export async function fetchOutstandingOrders(branchId?: string | null): Promise<
     return ta - tb;
   });
 
-  return mapped;
+  const tripByOrder = await fetchTripNumbersByOrderIds(mapped.map((m) => m.id));
+  return mapped.map((m) => {
+    const trip = tripByOrder.get(m.id);
+    return {
+      ...m,
+      tripId: trip?.tripId ?? null,
+      tripNumber: trip?.tripNumber ?? null,
+    };
+  });
 }
 
 /** Customers with credit configured or any outstanding balance. */
@@ -653,6 +668,8 @@ export async function fetchOrdersWithPaymentProofs(): Promise<OrderWithPaymentPr
         lastProofAt: uploadedAt || null,
         pendingCashCommissionCount: 0,
         allCashCommissionsReleased: true,
+        tripId: null,
+        tripNumber: null,
         _lastMs: uploadedMs,
         _proofs: [r],
       });
@@ -669,7 +686,7 @@ export async function fetchOrdersWithPaymentProofs(): Promise<OrderWithPaymentPr
     }
   }
 
-  return Array.from(byOrder.values())
+  const enriched = Array.from(byOrder.values())
     .map(({ _lastMs: _, _proofs, ...row }) => {
       const proofLites = _proofs.map((p) => ({
         id: String(p.id),
@@ -697,6 +714,16 @@ export async function fetchOrdersWithPaymentProofs(): Promise<OrderWithPaymentPr
       const tb = b.lastProofAt ? new Date(b.lastProofAt).getTime() : 0;
       return tb - ta;
     });
+
+  const tripByOrder = await fetchTripNumbersByOrderIds(enriched.map((r) => r.orderId));
+  return enriched.map((row) => {
+    const trip = tripByOrder.get(row.orderId);
+    return {
+      ...row,
+      tripId: trip?.tripId ?? null,
+      tripNumber: trip?.tripNumber ?? null,
+    };
+  });
 }
 
 /** Agent dashboard / finance views: order agent or assigned customer agent. */

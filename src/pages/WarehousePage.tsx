@@ -52,6 +52,7 @@ import {
   OrderProductSelectionModal,
   type OrderProductSelectionConfirm,
 } from '@/src/components/orders/OrderProductSelectionModal';
+import { OrderTripIdCell } from '@/src/components/orders/OrderTripIdCell';
 import RawMaterialPickerModal from '@/src/components/products/RawMaterialPickerModal';
 import {
   fetchVariantMonthlyOrderMetrics,
@@ -5150,6 +5151,7 @@ export default function WarehousePage() {
                             <thead className="bg-gray-50 border-b border-gray-200">
                               <tr>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Order</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Trip ID</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Customer</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
                                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Qty (line)</th>
@@ -5167,6 +5169,9 @@ export default function WarehousePage() {
                                     >
                                       {row.orderNumber}
                                     </Link>
+                                  </td>
+                                  <td className="px-6 py-3 text-sm">
+                                    <OrderTripIdCell tripNumber={row.tripNumber} tripId={row.tripId} />
                                   </td>
                                   <td className="px-6 py-3 text-sm text-gray-700 max-w-[200px] truncate" title={row.customerName ?? ''}>
                                     {row.customerName ?? '—'}
@@ -5202,6 +5207,9 @@ export default function WarehousePage() {
                                 </Link>
                                 <span className="text-xs text-gray-600 shrink-0">{row.status}</span>
                               </div>
+                              <p className="text-xs text-gray-500">
+                                Trip ID: <OrderTripIdCell tripNumber={row.tripNumber} tripId={row.tripId} className="inline" />
+                              </p>
                               {row.customerName ? (
                                 <p className="text-sm text-gray-700">{row.customerName}</p>
                               ) : null}

@@ -18,6 +18,8 @@ import {
   markOrdersDelayedForTrip,
   orderListDisplayStatus,
 } from '@/src/lib/orderTripDelay';
+import { fetchTripNumbersByOrderIds } from '@/src/lib/orderTripLookup';
+import { OrderTripIdCell } from '@/src/components/orders/OrderTripIdCell';
 import {
   Search,
   Plus,
@@ -84,6 +86,8 @@ interface OrderRow {
    * when denominator is positive (pre-discount extended subtotal per line).
    */
   line_items_discount_percent_effective: number;
+  trip_id: string | null;
+  trip_number: string | null;
 }
 
 /** Prefer aggregated line-item discount % when present (matches CSV); else header `discount_percent`. */
@@ -320,6 +324,8 @@ function mapFetchedOrderRow(
     urgency: (raw.urgency as string | null) ?? null,
     line_items_discount_amount_total: roundMoney(lineDiscount.sumDiscountAmount),
     line_items_discount_percent_effective: lineDiscount.effectiveDiscountPercent,
+    trip_id: null,
+    trip_number: null,
   };
 }
 
@@ -607,18 +613,29 @@ export function OrdersPage() {
     if (isStale()) return;
 
     setDelayedTripOrderIds(delayedIds);
+    const mappedOrders = orderRows.map((raw) => {
+      const id = String(raw.id ?? '');
+      const agg = aggByOrder.get(id) ?? { sumDiscountAmount: 0, sumPreDiscountSubtotal: 0 };
+      const effectivePct =
+        agg.sumPreDiscountSubtotal > 1e-9
+          ? Math.round((agg.sumDiscountAmount / agg.sumPreDiscountSubtotal) * 1_000_000) / 10000
+          : 0;
+      return mapFetchedOrderRow(raw, {
+        sumDiscountAmount: agg.sumDiscountAmount,
+        effectiveDiscountPercent: effectivePct,
+      });
+    });
+    const tripByOrder = await fetchTripNumbersByOrderIds(mappedOrders.map((o) => o.id));
+    if (isStale()) return;
+
     setAllOrders(
-      orderRows.map((raw) => {
-        const id = String(raw.id ?? '');
-        const agg = aggByOrder.get(id) ?? { sumDiscountAmount: 0, sumPreDiscountSubtotal: 0 };
-        const effectivePct =
-          agg.sumPreDiscountSubtotal > 1e-9
-            ? Math.round((agg.sumDiscountAmount / agg.sumPreDiscountSubtotal) * 1_000_000) / 10000
-            : 0;
-        return mapFetchedOrderRow(raw, {
-          sumDiscountAmount: agg.sumDiscountAmount,
-          effectiveDiscountPercent: effectivePct,
-        });
+      mappedOrders.map((order) => {
+        const trip = tripByOrder.get(order.id);
+        return {
+          ...order,
+          trip_id: trip?.tripId ?? null,
+          trip_number: trip?.tripNumber ?? null,
+        };
       }),
     );
     setResolvedBranchIdForList(branchData.id);
@@ -749,7 +766,9 @@ export function OrdersPage() {
   const filteredOrders = allOrders.filter(order => {
     const matchesSearch =
       order.order_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (order.customer_name ?? '').toLowerCase().includes(searchTerm.toLowerCase());
+      (order.customer_name ?? '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (order.trip_number ?? '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (order.trip_id ?? '').toLowerCase().includes(searchTerm.toLowerCase());
 
     const matchesHeaderStatus =
       headerStatusFilter === '' || orderDisplayStatus(order) === headerStatusFilter;
@@ -783,6 +802,7 @@ export function OrdersPage() {
         case 'agent': av = (a.agent_name ?? '').toLowerCase(); bv = (b.agent_name ?? '').toLowerCase(); break;
         case 'order_date': av = a.order_date ?? ''; bv = b.order_date ?? ''; break;
         case 'required_date': av = a.required_date ?? ''; bv = b.required_date ?? ''; break;
+        case 'trip': av = a.trip_number ?? a.trip_id ?? ''; bv = b.trip_number ?? b.trip_id ?? ''; break;
         case 'amount': av = a.total_amount; bv = b.total_amount; break;
         case 'status': av = orderDisplayStatus(a); bv = orderDisplayStatus(b); break;
         case 'urgency': {
@@ -1046,6 +1066,11 @@ export function OrdersPage() {
                               <div className="font-semibold text-gray-900 truncate">{order.customer_name ?? '—'}</div>
                             )}
                             <div className="text-xs text-gray-600 truncate tabular-nums">{order.order_number}</div>
+                            {(order.trip_number || order.trip_id) && (
+                              <div className="text-xs text-gray-500 truncate mt-0.5">
+                                Trip: <OrderTripIdCell tripNumber={order.trip_number} tripId={order.trip_id} className="inline" />
+                              </div>
+                            )}
                           </div>
                           {order.requires_approval && <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />}
                         </div>
@@ -1101,6 +1126,9 @@ export function OrdersPage() {
                       </th>
                       <th onClick={() => handleSort('required_date')} className="px-6 py-3 text-left font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
                         <span className="flex items-center">Required Date{sortIcon('required_date')}</span>
+                      </th>
+                      <th onClick={() => handleSort('trip')} className="px-6 py-3 text-left font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
+                        <span className="flex items-center">Trip ID{sortIcon('trip')}</span>
                       </th>
                       {perms.payment && (
                         <th onClick={() => handleSort('amount')} className="px-6 py-3 text-left font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900">
@@ -1194,6 +1222,12 @@ export function OrdersPage() {
                           {rowOverlay({})}
                           <span className="relative z-10 pointer-events-none">{order.required_date ?? '—'}</span>
                         </td>
+                        <td className="relative px-6 py-4 align-middle">
+                          {rowOverlay({})}
+                          <span className="relative z-10 pointer-events-none">
+                            <OrderTripIdCell tripNumber={order.trip_number} tripId={order.trip_id} />
+                          </span>
+                        </td>
                         {perms.payment && (
                           <td className="relative px-6 py-4 align-middle">
                             {rowOverlay({})}
@@ -1234,7 +1268,7 @@ export function OrdersPage() {
                     })}
                     {sortedOrders.length === 0 && (
                       <tr>
-                        <td colSpan={perms.payment ? 7 : 5} className="px-6 py-12 text-center text-gray-500">
+                        <td colSpan={perms.payment ? 8 : 6} className="px-6 py-12 text-center text-gray-500">
                           <FileText className="w-12 h-12 mx-auto mb-3 text-gray-400" />
                           <p className="font-medium">No orders found</p>
                           <p className="text-sm mt-1">Try adjusting your filters or create a new order</p>

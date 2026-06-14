@@ -18,6 +18,7 @@
 
 import { supabase } from '@/src/lib/supabase';
 import { resolveBranchIdByName } from '@/src/lib/branchCompanySettings';
+import { fetchTripNumbersByOrderIds } from '@/src/lib/orderTripLookup';
 import type { WarehouseAssignmentScope } from '@/src/lib/warehouseScope';
 
 /** Toggle stock movements chart/table on the warehouse dashboard. */
@@ -80,6 +81,8 @@ export interface IncomingPORow {
 export interface OrderToFulfillRow {
   id: string;
   orderNumber: string;
+  tripId: string | null;
+  tripNumber: string | null;
   status: string;
   customerName: string;
   agentName: string | null;
@@ -475,7 +478,7 @@ async function fetchOrdersAwaitingFulfillment(branchId: string | null): Promise<
     if (error) throw error;
 
     const now = new Date();
-    return ((data ?? []) as Array<Record<string, unknown>>).map((r) => {
+    const mapped = ((data ?? []) as Array<Record<string, unknown>>).map((r) => {
       const requiredDate = toStr(r.required_date);
       const days = diffDays(requiredDate, now);
       const urgency: OrderToFulfillRow['urgency'] =
@@ -483,6 +486,8 @@ async function fetchOrdersAwaitingFulfillment(branchId: string | null): Promise<
       return {
         id: String(r.id),
         orderNumber: toStr(r.order_number) ?? String(r.id),
+        tripId: null as string | null,
+        tripNumber: null as string | null,
         status: toStr(r.status) ?? '—',
         customerName: toStr(r.customer_name) ?? '—',
         agentName: toStr(r.agent_name),
@@ -491,6 +496,15 @@ async function fetchOrdersAwaitingFulfillment(branchId: string | null): Promise<
         totalAmount: toNumber(r.total_amount),
         lineCount: Array.isArray(r.order_line_items) ? (r.order_line_items as unknown[]).length : 0,
         urgency,
+      };
+    });
+    const tripByOrder = await fetchTripNumbersByOrderIds(mapped.map((m) => m.id));
+    return mapped.map((row) => {
+      const trip = tripByOrder.get(row.id);
+      return {
+        ...row,
+        tripId: trip?.tripId ?? null,
+        tripNumber: trip?.tripNumber ?? null,
       };
     });
   } catch (e) {

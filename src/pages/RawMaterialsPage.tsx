@@ -20,6 +20,7 @@ import {
   Loader2,
   ChevronDown,
   ChevronUp,
+  TrendingDown,
 } from 'lucide-react';
 import AddMaterialCategoryModal, { MaterialCategoryFormData } from '@/src/components/materials/AddMaterialCategoryModal';
 import { supabase } from '@/src/lib/supabase';

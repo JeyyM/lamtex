@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Ca
 import { Badge } from '@/src/components/ui/Badge';
 import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagination';
 import { fetchProductOrderHistory, type ProductOrderHistoryRow } from '@/src/lib/productOrderHistory';
+import { OrderTripIdCell } from '@/src/components/orders/OrderTripIdCell';
 
 const fmt = (date: string | null | undefined) =>
   date
@@ -117,6 +118,10 @@ export function ProductOrderHistoryCard({
           av = a.branchName ?? '';
           bv = b.branchName ?? '';
           break;
+        case 'trip':
+          av = a.tripNumber ?? a.tripId ?? '';
+          bv = b.tripNumber ?? b.tripId ?? '';
+          break;
         case 'status':
           av = a.status;
           bv = b.status;
@@ -227,6 +232,12 @@ export function ProductOrderHistoryCard({
                     >
                       <span className="inline-flex items-center">Branch{sortIcon('branch')}</span>
                     </th>
+                    <th
+                      onClick={() => handleSort('trip')}
+                      className="px-5 py-3 text-left font-medium cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
+                    >
+                      <span className="inline-flex items-center">Trip ID{sortIcon('trip')}</span>
+                    </th>
                     <th className="px-3 py-3 text-center font-medium align-top min-w-[8.5rem] max-w-[12rem]">
                       <div className="normal-case flex justify-center">
                         <select
@@ -284,7 +295,7 @@ export function ProductOrderHistoryCard({
                 <tbody className="divide-y divide-gray-200">
                   {rowsMatchingFilters.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="px-5 py-12 text-center text-sm text-gray-500">
+                      <td colSpan={9} className="px-5 py-12 text-center text-sm text-gray-500">
                         No orders match the selected status. Choose{' '}
                         <span className="font-medium text-gray-700">Status</span> to show all.
                       </td>
@@ -300,6 +311,9 @@ export function ProductOrderHistoryCard({
                           {row.orderNumber}
                         </td>
                         <td className="px-5 py-3 text-gray-900">{row.branchName ?? '—'}</td>
+                        <td className="px-5 py-3">
+                          <OrderTripIdCell tripNumber={row.tripNumber} tripId={row.tripId} />
+                        </td>
                         <td className="px-5 py-3 text-center align-middle">
                           <Badge variant={getOrderStatusVariant(row.status)}>{row.status}</Badge>
                         </td>
@@ -343,9 +357,10 @@ export function ProductOrderHistoryCard({
                       </div>
                       <Badge variant={getOrderStatusVariant(row.status)}>{row.status}</Badge>
                     </div>
-                    <div className="flex justify-between text-xs text-gray-500">
+                    <div className="flex flex-wrap justify-between gap-x-3 gap-y-1 text-xs text-gray-500">
                       <span>{row.branchName ?? '—'}</span>
                       <span>{fmt(row.orderDate)}</span>
+                      <OrderTripIdCell tripNumber={row.tripNumber} tripId={row.tripId} />
                     </div>
                     <p className="text-xs font-medium text-gray-900">Qty: {row.quantity.toLocaleString()}</p>
                   </div>

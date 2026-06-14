@@ -348,7 +348,7 @@ export function SuppliersPage() {
           </p>
         </div>
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-          <Button variant="primary" className="gap-2">
+          <Button variant="primary" className="gap-2" onClick={() => navigate('/suppliers/new')}>
             <Plus className="w-4 h-4" />
             <span className="hidden sm:inline">Add New Supplier</span>
             <span className="sm:hidden">Add</span>
