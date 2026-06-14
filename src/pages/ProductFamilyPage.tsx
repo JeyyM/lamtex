@@ -639,11 +639,15 @@ export default function ProductFamilyPage() {
   }, [variants, selectedBranch, comparisonPeriodKind, comparisonQueryDates]);
 
   // ── Image carousel ──
-  const productImages = product?.images?.length
-    ? product.images
-    : product?.image_url
-    ? [product.image_url]
-    : [];
+  const productImages = useMemo(
+    () =>
+      product?.images?.length
+        ? product.images
+        : product?.image_url
+        ? [product.image_url]
+        : [],
+    [product?.images, product?.image_url],
+  );
 
   const handlePreviousImage = () =>
     setCurrentImageIndex(p => (p === 0 ? productImages.length - 1 : p - 1));

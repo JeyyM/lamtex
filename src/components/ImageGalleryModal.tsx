@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Upload, Search, Loader2, AlertTriangle, RefreshCw, Zap } from 'lucide-react';
 import { supabase } from '@/src/lib/supabase';
@@ -43,11 +43,14 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
   stackOnTopOfModal = false,
 }) => {
   // Product-family pages use multi-select; default them to the product catalog folder.
-  const storageFolder =
-    folder.trim()
-    || (catalogScope === 'product' ? PRODUCT_CATALOG_IMAGES_FOLDER : '')
-    || (catalogScope === 'material' ? RAW_MATERIAL_CATALOG_IMAGES_FOLDER : '')
-    || (onSelectImages ? PRODUCT_CATALOG_IMAGES_FOLDER : '');
+  const storageFolder = useMemo(
+    () =>
+      folder.trim()
+      || (catalogScope === 'product' ? PRODUCT_CATALOG_IMAGES_FOLDER : '')
+      || (catalogScope === 'material' ? RAW_MATERIAL_CATALOG_IMAGES_FOLDER : '')
+      || (onSelectImages ? PRODUCT_CATALOG_IMAGES_FOLDER : ''),
+    [folder, catalogScope, onSelectImages],
+  );
 
   const [images, setImages] = useState<StorageImage[]>([]);
   const [loading, setLoading] = useState(false);
@@ -60,23 +63,28 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
 
   const isMultiSelect = maxImages > 1;
 
-  const assignedUrls = React.useMemo(() => {
+  const currentImagesKey = useMemo(() => currentImages.join('\u0001'), [currentImages]);
+
+  const assignedUrls = useMemo(() => {
     const urls = [...currentImages];
     if (currentImageUrl?.trim() && !urls.includes(currentImageUrl)) {
       urls.unshift(currentImageUrl);
     }
     return urls.filter(Boolean);
-  }, [currentImages, currentImageUrl]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by currentImagesKey
+  }, [currentImagesKey, currentImageUrl]);
 
-  const displayImages = React.useMemo(
+  const displayImages = useMemo(
     () => mergeGalleryWithAssigned(images, assignedUrls),
     [images, assignedUrls],
   );
 
+  const gallerySessionRef = useRef<string | null>(null);
+
   // Fetch images from Supabase Storage
   const fetchImages = useCallback(async () => {
-    setLoading(true);
     setError(null);
+    setLoading(true);
 
     try {
       const mapped = await fetchGalleryImages(storageFolder);
@@ -95,15 +103,25 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
     }
   }, [storageFolder]);
 
-  // Load images when the modal opens or when the storage folder changes (different order / proof type / etc.).
+  // Open / folder change only — do not refetch when parent re-renders with a new currentImages array.
   useEffect(() => {
-    if (!isOpen) return;
-    void fetchImages();
-    setSelectedImagesOrder(currentImages);
+    if (!isOpen) {
+      gallerySessionRef.current = null;
+      return;
+    }
+
+    const sessionKey = `${storageFolder}|${currentImagesKey}|${currentImageUrl ?? ''}`;
+    if (gallerySessionRef.current === sessionKey) return;
+
+    gallerySessionRef.current = sessionKey;
+    setSelectedImagesOrder([...currentImages]);
     setSelectedImage(currentImageUrl || null);
     setSearchQuery('');
     setUploadStatus(null);
-  }, [isOpen, storageFolder, fetchImages, currentImages, currentImageUrl]);
+    void fetchImages();
+  // currentImages read only when sessionKey changes (includes currentImagesKey)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, storageFolder, currentImagesKey, currentImageUrl, fetchImages]);
 
   // Upload handler with client-side optimization
   const handleFileSelect = async () => {
@@ -319,14 +337,14 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
             </div>
           )}
 
-          {loading ? (
+          {loading && images.length === 0 ? (
             <div className="flex items-center justify-center h-64">
               <div className="text-center">
                 <Loader2 className="w-12 h-12 animate-spin text-red-500 mx-auto" />
                 <p className="mt-4 text-gray-500">Loading images...</p>
               </div>
             </div>
-          ) : error ? (
+          ) : error && images.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-64 text-center">
               <AlertTriangle className="w-12 h-12 text-orange-500 mb-3" />
               <h3 className="text-lg font-semibold text-gray-900 mb-1">Failed to load images</h3>
