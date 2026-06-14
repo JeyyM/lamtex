@@ -61,6 +61,7 @@ import {
   tripStatusIsCompletedUi,
   getDispatchVehicleColor,
   dispatchTableStatusBadgeVariant,
+  tripHistoryMatchesSearch,
 } from '@/src/lib/dispatchQueueUi';
 import { useLogisticsPermissions } from '@/src/lib/permissions/logisticsPermissions';
 import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
@@ -304,7 +305,7 @@ export function TruckDetailPage() {
 
   const filteredSortedTrips = useMemo(() => {
     const todayYmd = localYmd(new Date());
-    const q = tripSearchQuery.trim().toLowerCase();
+    const vehicleLabel = truck?.vehicleName ?? '';
     const filtered = tripHistory.filter((trip) => {
       const dk = (trip.date ?? '').slice(0, 10);
       const matchesTimeframe =
@@ -315,22 +316,31 @@ export function TruckDetailPage() {
             : tripRecordsTimeframe === 'upcoming'
               ? dk >= todayYmd
               : dk < todayYmd;
-      const matchesSearch =
-        !q ||
-        trip.tripNumber.toLowerCase().includes(q) ||
-        trip.driverName.toLowerCase().includes(q) ||
-        trip.route.some((d) => d.toLowerCase().includes(q));
+      const matchesSearch = tripHistoryMatchesSearch(
+        {
+          id: trip.id,
+          tripId: trip.tripId,
+          tripNumber: trip.tripNumber,
+          driverName: trip.driverName,
+          vehicleName,
+          route: trip.route,
+        },
+        tripSearchQuery,
+      );
       const matchesStatus =
         filterStatus === 'All' ||
         (trip.status === 'Completed' ? 'Complete' : trip.status) === filterStatus;
       return matchesTimeframe && matchesSearch && matchesStatus;
     });
 
-    const vehicleLabel = truck?.vehicleName ?? '';
     return [...filtered].sort((a, b) => {
       let av: string | number;
       let bv: string | number;
       switch (tripSortKey) {
+        case 'tripNumber':
+          av = (a.tripNumber || a.tripId || a.id).toLowerCase();
+          bv = (b.tripNumber || b.tripId || b.id).toLowerCase();
+          break;
         case 'vehicleName':
           av = `${vehicleLabel} ${a.driverName}`.toLowerCase();
           bv = `${vehicleLabel} ${b.driverName}`.toLowerCase();
@@ -1307,7 +1317,7 @@ export function TruckDetailPage() {
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                   <input
                     type="text"
-                    placeholder="Search by trip #, driver, or stop…"
+                    placeholder="Search trip ID, trip #, driver, or stop…"
                     value={tripSearchQuery}
                     onChange={(e) => setTripSearchQuery(e.target.value)}
                     className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none"
@@ -1384,11 +1394,11 @@ export function TruckDetailPage() {
                         <thead className="bg-gray-50 border-b border-gray-200">
                           <tr>
                             <th
-                              onClick={() => handleTripSort('vehicleName')}
+                              onClick={() => handleTripSort('tripNumber')}
                               className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 hover:text-gray-900"
                             >
                               <span className="inline-flex items-center">
-                                Vehicle & Driver{tripSortIcon('vehicleName')}
+                                Trip · Vehicle & Driver{tripSortIcon('tripNumber')}
                               </span>
                             </th>
                             <th
@@ -1442,6 +1452,7 @@ export function TruckDetailPage() {
                                   <div className="flex items-center gap-2">
                                     <Truck className="w-4 h-4 text-gray-400" />
                                     <div>
+                                      <div className="text-xs font-semibold text-gray-700 font-mono tracking-tight">{trip.tripNumber}</div>
                                       <div className="text-sm font-medium text-gray-900">{truck.vehicleName}</div>
                                       <div className="text-xs text-gray-500">{trip.driverName || '—'}</div>
                                     </div>
@@ -1489,7 +1500,8 @@ export function TruckDetailPage() {
                           >
                             <div className="flex items-start justify-between gap-3">
                               <div className="min-w-0 flex-1">
-                                <p className="text-sm font-medium text-gray-900 break-words">{truck.vehicleName}</p>
+                                <p className="text-xs font-semibold text-gray-700 font-mono tracking-tight">{trip.tripNumber}</p>
+                                <p className="text-sm font-medium text-gray-900 break-words mt-0.5">{truck.vehicleName}</p>
                                 <p className="text-xs text-gray-500 mt-1 break-words">
                                   {trip.ordersCount} order{trip.ordersCount !== 1 ? 's' : ''} • {trip.driverName || '—'}
                                 </p>

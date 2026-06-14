@@ -98,7 +98,7 @@ import {
 } from '@/src/lib/employeeProfileMutations';
 import { fetchBranchTripHistory, fetchDriverTripHistory, type BranchTripHistoryRecord } from '@/src/lib/fleetTrucks';
 import { fetchTripById } from '@/src/lib/logisticsScheduling';
-import { dispatchTableStatusBadgeVariant, tripStatusDisplay } from '@/src/lib/dispatchQueueUi';
+import { dispatchTableStatusBadgeVariant, tripHistoryMatchesSearch, tripStatusDisplay } from '@/src/lib/dispatchQueueUi';
 import { TripDetailsModal } from '@/src/components/logistics/TripDetailsModal';
 import type { Trip } from '@/src/types/logistics';
 import { OrderPermissionSection } from '@/src/components/employees/OrderPermissionToggles';
@@ -1518,7 +1518,6 @@ export default function EmployeeDetailPage() {
   );
 
   const filteredTripHistory = useMemo(() => {
-    const q = tripHistorySearch.trim().toLowerCase();
     return tripHistory.filter(row => {
       if (!tripHistoryPeriodQuery.invalid) {
         if (!inDatePeriodRange(row.date, tripHistoryPeriodQuery.from, tripHistoryPeriodQuery.to)) {
@@ -1526,16 +1525,19 @@ export default function EmployeeDetailPage() {
         }
       }
       if (tripHistoryStatusFilter && row.status !== tripHistoryStatusFilter) return false;
-      if (!q) return true;
-      const routeLabel = row.route.join(', ');
-      return [
-        row.tripNumber,
-        row.driverName,
-        row.vehicleName,
-        row.customerLabel,
-        routeLabel,
-        ...(row.orderNumbers ?? []),
-      ].some(v => v?.toLowerCase().includes(q));
+      return tripHistoryMatchesSearch(
+        {
+          id: row.id,
+          tripId: row.tripId,
+          tripNumber: row.tripNumber,
+          driverName: row.driverName,
+          vehicleName: row.vehicleName,
+          customerLabel: row.customerLabel,
+          route: row.route,
+          orderNumbers: row.orderNumbers,
+        },
+        tripHistorySearch,
+      );
     });
   }, [tripHistory, tripHistorySearch, tripHistoryStatusFilter, tripHistoryPeriodQuery]);
 
@@ -4810,8 +4812,8 @@ export default function EmployeeDetailPage() {
                       className="w-full pl-9 pr-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
                       placeholder={
                         driverTripView
-                          ? 'Search by trip #, vehicle, route, or customer'
-                          : 'Search by trip #, vehicle, driver, or customer'
+                          ? 'Search trip ID, trip #, vehicle, route, or customer'
+                          : 'Search trip ID, trip #, vehicle, driver, or customer'
                       }
                       value={tripHistorySearch}
                       onChange={e => setTripHistorySearch(e.target.value)}

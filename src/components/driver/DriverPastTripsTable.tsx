@@ -13,6 +13,7 @@ import {
   todayIsoLocal,
   type DatePeriodKind,
 } from '@/src/lib/datePeriodQuery';
+import { tripHistoryMatchesSearch } from '@/src/lib/dispatchQueueUi';
 import {
   ArrowDown,
   ArrowUp,
@@ -23,7 +24,7 @@ import {
   X,
 } from 'lucide-react';
 
-type SortKey = 'customerName' | 'orderNumber' | 'deliveryAddress' | 'scheduledDate' | 'status';
+type SortKey = 'tripNumber' | 'customerName' | 'orderNumber' | 'deliveryAddress' | 'scheduledDate' | 'status';
 
 type PastDeliveryRow = DriverOrderStop & { scheduledDate: string | null };
 
@@ -156,20 +157,21 @@ export function DriverPastTripsTable({ pastTrips, orderStops, onOpenTrip }: Prop
   }, [dateFilteredRows]);
 
   const filtered = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
     return dateFilteredRows.filter((r) => {
       if (statusFilter && r.status !== statusFilter) return false;
-      if (!q) return true;
-      const hay = [
-        r.customerName,
-        r.orderNumber,
-        r.deliveryAddress ?? '',
-        r.tripNumber,
-        r.phone ?? '',
-      ]
-        .join(' ')
-        .toLowerCase();
-      return hay.includes(q);
+      return tripHistoryMatchesSearch(
+        {
+          id: r.id,
+          tripId: r.tripId,
+          tripNumber: r.tripNumber,
+          driverName: '',
+          customerLabel: r.customerName,
+          route: r.deliveryAddress ? [r.deliveryAddress] : [],
+          orderNumbers: [r.orderNumber],
+          phone: r.phone ?? undefined,
+        },
+        searchQuery,
+      );
     });
   }, [dateFilteredRows, searchQuery, statusFilter]);
 
@@ -195,6 +197,10 @@ export function DriverPastTripsTable({ pastTrips, orderStops, onOpenTrip }: Prop
       let av: string;
       let bv: string;
       switch (sortKey) {
+        case 'tripNumber':
+          av = a.tripNumber;
+          bv = b.tripNumber;
+          break;
         case 'customerName':
           av = a.customerName;
           bv = b.customerName;
@@ -256,7 +262,7 @@ export function DriverPastTripsTable({ pastTrips, orderStops, onOpenTrip }: Prop
                 type="search"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search customer, order, address…"
+                placeholder="Search trip ID, trip #, customer, order, or address…"
                 className="w-full pl-9 pr-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500"
               />
             </div>
@@ -295,6 +301,11 @@ export function DriverPastTripsTable({ pastTrips, orderStops, onOpenTrip }: Prop
               <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b border-gray-200">
                 <tr>
                   <th className="text-left px-4 py-3 font-medium">
+                    <button type="button" onClick={() => handleSort('tripNumber')} className="inline-flex items-center hover:text-gray-900">
+                      Trip{sortIcon('tripNumber')}
+                    </button>
+                  </th>
+                  <th className="text-left px-4 py-3 font-medium">
                     <button type="button" onClick={() => handleSort('customerName')} className="inline-flex items-center hover:text-gray-900">
                       Customer{sortIcon('customerName')}
                     </button>
@@ -324,7 +335,7 @@ export function DriverPastTripsTable({ pastTrips, orderStops, onOpenTrip }: Prop
               <tbody className="divide-y divide-gray-100">
                 {pagedRows.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="px-4 py-10 text-center text-gray-500">
+                    <td colSpan={6} className="px-4 py-10 text-center text-gray-500">
                       {rows.length === 0
                         ? 'No completed deliveries on record.'
                         : periodQuery.invalid
@@ -339,6 +350,7 @@ export function DriverPastTripsTable({ pastTrips, orderStops, onOpenTrip }: Prop
                       onClick={() => onOpenTrip(r.tripId)}
                       className="hover:bg-gray-50 cursor-pointer transition-colors"
                     >
+                      <td className="px-4 py-3 font-medium text-gray-900 whitespace-nowrap font-mono text-xs">{r.tripNumber}</td>
                       <td className="px-4 py-3">
                         <p className="font-medium text-gray-900">{r.customerName}</p>
                         {r.deliveryAddress && (

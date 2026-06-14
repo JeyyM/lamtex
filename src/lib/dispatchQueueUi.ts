@@ -6,6 +6,50 @@ export function normalizeDispatchSearchToken(value: string): string {
   return value.toLowerCase().replace(/[\s\-_#]/g, '');
 }
 
+function dispatchSearchMatchesText(
+  value: string | null | undefined,
+  q: string,
+  qNorm: string,
+): boolean {
+  if (!value?.trim()) return false;
+  const lower = value.toLowerCase();
+  if (lower.includes(q)) return true;
+  if (qNorm.length >= 3 && normalizeDispatchSearchToken(value).includes(qNorm)) return true;
+  return false;
+}
+
+/** Trip history / fleet tables — trip #, trip UUID, driver, vehicle, route, orders. */
+export type TripHistorySearchRecord = {
+  id?: string;
+  tripId?: string | null;
+  tripNumber?: string;
+  driverName?: string;
+  vehicleName?: string;
+  customerLabel?: string;
+  route?: string[];
+  orderNumbers?: string[];
+  phone?: string;
+};
+
+export function tripHistoryMatchesSearch(record: TripHistorySearchRecord, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const qNorm = normalizeDispatchSearchToken(q);
+  const matchText = (value: string | null | undefined) => dispatchSearchMatchesText(value, q, qNorm);
+
+  if (matchText(record.tripNumber)) return true;
+  if (matchText(record.tripId)) return true;
+  if (matchText(record.id)) return true;
+  if (matchText(record.driverName)) return true;
+  if (matchText(record.vehicleName)) return true;
+  if (matchText(record.customerLabel)) return true;
+  if (record.route?.some((d) => matchText(d))) return true;
+  if (record.orderNumbers?.some((n) => matchText(n))) return true;
+  if (matchText(record.phone)) return true;
+
+  return false;
+}
+
 /** Dispatch queue search — trip, driver, customer, destination, order #, or order UUID. */
 export type DispatchSearchExtras = {
   orderMetaById?: Record<string, { orderNumber?: string }>;
@@ -21,13 +65,8 @@ export function tripMatchesDispatchSearch(
   if (!q) return true;
   const qNorm = normalizeDispatchSearchToken(q);
 
-  const matchText = (value: string | null | undefined): boolean => {
-    if (!value?.trim()) return false;
-    const lower = value.toLowerCase();
-    if (lower.includes(q)) return true;
-    if (qNorm.length >= 3 && normalizeDispatchSearchToken(value).includes(qNorm)) return true;
-    return false;
-  };
+  const matchText = (value: string | null | undefined): boolean =>
+    dispatchSearchMatchesText(value, q, qNorm);
 
   if (matchText(trip.tripNumber)) return true;
   if (matchText(trip.id)) return true;
