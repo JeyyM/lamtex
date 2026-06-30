@@ -16,20 +16,20 @@ DECLARE
   v_fail_1m  INT;
 BEGIN
   SELECT count(*) INTO v_fail_10m
-  FROM public.public_order_access_attempts
-  WHERE ip = v_ip
-    AND found = FALSE
-    AND created_at > NOW() - INTERVAL '10 minutes';
+  FROM public.public_order_access_attempts a
+  WHERE a.ip = v_ip
+    AND a.found = FALSE
+    AND a.created_at > NOW() - INTERVAL '10 minutes';
 
   IF v_fail_10m >= 30 THEN
     RETURN 'rate_limited';
   END IF;
 
   SELECT count(*) INTO v_fail_1m
-  FROM public.public_order_access_attempts
-  WHERE ip = v_ip
-    AND found = FALSE
-    AND created_at > NOW() - INTERVAL '1 minute';
+  FROM public.public_order_access_attempts a
+  WHERE a.ip = v_ip
+    AND a.found = FALSE
+    AND a.created_at > NOW() - INTERVAL '1 minute';
 
   IF v_fail_1m >= 60 THEN
     RETURN 'rate_limited';

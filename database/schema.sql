@@ -3364,10 +3364,12 @@ CREATE TABLE IF NOT EXISTS chat_conversations (
   created_by      UUID,
   last_message_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   last_message_preview TEXT,
+  last_message_sender_id UUID,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ALTER TABLE chat_conversations ADD COLUMN IF NOT EXISTS avatar_url TEXT;
+ALTER TABLE chat_conversations ADD COLUMN IF NOT EXISTS last_message_sender_id UUID;
 
 CREATE TABLE IF NOT EXISTS chat_participants (
   id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -3525,7 +3527,10 @@ BEGIN
   END IF;
 
   UPDATE chat_conversations
-  SET last_message_at = NEW.created_at, last_message_preview = preview, updated_at = NOW()
+  SET last_message_at = NEW.created_at,
+      last_message_preview = preview,
+      last_message_sender_id = NEW.sender_id,
+      updated_at = NOW()
   WHERE id = NEW.conversation_id;
 
   IF conv.type = 'group' THEN
@@ -4143,20 +4148,20 @@ DECLARE
   v_all_1m   INT;
 BEGIN
   SELECT count(*) INTO v_fail_10m
-  FROM public.public_order_access_attempts
-  WHERE ip = v_ip
-    AND found = FALSE
-    AND created_at > NOW() - INTERVAL '10 minutes';
+  FROM public.public_order_access_attempts a
+  WHERE a.ip = v_ip
+    AND a.found = FALSE
+    AND a.created_at > NOW() - INTERVAL '10 minutes';
 
   IF v_fail_10m >= 30 THEN
     RETURN 'rate_limited';
   END IF;
 
   SELECT count(*) INTO v_all_1m
-  FROM public.public_order_access_attempts
-  WHERE ip = v_ip
-    AND found = FALSE
-    AND created_at > NOW() - INTERVAL '1 minute';
+  FROM public.public_order_access_attempts a
+  WHERE a.ip = v_ip
+    AND a.found = FALSE
+    AND a.created_at > NOW() - INTERVAL '1 minute';
 
   IF v_all_1m >= 60 THEN
     RETURN 'rate_limited';

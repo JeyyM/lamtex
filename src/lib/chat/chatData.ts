@@ -72,7 +72,7 @@ export async function fetchConversations(userId: string): Promise<Chat[]> {
   // 2. Conversation records
   const { data: convs, error: convErr } = await supabase
     .from('chat_conversations')
-    .select('id, type, name, avatar_url, created_by, last_message_at, last_message_preview, created_at')
+    .select('id, type, name, avatar_url, created_by, last_message_at, last_message_preview, last_message_sender_id, created_at')
     .in('id', convIds)
     .order('last_message_at', { ascending: false });
   if (convErr || !convs) return [];
@@ -110,6 +110,9 @@ export async function fetchConversations(userId: string): Promise<Chat[]> {
       return { ...base, chatRole: p.role };
     });
     const preview = (cRaw.last_message_preview as string) ?? '';
+    const lastSenderId = cRaw.last_message_sender_id
+      ? String(cRaw.last_message_sender_id)
+      : '';
     return {
       id: convId,
       name: (cRaw.name as string) ?? '',
@@ -119,7 +122,7 @@ export async function fetchConversations(userId: string): Promise<Chat[]> {
         ? {
             content: preview,
             timestamp: String(cRaw.last_message_at),
-            senderId: '',
+            senderId: lastSenderId,
           }
         : undefined,
       unreadCount: unreadByConv.get(convId) ?? 0,

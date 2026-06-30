@@ -41,6 +41,7 @@ import { EmojiPickerPopover } from '../components/chat/EmojiPickerPopover';
 import { MessageContent } from '../components/chat/MessageContent';
 import { ChatLightbox, type LightboxImage } from '../components/chat/ChatLightbox';
 import { ChatAvatar } from '../components/chat/ChatAvatar';
+import { formatChatListPreview } from '../lib/chat/chatDisplay';
 import {
   fetchChatDirectory,
   fetchConversations,
@@ -1156,7 +1157,7 @@ export default function ChatsPage() {
                               <p className="text-xs text-gray-500 mb-1">{chat.members.length} members</p>
                             )}
                             <p className="text-sm text-gray-600 line-clamp-1">
-                              {chat.lastMessage?.content || 'No messages yet'}
+                              {formatChatListPreview(chat, currentUserId)}
                             </p>
                           </div>
                           {chat.unreadCount > 0 && (
