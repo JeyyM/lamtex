@@ -12,6 +12,8 @@ export interface ModalPortalProps {
   onBackdropClick?: () => void;
   /** Slide up from bottom on small screens. */
   mobileBottomSheet?: boolean;
+  /** Full-height panel that slides in from the right (notifications drawer). */
+  drawerFromRight?: boolean;
 }
 
 /** Full-viewport modal shell — portals to document.body so backdrop covers the entire screen. */
@@ -23,6 +25,7 @@ export function ModalPortal({
   className = 'flex items-center justify-center p-4 overflow-y-auto',
   onBackdropClick,
   mobileBottomSheet = false,
+  drawerFromRight = false,
 }: ModalPortalProps) {
   useEffect(() => {
     if (!open) return;
@@ -42,13 +45,25 @@ export function ModalPortal({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [open, onBackdropClick]);
 
-  const panelMotion = modalPanelMotion(mobileBottomSheet);
+  const panelMotion = modalPanelMotion(mobileBottomSheet, drawerFromRight);
+
+  const shellClass = drawerFromRight
+    ? 'fixed inset-0 flex justify-end p-0 overflow-hidden'
+    : `fixed inset-0 min-h-[100dvh] h-[100dvh] w-[100vw] max-w-[100vw] ${className}`;
+
+  const panelWrapClass = drawerFromRight
+    ? 'relative z-10 h-full max-h-[100dvh] pointer-events-none'
+    : 'relative z-10 w-full flex justify-center pointer-events-none';
+
+  const innerClass = drawerFromRight
+    ? 'pointer-events-auto h-full'
+    : 'pointer-events-auto w-full flex justify-center';
 
   return createPortal(
     <AnimatePresence>
       {open && (
         <div
-          className={`fixed inset-0 min-h-[100dvh] h-[100dvh] w-[100vw] max-w-[100vw] ${className}`}
+          className={shellClass}
           style={{ zIndex }}
           role="presentation"
         >
@@ -61,11 +76,8 @@ export function ModalPortal({
             onClick={onBackdropClick}
             aria-hidden
           />
-          <motion.div
-            className="relative z-10 w-full flex justify-center pointer-events-none"
-            {...panelMotion}
-          >
-            <div className="pointer-events-auto w-full flex justify-center" onClick={(e) => e.stopPropagation()}>
+          <motion.div className={panelWrapClass} {...panelMotion}>
+            <div className={innerClass} onClick={(e) => e.stopPropagation()}>
               {children}
             </div>
           </motion.div>

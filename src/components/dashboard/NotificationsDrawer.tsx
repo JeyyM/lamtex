@@ -49,23 +49,24 @@ export function NotificationsDrawer({
   return (
     <ModalPortal
       open={isOpen}
-      backdropClassName="bg-black/20"
-      className="flex justify-end p-0 overflow-hidden"
+      drawerFromRight
+      zIndex={60}
+      backdropClassName="bg-black/30"
       onBackdropClick={onClose}
     >
       <div
-        className="w-full md:w-96 bg-white h-full shadow-xl flex flex-col relative z-10 transform transition-transform duration-300"
+        className="w-[min(100vw,24rem)] h-full bg-white shadow-2xl flex flex-col border-l border-gray-200"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="p-4 md:p-5 border-b border-gray-200 bg-gray-50 space-y-3">
-          <div className="flex items-center justify-between">
-            <div>
+        <div className="p-4 md:p-5 border-b border-gray-200 bg-gray-50 space-y-3 shrink-0">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
               <h2 className="text-lg font-semibold text-gray-900">Notifications</h2>
               {unreadCount > 0 && (
                 <p className="text-xs text-gray-500 mt-0.5">{unreadCount} unread</p>
               )}
             </div>
-            <Button variant="ghost" size="sm" onClick={onClose}>
+            <Button variant="ghost" size="sm" onClick={onClose} aria-label="Close notifications">
               <X className="w-5 h-5" />
             </Button>
           </div>
@@ -87,7 +88,8 @@ export function NotificationsDrawer({
             </div>
           )}
         </div>
-        <div className="flex-1 overflow-y-auto p-4 md:p-5 space-y-4">
+
+        <div className="flex-1 min-h-0 overflow-y-auto p-4 md:p-5 space-y-3">
           {loading ? (
             <p className="text-sm text-gray-500 text-center py-8">Loading notifications…</p>
           ) : notifications.length === 0 ? (
@@ -96,24 +98,19 @@ export function NotificationsDrawer({
             notifications.map((notif) => (
               <div
                 key={notif.id}
-                className={`p-4 rounded-lg border ${
+                className={`p-3.5 rounded-lg border ${
                   notif.read ? 'bg-gray-50 border-gray-100' : 'bg-white border-red-100 shadow-sm'
                 }`}
               >
                 <div className="flex items-start gap-3">
-                  <div className="mt-0.5">{getIcon(notif.category)}</div>
+                  <div className="mt-0.5 shrink-0">{getIcon(notif.category)}</div>
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <span className="text-xs font-medium text-gray-500 uppercase">{notif.category}</span>
-                        {notif.title && (
-                          <p className={`text-sm mt-0.5 ${notif.read ? 'text-gray-700' : 'text-gray-900 font-semibold'}`}>
-                            {notif.title}
-                          </p>
-                        )}
-                      </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">
+                        {notif.category}
+                      </span>
                       <div className="flex items-center gap-1 shrink-0">
-                        <span className="text-xs text-gray-400 whitespace-nowrap">
+                        <span className="text-[11px] text-gray-400 whitespace-nowrap">
                           {formatNotificationTime(notif.createdAt)}
                         </span>
                         <button
@@ -126,10 +123,23 @@ export function NotificationsDrawer({
                         </button>
                       </div>
                     </div>
-                    <p className={`text-sm mt-1 ${notif.read ? 'text-gray-600' : 'text-gray-900 font-medium'}`}>
+                    {notif.title && (
+                      <p
+                        className={`text-sm mt-1 leading-snug break-words ${
+                          notif.read ? 'text-gray-700' : 'text-gray-900 font-semibold'
+                        }`}
+                      >
+                        {notif.title}
+                      </p>
+                    )}
+                    <p
+                      className={`text-sm mt-1 leading-snug break-words ${
+                        notif.read ? 'text-gray-600' : 'text-gray-800'
+                      }`}
+                    >
                       {notif.message}
                     </p>
-                    <div className="flex flex-wrap items-center gap-3 mt-2">
+                    <div className="flex flex-wrap items-center gap-3 mt-2.5">
                       {!notif.read && (
                         <button
                           type="button"

@@ -377,18 +377,16 @@ export function Topbar() {
         </div>
       )}
 
-      {isNotificationsOpen && (
-        <NotificationsDrawer
-          isOpen={isNotificationsOpen}
-          onClose={() => setIsNotificationsOpen(false)}
-          notifications={notifications}
-          loading={notificationsLoading}
-          onMarkRead={handleMarkRead}
-          onMarkAllRead={handleMarkAllRead}
-          onDelete={handleDelete}
-          onClearAll={handleClearAll}
-        />
-      )}
+      <NotificationsDrawer
+        isOpen={isNotificationsOpen}
+        onClose={() => setIsNotificationsOpen(false)}
+        notifications={notifications}
+        loading={notificationsLoading}
+        onMarkRead={handleMarkRead}
+        onMarkAllRead={handleMarkAllRead}
+        onDelete={handleDelete}
+        onClearAll={handleClearAll}
+      />
     </>
   );
 }

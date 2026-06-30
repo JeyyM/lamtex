@@ -3,7 +3,15 @@ export const MODAL_BACKDROP_TRANSITION = { duration: 0.22, ease: [0.4, 0, 0.2, 1
 
 export const MODAL_PANEL_TRANSITION = { duration: 0.28, ease: [0.16, 1, 0.3, 1] as const };
 
-export function modalPanelMotion(mobileBottomSheet = false) {
+export function modalPanelMotion(mobileBottomSheet = false, drawerFromRight = false) {
+  if (drawerFromRight) {
+    return {
+      initial: { x: '100%' },
+      animate: { x: 0 },
+      exit: { x: '100%' },
+      transition: MODAL_PANEL_TRANSITION,
+    };
+  }
   if (mobileBottomSheet) {
     return {
       initial: { opacity: 0, y: 48 },
