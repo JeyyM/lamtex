@@ -13,6 +13,33 @@ import {
   Maximize2,
 } from 'lucide-react';
 import type { ChatMessage, ChatAttachment } from '@/src/types/chat';
+import { notifyLinkPreviewImageUrl } from '@/src/lib/notifyApi';
+
+function LinkPreviewImage({
+  src,
+  alt,
+  className,
+}: {
+  src: string;
+  alt: string;
+  className: string;
+}) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return null;
+
+  const proxied = src.includes('/api/link-preview-image?') ? src : notifyLinkPreviewImageUrl(src);
+
+  return (
+    <img
+      src={proxied}
+      alt={alt}
+      loading="lazy"
+      referrerPolicy="no-referrer"
+      className={className}
+      onError={() => setFailed(true)}
+    />
+  );
+}
 
 function formatBytes(bytes: number): string {
   if (!bytes) return '';
@@ -243,11 +270,10 @@ export function MessageContent({ message, isOwnMessage, onImageClick, onVideoCli
           }`}
         >
           {message.linkPreview.image && (
-            <img
+            <LinkPreviewImage
               src={message.linkPreview.image}
               alt={message.linkPreview.title ?? 'Link preview'}
-              loading="lazy"
-              className="max-h-40 w-full object-cover"
+              className="max-h-40 w-full object-cover bg-gray-100"
             />
           )}
           <div className="p-2.5">

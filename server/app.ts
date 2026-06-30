@@ -243,6 +243,7 @@ import {
 import { readEnv } from './env';
 import { assertSafePublicUrl } from './lib/ssrfGuard';
 import { createNotifyAuthMiddleware } from './lib/notifyAuth';
+import { extractOgImageUrl } from './lib/ogImage';
 
 const app = express();
 
@@ -2331,20 +2332,70 @@ app.post('/api/link-preview', async (req, res) => {
       return;
     }
 
-    const r = result as Record<string, any>;
-    const ogImage = r.ogImage;
-    const imageRaw = Array.isArray(ogImage) ? ogImage[0]?.url : ogImage?.url;
+    const r = result as Record<string, unknown>;
+    const pageUrl = String(r.ogUrl ?? r.requestUrl ?? url);
+    const image = extractOgImageUrl(r, pageUrl);
     res.json({
       ok: true,
-      url: r.ogUrl ?? r.requestUrl ?? url,
-      title: r.ogTitle ?? r.twitterTitle ?? null,
-      description: r.ogDescription ?? r.twitterDescription ?? null,
-      image: imageRaw ?? null,
-      siteName: r.ogSiteName ?? null,
+      url: pageUrl,
+      title: (r.ogTitle ?? r.twitterTitle ?? null) as string | null,
+      description: (r.ogDescription ?? r.twitterDescription ?? null) as string | null,
+      image,
+      siteName: (r.ogSiteName ?? null) as string | null,
     });
   } catch (err) {
     console.error('[notify-server] link-preview', err);
     res.json({ ok: false });
+  }
+});
+
+/** Proxy preview images (no auth — <img> cannot send Bearer tokens). SSRF-guarded. */
+app.get('/api/link-preview-image', async (req, res) => {
+  const rawUrl = typeof req.query.url === 'string' ? req.query.url.trim() : '';
+  if (!/^https?:\/\//i.test(rawUrl)) {
+    res.status(400).end();
+    return;
+  }
+
+  try {
+    await assertSafePublicUrl(rawUrl);
+  } catch {
+    res.status(400).end();
+    return;
+  }
+
+  try {
+    const upstream = await fetch(rawUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; LamtexBot/1.0)',
+        Accept: 'image/*,*/*;q=0.8',
+      },
+      redirect: 'follow',
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!upstream.ok) {
+      res.status(502).end();
+      return;
+    }
+
+    const contentType = upstream.headers.get('content-type') ?? '';
+    if (!contentType.startsWith('image/')) {
+      res.status(415).end();
+      return;
+    }
+
+    const body = Buffer.from(await upstream.arrayBuffer());
+    if (body.length > 5_000_000) {
+      res.status(413).end();
+      return;
+    }
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+    res.send(body);
+  } catch (err) {
+    console.error('[notify-server] link-preview-image', err);
+    res.status(502).end();
   }
 });
 

@@ -11,6 +11,11 @@ export function notifyApiUrl(path: string): string {
   return base ? `${base}${p}` : p;
 }
 
+/** Load a third-party OG image through our SSRF-guarded notify proxy (hotlink-safe). */
+export function notifyLinkPreviewImageUrl(imageUrl: string): string {
+  return notifyApiUrl(`/api/link-preview-image?url=${encodeURIComponent(imageUrl)}`);
+}
+
 /**
  * Fetch the notify API, attaching the current Supabase access token so the
  * server can authenticate the caller (see server/lib/notifyAuth.ts).
