@@ -4,6 +4,7 @@ import { Button } from '@/src/components/ui/Button';
 import { Invoice } from '@/src/types/orders';
 import { PaymentLink, PAYMENT_METHOD_CONFIGS, calculatePaymentFees } from '@/src/types/payments';
 import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
+import { generateSecureToken } from '@/src/lib/secureToken';
 
 interface PaymentLinkModalProps {
   invoice: Invoice;
@@ -20,8 +21,8 @@ export function PaymentLinkModal({ invoice, onClose, onGenerate }: PaymentLinkMo
   const [copied, setCopied] = useState(false);
 
   const handleGenerate = () => {
-    // Generate unique token
-    const token = `PAY-2026-${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
+    // Generate unique, crypto-strong token (128-bit) — infeasible to guess.
+    const token = `PAY-${new Date().getFullYear()}-${generateSecureToken(16)}`;
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + expiryDays);
 

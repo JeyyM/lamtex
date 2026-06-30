@@ -1,3 +1,5 @@
+import { supabase } from '@/src/lib/supabase';
+
 /**
  * Notification / email API base URL.
  * - Dev: empty → relative `/api/*` (Vite proxy → localhost:3001)
@@ -9,6 +11,20 @@ export function notifyApiUrl(path: string): string {
   return base ? `${base}${p}` : p;
 }
 
-export function notifyFetch(path: string, init?: RequestInit): Promise<Response> {
-  return fetch(notifyApiUrl(path), init);
+/**
+ * Fetch the notify API, attaching the current Supabase access token so the
+ * server can authenticate the caller (see server/lib/notifyAuth.ts).
+ */
+export async function notifyFetch(path: string, init?: RequestInit): Promise<Response> {
+  const headers = new Headers(init?.headers);
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (token && !headers.has('Authorization')) {
+      headers.set('Authorization', `Bearer ${token}`);
+    }
+  } catch {
+    // No session (e.g. public page) — send unauthenticated; server decides.
+  }
+  return fetch(notifyApiUrl(path), { ...init, headers });
 }

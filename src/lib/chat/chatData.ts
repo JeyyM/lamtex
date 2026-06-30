@@ -1,5 +1,6 @@
 import { supabase } from '@/src/lib/supabase';
 import { notifyFetch } from '@/src/lib/notifyApi';
+import { optimizeImage } from '@/src/lib/imageOptimizer';
 import type {
   Chat,
   ChatMessage,
@@ -380,11 +381,12 @@ export async function updateGroupAvatar(conversationId: string, avatarUrl: strin
 }
 
 export async function uploadGroupAvatar(file: File): Promise<string> {
-  const ext = file.name.split('.').pop() ?? 'jpg';
+  const { file: uploadFile } = await optimizeImage(file);
+  const ext = uploadFile.name.split('.').pop() ?? 'webp';
   const path = `${CHAT_ATTACHMENT_FOLDER}/group-avatars/${Date.now()}_${Math.random().toString(36).slice(2, 7)}.${ext}`;
   const { error } = await supabase.storage
     .from(STORAGE_BUCKET)
-    .upload(path, file, { cacheControl: '3600', upsert: false });
+    .upload(path, uploadFile, { cacheControl: '3600', upsert: false, contentType: uploadFile.type });
   if (error) throw new Error(error.message);
   const { data: pub } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(path);
   return pub.publicUrl;
@@ -569,20 +571,27 @@ export async function uploadChatAttachment(
   conversationId: string,
   file: File,
 ): Promise<ChatAttachment> {
+  const uploadFile = file.type.startsWith('image/')
+    ? (await optimizeImage(file)).file
+    : file;
   const path = `${CHAT_ATTACHMENT_FOLDER}/${conversationId}/${Date.now()}-${Math.random()
     .toString(36)
-    .slice(2, 9)}_${safeFileName(file.name)}`;
+    .slice(2, 9)}_${safeFileName(uploadFile.name)}`;
   const { error } = await supabase.storage
     .from(STORAGE_BUCKET)
-    .upload(path, file, { cacheControl: '3600', upsert: false });
+    .upload(path, uploadFile, {
+      cacheControl: '3600',
+      upsert: false,
+      contentType: uploadFile.type || undefined,
+    });
   if (error) throw new Error(error.message);
   const { data: pub } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(path);
   const kind: ChatAttachment['kind'] = file.type.startsWith('image/') ? 'image' : 'file';
   return {
     url: pub.publicUrl,
-    name: file.name,
-    type: file.type || 'application/octet-stream',
-    size: file.size,
+    name: uploadFile.name,
+    type: uploadFile.type || 'application/octet-stream',
+    size: uploadFile.size,
     kind,
   };
 }

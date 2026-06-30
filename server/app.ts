@@ -241,6 +241,8 @@ import {
   materialStockAlertSubject,
 } from './email/notificationSubjects';
 import { readEnv } from './env';
+import { assertSafePublicUrl } from './lib/ssrfGuard';
+import { createNotifyAuthMiddleware } from './lib/notifyAuth';
 
 const app = express();
 
@@ -275,6 +277,12 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json({ limit: '1mb' }));
+
+// Authenticate notify + link-preview endpoints (enforced when Supabase env is
+// configured on this server — see server/lib/notifyAuth.ts).
+const notifyAuth = createNotifyAuthMiddleware();
+app.use('/api/notifications', notifyAuth);
+app.use('/api/link-preview', notifyAuth);
 
 /** Restore full /api/... path when Vercel rewrites to /api/index. */
 app.use((req, _res, next) => {
@@ -2301,6 +2309,14 @@ app.post('/api/link-preview', async (req, res) => {
     const url = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
     if (!/^https?:\/\//i.test(url)) {
       res.status(400).json({ ok: false, error: 'Invalid url' });
+      return;
+    }
+
+    // SSRF guard: block internal/metadata/private destinations before fetching.
+    try {
+      await assertSafePublicUrl(url);
+    } catch {
+      res.status(400).json({ ok: false, error: 'URL not allowed' });
       return;
     }
 

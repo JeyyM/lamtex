@@ -4081,6 +4081,113 @@ BEGIN
 END;
 $$;
 
+-- ── 24f-pre: Public order portal anti-brute-force rate limiting ───────────
+-- Source: database/public_order_rate_limit.sql
+-- The public RPCs below are granted to `anon`, so they are reachable directly
+-- via the REST API with the public anon key. These helpers throttle token
+-- probing by client IP from inside the SECURITY DEFINER functions (the only
+-- place that cannot be bypassed).
+CREATE TABLE IF NOT EXISTS public.public_order_access_attempts (
+  id          BIGSERIAL PRIMARY KEY,
+  ip          TEXT NOT NULL DEFAULT 'unknown',
+  found       BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_public_order_access_attempts_ip_time
+  ON public.public_order_access_attempts (ip, created_at DESC);
+
+ALTER TABLE public.public_order_access_attempts ENABLE ROW LEVEL SECURITY;
+
+CREATE OR REPLACE FUNCTION public.current_request_ip()
+RETURNS TEXT
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_headers TEXT;
+  v_ip      TEXT;
+BEGIN
+  BEGIN
+    v_headers := current_setting('request.headers', true);
+  EXCEPTION WHEN OTHERS THEN
+    v_headers := NULL;
+  END;
+
+  IF v_headers IS NULL OR v_headers = '' THEN
+    RETURN 'unknown';
+  END IF;
+
+  BEGIN
+    v_ip := split_part(COALESCE((v_headers::json) ->> 'x-forwarded-for', ''), ',', 1);
+  EXCEPTION WHEN OTHERS THEN
+    v_ip := NULL;
+  END;
+
+  v_ip := NULLIF(trim(COALESCE(v_ip, '')), '');
+  RETURN COALESCE(v_ip, 'unknown');
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.public_order_access_guard()
+RETURNS TEXT
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_ip       TEXT := public.current_request_ip();
+  v_fail_10m INT;
+  v_all_1m   INT;
+BEGIN
+  SELECT count(*) INTO v_fail_10m
+  FROM public.public_order_access_attempts
+  WHERE ip = v_ip
+    AND found = FALSE
+    AND created_at > NOW() - INTERVAL '10 minutes';
+
+  IF v_fail_10m >= 30 THEN
+    RETURN 'rate_limited';
+  END IF;
+
+  SELECT count(*) INTO v_all_1m
+  FROM public.public_order_access_attempts
+  WHERE ip = v_ip
+    AND created_at > NOW() - INTERVAL '1 minute';
+
+  IF v_all_1m >= 120 THEN
+    RETURN 'rate_limited';
+  END IF;
+
+  RETURN NULL;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.public_order_access_record(p_found BOOLEAN)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_ip TEXT := public.current_request_ip();
+BEGIN
+  INSERT INTO public.public_order_access_attempts (ip, found)
+  VALUES (v_ip, COALESCE(p_found, FALSE));
+
+  IF random() < 0.01 THEN
+    DELETE FROM public.public_order_access_attempts
+    WHERE created_at < NOW() - INTERVAL '1 day';
+  END IF;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.current_request_ip() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.public_order_access_guard() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.public_order_access_record(BOOLEAN) FROM PUBLIC;
+
 -- ── 24f: Get public order summary by portal token ─────────────────────────
 -- Source: database/order_customer_portal_contacts.sql (latest version)
 CREATE OR REPLACE FUNCTION public.get_public_order_summary(p_token TEXT)
@@ -4102,8 +4209,16 @@ DECLARE
   v_agent    JSONB;
   v_agent_core TEXT;
   v_driver   JSONB;
+  v_block    TEXT;
 BEGIN
+  -- Anti-brute-force: throttle by client IP before doing anything else.
+  v_block := public.public_order_access_guard();
+  IF v_block IS NOT NULL THEN
+    RETURN jsonb_build_object('ok', false, 'error', v_block);
+  END IF;
+
   IF p_token IS NULL OR length(trim(p_token)) < 8 THEN
+    PERFORM public.public_order_access_record(false);
     RETURN jsonb_build_object('ok', false, 'error', 'invalid_token');
   END IF;
 
@@ -4112,8 +4227,12 @@ BEGIN
   WHERE token = trim(p_token);
 
   IF NOT FOUND THEN
+    PERFORM public.public_order_access_record(false);
     RETURN jsonb_build_object('ok', false, 'error', 'not_found');
   END IF;
+
+  -- Valid token (even if revoked/expired/cancelled) — not a guess.
+  PERFORM public.public_order_access_record(true);
 
   IF v_portal.revoked_at IS NOT NULL THEN
     RETURN jsonb_build_object('ok', false, 'error', 'revoked');
@@ -4487,8 +4606,15 @@ AS $$
 DECLARE
   v_portal order_customer_portals%ROWTYPE;
   v_lines  JSONB;
+  v_block  TEXT;
 BEGIN
+  v_block := public.public_order_access_guard();
+  IF v_block IS NOT NULL THEN
+    RETURN '[]'::jsonb;
+  END IF;
+
   IF p_token IS NULL OR length(trim(p_token)) < 8 THEN
+    PERFORM public.public_order_access_record(false);
     RETURN '[]'::jsonb;
   END IF;
 
@@ -4497,8 +4623,11 @@ BEGIN
   WHERE token = trim(p_token);
 
   IF NOT FOUND THEN
+    PERFORM public.public_order_access_record(false);
     RETURN '[]'::jsonb;
   END IF;
+
+  PERFORM public.public_order_access_record(true);
 
   IF v_portal.expires_at IS NOT NULL AND v_portal.expires_at < NOW() THEN
     RETURN '[]'::jsonb;
@@ -12100,6 +12229,99 @@ BEGIN
       );
     EXCEPTION WHEN duplicate_object THEN NULL;
     END;
+  END LOOP;
+END $$;
+
+-- ============================================================================
+-- RLS HARDENING — self-escalation / self-dealing guard
+-- Mirrors database/rls_self_escalation_guard.sql. Must run AFTER the blanket
+-- loop above so it replaces the permissive write policies on privilege/finance
+-- tables. Employees cannot modify their OWN permission/assignment/financial
+-- rows (only an Executive, or any user acting on someone else's row, may write).
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION public.current_employee_id()
+RETURNS UUID
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT e.id
+  FROM public.employees e
+  WHERE e.auth_user_id = auth.uid()
+  LIMIT 1;
+$$;
+
+CREATE OR REPLACE FUNCTION public.is_executive()
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.employees e
+    WHERE e.auth_user_id = auth.uid()
+      AND e.status = 'active'
+      AND e.user_role IS NOT DISTINCT FROM 'Executive'::public.user_role
+  );
+$$;
+
+REVOKE ALL ON FUNCTION public.current_employee_id() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.is_executive() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.current_employee_id() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.is_executive() TO authenticated;
+
+DO $$
+DECLARE
+  tbl TEXT;
+  guard CONSTANT TEXT :=
+    '(public.is_executive() OR employee_id IS DISTINCT FROM public.current_employee_id())';
+BEGIN
+  FOREACH tbl IN ARRAY ARRAY[
+    'employee_order_permissions',
+    'employee_product_permissions',
+    'employee_material_permissions',
+    'employee_warehouse_permissions',
+    'employee_production_request_permissions',
+    'employee_purchase_order_permissions',
+    'employee_inter_branch_request_permissions',
+    'employee_logistics_permissions',
+    'employee_customer_permissions',
+    'employee_supplier_permissions',
+    'employee_finance_permissions',
+    'employee_employees_permissions',
+    'employee_agent_analytics_permissions',
+    'employee_reports_permissions',
+    'employee_settings_permissions',
+    'employee_product_assignments',
+    'employee_material_assignments',
+    'employee_compensation',
+    'employee_bank_details',
+    'employee_government_ids'
+  ]
+  LOOP
+    EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', 'auth_insert_' || tbl, tbl);
+    EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', 'auth_update_' || tbl, tbl);
+    EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', 'auth_delete_' || tbl, tbl);
+    EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', 'sec_insert_' || tbl, tbl);
+    EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', 'sec_update_' || tbl, tbl);
+    EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', 'sec_delete_' || tbl, tbl);
+
+    EXECUTE format(
+      'CREATE POLICY %I ON public.%I FOR INSERT TO authenticated WITH CHECK %s',
+      'sec_insert_' || tbl, tbl, guard
+    );
+    EXECUTE format(
+      'CREATE POLICY %I ON public.%I FOR UPDATE TO authenticated USING %s WITH CHECK %s',
+      'sec_update_' || tbl, tbl, guard, guard
+    );
+    EXECUTE format(
+      'CREATE POLICY %I ON public.%I FOR DELETE TO authenticated USING %s',
+      'sec_delete_' || tbl, tbl, guard
+    );
   END LOOP;
 END $$;
 

@@ -40,6 +40,7 @@ import { supabase } from '../lib/supabase';
 import { EmojiPickerPopover } from '../components/chat/EmojiPickerPopover';
 import { MessageContent } from '../components/chat/MessageContent';
 import { ChatLightbox, type LightboxImage } from '../components/chat/ChatLightbox';
+import { ChatAvatar } from '../components/chat/ChatAvatar';
 import {
   fetchChatDirectory,
   fetchConversations,
@@ -215,15 +216,14 @@ function InfoPanel({
           title={chat.type === 'group' ? 'Change group photo' : undefined}
           disabled={avatarUploading}
         >
-          {chat.avatarUrl ? (
-            <img src={chat.avatarUrl} alt={chatDisplayName} className="w-20 h-20 rounded-full object-cover" />
-          ) : (
-            <div className="w-20 h-20 rounded-full bg-gradient-to-br from-red-400 to-red-600 flex items-center justify-center text-white font-bold text-2xl">
-              {chat.type === 'group' ? <Users className="w-9 h-9" /> : getUserInitials(chatDisplayName)}
-            </div>
-          )}
+          <ChatAvatar
+            type={chat.type}
+            displayName={chatDisplayName}
+            avatarUrl={chat.avatarUrl}
+            size="lg"
+          />
           {chat.type === 'group' && (
-            <div className="absolute inset-0 rounded-full bg-black/0 group-hover:bg-black/30 flex items-center justify-center transition-colors">
+            <div className="absolute inset-0 rounded-full bg-black/0 group-hover:bg-black/30 flex items-center justify-center transition-colors pointer-events-none">
               {avatarUploading
                 ? <Loader2 className="w-6 h-6 text-white animate-spin opacity-0 group-hover:opacity-100" />
                 : <Camera className="w-6 h-6 text-white opacity-0 group-hover:opacity-100 transition-opacity" />}
@@ -1139,9 +1139,12 @@ export default function ChatsPage() {
                         }`}
                       >
                         <div className="flex items-start gap-3">
-                          <div className="w-12 h-12 rounded-full bg-gradient-to-br from-red-400 to-red-600 flex items-center justify-center text-white font-semibold flex-shrink-0">
-                            {chat.type === 'group' ? <Users className="w-6 h-6" /> : getUserInitials(displayName)}
-                          </div>
+                          <ChatAvatar
+                            type={chat.type}
+                            displayName={displayName}
+                            avatarUrl={chat.avatarUrl}
+                            size="sm"
+                          />
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center justify-between mb-1">
                               <h3 className="font-semibold text-gray-900 truncate">{displayName}</h3>
@@ -1183,9 +1186,13 @@ export default function ChatsPage() {
                       }`}
                       title={displayName}
                     >
-                      <div className="w-10 h-10 rounded-full bg-gradient-to-br from-red-400 to-red-600 flex items-center justify-center text-white font-semibold mx-auto">
-                        {chat.type === 'group' ? <Users className="w-5 h-5" /> : getUserInitials(displayName)}
-                      </div>
+                      <ChatAvatar
+                        type={chat.type}
+                        displayName={displayName}
+                        avatarUrl={chat.avatarUrl}
+                        size="xs"
+                        className="mx-auto"
+                      />
                       {chat.unreadCount > 0 && (
                         <div className="absolute top-1 right-1 w-5 h-5 bg-red-600 text-white text-xs rounded-full flex items-center justify-center font-semibold">
                           {chat.unreadCount}
@@ -1220,11 +1227,12 @@ export default function ChatsPage() {
                     >
                       <ArrowLeft className="w-5 h-5" />
                     </Button>
-                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-red-400 to-red-600 flex items-center justify-center text-white font-semibold">
-                      {selectedChat.type === 'group'
-                        ? <Users className="w-5 h-5" />
-                        : getUserInitials(chatDisplayName(selectedChat))}
-                    </div>
+                    <ChatAvatar
+                      type={selectedChat.type}
+                      displayName={chatDisplayName(selectedChat)}
+                      avatarUrl={selectedChat.avatarUrl}
+                      size="xs"
+                    />
                     <div>
                       <h2 className="font-semibold text-gray-900">{chatDisplayName(selectedChat)}</h2>
                       <p className="text-xs text-gray-500">

@@ -1,4 +1,5 @@
 import { supabase } from '@/src/lib/supabase';
+import { generateSecureToken } from '@/src/lib/secureToken';
 import { mapPublicActivities } from '@/src/lib/publicOrderActivity';
 import { getItemDiscountLines } from '@/src/lib/publicOrderTotals';
 import type {
@@ -13,8 +14,8 @@ import type {
 
 function generatePortalToken(): string {
   const year = new Date().getFullYear();
-  const suffix = Math.random().toString(36).slice(2, 10).toUpperCase();
-  return `ORD-${year}-${suffix}`;
+  // 128-bit crypto-random suffix → guessing a valid token is infeasible.
+  return `ORD-${year}-${generateSecureToken(16)}`;
 }
 
 export function buildOrderCustomerPortalUrl(token: string): string {
@@ -437,8 +438,12 @@ export function publicOrderErrorMessage(code?: string): string {
       return 'This order link is invalid or has been removed.';
     case 'expired':
       return 'This order link has expired. Please contact your sales agent for a new link.';
+    case 'revoked':
+      return 'This order link has been revoked. Please contact your sales agent for a new link.';
     case 'cancelled':
       return 'This order was cancelled.';
+    case 'rate_limited':
+      return 'Too many attempts. Please wait a few minutes and try again.';
     case 'invalid_token':
       return 'Invalid link.';
     default:
