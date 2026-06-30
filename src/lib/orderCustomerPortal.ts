@@ -142,6 +142,25 @@ function driverFromTrips(trips: PublicOrderTrip[]): PublicOrderAssignedDriver | 
   return null;
 }
 
+function normalizeRpcPayload(data: unknown): Record<string, unknown> {
+  if (data == null) return { ok: false, error: 'empty' };
+  if (typeof data === 'string') {
+    try {
+      const parsed = JSON.parse(data) as unknown;
+      if (parsed != null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      /* fall through */
+    }
+    return { ok: false, error: 'empty' };
+  }
+  if (typeof data === 'object' && !Array.isArray(data)) {
+    return data as Record<string, unknown>;
+  }
+  return { ok: false, error: 'empty' };
+}
+
 function mapPublicSummary(raw: Record<string, unknown>): PublicOrderSummary {
   const customer = (raw.customer as Record<string, unknown>) ?? {};
   const company = (raw.company as Record<string, unknown>) ?? {};
@@ -411,9 +430,7 @@ export async function fetchPublicOrderSummary(token: string): Promise<PublicOrde
       activities: [],
     };
   }
-  const summary = mapPublicSummary(
-    (data ?? { ok: false, error: 'empty' }) as Record<string, unknown>,
-  );
+  const summary = mapPublicSummary(normalizeRpcPayload(data));
   return mergeDiscountBreakdownIntoSummary(summary, discountRows);
 }
 
@@ -432,21 +449,18 @@ export async function recordOrderPortalEmailSent(portalId: string, email: string
   return { ok: true };
 }
 
+/** Customer-facing copy for the public order portal error states. */
 export function publicOrderErrorMessage(code?: string): string {
   switch (code) {
-    case 'not_found':
-      return 'This order link is invalid or has been removed.';
     case 'expired':
       return 'This order link has expired. Please contact your sales agent for a new link.';
     case 'revoked':
-      return 'This order link has been revoked. Please contact your sales agent for a new link.';
+      return 'This order link is no longer active. Please contact your sales agent for a new link.';
     case 'cancelled':
-      return 'This order was cancelled.';
+      return 'This order was cancelled. Please contact your sales agent if you have questions.';
     case 'rate_limited':
-      return 'Too many attempts. Please wait a few minutes and try again.';
-    case 'invalid_token':
-      return 'Invalid link.';
+      return 'Too many attempts from this connection. Please wait a few minutes and try again, or contact your sales agent.';
     default:
-      return 'We could not load this order. Please try again later or contact LAMTEX.';
+      return 'This order could not be loaded or does not exist. Please contact your sales agent for assistance.';
   }
 }

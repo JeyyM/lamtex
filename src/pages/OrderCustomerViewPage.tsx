@@ -88,10 +88,12 @@ export function OrderCustomerViewPage() {
   const { token } = useParams<{ token: string }>();
   const [loading, setLoading] = useState(true);
   const [summary, setSummary] = useState<PublicOrderSummary | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     if (!token) {
       setLoading(false);
+      setSummary(null);
       return;
     }
     let cancelled = false;
@@ -106,7 +108,7 @@ export function OrderCustomerViewPage() {
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [token, reloadKey]);
 
   const handlePrint = () => window.print();
 
@@ -119,11 +121,16 @@ export function OrderCustomerViewPage() {
   }
 
   if (!summary?.ok) {
+    const err = summary?.error;
+    const canRetry = err === 'rate_limited' || err === 'load_failed';
     return (
       <EntityNotFound
         {...NOT_FOUND_COPY.orderSummary}
-        description={publicOrderErrorMessage(summary?.error) ?? NOT_FOUND_COPY.orderSummary.description}
+        description={publicOrderErrorMessage(err) ?? NOT_FOUND_COPY.orderSummary.description}
         standalone
+        hideBackButton
+        variant={canRetry ? 'error' : 'missing'}
+        onRetry={canRetry ? () => setReloadKey((k) => k + 1) : undefined}
       />
     );
   }

@@ -43,6 +43,8 @@ export type EntityNotFoundProps = {
   retryLabel?: string;
   /** Full viewport centering for public / standalone pages. */
   standalone?: boolean;
+  /** Hide the back button (e.g. public customer pages with no in-app history). */
+  hideBackButton?: boolean;
   className?: string;
 };
 
@@ -58,6 +60,7 @@ export function EntityNotFound({
   onRetry,
   retryLabel = 'Retry',
   standalone = false,
+  hideBackButton = false,
   className,
 }: EntityNotFoundProps) {
   const navigate = useNavigate();
@@ -96,14 +99,16 @@ export function EntityNotFound({
               {retryLabel}
             </Button>
           )}
-          <Button
-            variant={onRetry ? 'outline' : 'primary'}
-            onClick={handleBack}
-            className="gap-2 w-full sm:w-auto"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            {backLabel}
-          </Button>
+          {!hideBackButton && (
+            <Button
+              variant={onRetry ? 'outline' : 'primary'}
+              onClick={handleBack}
+              className="gap-2 w-full sm:w-auto"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              {backLabel}
+            </Button>
+          )}
         </div>
       </CardContent>
     </Card>
@@ -156,8 +161,9 @@ export const NOT_FOUND_COPY = {
     icon: FileText,
   },
   orderSummary: {
-    title: 'Order Summary Not Found',
-    description: 'This order summary is unavailable, expired, or does not exist.',
+    title: 'Unable to load order',
+    description:
+      'This order could not be loaded or does not exist. Please contact your sales agent for assistance.',
     icon: FileText,
   },
   product: {

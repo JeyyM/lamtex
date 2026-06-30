@@ -96,9 +96,10 @@ BEGIN
   SELECT count(*) INTO v_all_1m
   FROM public.public_order_access_attempts
   WHERE ip = v_ip
+    AND found = FALSE
     AND created_at > NOW() - INTERVAL '1 minute';
 
-  IF v_all_1m >= 120 THEN
+  IF v_all_1m >= 60 THEN
     RETURN 'rate_limited';
   END IF;
 

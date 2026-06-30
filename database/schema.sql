@@ -4155,9 +4155,10 @@ BEGIN
   SELECT count(*) INTO v_all_1m
   FROM public.public_order_access_attempts
   WHERE ip = v_ip
+    AND found = FALSE
     AND created_at > NOW() - INTERVAL '1 minute';
 
-  IF v_all_1m >= 120 THEN
+  IF v_all_1m >= 60 THEN
     RETURN 'rate_limited';
   END IF;
 
@@ -4597,6 +4598,7 @@ GRANT EXECUTE ON FUNCTION public.get_public_order_summary(TEXT) TO anon, authent
 
 -- ── 24g: Get public per-line discount lines by token ───────────────────────
 -- Source: database/public_order_discount_lines.sql
+-- Rate limiting is handled by get_public_order_summary only (this RPC is supplementary).
 CREATE OR REPLACE FUNCTION public.get_public_order_discount_lines(p_token TEXT)
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -4606,15 +4608,8 @@ AS $$
 DECLARE
   v_portal order_customer_portals%ROWTYPE;
   v_lines  JSONB;
-  v_block  TEXT;
 BEGIN
-  v_block := public.public_order_access_guard();
-  IF v_block IS NOT NULL THEN
-    RETURN '[]'::jsonb;
-  END IF;
-
   IF p_token IS NULL OR length(trim(p_token)) < 8 THEN
-    PERFORM public.public_order_access_record(false);
     RETURN '[]'::jsonb;
   END IF;
 
@@ -4623,11 +4618,12 @@ BEGIN
   WHERE token = trim(p_token);
 
   IF NOT FOUND THEN
-    PERFORM public.public_order_access_record(false);
     RETURN '[]'::jsonb;
   END IF;
 
-  PERFORM public.public_order_access_record(true);
+  IF v_portal.revoked_at IS NOT NULL THEN
+    RETURN '[]'::jsonb;
+  END IF;
 
   IF v_portal.expires_at IS NOT NULL AND v_portal.expires_at < NOW() THEN
     RETURN '[]'::jsonb;
