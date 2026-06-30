@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X, Upload, Image as ImageIcon, Trash2, Loader2, Plus } from 'lucide-react';
 import ImageGalleryModal from '../ImageGalleryModal';
 import { RAW_MATERIAL_CATALOG_IMAGES_FOLDER } from '@/src/lib/catalogImageStorage';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 
 interface AddMaterialModalProps {
   isOpen: boolean;
@@ -204,11 +205,9 @@ const AddMaterialModal: React.FC<AddMaterialModalProps> = ({
     }));
   };
 
-  if (!isOpen) return null;
-
   return (
     <>
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <PortalModalOverlay open={isOpen} onClose={handleClose} zIndex={50}>
         <div className="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] flex flex-col shadow-xl">
           {/* Header */}
           <div className="p-6 border-b border-gray-200">
@@ -557,7 +556,7 @@ const AddMaterialModal: React.FC<AddMaterialModalProps> = ({
             </div>
           </div>
         </div>
-      </div>
+      </PortalModalOverlay>
 
       {/* Image Gallery Modal */}
       <ImageGalleryModal

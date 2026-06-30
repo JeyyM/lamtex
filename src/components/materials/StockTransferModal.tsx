@@ -12,6 +12,7 @@ import {
   MapPin,
 } from 'lucide-react';
 import { useAppContext } from '@/src/store/AppContext';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 
 interface StockTransferModalProps {
   onClose: () => void;
@@ -135,7 +136,7 @@ export function StockTransferModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 overflow-y-auto">
+    <PortalModalOverlay open onClose={onClose} zIndex={50}>
       <div className="bg-white rounded-lg shadow-xl max-w-5xl w-full max-h-[95vh] overflow-y-auto">
         <form onSubmit={handleSubmit}>
           {/* Header */}
@@ -431,6 +432,6 @@ export function StockTransferModal({
           </div>
         </form>
       </div>
-    </div>
+    </PortalModalOverlay>
   );
 }

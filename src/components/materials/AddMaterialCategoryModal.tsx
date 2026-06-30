@@ -3,6 +3,7 @@ import { X, Upload, Image as ImageIcon, Trash2, Loader2 } from 'lucide-react';
 import ImageGalleryModal from '../ImageGalleryModal';
 import CategoryIconModal from '../products/CategoryIconModal';
 import { RAW_MATERIAL_CATALOG_IMAGES_FOLDER } from '@/src/lib/catalogImageStorage';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 
 interface AddMaterialCategoryModalProps {
   isOpen: boolean;
@@ -144,11 +145,9 @@ const AddMaterialCategoryModal: React.FC<AddMaterialCategoryModalProps> = ({
     }
   };
 
-  if (!isOpen) return null;
-
   return (
     <>
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-0 md:p-4">
+      <PortalModalOverlay open={isOpen} onClose={handleClose} zIndex={50} mobileBottomSheet>
         <div className="bg-white w-full h-full md:h-auto md:rounded-xl md:max-w-2xl md:w-full md:max-h-[90vh] flex flex-col shadow-xl">
           {/* Header */}
           <div className="p-4 md:p-6 border-b border-gray-200">
@@ -334,7 +333,7 @@ const AddMaterialCategoryModal: React.FC<AddMaterialCategoryModalProps> = ({
             </div>
           </div>
         </div>
-      </div>
+      </PortalModalOverlay>
 
       {/* Image Gallery Modal */}
       <ImageGalleryModal

@@ -3,6 +3,7 @@ import { X, Upload, Image as ImageIcon, Trash2 } from 'lucide-react';
 import ImageGalleryModal from '../ImageGalleryModal';
 import CategoryIconModal from './CategoryIconModal';
 import { PRODUCT_CATALOG_IMAGES_FOLDER } from '@/src/lib/catalogImageStorage';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 
 interface AddCategoryModalProps {
   isOpen: boolean;
@@ -145,13 +146,10 @@ const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
     }
   };
 
-  if (!isOpen) return null;
-
   return (
     <>
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div className="fixed inset-0 bg-black/50" onClick={handleClose} />
-        <div className="relative z-10 bg-white w-full md:max-w-2xl rounded-xl max-h-[90vh] flex flex-col shadow-xl" onClick={(e) => e.stopPropagation()}>
+      <PortalModalOverlay open={isOpen} onClose={handleClose} zIndex={50}>
+        <div className="bg-white w-full md:max-w-2xl rounded-xl max-h-[90vh] flex flex-col shadow-xl">
           {/* Header */}
           <div className="px-4 md:px-6 py-4 md:py-6 border-b border-gray-200">
             <div className="flex items-center justify-between gap-3">
@@ -365,7 +363,7 @@ const AddCategoryModal: React.FC<AddCategoryModalProps> = ({
             </div>
           </div>
         </div>
-      </div>
+      </PortalModalOverlay>
 
       {/* Image Gallery Modal */}
       <ImageGalleryModal

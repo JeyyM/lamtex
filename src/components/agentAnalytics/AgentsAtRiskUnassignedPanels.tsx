@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { History, Loader2, UserPlus, CheckCircle2, X } from 'lucide-react';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 import {
   AgentAnalyticsBundle,
   AgentQuotaMissHistoryRow,
@@ -174,21 +174,17 @@ function QuotaMissHistoryModal({
   agent: AgentQuotaMissHistoryRow | null;
   onClose: () => void;
 }) {
-  if (!agent || typeof document === 'undefined') return null;
+  if (!agent) return null;
 
   const count = agent.misses.length;
 
-  return createPortal(
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="quota-miss-history-title"
-      className="fixed inset-0 z-[200] flex min-h-[100dvh] min-h-screen w-full flex-col items-center justify-center overflow-y-auto bg-black/50 p-4 sm:p-6"
-      onClick={onClose}
-    >
+  return (
+    <PortalModalOverlay open={Boolean(agent)} onClose={onClose} zIndex={200}>
       <div
         className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[min(90vh,640px)] flex flex-col my-auto"
-        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="quota-miss-history-title"
       >
         <div className="flex items-start justify-between gap-3 px-4 py-3 border-b border-gray-200 shrink-0">
           <div className="min-w-0">
@@ -220,8 +216,7 @@ function QuotaMissHistoryModal({
           <QuotaMissHistoryTable misses={agent.misses} />
         </div>
       </div>
-    </div>,
-    document.body,
+    </PortalModalOverlay>
   );
 }
 

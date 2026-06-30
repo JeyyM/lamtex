@@ -8,6 +8,7 @@ import {
   MessageSquare,
 } from 'lucide-react';
 import { useAppContext } from '@/src/store/AppContext';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 
 interface CancelOrderModalProps {
   orderNumber: string;
@@ -95,7 +96,7 @@ export function CancelOrderModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-0 lg:p-4">
+    <PortalModalOverlay open onClose={onClose} zIndex={50}>
       <Card className="w-full h-full max-h-screen overflow-y-auto rounded-none lg:rounded-xl lg:w-full lg:max-w-2xl lg:max-h-[90vh]">
         <CardHeader className="border-b border-gray-200 bg-red-50">
           <div className="flex items-center justify-between">
@@ -297,6 +298,6 @@ export function CancelOrderModal({
           </CardContent>
         </form>
       </Card>
-    </div>
+    </PortalModalOverlay>
   );
 }

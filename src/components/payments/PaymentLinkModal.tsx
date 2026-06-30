@@ -3,6 +3,7 @@ import { X, Link as LinkIcon, Mail, MessageSquare, QrCode, Copy, Check } from 'l
 import { Button } from '@/src/components/ui/Button';
 import { Invoice } from '@/src/types/orders';
 import { PaymentLink, PAYMENT_METHOD_CONFIGS, calculatePaymentFees } from '@/src/types/payments';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 
 interface PaymentLinkModalProps {
   invoice: Invoice;
@@ -75,7 +76,7 @@ export function PaymentLinkModal({ invoice, onClose, onGenerate }: PaymentLinkMo
   });
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+    <PortalModalOverlay open onClose={onClose} zIndex={50}>
       <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="border-b border-gray-200 px-6 py-4 flex items-center justify-between flex-shrink-0">
@@ -263,6 +264,6 @@ export function PaymentLinkModal({ invoice, onClose, onGenerate }: PaymentLinkMo
           )}
         </div>
       </div>
-    </div>
+    </PortalModalOverlay>
   );
 }

@@ -7,6 +7,7 @@ import type { OrderLineItem } from '@/src/types/orders';
 import { Button } from '@/src/components/ui/Button';
 import { StatKpiCard } from '@/src/components/ui/StatKpiCard';
 import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
+import { ModalPortal } from '@/src/components/ui/ModalPortal';
 import { TablePagination, TABLE_PAGE_SIZE } from '@/src/components/ui/TablePagination';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import OrderDetailModal from '../components/logistics/OrderDetailModal';
@@ -836,6 +837,7 @@ export default function WarehousePage() {
   const [ordersCalSelectedKey, setOrdersCalSelectedKey] = useState<string | null>(null);
 
   // Orders & Loading tab — live order rows + modals
+  const [tripActionFilter, setTripActionFilter] = useState<'all' | 'pending'>('all');
   const [warehouseOrders, setWarehouseOrders] = useState<WarehouseOrderRow[]>([]);
   const [warehouseTrips, setWarehouseTrips] = useState<WarehouseTripSummary[]>([]);
   /** On-hand qty by variant for the active warehouse branch (loading pipeline). */
@@ -914,6 +916,16 @@ export default function WarehousePage() {
         return b.trip.tripNumber.localeCompare(a.trip.tripNumber);
       });
   }, [warehouseOrders, warehouseTrips]);
+
+  /** Trips visible under the current filter (all vs. pending-action). */
+  const visibleTripGroups = useMemo(() => {
+    if (tripActionFilter === 'all') return warehouseTripGroups;
+    const actionableStatuses = new Set(['Scheduled', 'Loading', 'Packed']);
+    return warehouseTripGroups.filter(({ orders }) =>
+      orders.some((o) => actionableStatuses.has(o.status)),
+    );
+  }, [warehouseTripGroups, tripActionFilter]);
+
   const resolveWarehouseOrderRow = useCallback(
     (id: string) => warehouseOrders.find((o) => o.id === id) ?? pastTripOrderById.get(id),
     [warehouseOrders, pastTripOrderById],
@@ -4301,11 +4313,36 @@ export default function WarehousePage() {
 
             {/* Orders — live from DB */}
             <div className="bg-white rounded-lg border border-gray-200">
-              <div className="p-4 border-b border-gray-200 flex items-center justify-between gap-3">
-                <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+              <div className="p-4 border-b border-gray-200 flex flex-wrap items-center gap-3">
+                <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2 mr-auto">
                   <Truck className="w-5 h-5 text-blue-600 shrink-0" aria-hidden />
                   Ongoing Trips
                 </h3>
+                {/* Filter toggle */}
+                <div className="flex items-center rounded-lg border border-gray-200 overflow-hidden text-xs font-medium">
+                  <button
+                    type="button"
+                    onClick={() => setTripActionFilter('all')}
+                    className={`px-3 py-1.5 transition-colors ${
+                      tripActionFilter === 'all'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-white text-gray-600 hover:bg-gray-50'
+                    }`}
+                  >
+                    All trips
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTripActionFilter('pending')}
+                    className={`px-3 py-1.5 border-l border-gray-200 transition-colors ${
+                      tripActionFilter === 'pending'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-white text-gray-600 hover:bg-gray-50'
+                    }`}
+                  >
+                    Needs loading
+                  </button>
+                </div>
                 <div className="flex items-center gap-2">
                   {warehouseOrdersLoading && <Loader2 className="w-4 h-4 animate-spin text-gray-400" />}
                   <button
@@ -4343,6 +4380,22 @@ export default function WarehousePage() {
                     This list only shows orders assigned to a logistics trip. Use <strong>Logistics</strong> to plan trips and attach orders—they will appear here under each trip.
                   </p>
                 </div>
+              ) : visibleTripGroups.length === 0 ? (
+                <div className="py-10 text-center text-gray-500 px-4">
+                  <Package className="w-10 h-10 mx-auto mb-2 text-gray-300" />
+                  <p className="text-sm font-medium text-gray-700">No trips need loading right now</p>
+                  <p className="text-xs mt-2 text-gray-500">
+                    All scheduled orders have been packed or are already in transit. Switch to{' '}
+                    <button
+                      type="button"
+                      className="underline hover:text-gray-700"
+                      onClick={() => setTripActionFilter('all')}
+                    >
+                      All trips
+                    </button>{' '}
+                    to see the full list.
+                  </p>
+                </div>
               ) : (
                 <>
                   <WarehouseTripLoadingModal
@@ -4371,19 +4424,6 @@ export default function WarehousePage() {
                         return;
                       }
                       void advanceWarehouseOrderStatus(full, next);
-                    }}
-                    confirmInTransit={(lite) => {
-                      const full = resolveWarehouseOrderRow(lite.id);
-                      if (!full) return;
-                      const rows = full.items.map((li) => ({
-                        itemId: li.id,
-                        shippedQuantity: Math.max(0, li.quantity - (li.quantityShipped ?? 0)),
-                      }));
-                      void handleConfirmInTransit(rows, full);
-                    }}
-                    onRecordDelivery={(lite) => {
-                      const full = resolveWarehouseOrderRow(lite.id);
-                      if (full) handleSendProof(full);
                     }}
                     onEditTrip={
                       tripLoadingModalTrip ? () => void openWarehouseEditTrip(tripLoadingModalTrip) : undefined
@@ -4419,7 +4459,7 @@ export default function WarehousePage() {
                   )}
 
                   <div className="hidden md:block divide-y divide-gray-200">
-                    {warehouseTripGroups.map(({ trip, orders }) => {
+                    {visibleTripGroups.map(({ trip, orders }) => {
                       const tripShortage = orders.some((o) => o.hasShortage);
                       return (
                         <div key={trip.id} className="p-4 space-y-3">
@@ -4545,7 +4585,7 @@ export default function WarehousePage() {
                   </div>
 
                   <div className="md:hidden divide-y divide-gray-200">
-                    {warehouseTripGroups.map(({ trip, orders }) => {
+                    {visibleTripGroups.map(({ trip, orders }) => {
                       const tripShortage = orders.some((o) => o.hasShortage);
                       return (
                         <div key={trip.id} className="p-4 space-y-3">
@@ -5369,16 +5409,12 @@ export default function WarehousePage() {
         const selectedEvs = ordersCalSelectedKey ? (ordersCalByDateKey[ordersCalSelectedKey] ?? []) : [];
 
         return (
-          <div
-            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-            onClick={() => setOrdersCalOpen(false)}
-          >
+          <ModalPortal open onBackdropClick={() => setOrdersCalOpen(false)} zIndex={50} backdropClassName="bg-black/60 backdrop-blur-sm">
             <div
               role="dialog"
               aria-modal="true"
               aria-labelledby="orders-cal-title"
               className="bg-white rounded-xl shadow-xl w-full max-w-4xl max-h-[92vh] overflow-hidden flex flex-col"
-              onClick={(e) => e.stopPropagation()}
             >
               {/* Header */}
               <div className="flex items-start justify-between gap-3 p-4 md:p-5 border-b border-gray-200">
@@ -5568,7 +5604,7 @@ export default function WarehousePage() {
                 </button>
               </div>
             </div>
-          </div>
+          </ModalPortal>
         );
       })()}
 
@@ -5764,16 +5800,12 @@ export default function WarehousePage() {
 
       {/* Full warehouse schedule calendar (month view; includes IBR) */}
       {scheduleCalendarModalOpen && (
-        <div
-          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-          onClick={() => setScheduleCalendarModalOpen(false)}
-        >
+        <ModalPortal open={scheduleCalendarModalOpen} onBackdropClick={() => setScheduleCalendarModalOpen(false)} zIndex={50} backdropClassName="bg-black/60 backdrop-blur-sm">
           <div
             role="dialog"
             aria-modal="true"
             aria-labelledby="warehouse-calendar-title"
             className="bg-white rounded-xl shadow-xl w-full max-w-4xl max-h-[92vh] overflow-hidden flex flex-col"
-            onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-start justify-between gap-3 p-4 md:p-5 border-b border-gray-200">
               <div>
@@ -6005,7 +6037,7 @@ export default function WarehousePage() {
               )}
             </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
 
       {/* Create Request Modal */}
@@ -6023,13 +6055,9 @@ export default function WarehousePage() {
 
       {/* 14-day strip: day detail (matches full-calendar data) */}
       {scheduleStripDetailDateKey && (
-        <div
-          className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-          onClick={() => setScheduleStripDetailDateKey(null)}
-        >
+        <ModalPortal open={Boolean(scheduleStripDetailDateKey)} onBackdropClick={() => setScheduleStripDetailDateKey(null)} zIndex={50} backdropClassName="bg-black/70 backdrop-blur-sm">
           <div
             className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto"
-            onClick={(e) => e.stopPropagation()}
             role="dialog"
             aria-modal="true"
             aria-labelledby="schedule-strip-day-title"
@@ -6144,7 +6172,7 @@ export default function WarehousePage() {
               )}
             </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
 
       {/* ── Fulfill Order (Record Delivery) Modal ────────────────────── */}

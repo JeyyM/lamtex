@@ -30,6 +30,7 @@ import {
 
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
+import { ModalPortal } from '@/src/components/ui/ModalPortal';
 import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { StatKpiCard } from '@/src/components/ui/StatKpiCard';
@@ -1743,7 +1744,7 @@ function EditCreditLimitModal(props: { row: CustomerCreditRow; onClose: () => vo
 
 function Modal(props: { title: string; onClose: () => void; children: React.ReactNode }) {
   return (
-    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+    <ModalPortal open onBackdropClick={props.onClose} zIndex={50} backdropClassName="bg-black/60">
       <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[92vh] flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
           <h2 className="text-base sm:text-lg font-semibold text-gray-900">{props.title}</h2>
@@ -1753,7 +1754,7 @@ function Modal(props: { title: string; onClose: () => void; children: React.Reac
                 </div>
         <div className="p-5 overflow-y-auto flex-1">{props.children}</div>
               </div>
-            </div>
+    </ModalPortal>
   );
 }
 

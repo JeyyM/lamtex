@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { useLogisticsPermissions } from '@/src/lib/permissions/logisticsPermissions';
 import { ModuleAccessDenied } from '@/src/components/permissions/ModuleAccessDenied';
+import { ModalPortal } from '@/src/components/ui/ModalPortal';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { StatKpiCard } from '@/src/components/ui/StatKpiCard';
 import { Badge } from '@/src/components/ui/Badge';
@@ -1817,13 +1818,9 @@ export function LogisticsPage() {
         }
 
         return (
-          <div
-            className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-            onClick={() => setStripDetailDateKey(null)}
-          >
+          <ModalPortal open onBackdropClick={() => setStripDetailDateKey(null)} zIndex={50} backdropClassName="bg-black/70 backdrop-blur-sm">
             <div
               className="bg-white rounded-xl shadow-xl w-full max-w-sm"
-              onClick={(e) => e.stopPropagation()}
               role="dialog"
               aria-modal="true"
             >
@@ -1876,7 +1873,7 @@ export function LogisticsPage() {
                 })}
               </div>
             </div>
-          </div>
+          </ModalPortal>
         );
       })()}
 
@@ -1902,16 +1899,12 @@ export function LogisticsPage() {
         const selectedTrips = dispatchCalSelectedKey ? (dispatchCalByDateKey[dispatchCalSelectedKey] ?? []) : [];
 
         return (
-          <div
-            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-            onClick={() => setDispatchCalOpen(false)}
-          >
+          <ModalPortal open onBackdropClick={() => setDispatchCalOpen(false)} zIndex={50} backdropClassName="bg-black/60 backdrop-blur-sm">
             <div
               role="dialog"
               aria-modal="true"
               aria-labelledby="dispatch-cal-title"
               className="bg-white rounded-xl shadow-xl w-full max-w-4xl max-h-[92vh] overflow-hidden flex flex-col"
-              onClick={(e) => e.stopPropagation()}
             >
               {/* Header */}
               <div className="flex items-start justify-between gap-3 p-4 md:p-5 border-b border-gray-200">
@@ -2104,7 +2097,7 @@ export function LogisticsPage() {
                 </button>
               </div>
             </div>
-          </div>
+          </ModalPortal>
         );
       })()}
     </div>

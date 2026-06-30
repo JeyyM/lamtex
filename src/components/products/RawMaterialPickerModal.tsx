@@ -1,9 +1,9 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { createPortal } from 'react-dom';
 import { X, ChevronRight, ArrowLeft, Search, Package, Loader2, Building2 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAppContext } from '@/src/store/AppContext';
 import { getMaterialIdsWithStockAtBothBranches } from '../../lib/interBranchRequest';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 
 /** Same as lib: `VITE_DEBUG_IBR=true` forces logs in production builds. */
 const ibrPickerLog = (...args: unknown[]) => {
@@ -162,15 +162,6 @@ export default function RawMaterialPickerModal({
     () => (allowedMaterialIds?.length ? new Set(allowedMaterialIds) : null),
     [allowedMaterialIds],
   );
-
-  useEffect(() => {
-    if (!isOpen) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = prev;
-    };
-  }, [isOpen]);
 
   // Fetch supplier catalogue, then which categories actually contain those materials
   useEffect(() => {
@@ -536,18 +527,12 @@ export default function RawMaterialPickerModal({
     return { label: 'In Stock', color: 'text-green-600 bg-green-50' };
   };
 
-  if (!isOpen) return null;
-
-  const overlay = (
-    <div
-      className="fixed top-0 left-0 right-0 bottom-0 z-[200] flex w-[100vw] min-h-[100dvh] h-[100dvh] items-center justify-center bg-black/50 p-4"
-      role="presentation"
-    >
+  return (
+    <PortalModalOverlay open={isOpen} onClose={onClose} zIndex={200}>
       <div
         className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col"
         role="dialog"
         aria-modal="true"
-        onClick={(e) => e.stopPropagation()}
       >
 
         {/* Header */}
@@ -737,8 +722,6 @@ export default function RawMaterialPickerModal({
 
         </div>
       </div>
-    </div>
+    </PortalModalOverlay>
   );
-
-  return typeof document !== 'undefined' ? createPortal(overlay, document.body) : null;
 }

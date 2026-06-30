@@ -29,6 +29,7 @@ import {
   QuotaHistoryRow,
 } from '@/src/lib/agentAnalytics';
 import { supabase } from '@/src/lib/supabase';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 
 interface Props {
   rows: AgentLeaderboardRow[];
@@ -392,7 +393,7 @@ function EditQuotaModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+    <PortalModalOverlay open onClose={onClose} zIndex={50}>
       <div className="bg-white rounded-xl shadow-xl max-w-md w-full">
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
           <h3 className="font-semibold text-gray-900">Edit quota — {row.agentName}</h3>
@@ -463,7 +464,7 @@ function EditQuotaModal({
           </button>
         </div>
       </div>
-    </div>
+    </PortalModalOverlay>
   );
 }
 
@@ -526,7 +527,7 @@ function BulkQuotaModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+    <PortalModalOverlay open onClose={onClose} zIndex={50}>
       <div className="bg-white rounded-xl shadow-xl max-w-3xl w-full max-h-[90vh] flex flex-col">
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
           <h3 className="font-semibold text-gray-900 flex items-center gap-2">
@@ -648,7 +649,7 @@ function BulkQuotaModal({
           </button>
         </div>
       </div>
-    </div>
+    </PortalModalOverlay>
   );
 }
 
@@ -678,7 +679,7 @@ function HistoryModal({
   }, [employeeId]);
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+    <PortalModalOverlay open onClose={onClose} zIndex={50}>
       <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] flex flex-col">
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
           <h3 className="font-semibold text-gray-900 flex items-center gap-2">
@@ -738,6 +739,6 @@ function HistoryModal({
           )}
         </div>
       </div>
-    </div>
+    </PortalModalOverlay>
   );
 }

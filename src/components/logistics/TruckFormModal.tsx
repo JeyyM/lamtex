@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { X, Save, Loader2, Weight, Box, Ruler } from 'lucide-react';
 import { Button } from '@/src/components/ui/Button';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 import type { Vehicle } from '@/src/types/logistics';
 import {
   emptyTruckForm,
@@ -63,15 +64,6 @@ export function TruckFormModal({
 
   useEffect(() => {
     if (!isOpen) return;
-    const originalOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = originalOverflow;
-    };
-  }, [isOpen]);
-
-  useEffect(() => {
-    if (!isOpen) return;
     let cancelled = false;
 
     const run = async () => {
@@ -111,8 +103,6 @@ export function TruckFormModal({
     };
   }, [isOpen, mode, vehicleUuid, initialForm, branchName, isContainer]);
 
-  if (!isOpen) return null;
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
@@ -150,7 +140,7 @@ export function TruckFormModal({
     : isContainer ? 'Edit shipping container' : 'Edit truck';
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-0 sm:p-4">
+    <PortalModalOverlay open={isOpen} onClose={onClose} zIndex={100} mobileBottomSheet>
       <div className="bg-white w-full max-w-full h-full max-h-screen sm:h-auto sm:max-w-3xl sm:max-h-[90vh] sm:rounded-lg shadow-xl flex flex-col relative overflow-hidden">
         <div className="sticky top-0 bg-white border-b border-gray-200 sm:rounded-t-lg px-4 sm:px-6 py-4 flex items-start justify-between gap-3 z-10">
           <div className="min-w-0">
@@ -524,6 +514,6 @@ export function TruckFormModal({
           </div>
         </form>
       </div>
-    </div>
+    </PortalModalOverlay>
   );
 }

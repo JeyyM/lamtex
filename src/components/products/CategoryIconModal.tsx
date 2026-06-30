@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { X, Search } from 'lucide-react';
+import { ModalPortal } from '@/src/components/ui/ModalPortal';
 
 // Material Symbol icons for general retail categories
 const MATERIAL_ICONS = [
@@ -82,10 +83,8 @@ const CategoryIconModal: React.FC<CategoryIconModalProps> = ({
     setCurrentPage(0); // Reset to first page when searching
   };
 
-  if (!isOpen) return null;
-
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <ModalPortal open={isOpen} onBackdropClick={onClose} zIndex={50} backdropClassName="bg-black/50 backdrop-blur-sm">
       <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full max-h-[85vh] flex flex-col">
         {/* Header */}
         <div className="p-6 border-b border-gray-200">
@@ -179,7 +178,7 @@ const CategoryIconModal: React.FC<CategoryIconModalProps> = ({
           </div>
         )}
       </div>
-    </div>
+    </ModalPortal>
   );
 };
 

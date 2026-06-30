@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { createPortal } from 'react-dom';
 import { X, Truck, Package } from 'lucide-react';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 
 export type IbrInTransitModalLine = {
   id: string;
@@ -59,8 +59,6 @@ export function MarkIbrInTransitModal({
     }
   }, [isOpen, lines]);
 
-  if (!isOpen) return null;
-
   const parseShipInput = (value: string): number => {
     const n = parseFloat(value);
     if (Number.isNaN(n)) return NaN;
@@ -112,15 +110,14 @@ export function MarkIbrInTransitModal({
     void onConfirm(rows);
   };
 
-  return createPortal(
-    <div className="fixed inset-0 z-[100] overflow-y-auto bg-black/50">
-      <div className="flex min-h-dvh items-center justify-center p-4 py-8">
-        <div
-          className="w-full max-w-3xl max-h-[min(90dvh,900px)] overflow-y-auto overscroll-contain rounded-lg bg-white shadow-xl"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="ibr-in-transit-title"
-        >
+  return (
+    <PortalModalOverlay open={isOpen} onClose={onClose} zIndex={100}>
+      <div
+        className="w-full max-w-3xl max-h-[min(90dvh,900px)] overflow-y-auto overscroll-contain rounded-lg bg-white shadow-xl"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="ibr-in-transit-title"
+      >
           <div className="flex items-center justify-between border-b border-gray-200 bg-gradient-to-r from-amber-50 to-white p-6">
           <div>
             <h2 id="ibr-in-transit-title" className="flex items-center gap-2 text-xl font-bold text-gray-900">
@@ -249,8 +246,6 @@ export function MarkIbrInTransitModal({
           </button>
         </div>
         </div>
-      </div>
-    </div>,
-    document.body,
+    </PortalModalOverlay>
   );
 }

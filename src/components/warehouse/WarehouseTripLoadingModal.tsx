@@ -4,6 +4,7 @@ import { Button } from '@/src/components/ui/Button';
 import type { OrderLineItem } from '@/src/types/orders';
 import { finishedGoodProductHref } from '@/src/lib/productRoutes';
 import { tripStatusBadgeClass } from '@/src/lib/logisticsScheduling';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 
 export type WarehouseTripSummary = {
   id: string;
@@ -89,8 +90,6 @@ type WarehouseTripLoadingModalProps = {
   warehouseStatusOrderId: string | null;
   inTransitSubmitting: boolean;
   advanceWarehouseOrderStatus: (order: WarehouseOrderRowLite, nextStatus: string) => void | Promise<void>;
-  confirmInTransit: (order: WarehouseOrderRowLite) => void | Promise<void>;
-  onRecordDelivery: (order: WarehouseOrderRowLite) => void;
   /** Opens full trip edit (status, truck, driver, orders) — same flow as Logistics. */
   onEditTrip?: () => void;
   editTripOpening?: boolean;
@@ -106,8 +105,6 @@ export function WarehouseTripLoadingModal({
   warehouseStatusOrderId,
   inTransitSubmitting,
   advanceWarehouseOrderStatus,
-  confirmInTransit,
-  onRecordDelivery,
   onEditTrip,
   editTripOpening = false,
 }: WarehouseTripLoadingModalProps) {
@@ -125,8 +122,6 @@ export function WarehouseTripLoadingModal({
       setReportSent(false);
     }
   }, [isOpen, trip?.id, trip?.delayReason]);
-
-  if (!isOpen) return null;
 
   const resetReport = () => {
     setProblemMessage(trip?.delayReason?.trim() ?? '');
@@ -168,15 +163,9 @@ export function WarehouseTripLoadingModal({
     : 'Orders not on a trip — loading & stock';
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50"
-      onClick={handleClose}
-      onKeyDown={(e) => e.key === 'Escape' && handleClose()}
-      role="presentation"
-    >
+    <PortalModalOverlay open={isOpen} onClose={handleClose} zIndex={50}>
       <div
         className="bg-white rounded-xl shadow-xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col"
-        onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
         aria-labelledby="trip-loading-modal-title"
@@ -372,30 +361,16 @@ export function WarehouseTripLoadingModal({
                   </Button>
                 )}
                 {ord.status === 'Ready' && (
-                  <Button
-                    type="button"
-                    size="sm"
-                    className="bg-amber-600 hover:bg-amber-700"
-                    disabled={inTransitSubmitting}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      void confirmInTransit(ord);
-                    }}
-                  >
-                    {inTransitSubmitting ? (
-                      <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />
-                    ) : (
-                      <Truck className="w-3.5 h-3.5 mr-1" />
-                    )}
-                    Mark in Transit
-                  </Button>
+                  <span className="text-xs text-emerald-700 font-medium self-center flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    Ready to depart — awaiting logistics dispatch
+                  </span>
                 )}
-                {ord.status === 'In Transit' && (
-                  <Button type="button" size="sm" className="bg-emerald-600 hover:bg-emerald-700" onClick={() => onRecordDelivery(ord)}>
-                    <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
-                    Record delivery
-                  </Button>
+                {(ord.status === 'In Transit' || ord.status === 'Delivered' || ord.status === 'Completed') && (
+                  <span className="text-xs text-blue-700 font-medium self-center flex items-center gap-1">
+                    <Truck className="w-3.5 h-3.5" />
+                    {ord.status} — handled by logistics / driver
+                  </span>
                 )}
                 {ord.status === 'Approved' && (
                   <span className="text-xs text-gray-500 self-center">Awaiting scheduled trip from logistics</span>
@@ -450,6 +425,6 @@ export function WarehouseTripLoadingModal({
           </div>
         </div>
       </div>
-    </div>
+    </PortalModalOverlay>
   );
 }

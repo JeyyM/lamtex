@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { createPortal } from 'react-dom';
 import { X, Factory, CheckCircle, AlertTriangle } from 'lucide-react';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 
 export type ProductionLineRow = {
   id: string;
@@ -59,7 +59,9 @@ export function RecordProductionModal({
     setInputValues(Object.fromEntries(lines.map((line) => [line.id, String(remainingFor(line))])));
   }, [isOpen, lines]);
 
-  if (!isOpen) return null;
+  const handleBackdropClose = () => {
+    if (!saving) onClose();
+  };
 
   const setAdded = (itemId: string, added: number) => {
     // Allow surpassing the target (buffer stock) — only floor at zero.
@@ -104,15 +106,8 @@ export function RecordProductionModal({
   const fullLines = results.filter((v) => v.producedQuantity + 1e-9 >= v.targetQuantity).length;
 
   const el = (
-    <div
-      className="fixed inset-0 z-[100] flex min-h-[100dvh] w-full items-center justify-center bg-black/50 p-4"
-      role="presentation"
-      onClick={() => !saving && onClose()}
-    >
-      <div
-        className="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <PortalModalOverlay open={isOpen} onClose={handleBackdropClose} zIndex={100}>
+      <div className="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-hidden">
         <div className="flex items-center justify-between p-6 border-b border-gray-200 bg-gradient-to-r from-emerald-50 to-white">
           <div>
             <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
@@ -272,8 +267,8 @@ export function RecordProductionModal({
           </button>
         </div>
       </div>
-    </div>
+    </PortalModalOverlay>
   );
 
-  return createPortal(el, document.body);
+  return el;
 }

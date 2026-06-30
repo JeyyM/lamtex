@@ -3,6 +3,7 @@ import { X, Upload, Image as ImageIcon, Trash2 } from 'lucide-react';
 import ImageGalleryModal from '../ImageGalleryModal';
 import { productCategoryOptionLabel } from '@/src/lib/productRoutes';
 import { PRODUCT_CATALOG_IMAGES_FOLDER } from '@/src/lib/catalogImageStorage';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 
 export interface ProductCategoryOption {
   id: string;
@@ -176,8 +177,7 @@ const AddProductModal: React.FC<AddProductModalProps> = ({
 
   return (
     <>
-      {isOpen && (
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <PortalModalOverlay open={isOpen} onClose={handleClose} zIndex={50}>
         <div className="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] flex flex-col shadow-xl">
           {/* Header */}
           <div className="p-6 border-b border-gray-200">
@@ -403,8 +403,7 @@ const AddProductModal: React.FC<AddProductModalProps> = ({
             </div>
           </div>
         </div>
-      </div>
-      )}
+      </PortalModalOverlay>
 
       {/* Image Gallery Modal — always mounted so folder/catalogScope apply reliably */}
       <ImageGalleryModal

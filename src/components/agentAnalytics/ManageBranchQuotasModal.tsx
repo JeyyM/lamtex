@@ -1,6 +1,6 @@
 import React from 'react';
-import { createPortal } from 'react-dom';
 import { X, Target } from 'lucide-react';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 import { BranchOption } from '@/src/lib/agentAnalytics';
 import { BranchQuotaPanel } from '@/src/components/agentAnalytics/QuotasManager';
 
@@ -27,19 +27,9 @@ export function ManageBranchQuotasModal({
   changedByName,
   onSaved,
 }: Props) {
-  if (!open || typeof document === 'undefined') return null;
-
-  return createPortal(
-    <div
-      role="dialog"
-      aria-modal="true"
-      className="fixed inset-0 z-[200] flex min-h-[100dvh] min-h-screen w-full flex-col items-center justify-center overflow-y-auto bg-black/50 p-4 sm:p-6"
-      onClick={onClose}
-    >
-      <div
-        className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[min(90vh,720px)] flex flex-col my-auto"
-        onClick={(e) => e.stopPropagation()}
-      >
+  return (
+    <PortalModalOverlay open={open} onClose={onClose} zIndex={200}>
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[min(90vh,720px)] flex flex-col my-auto">
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 shrink-0">
           <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
             <Target className="w-5 h-5 text-indigo-600" /> Manage quotas
@@ -73,7 +63,6 @@ export function ManageBranchQuotasModal({
           </div>
         </div>
       </div>
-    </div>,
-    document.body,
+    </PortalModalOverlay>
   );
 }

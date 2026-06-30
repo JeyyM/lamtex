@@ -6,6 +6,7 @@ import {
   deliveryProofGalleryFolder,
   uploadOrderProofBinary,
 } from '@/src/lib/orderProofPayments';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 
 /** Max units in scope for this line (recorded at in transit, or full line qty if none / zero shipped). */
 export function fulfillmentCap(item: OrderLineItem): number {
@@ -92,8 +93,6 @@ export function FulfillOrderModal({
       setInputValues(Object.fromEntries(data.map((d) => [d.itemId, String(d.deliveredQuantity)])));
     }
   }, [isOpen, items]);
-
-  if (!isOpen) return null;
 
   const hasLineItems = items.length > 0;
 
@@ -198,7 +197,7 @@ export function FulfillOrderModal({
 
   return (
     <>
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+    <PortalModalOverlay open={isOpen} onClose={onClose} zIndex={50}>
       <div className="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-white">
@@ -514,7 +513,7 @@ export function FulfillOrderModal({
           </button>
         </div>
       </div>
-    </div>
+    </PortalModalOverlay>
 
     <ImageGalleryModal
       isOpen={showProofGallery}

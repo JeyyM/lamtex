@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { X, Package, Truck, Clock, MapPin, Calendar, User, AlertTriangle, CheckCircle, Edit } from 'lucide-react';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 
 interface OrderItem {
   name: string;
@@ -39,18 +40,6 @@ export default function OrderDetailModal({ isOpen, onClose, order }: OrderDetail
   const [problemDescription, setProblemDescription] = useState('');
   const [selectedStatus, setSelectedStatus] = useState(order.status);
 
-  useEffect(() => {
-    if (!isOpen) return;
-    const originalOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-
-    return () => {
-      document.body.style.overflow = originalOverflow;
-    };
-  }, [isOpen]);
-
-  if (!isOpen) return null;
-
   const handleReportProblem = () => {
     console.log('Problem reported:', problemDescription);
     alert('Problem reported successfully!');
@@ -81,7 +70,7 @@ export default function OrderDetailModal({ isOpen, onClose, order }: OrderDetail
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-0 sm:p-4">
+    <PortalModalOverlay open={isOpen} onClose={onClose} zIndex={100} mobileBottomSheet>
       <div className="bg-white w-full max-w-full h-full max-h-screen sm:h-auto sm:max-w-4xl sm:max-h-[90vh] sm:rounded-lg shadow-xl overflow-hidden flex flex-col">
         {/* Header */}
         <div className="flex items-start justify-between gap-3 p-4 sm:p-6 border-b border-gray-200">
@@ -354,6 +343,6 @@ export default function OrderDetailModal({ isOpen, onClose, order }: OrderDetail
           </button>
         </div>
       </div>
-    </div>
+    </PortalModalOverlay>
   );
 }

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { createPortal } from 'react-dom';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 import { X, Truck, Package } from 'lucide-react';
 import { OrderLineItem } from '@/src/types/orders';
 import { remainingToShipForLine } from '@/src/lib/orderShipmentQuantities';
@@ -52,8 +52,6 @@ export function MarkInTransitModal({
     }
   }, [isOpen, items, orderStatus]);
 
-  if (!isOpen) return null;
-
   const isPacked = purpose === 'markPacked';
   const title = isPacked ? 'Record loaded quantities' : 'Confirm in transit';
   const hint = isPacked
@@ -95,8 +93,8 @@ export function MarkInTransitModal({
     void onConfirm(rows);
   };
 
-  return createPortal(
-    <div className="fixed inset-0 z-[100] flex min-h-dvh items-center justify-center bg-black/50 p-4">
+  return (
+    <PortalModalOverlay open={isOpen} onClose={onClose} zIndex={100}>
       <div
         className="max-h-[min(90dvh,900px)] w-full max-w-3xl overflow-hidden rounded-lg bg-white shadow-xl"
         role="dialog"
@@ -213,7 +211,6 @@ export function MarkInTransitModal({
           </button>
         </div>
       </div>
-    </div>,
-    document.body
+    </PortalModalOverlay>
   );
 }

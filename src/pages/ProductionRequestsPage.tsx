@@ -83,6 +83,9 @@ const getStatusVariant = (status: PRStatus): 'success' | 'warning' | 'danger' | 
   return 'neutral';
 };
 
+/** Statuses that represent a closed PR — hidden by default, shown when "Show completed" is on. */
+const PR_CLOSED_STATUSES: PRStatus[] = ['Completed', 'Cancelled', 'Rejected'];
+
 /** IBR approval can create a PR for products to send; track those under Inter-branch requests, not this list. */
 function isIbrFlowProductionRequest(r: PRRow): boolean {
   return r.inter_branch_request_id != null || r.pr_number.startsWith('PR-IBR-');
@@ -110,6 +113,7 @@ export function ProductionRequestsPage() {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resolvedBranchId, setResolvedBranchId] = useState<string | null>(null);
+  const [showCompleted, setShowCompleted] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [prSortKey, setPrSortKey] = useState<string>('request_date');
@@ -234,11 +238,22 @@ export function ProductionRequestsPage() {
   }, [prRowsExcludingIbr, exportQueryDates]);
 
   const distinctStatuses = useMemo((): string[] => {
-    const s = new Set<string>(dateFilteredProductionRequests.map((r) => String(r.status)).filter(Boolean));
+    const pool = showCompleted
+      ? dateFilteredProductionRequests
+      : dateFilteredProductionRequests.filter((r) => !PR_CLOSED_STATUSES.includes(r.status));
+    const s = new Set<string>(pool.map((r) => String(r.status)).filter(Boolean));
     return Array.from(s).sort((a, b) => a.localeCompare(b));
-  }, [dateFilteredProductionRequests]);
+  }, [dateFilteredProductionRequests, showCompleted]);
+
+  // Reset status filter if its status is now hidden by the showCompleted toggle
+  useEffect(() => {
+    if (!showCompleted && PR_CLOSED_STATUSES.includes(statusFilter as PRStatus)) {
+      setStatusFilter('');
+    }
+  }, [showCompleted, statusFilter]);
 
   const filtered = dateFilteredProductionRequests.filter((r) => {
+    if (!showCompleted && PR_CLOSED_STATUSES.includes(r.status)) return false;
     const q = searchQuery.toLowerCase();
     const matchesSearch =
       r.pr_number.toLowerCase().includes(q) ||
@@ -322,13 +337,13 @@ export function ProductionRequestsPage() {
 
   useEffect(() => {
     setTablePage(1);
-  }, [searchQuery, statusFilter, resolvedBranchId, exportPeriodKind, exportCustomStart, exportCustomEnd]);
+  }, [searchQuery, statusFilter, showCompleted, resolvedBranchId, exportPeriodKind, exportCustomStart, exportCustomEnd]);
 
   const totalPRs = dateFilteredProductionRequests.length;
   const drafts = dateFilteredProductionRequests.filter((r) => r.status === 'Draft').length;
   const awaiting = dateFilteredProductionRequests.filter((r) => r.status === 'Requested').length;
   const inProgress = dateFilteredProductionRequests.filter((r) => r.status === 'In Progress').length;
-  const completed = dateFilteredProductionRequests.filter((r) => r.status === 'Completed').length;
+  const completed = dateFilteredProductionRequests.filter((r) => PR_CLOSED_STATUSES.includes(r.status)).length;
 
   const handleNewPR = async () => {
     setCreating(true);
@@ -429,21 +444,35 @@ export function ProductionRequestsPage() {
         />
         <StatKpiCard label="Pending approval" value={String(awaiting)} tone="amber" icon={<ClipboardList />} />
         <StatKpiCard label="In progress" value={String(inProgress)} tone="blue" icon={<PlayCircle />} />
-        <StatKpiCard label="Completed" value={String(completed)} tone="emerald" icon={<CheckCircle />} />
+        <StatKpiCard label="Completed / closed" value={String(completed)} tone="emerald" icon={<CheckCircle />} sub="Completed · Cancelled · Rejected" />
       </div>
 
       <Card>
         <CardContent className="p-4">
           <div className="flex flex-col gap-3">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
-              <input
-                type="text"
-                placeholder="Search by PR #, branch, or requested by…"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent outline-none"
-              />
+            <div className="flex flex-col sm:flex-row gap-3">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
+                <input
+                  type="text"
+                  placeholder="Search by PR #, branch, or requested by…"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent outline-none"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCompleted((v) => !v)}
+                className={`inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium transition-colors shrink-0 ${
+                  showCompleted
+                    ? 'bg-white border-emerald-500 text-emerald-700 shadow-[0_0_8px_2px_rgba(16,185,129,0.35)] hover:border-emerald-600'
+                    : 'bg-white border-gray-300 text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                <CheckCircle className="w-4 h-4" />
+                Show completed
+              </button>
             </div>
             <div className="md:hidden">
               <select

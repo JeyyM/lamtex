@@ -24,7 +24,6 @@ import {
   Activity,
   TrendingUp,
   TrendingDown,
-  Wrench,
 } from 'lucide-react';
 import {
   BarChart,
@@ -46,7 +45,6 @@ import {
   type IBRToFulfillRow,
   type RecentMovementRow,
 } from '@/src/lib/warehouseDashboard';
-import { buildWarehouseAssignmentScope } from '@/src/lib/warehouseScope';
 import { finishedGoodProductHref } from '@/src/lib/productRoutes';
 import { OrderTripIdCell } from '@/src/components/orders/OrderTripIdCell';
 
@@ -108,16 +106,11 @@ export function WarehouseDashboard(): React.ReactElement {
   const {
     branch,
     employeeName,
-    role,
-    assignedProductIds,
-    assignedMaterialIds,
+    warehouseScope,
     warehouseScopeLoading,
   } = useAppContext();
   const poPerms = usePurchaseOrderPermissions();
   const ibrPerms = useInterBranchRequestPermissions();
-
-  const scopeProductKey = assignedProductIds?.join('|') ?? '';
-  const scopeMaterialKey = assignedMaterialIds?.join('|') ?? '';
 
   const [bundle, setBundle] = useState<WarehouseManagerDashboardBundle | null>(null);
   const [loading, setLoading] = useState(true);
@@ -131,11 +124,10 @@ export function WarehouseDashboard(): React.ReactElement {
       setRefreshing(silent);
       setError(null);
       try {
-        const scope = buildWarehouseAssignmentScope(role, assignedProductIds, assignedMaterialIds);
         const data = await fetchWarehouseManagerDashboard({
           branchName: branch,
           employeeName,
-          scope,
+          scope: warehouseScope,
         });
         setBundle(data);
       } catch (e) {
@@ -145,14 +137,7 @@ export function WarehouseDashboard(): React.ReactElement {
         setRefreshing(false);
       }
     },
-    [
-      branch,
-      employeeName,
-      role,
-      scopeProductKey,
-      scopeMaterialKey,
-      warehouseScopeLoading,
-    ],
+    [branch, employeeName, warehouseScope, warehouseScopeLoading],
   );
 
   useEffect(() => {
@@ -217,19 +202,6 @@ export function WarehouseDashboard(): React.ReactElement {
           </DashHeaderLink>
         </div>
       </div>
-
-      {bundle.scopeActive && (
-        <Card className="border-blue-100 bg-blue-50/40">
-          <CardContent className="p-3 flex items-center gap-3">
-            <Wrench className="w-4 h-4 text-blue-600 shrink-0" />
-            <div className="text-sm text-blue-900">
-              You're viewing a scoped catalog:{' '}
-              <span className="font-semibold">{bundle.scopeSummary.productCount} product variants</span> and{' '}
-              <span className="font-semibold">{bundle.scopeSummary.materialCount} raw materials</span> assigned to you.
-            </div>
-          </CardContent>
-        </Card>
-      )}
 
       <WarehouseKpiStrip kpis={bundle.kpis} />
 

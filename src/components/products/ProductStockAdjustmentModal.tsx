@@ -9,6 +9,7 @@ import {
   setVariantBranchQuantity,
   setVariantTotalStockDirect,
 } from '@/src/lib/productVariantStock';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 
 type AdjustmentType = 'add' | 'subtract';
 
@@ -58,8 +59,6 @@ export default function ProductStockAdjustmentModal({
     if (!isOpen) return;
     setConsumeRawMaterials(adjustmentType === 'add');
   }, [isOpen, adjustmentType]);
-
-  if (!isOpen) return null;
 
   const unitsInt = Math.max(0, Math.round(Number(quantity) || 0));
   const newStock =
@@ -195,7 +194,7 @@ export default function ProductStockAdjustmentModal({
 
   if (view === 'success') {
     return (
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <PortalModalOverlay open={isOpen} onClose={handleClose} zIndex={50}>
         <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl p-8 text-center">
           <div className="inline-flex items-center justify-center w-16 h-16 bg-green-100 rounded-full mb-4">
             <CheckCircle className="w-8 h-8 text-green-600" />
@@ -206,13 +205,13 @@ export default function ProductStockAdjustmentModal({
             <strong>{savedDisplayStock ?? newStock} units</strong>.
           </p>
         </div>
-      </div>
+      </PortalModalOverlay>
     );
   }
 
   if (view === 'confirm') {
     return (
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <PortalModalOverlay open={isOpen} onClose={handleClose} zIndex={50}>
         <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
           <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between z-10">
             <div>
@@ -335,12 +334,12 @@ export default function ProductStockAdjustmentModal({
             </div>
           </div>
         </div>
-      </div>
+      </PortalModalOverlay>
     );
   }
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+    <PortalModalOverlay open={isOpen} onClose={handleClose} zIndex={50}>
       <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
         <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between z-10">
           <div>
@@ -542,6 +541,6 @@ export default function ProductStockAdjustmentModal({
           </div>
         </div>
       </div>
-    </div>
+    </PortalModalOverlay>
   );
 }

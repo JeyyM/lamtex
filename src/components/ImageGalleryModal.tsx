@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { createPortal } from 'react-dom';
 import { X, Upload, Search, Loader2, AlertTriangle, RefreshCw, Zap } from 'lucide-react';
+import { ModalPortal } from '@/src/components/ui/ModalPortal';
 import { supabase } from '@/src/lib/supabase';
 import { optimizeImage, formatBytes } from '@/src/lib/imageOptimizer';
 import { fetchGalleryImages, IMAGE_GALLERY_BUCKET, mergeGalleryWithAssigned, type GalleryImage } from '@/src/lib/imageGalleryStorage';
@@ -236,17 +236,17 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
     ? [selectedImage]
     : [];
 
-  if (!isOpen) return null;
-
-  const overlayZ = stackOnTopOfModal ? 'z-[110]' : 'z-[100]';
-  const overlayPad = stackOnTopOfModal ? 'p-0 sm:p-3' : 'p-0 sm:p-4';
   const panelClass = stackOnTopOfModal
     ? 'bg-white w-full flex flex-col shadow-xl h-[100dvh] max-h-[100dvh] sm:h-[calc(100dvh-1.5rem)] sm:max-h-[calc(100dvh-1.5rem)] max-w-none sm:max-w-[min(1280px,calc(100vw-1.5rem))] rounded-none sm:rounded-xl min-h-0'
     : 'bg-white w-full h-full sm:h-auto rounded-none sm:rounded-xl max-h-screen sm:max-h-[90vh] sm:max-w-5xl flex flex-col shadow-xl';
 
-  return createPortal(
-    <div
-      className={`fixed inset-0 flex items-center justify-center ${stackOnTopOfModal ? 'bg-black/60' : 'bg-black/50'} ${overlayZ} ${overlayPad} overflow-y-auto`}
+  return (
+    <ModalPortal
+      open={isOpen}
+      onBackdropClick={onClose}
+      zIndex={stackOnTopOfModal ? 110 : 100}
+      backdropClassName={stackOnTopOfModal ? 'bg-black/60' : 'bg-black/50'}
+      className={`flex items-center justify-center ${stackOnTopOfModal ? 'p-0 sm:p-3' : 'p-0 sm:p-4'} overflow-y-auto`}
     >
       <div className={panelClass}>
         {/* Header */}
@@ -478,8 +478,7 @@ const ImageGalleryModal: React.FC<ImageGalleryModalProps> = ({
           </div>
         </div>
       </div>
-    </div>,
-    document.body,
+    </ModalPortal>
   );
 };
 

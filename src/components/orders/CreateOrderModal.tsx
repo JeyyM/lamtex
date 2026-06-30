@@ -26,6 +26,7 @@ import {
   MapPin,
   Phone,
 } from 'lucide-react';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 
 // ── DB Types ──────────────────────────────────────────────────────────────────
 
@@ -601,12 +602,9 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
   const today = new Date().toISOString().split('T')[0];
 
   return (
-    <div 
-      className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-0 lg:p-4"
-    >
+    <PortalModalOverlay open onClose={onClose} zIndex={50}>
       <div 
         className="bg-white w-full h-full max-h-screen overflow-hidden flex flex-col lg:rounded-lg lg:h-auto lg:max-w-5xl lg:max-h-[90vh]"
-        onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="px-4 md:px-6 py-4 border-b border-gray-200 flex items-center justify-between">
@@ -1428,6 +1426,6 @@ export function CreateOrderModal({ customerId: initialCustomerId, customerName: 
           </div>
         </div>
       )}
-    </div>
+    </PortalModalOverlay>
   );
 }

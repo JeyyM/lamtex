@@ -21,6 +21,7 @@ import {
   type DriverTripSummary,
   type DriverDelayType,
 } from '@/src/lib/driverDashboard';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 
 export function DriverDashboard(): React.ReactElement {
   const { branch, employeeId, employeeName, session, sessionLoading, addAuditLog } = useAppContext();
@@ -243,7 +244,12 @@ export function DriverDashboard(): React.ReactElement {
 
       {/* Report delay modal */}
       {delayTrip && (
-        <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-[110] p-0 sm:p-4">
+        <PortalModalOverlay
+          open={Boolean(delayTrip)}
+          onClose={() => { if (!delaySaving) setDelayTrip(null); }}
+          zIndex={110}
+          mobileBottomSheet
+        >
           <div className="bg-white w-full sm:max-w-md sm:rounded-lg shadow-xl">
             <div className="p-5 border-b border-gray-200">
               <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
@@ -295,7 +301,7 @@ export function DriverDashboard(): React.ReactElement {
               </Button>
             </div>
           </div>
-        </div>
+        </PortalModalOverlay>
       )}
     </div>
   );

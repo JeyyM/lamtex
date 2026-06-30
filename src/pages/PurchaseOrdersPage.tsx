@@ -109,6 +109,9 @@ const getStatusVariant = (status: POStatus): 'success' | 'warning' | 'danger' | 
   return 'neutral';
 };
 
+/** Statuses that represent a closed PO — hidden by default, shown when "Show completed" is on. */
+const PO_CLOSED_STATUSES: POStatus[] = ['Completed', 'Cancelled', 'Rejected'];
+
 /** Inter-branch/transfer POs are not listed here; use **Inter-branch requests** in the app nav. */
 function hideFromMainPurchaseOrderList(po: PORow): boolean {
   return (
@@ -146,6 +149,7 @@ export function PurchaseOrdersPage() {
   const [searchQuery, setSearchQuery]           = useState('');
   /** '' = all PO statuses (matches column filter pattern on Orders) */
   const [statusFilter, setStatusFilter]         = useState('');
+  const [showCompleted, setShowCompleted]      = useState(false);
   const [poSortKey, setPoSortKey]              = useState<string>('order_date');
   const [poSortDir, setPoSortDir]              = useState<'asc' | 'desc'>('desc');
   const [poTablePage, setPoTablePage]         = useState(1);
@@ -267,11 +271,22 @@ export function PurchaseOrdersPage() {
   }, [visiblePurchaseOrders, exportQueryDates]);
 
   const distinctPoStatuses = useMemo(() => {
-    const s = new Set<POStatus>(dateFilteredPurchaseOrders.map((po) => po.status).filter((v): v is POStatus => Boolean(v)));
+    const pool = showCompleted
+      ? dateFilteredPurchaseOrders
+      : dateFilteredPurchaseOrders.filter((po) => !PO_CLOSED_STATUSES.includes(po.status));
+    const s = new Set<POStatus>(pool.map((po) => po.status).filter((v): v is POStatus => Boolean(v)));
     return Array.from(s).sort((a, b) => a.localeCompare(b));
-  }, [dateFilteredPurchaseOrders]);
+  }, [dateFilteredPurchaseOrders, showCompleted]);
+
+  // Reset status filter if it's now hidden by the showCompleted toggle
+  useEffect(() => {
+    if (!showCompleted && PO_CLOSED_STATUSES.includes(statusFilter as POStatus)) {
+      setStatusFilter('');
+    }
+  }, [showCompleted, statusFilter]);
 
   const filtered = dateFilteredPurchaseOrders.filter((po) => {
+    if (!showCompleted && PO_CLOSED_STATUSES.includes(po.status)) return false;
     const q = searchQuery.toLowerCase();
     const matchesSearch =
       po.po_number.toLowerCase().includes(q) ||
@@ -341,16 +356,19 @@ export function PurchaseOrdersPage() {
 
   useEffect(() => {
     setPoTablePage(1);
-  }, [searchQuery, statusFilter, resolvedBranchId, exportPeriodKind, exportCustomStart, exportCustomEnd]);
+  }, [searchQuery, statusFilter, showCompleted, resolvedBranchId, exportPeriodKind, exportCustomStart, exportCustomEnd]);
 
   // ── KPIs ───────────────────────────────────────────────
   const totalPOs     = dateFilteredPurchaseOrders.length;
   const draftPOs     = dateFilteredPurchaseOrders.filter((po) => po.status === 'Draft').length;
   const awaitingPOs  = dateFilteredPurchaseOrders.filter((po) => po.status === 'Requested').length;
+  // "In progress" = active POs that are NOT yet closed — Partially Received is active, not completed
   const pendingPOs   = dateFilteredPurchaseOrders.filter(po =>
     ['Accepted', 'Sent', 'Confirmed', 'Partially Received', 'Received'].includes(po.status)
   ).length;
-  const completedPOs = dateFilteredPurchaseOrders.filter(po => po.status === 'Completed').length;
+  const completedPOs = dateFilteredPurchaseOrders.filter(po =>
+    PO_CLOSED_STATUSES.includes(po.status)
+  ).length;
 
   const isOverdue = (po: PORow) =>
     po.expected_delivery_date &&
@@ -440,22 +458,36 @@ export function PurchaseOrdersPage() {
         />
         <StatKpiCard label="Pending approval" value={String(awaitingPOs)} tone="amber" icon={<ClipboardList />} />
         <StatKpiCard label="In progress" value={String(pendingPOs)} tone="orange" icon={<Clock />} />
-        <StatKpiCard label="Completed" value={String(completedPOs)} tone="emerald" icon={<CheckCircle />} />
+        <StatKpiCard label="Completed / closed" value={String(completedPOs)} tone="emerald" icon={<CheckCircle />} sub="Completed · Cancelled · Rejected" />
       </div>
 
       {/* ── Filters ── */}
       <Card>
         <CardContent className="p-4">
           <div className="flex flex-col gap-3">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
-              <input
-                type="text"
-                placeholder={showMaterialsColumn ? 'Search by PO number, supplier, or material…' : 'Search by PO number or supplier…'}
-                value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
-              />
+            <div className="flex flex-col sm:flex-row gap-3">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
+                <input
+                  type="text"
+                  placeholder={showMaterialsColumn ? 'Search by PO number, supplier, or material…' : 'Search by PO number or supplier…'}
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCompleted((v) => !v)}
+                className={`inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium transition-colors shrink-0 ${
+                  showCompleted
+                    ? 'bg-white border-emerald-500 text-emerald-700 shadow-[0_0_8px_2px_rgba(16,185,129,0.35)] hover:border-emerald-600'
+                    : 'bg-white border-gray-300 text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                <CheckCircle className="w-4 h-4" />
+                Show completed
+              </button>
             </div>
             <div className="md:hidden">
               <select

@@ -14,6 +14,7 @@ import {
   Info,
 } from 'lucide-react';
 import { useAppContext } from '@/src/store/AppContext';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 
 interface TransferProductModalProps {
   onClose: () => void;
@@ -133,7 +134,7 @@ export function TransferProductModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-0 md:p-4">
+    <PortalModalOverlay open onClose={onClose} zIndex={50} mobileBottomSheet>
       <Card className="w-full h-full md:w-auto md:h-auto md:max-w-4xl md:max-h-[85vh] flex flex-col md:rounded-xl">
         <CardHeader className="border-b bg-gradient-to-r from-orange-50 to-white flex-shrink-0 px-4 md:px-6 py-4">
           <div className="flex items-center justify-between gap-3">
@@ -385,6 +386,6 @@ export function TransferProductModal({
           </form>
         </CardContent>
       </Card>
-    </div>
+    </PortalModalOverlay>
   );
 }

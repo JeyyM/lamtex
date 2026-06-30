@@ -4,6 +4,8 @@ export interface ChatUser {
   avatar?: string;
   branch: string;
   role: string;
+  /** Role within a specific conversation ('admin' | 'member'). Populated in fetchConversations. */
+  chatRole?: 'admin' | 'member';
   status: 'online' | 'offline' | 'away';
   lastSeen?: string;
 }
@@ -38,6 +40,7 @@ export interface ChatMessage {
   edited?: boolean;
   editedAt?: string;
   deleted?: boolean;
+  pinned?: boolean;
   attachments?: ChatAttachment[];
   linkPreview?: ChatLinkPreview | null;
   replyTo?: {
@@ -58,6 +61,7 @@ export interface Chat {
   name: string;
   type: 'direct' | 'group';
   avatar?: string;
+  avatarUrl?: string;
   members: ChatUser[];
   lastMessage?: {
     content: string;

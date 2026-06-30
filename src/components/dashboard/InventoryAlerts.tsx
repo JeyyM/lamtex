@@ -7,6 +7,7 @@ import { FinishedGoodsAlert, RawMaterialAlert } from '@/src/types/executive';
 import { useAppContext } from '@/src/store/AppContext';
 import { AlertTriangle, ArrowRight, Package, ArrowRightLeft, ShoppingCart, X, User, Calendar, TrendingDown } from 'lucide-react';
 import { getBranchById } from '@/src/mock/branches';
+import { ModalPortal } from '@/src/components/ui/ModalPortal';
 
 interface InventoryAlertsProps {
   finishedGoods: FinishedGoodsAlert[];
@@ -244,7 +245,7 @@ export function InventoryAlerts({ finishedGoods, rawMaterials, showViewAll = fal
 
       {/* Schedule Batch Modal */}
       {schedulingBatch && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        <ModalPortal open={Boolean(schedulingBatch)} onBackdropClick={() => setSchedulingBatch(null)} zIndex={50} backdropClassName="bg-black/70 backdrop-blur-sm">
           <div className="bg-white rounded-lg shadow-xl w-full mx-0 my-0 max-h-screen lg:mx-4 lg:my-4 lg:max-w-md lg:max-h-[90vh] overflow-y-auto">
             <div className="p-4 md:p-6">
               <div className="flex items-center gap-3 mb-4">
@@ -294,12 +295,12 @@ export function InventoryAlerts({ finishedGoods, rawMaterials, showViewAll = fal
               </div>
             </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
 
       {/* Transfer Stock Modal */}
       {transferringStock && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        <ModalPortal open={Boolean(transferringStock)} onBackdropClick={() => setTransferringStock(null)} zIndex={50} backdropClassName="bg-black/70 backdrop-blur-sm">
           <div className="bg-white rounded-lg shadow-xl w-full mx-0 my-0 max-h-screen lg:mx-4 lg:my-4 lg:max-w-md lg:max-h-[90vh] overflow-y-auto">
             <div className="p-4 md:p-6">
               <div className="flex items-center gap-3 mb-4">
@@ -355,12 +356,12 @@ export function InventoryAlerts({ finishedGoods, rawMaterials, showViewAll = fal
               </div>
             </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
 
       {/* Purchase Request Modal */}
       {creatingPR && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        <ModalPortal open={Boolean(creatingPR)} onBackdropClick={() => setCreatingPR(null)} zIndex={50} backdropClassName="bg-black/70 backdrop-blur-sm">
           <div className="bg-white rounded-lg shadow-xl w-full mx-0 my-0 max-h-screen lg:mx-4 lg:my-4 lg:max-w-md lg:max-h-[90vh] overflow-y-auto">
             <div className="p-4 md:p-6">
               <div className="flex items-center gap-3 mb-4">
@@ -410,7 +411,7 @@ export function InventoryAlerts({ finishedGoods, rawMaterials, showViewAll = fal
               </div>
             </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
     </>
   );

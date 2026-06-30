@@ -4,6 +4,7 @@ import { Button } from '@/src/components/ui/Button';
 import { supabase } from '@/src/lib/supabase';
 import { fetchOrderLoadByOrderId, orderLoadWithFallback } from '@/src/lib/orderLoadMetrics';
 import type { Trip, OrderReadyForDispatch, DriverOption, Vehicle } from '@/src/types/logistics';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 
 interface EditTripModalProps {
   isOpen: boolean;
@@ -113,9 +114,6 @@ export function EditTripModal({
     setLogisticsNotes(trip.logisticsNotes ?? '');
     setSaveError('');
     setOrderSearch('');
-    const orig = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => { document.body.style.overflow = orig; };
   }, [isOpen, trip]);
 
   useEffect(() => {
@@ -159,8 +157,6 @@ export function EditTripModal({
         setOrdersLoading(false);
       });
   }, [isOpen, trip.orders]);
-
-  if (!isOpen) return null;
 
   const selectedVehicle = vehicles.find((v) => v.id === vehicleId) ?? null;
   const maxWeight = num(selectedVehicle?.maxCapacityKg ?? selectedVehicle?.maxWeight, trip.maxWeight || 5000);
@@ -228,7 +224,7 @@ export function EditTripModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-0 sm:p-4">
+    <PortalModalOverlay open={isOpen} onClose={onClose} zIndex={100} mobileBottomSheet>
       <div className="bg-white w-full max-w-full h-full max-h-screen sm:h-auto sm:max-w-3xl sm:max-h-[92vh] sm:rounded-lg shadow-xl flex flex-col overflow-hidden">
 
         {/* Header */}
@@ -484,7 +480,7 @@ export function EditTripModal({
           </div>
         </div>
       </div>
-    </div>
+    </PortalModalOverlay>
   );
 }
 

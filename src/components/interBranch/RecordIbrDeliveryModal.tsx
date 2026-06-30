@@ -3,6 +3,7 @@ import { X, Package, CheckCircle, AlertTriangle, Image as ImageIcon, Upload, Zoo
 import type { IbrInTransitModalLine } from '@/src/components/interBranch/MarkIbrInTransitModal';
 import type { FulfillmentData } from '@/src/components/orders/FulfillOrderModal';
 import ImageGalleryModal from '@/src/components/ImageGalleryModal';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 
 const IBR_DELIVERY_PROOFS_FOLDER = 'ibr-delivery-proofs';
 
@@ -139,11 +140,9 @@ export function RecordIbrDeliveryModal({
     void onConfirm(fulfillmentData, proofImageUrls);
   };
 
-  if (!isOpen) return null;
-
   return (
     <>
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <PortalModalOverlay open={isOpen} onClose={onClose} zIndex={50}>
         <div
           className="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-hidden"
           role="dialog"
@@ -422,7 +421,7 @@ export function RecordIbrDeliveryModal({
             </button>
           </div>
         </div>
-      </div>
+      </PortalModalOverlay>
 
       <ImageGalleryModal
         isOpen={showProofGallery}

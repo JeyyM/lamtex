@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { X, ExternalLink, Package, User, Calendar, DollarSign, TrendingUp, AlertCircle, CheckCircle, XCircle } from 'lucide-react';
 import { Button } from '@/src/components/ui/Button';
 import { Badge } from '@/src/components/ui/Badge';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 
 interface OrderItem {
   productName: string;
@@ -68,11 +69,8 @@ export function OrderApprovalModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-      <div
-        className="bg-white rounded-lg shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <PortalModalOverlay open onClose={onClose} zIndex={50}>
+      <div className="bg-white rounded-lg shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
         {/* Header */}
         <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between bg-gradient-to-r from-red-50 to-rose-50">
           <div>
@@ -286,6 +284,6 @@ export function OrderApprovalModal({
           </Button>
         </div>
       </div>
-    </div>
+    </PortalModalOverlay>
   );
 }

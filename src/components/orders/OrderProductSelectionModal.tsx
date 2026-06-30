@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { createPortal } from 'react-dom';
 import { useAppContext } from '@/src/store/AppContext';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 import { scopedProductIdList } from '@/src/lib/warehouseScope';
 import { effectiveInventoryBranch } from '@/src/lib/inventoryAccess';
 import { Button } from '@/src/components/ui/Button';
@@ -842,11 +842,9 @@ export function OrderProductSelectionModal({
     onClose();
   };
 
-  if (!open) return null;
-
   const overlay = (
     <>
-      <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[200] p-0 lg:p-4">
+      <PortalModalOverlay open={open} onClose={handleClose} zIndex={200} mobileBottomSheet>
         <div className="bg-white w-full h-full max-h-screen overflow-hidden flex flex-col lg:rounded-lg lg:h-auto lg:max-w-5xl lg:max-h-[90vh]">
           <div className="px-4 md:px-6 py-4 border-b border-gray-200 flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -1060,11 +1058,11 @@ export function OrderProductSelectionModal({
             </Button>
           </div>
         </div>
-      </div>
+      </PortalModalOverlay>
 
       {selectedProduct && selectedVariant && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[210] p-0 lg:p-4">
-          <div className="bg-white rounded-none lg:rounded-lg shadow-2xl w-full h-full lg:h-auto lg:max-w-4xl lg:max-h-[85vh] overflow-hidden flex flex-col">
+        <PortalModalOverlay open={Boolean(selectedProduct && selectedVariant)} onClose={backFromProductDetail} zIndex={210} mobileBottomSheet>
+          <div className="bg-white rounded-none lg:rounded-lg shadow-2xl w-full h-full lg:h-auto lg:max-w-4xl lg:max-h-[85vh] overflow-hidden flex flex-col relative">
             <button
               type="button"
               onClick={backFromProductDetail}
@@ -1401,10 +1399,10 @@ export function OrderProductSelectionModal({
               </div>
             </div>
           </div>
-        </div>
+        </PortalModalOverlay>
       )}
     </>
   );
 
-  return typeof document !== 'undefined' ? createPortal(overlay, document.body) : null;
+  return overlay;
 }

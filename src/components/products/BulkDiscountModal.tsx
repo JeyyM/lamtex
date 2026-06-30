@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { X, Plus, Trash2, Save } from 'lucide-react';
 import { Button } from '../ui/Button';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 
 interface BulkDiscountTier {
   minQty: number;
@@ -30,8 +31,6 @@ export default function BulkDiscountModal({
       { minQty: 1, discount: 0, pricePerUnit: basePrice }
     ]
   );
-
-  if (!isOpen) return null;
 
   const handleAddTier = () => {
     const lastTier = discountTiers[discountTiers.length - 1];
@@ -72,7 +71,7 @@ export default function BulkDiscountModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+    <PortalModalOverlay open={isOpen} onClose={onClose} zIndex={50}>
       <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b">
@@ -211,6 +210,6 @@ export default function BulkDiscountModal({
           </Button>
         </div>
       </div>
-    </div>
+    </PortalModalOverlay>
   );
 }

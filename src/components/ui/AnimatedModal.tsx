@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X } from 'lucide-react';
+import { MODAL_BACKDROP_TRANSITION, modalPanelMotion } from '@/src/components/ui/modalMotion';
 
 interface AnimatedModalProps {
   isOpen: boolean;
@@ -65,22 +66,16 @@ export function AnimatedModal({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            className="fixed inset-0 bg-black bg-opacity-50"
+            transition={MODAL_BACKDROP_TRANSITION}
+            className="fixed inset-0 bg-black/50"
             onClick={onClose}
           />
 
           {/* Modal Container */}
-          <div className="flex min-h-full items-center justify-center p-4">
+          <div className="flex min-h-full items-center justify-center p-4 pointer-events-none">
             <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              transition={{
-                duration: 0.2,
-                ease: [0.4, 0, 0.2, 1], // Custom easing for smooth animation
-              }}
-              className={`relative w-full ${maxWidthClasses[maxWidth]} bg-white rounded-xl shadow-xl`}
+              {...modalPanelMotion(false)}
+              className={`relative w-full pointer-events-auto ${maxWidthClasses[maxWidth]} bg-white rounded-xl shadow-xl`}
               onClick={(e) => e.stopPropagation()}
             >
               {/* Header */}

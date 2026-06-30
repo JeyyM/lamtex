@@ -13,6 +13,7 @@ import { CancelOrderModal, type CancellationData } from '@/src/components/orders
 import { useAppContext } from '@/src/store/AppContext';
 import { useLogisticsPermissions } from '@/src/lib/permissions/logisticsPermissions';
 import { PermissionGate } from '@/src/components/permissions/PermissionGate';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 import type { OrderLineItem as OrdersLineItem } from '@/src/types/orders';
 import { remainingToShipForLine } from '@/src/lib/orderShipmentQuantities';
 import { reportTripDelay } from '@/src/lib/orderTripDelay';
@@ -682,8 +683,6 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
   // Fetch real orders whenever the modal opens or the trip changes
   useEffect(() => {
     if (!isOpen) return;
-    const originalOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
 
     const load = async () => {
       if (!trip.orders.length) { setOrdersData([]); return; }
@@ -787,18 +786,12 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
     };
 
     load();
-
-    return () => {
-      document.body.style.overflow = originalOverflow;
-    };
   }, [isOpen, trip.id, trip.orders.join('|')]);
 
   const allOrdersReadyForInTransit = React.useMemo(() => {
     if (!isOpen || ordersLoading || ordersData.length === 0) return false;
     return ordersData.every(({ order }) => orderReadyForInTransit(order.id, order.status));
   }, [isOpen, ordersData, orderReadyForInTransit, ordersLoading]);
-
-  if (!isOpen) return null;
 
   const customersInTrip = ordersData;
 
@@ -811,7 +804,8 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-0 sm:p-4">
+    <>
+      <PortalModalOverlay open={isOpen} onClose={onClose} zIndex={100} mobileBottomSheet>
       <div className="bg-white w-full max-w-full h-full max-h-screen sm:h-auto sm:max-w-6xl sm:max-h-[90vh] sm:rounded-lg shadow-xl flex flex-col overflow-hidden">
         {/* Header - Sticky */}
         <div className="sticky top-0 bg-white border-b border-gray-200 sm:rounded-t-lg px-4 sm:px-6 py-4 flex items-start justify-between gap-3">
@@ -1319,6 +1313,7 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
           </div>
         </div>
       </div>
+      </PortalModalOverlay>
 
       {/* ── Mark In Transit Modal ─────────────────────────────────── */}
       {showInTransitModal && inTransitOrder && (
@@ -1397,7 +1392,11 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
 
       {/* Report delay — nested modal */}
       {showReportDelayModal && (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/40">
+        <PortalModalOverlay
+          open={showReportDelayModal}
+          onClose={() => { if (!delaySaving) setShowReportDelayModal(false); }}
+          zIndex={110}
+        >
           <div
             className="bg-white rounded-xl shadow-xl max-w-lg w-full max-h-[90vh] flex flex-col border border-gray-200"
             role="dialog"
@@ -1458,11 +1457,15 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
               </Button>
             </div>
           </div>
-        </div>
+        </PortalModalOverlay>
       )}
 
       {showCancelTripModal && (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/40">
+        <PortalModalOverlay
+          open={showCancelTripModal}
+          onClose={() => { if (!cancelTripSaving) setShowCancelTripModal(false); }}
+          zIndex={110}
+        >
           <div
             className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] flex flex-col border border-gray-200"
             role="dialog"
@@ -1592,8 +1595,8 @@ export function TripDetailsModal({ isOpen, onClose, trip, onEdit, onOrderStatusC
               </Button>
             </div>
           </div>
-        </div>
+        </PortalModalOverlay>
       )}
-    </div>
+    </>
   );
 }

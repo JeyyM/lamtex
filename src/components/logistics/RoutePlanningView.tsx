@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { OrderReadyForDispatch, Vehicle, Trip, DriverOption } from '@/src/types/logistics';
 import { TripScheduleModal } from './TripScheduleModal';
+import { ModalPortal } from '@/src/components/ui/ModalPortal';
 import { RoutePlanningMap } from '@/src/components/maps/RoutePlanningMap';
 import {
   fetchVehicleIdsWithMaintenanceOnDate,
@@ -152,15 +153,6 @@ export const RoutePlanningView: React.FC<RoutePlanningViewProps> = ({
   const [routeError, setRouteError] = useState<string | null>(null);
   const routeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [tripCreatedFeedback, setTripCreatedFeedback] = useState<TripCreatedFeedback | null>(null);
-
-  useEffect(() => {
-    if (!tripCreatedFeedback) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = prev;
-    };
-  }, [tripCreatedFeedback]);
 
   const filteredAndSortedOrders = useMemo(() => {
     let list =
@@ -942,10 +934,11 @@ export const RoutePlanningView: React.FC<RoutePlanningViewProps> = ({
       />
 
       {tripCreatedFeedback && (
-        <div
-          className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
-          role="presentation"
-          onClick={() => setTripCreatedFeedback(null)}
+        <ModalPortal
+          open={Boolean(tripCreatedFeedback)}
+          onBackdropClick={() => setTripCreatedFeedback(null)}
+          zIndex={110}
+          backdropClassName="bg-black/60 backdrop-blur-sm"
         >
           <div
             role="dialog"
@@ -953,7 +946,6 @@ export const RoutePlanningView: React.FC<RoutePlanningViewProps> = ({
             aria-labelledby="lamtex-trip-created-title"
             aria-describedby="lamtex-trip-created-desc"
             className="w-full max-w-md rounded-2xl border border-emerald-200 bg-white p-6 shadow-2xl ring-4 ring-emerald-100/80 sm:p-8"
-            onClick={(e) => e.stopPropagation()}
           >
             <div className="flex flex-col items-center text-center">
               <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
@@ -996,7 +988,7 @@ export const RoutePlanningView: React.FC<RoutePlanningViewProps> = ({
               </Button>
             </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
     </div>
   );

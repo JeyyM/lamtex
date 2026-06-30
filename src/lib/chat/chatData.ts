@@ -51,6 +51,7 @@ interface ParticipantRow {
   conversation_id: string;
   user_id: string;
   last_read_at: string;
+  role: 'admin' | 'member';
 }
 
 /** Build the conversation list (with members, last message preview, unread count). */
@@ -70,7 +71,7 @@ export async function fetchConversations(userId: string): Promise<Chat[]> {
   // 2. Conversation records
   const { data: convs, error: convErr } = await supabase
     .from('chat_conversations')
-    .select('id, type, name, created_by, last_message_at, last_message_preview, created_at')
+    .select('id, type, name, avatar_url, created_by, last_message_at, last_message_preview, created_at')
     .in('id', convIds)
     .order('last_message_at', { ascending: false });
   if (convErr || !convs) return [];
@@ -78,7 +79,7 @@ export async function fetchConversations(userId: string): Promise<Chat[]> {
   // 3. All participants of those conversations
   const { data: allParts } = await supabase
     .from('chat_participants')
-    .select('conversation_id, user_id, last_read_at')
+    .select('conversation_id, user_id, last_read_at, role')
     .in('conversation_id', convIds);
   const participantsByConv = new Map<string, ParticipantRow[]>();
   for (const p of (allParts ?? []) as ParticipantRow[]) {
@@ -97,16 +98,16 @@ export async function fetchConversations(userId: string): Promise<Chat[]> {
   return convs.map((c) => {
     const cRaw = c as Record<string, unknown>;
     const convId = String(cRaw.id);
-    const members: ChatUser[] = (participantsByConv.get(convId) ?? []).map(
-      (p) =>
-        directory.get(p.user_id) ?? {
-          id: p.user_id,
-          name: 'Unknown',
-          role: '',
-          branch: '',
-          status: 'offline' as const,
-        },
-    );
+    const members: ChatUser[] = (participantsByConv.get(convId) ?? []).map((p) => {
+      const base = directory.get(p.user_id) ?? {
+        id: p.user_id,
+        name: 'Unknown',
+        role: '',
+        branch: '',
+        status: 'offline' as const,
+      };
+      return { ...base, chatRole: p.role };
+    });
     const preview = (cRaw.last_message_preview as string) ?? '';
     return {
       id: convId,
@@ -123,6 +124,7 @@ export async function fetchConversations(userId: string): Promise<Chat[]> {
       unreadCount: unreadByConv.get(convId) ?? 0,
       createdAt: String(cRaw.created_at),
       createdBy: String(cRaw.created_by ?? ''),
+      avatarUrl: (cRaw.avatar_url as string | null) ?? undefined,
     };
   });
 }
@@ -188,13 +190,14 @@ interface MessageRow {
   edited: boolean;
   edited_at: string | null;
   deleted: boolean;
+  pinned: boolean;
   created_at: string;
 }
 
 export async function fetchMessages(conversationId: string, limit = 200): Promise<ChatMessage[]> {
   const { data, error } = await supabase
     .from('chat_messages')
-    .select('id, conversation_id, sender_id, content, reply_to_id, attachments, link_preview, edited, edited_at, deleted, created_at')
+    .select('id, conversation_id, sender_id, content, reply_to_id, attachments, link_preview, edited, edited_at, deleted, pinned, created_at')
     .eq('conversation_id', conversationId)
     .order('created_at', { ascending: true })
     .limit(limit);
@@ -224,6 +227,7 @@ export async function fetchMessages(conversationId: string, limit = 200): Promis
       edited: r.edited,
       editedAt: r.edited_at ?? undefined,
       deleted: r.deleted,
+      pinned: r.pinned,
       attachments: r.deleted ? [] : r.attachments ?? [],
       linkPreview: r.deleted ? null : r.link_preview,
       replyTo: replySource
@@ -271,17 +275,86 @@ export async function sendMessage(opts: {
   replyToId?: string | null;
   attachments?: ChatAttachment[];
   linkPreview?: ChatLinkPreview | null;
-}): Promise<{ ok: boolean; error?: string }> {
-  const { error } = await supabase.from('chat_messages').insert({
-    conversation_id: opts.conversationId,
-    sender_id: opts.senderId,
-    content: opts.content?.trim() ? opts.content.trim() : null,
-    reply_to_id: opts.replyToId ?? null,
-    attachments: opts.attachments ?? [],
-    link_preview: opts.linkPreview ?? null,
-  });
-  if (error) return { ok: false, error: error.message };
-  return { ok: true };
+}): Promise<{ ok: boolean; id?: string; error?: string }> {
+  const { data, error } = await supabase
+    .from('chat_messages')
+    .insert({
+      conversation_id: opts.conversationId,
+      sender_id: opts.senderId,
+      content: opts.content?.trim() ? opts.content.trim() : null,
+      reply_to_id: opts.replyToId ?? null,
+      attachments: opts.attachments ?? [],
+      link_preview: opts.linkPreview ?? null,
+    })
+    .select('id')
+    .single();
+  if (error || !data) return { ok: false, error: error?.message ?? 'Failed to send' };
+  return { ok: true, id: (data as { id: string }).id };
+}
+
+/** Fetch a single message with sender info and reactions. Used for incremental realtime updates. */
+export async function fetchSingleMessage(messageId: string): Promise<ChatMessage | null> {
+  const { data: row, error } = await supabase
+    .from('chat_messages')
+    .select('id, conversation_id, sender_id, content, reply_to_id, attachments, link_preview, edited, edited_at, deleted, pinned, created_at')
+    .eq('id', messageId)
+    .maybeSingle();
+  if (error || !row) return null;
+
+  const r = row as MessageRow;
+  const userIds = [r.sender_id];
+
+  let replyRow: MessageRow | null = null;
+  if (r.reply_to_id) {
+    const { data: rd } = await supabase
+      .from('chat_messages')
+      .select('id, conversation_id, sender_id, content, reply_to_id, attachments, link_preview, edited, edited_at, deleted, created_at')
+      .eq('id', r.reply_to_id)
+      .maybeSingle();
+    replyRow = rd as MessageRow | null;
+    if (replyRow) userIds.push(replyRow.sender_id);
+  }
+
+  const [directory, reactions] = await Promise.all([
+    fetchUsersByAuthIds(userIds),
+    fetchReactionsForMessages([r.id]),
+  ]);
+
+  const sender = directory.get(r.sender_id);
+  let replyTo: ChatMessage['replyTo'] | undefined;
+  if (replyRow) {
+    replyTo = {
+      messageId: replyRow.id,
+      senderName: directory.get(replyRow.sender_id)?.name ?? 'Unknown',
+      content: replyRow.deleted ? 'Deleted message' : replyRow.content ?? '📎 Attachment',
+    };
+  }
+
+  return {
+    id: r.id,
+    chatId: r.conversation_id,
+    senderId: r.sender_id,
+    senderName: sender?.name ?? 'Unknown',
+    content: r.deleted ? '' : r.content ?? '',
+    timestamp: r.created_at,
+    edited: r.edited,
+    editedAt: r.edited_at ?? undefined,
+    deleted: r.deleted,
+    pinned: r.pinned,
+    attachments: r.deleted ? [] : r.attachments ?? [],
+    linkPreview: r.deleted ? null : r.link_preview,
+    replyTo,
+    reactions: reactions.get(r.id) ?? [],
+    readBy: [r.sender_id],
+  };
+}
+
+/** Fetch up-to-date reactions for a single message (used for incremental reaction updates). */
+export async function fetchMessageReactions(
+  messageId: string,
+): Promise<NonNullable<ChatMessage['reactions']>> {
+  const map = await fetchReactionsForMessages([messageId]);
+  return map.get(messageId) ?? [];
 }
 
 export async function editMessage(messageId: string, content: string): Promise<void> {
@@ -296,6 +369,25 @@ export async function deleteMessage(messageId: string): Promise<void> {
     .from('chat_messages')
     .update({ deleted: true, content: null, attachments: [], link_preview: null })
     .eq('id', messageId);
+}
+
+export async function togglePinMessage(messageId: string, pinned: boolean): Promise<void> {
+  await supabase.from('chat_messages').update({ pinned }).eq('id', messageId);
+}
+
+export async function updateGroupAvatar(conversationId: string, avatarUrl: string): Promise<void> {
+  await supabase.from('chat_conversations').update({ avatar_url: avatarUrl }).eq('id', conversationId);
+}
+
+export async function uploadGroupAvatar(file: File): Promise<string> {
+  const ext = file.name.split('.').pop() ?? 'jpg';
+  const path = `${CHAT_ATTACHMENT_FOLDER}/group-avatars/${Date.now()}_${Math.random().toString(36).slice(2, 7)}.${ext}`;
+  const { error } = await supabase.storage
+    .from(STORAGE_BUCKET)
+    .upload(path, file, { cacheControl: '3600', upsert: false });
+  if (error) throw new Error(error.message);
+  const { data: pub } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(path);
+  return pub.publicUrl;
 }
 
 // ---------------------------------------------------------------------------
@@ -450,6 +542,21 @@ export async function addParticipants(
   await supabase.from('chat_participants').upsert(rows, { onConflict: 'conversation_id,user_id' });
 }
 
+export async function removeParticipant(conversationId: string, userId: string): Promise<void> {
+  await supabase
+    .from('chat_participants')
+    .delete()
+    .eq('conversation_id', conversationId)
+    .eq('user_id', userId);
+}
+
+export async function renameGroup(conversationId: string, name: string): Promise<void> {
+  await supabase
+    .from('chat_conversations')
+    .update({ name: name.trim(), updated_at: new Date().toISOString() })
+    .eq('id', conversationId);
+}
+
 // ---------------------------------------------------------------------------
 // Attachments + link preview
 // ---------------------------------------------------------------------------
@@ -505,26 +612,47 @@ export function extractFirstUrl(text: string): string | null {
 // Realtime
 // ---------------------------------------------------------------------------
 
+export type MessageEvent = { type: 'INSERT' | 'UPDATE' | 'DELETE'; id: string };
+export type ReactionEvent = { messageId: string };
+
 /**
- * Live updates for an open conversation: new/edited/deleted messages and
- * reaction changes. Postgres Changes respects RLS, so only participants of
- * this conversation receive the events.
+ * Live updates for an open conversation. Delivers granular events (type + id)
+ * so the UI can do incremental state merges instead of full refetches.
  */
 export function subscribeToConversation(
   conversationId: string,
-  handlers: { onMessageChange?: () => void; onReactionChange?: () => void },
+  handlers: {
+    onMessageEvent?: (event: MessageEvent) => void;
+    onReactionEvent?: (event: ReactionEvent) => void;
+    onParticipantChange?: () => void;
+  },
 ): () => void {
   const channel = supabase
     .channel(`chat:conv:${conversationId}`)
     .on(
       'postgres_changes',
       { event: '*', schema: 'public', table: 'chat_messages', filter: `conversation_id=eq.${conversationId}` },
-      () => handlers.onMessageChange?.(),
+      (payload) => {
+        const id =
+          (payload.new as { id?: string } | undefined)?.id ??
+          (payload.old as { id?: string } | undefined)?.id;
+        if (id) handlers.onMessageEvent?.({ type: payload.eventType as 'INSERT' | 'UPDATE' | 'DELETE', id });
+      },
     )
     .on(
       'postgres_changes',
       { event: '*', schema: 'public', table: 'chat_message_reactions' },
-      () => handlers.onReactionChange?.(),
+      (payload) => {
+        const messageId =
+          (payload.new as { message_id?: string } | undefined)?.message_id ??
+          (payload.old as { message_id?: string } | undefined)?.message_id;
+        if (messageId) handlers.onReactionEvent?.({ messageId });
+      },
+    )
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'chat_participants', filter: `conversation_id=eq.${conversationId}` },
+      () => handlers.onParticipantChange?.(),
     )
     .subscribe();
   return () => {
@@ -533,8 +661,8 @@ export function subscribeToConversation(
 }
 
 /**
- * Live updates for the conversation list. Subscribes to all message inserts;
- * RLS limits delivery to conversations the user participates in.
+ * Live updates for the sidebar conversation list. Watches messages, participant
+ * changes, and conversation renames so the list stays current for all users.
  */
 export function subscribeToMyChats(onChange: () => void): () => void {
   const channel = supabase
@@ -546,7 +674,12 @@ export function subscribeToMyChats(onChange: () => void): () => void {
     )
     .on(
       'postgres_changes',
-      { event: 'INSERT', schema: 'public', table: 'chat_participants' },
+      { event: '*', schema: 'public', table: 'chat_participants' },
+      () => onChange(),
+    )
+    .on(
+      'postgres_changes',
+      { event: 'UPDATE', schema: 'public', table: 'chat_conversations' },
       () => onChange(),
     )
     .subscribe();

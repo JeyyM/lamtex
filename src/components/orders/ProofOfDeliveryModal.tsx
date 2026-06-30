@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { X, Upload, Image as ImageIcon, CheckCircle } from 'lucide-react';
 import { Button } from '@/src/components/ui/Button';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 
 interface ProofOfDeliveryModalProps {
   orderId: string;
@@ -72,7 +73,7 @@ export function ProofOfDeliveryModal({ orderId, customerName, onClose, onSubmit 
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+    <PortalModalOverlay open onClose={onClose} zIndex={50}>
       <div className="bg-white rounded-lg shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-200 sticky top-0 bg-white z-10">
@@ -200,6 +201,6 @@ export function ProofOfDeliveryModal({ orderId, customerName, onClose, onSubmit 
           </Button>
         </div>
       </div>
-    </div>
+    </PortalModalOverlay>
   );
 }

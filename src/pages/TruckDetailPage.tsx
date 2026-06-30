@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
+import { ModalPortal } from '@/src/components/ui/ModalPortal';
 import { StatKpiCard } from '@/src/components/ui/StatKpiCard';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
@@ -1679,7 +1680,7 @@ export function TruckDetailPage() {
 
       {/* ── Schedule Maintenance Modal ─────────────────────────────────────── */}
       {showScheduleModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+        <ModalPortal open={showScheduleModal} onBackdropClick={() => setShowScheduleModal(false)} zIndex={50} backdropClassName="bg-black/40">
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col">
             {/* Header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
@@ -1756,12 +1757,12 @@ export function TruckDetailPage() {
               </Button>
             </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
 
       {/* ── Confirm Maintenance Modal ──────────────────────────────────────── */}
       {showConfirmModal && confirmTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+        <ModalPortal open={Boolean(confirmTarget)} onBackdropClick={() => setShowConfirmModal(false)} zIndex={50} backdropClassName="bg-black/40">
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col">
             {/* Header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
@@ -1852,7 +1853,7 @@ export function TruckDetailPage() {
               </Button>
             </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
 
       {/* 14-day strip: pick trip for a day */}
@@ -1868,13 +1869,9 @@ export function TruckDetailPage() {
           const dayTrips = truckTripsByDateKey[truckStripDetailKey] ?? [];
           const colors = getDispatchVehicleColor(vehicleId ?? '');
           return (
-            <div
-              className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-              onClick={() => setTruckStripDetailKey(null)}
-            >
+            <ModalPortal open onBackdropClick={() => setTruckStripDetailKey(null)} zIndex={50} backdropClassName="bg-black/70 backdrop-blur-sm">
               <div
                 className="bg-white rounded-xl shadow-xl w-full max-w-sm"
-                onClick={(e) => e.stopPropagation()}
                 role="dialog"
                 aria-modal="true"
               >
@@ -1931,7 +1928,7 @@ export function TruckDetailPage() {
                   ))}
                 </div>
               </div>
-            </div>
+            </ModalPortal>
           );
         })()}
 
@@ -1967,16 +1964,12 @@ export function TruckDetailPage() {
           const selectedTrips = truckCalSelectedKey ? truckTripsByDateKey[truckCalSelectedKey] ?? [] : [];
           const colors = getDispatchVehicleColor(vehicleId ?? '');
           return (
-            <div
-              className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-              onClick={() => setTruckCalOpen(false)}
-            >
+            <ModalPortal open onBackdropClick={() => setTruckCalOpen(false)} zIndex={50} backdropClassName="bg-black/60 backdrop-blur-sm">
               <div
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby="truck-dispatch-cal-title"
                 className="bg-white rounded-xl shadow-xl w-full max-w-4xl max-h-[92vh] overflow-hidden flex flex-col"
-                onClick={(e) => e.stopPropagation()}
               >
                 <div className="flex items-start justify-between gap-3 p-4 md:p-5 border-b border-gray-200">
                   <div>
@@ -2199,7 +2192,7 @@ export function TruckDetailPage() {
                   </button>
                 </div>
               </div>
-            </div>
+            </ModalPortal>
           );
         })()}
 

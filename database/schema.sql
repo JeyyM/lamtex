@@ -3360,12 +3360,14 @@ CREATE TABLE IF NOT EXISTS chat_conversations (
   id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   type            TEXT NOT NULL DEFAULT 'direct' CHECK (type IN ('direct', 'group')),
   name            TEXT,
+  avatar_url      TEXT,
   created_by      UUID,
   last_message_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   last_message_preview TEXT,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE chat_conversations ADD COLUMN IF NOT EXISTS avatar_url TEXT;
 
 CREATE TABLE IF NOT EXISTS chat_participants (
   id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -3388,8 +3390,10 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   edited          BOOLEAN NOT NULL DEFAULT FALSE,
   edited_at       TIMESTAMPTZ,
   deleted         BOOLEAN NOT NULL DEFAULT FALSE,
+  pinned          BOOLEAN NOT NULL DEFAULT FALSE,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS pinned BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE TABLE IF NOT EXISTS chat_message_reactions (
   id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -3406,6 +3410,7 @@ CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation ON chat_messages(conve
 CREATE INDEX IF NOT EXISTS idx_chat_messages_sender ON chat_messages(sender_id);
 CREATE INDEX IF NOT EXISTS idx_chat_message_reactions_message ON chat_message_reactions(message_id);
 CREATE INDEX IF NOT EXISTS idx_chat_conversations_last_message ON chat_conversations(last_message_at DESC);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_pinned ON chat_messages(conversation_id, pinned) WHERE pinned = TRUE;
 
 CREATE OR REPLACE FUNCTION public.is_chat_participant(p_conversation_id uuid, p_user_id uuid)
 RETURNS boolean

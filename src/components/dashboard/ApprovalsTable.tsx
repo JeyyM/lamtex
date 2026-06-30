@@ -6,6 +6,7 @@ import { Button } from '@/src/components/ui/Button';
 import { ApprovalOrder } from '@/src/types/executive';
 import { useAppContext } from '@/src/store/AppContext';
 import { Check, X, AlertTriangle, MapPin, Edit, ExternalLink, MessageSquare, ArrowRight } from 'lucide-react';
+import { ModalPortal } from '@/src/components/ui/ModalPortal';
 
 interface ApprovalsTableProps {
   orders: ApprovalOrder[];
@@ -278,7 +279,7 @@ export function ApprovalsTable({ orders, showViewAll = false }: ApprovalsTablePr
 
       {/* Approve Confirmation Modal */}
       {approvingOrder && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        <ModalPortal open={Boolean(approvingOrder)} onBackdropClick={() => setApprovingOrder(null)} zIndex={50} backdropClassName="bg-black/70 backdrop-blur-sm">
           <div className="bg-white rounded-lg shadow-xl w-full mx-0 my-0 max-h-screen lg:mx-4 lg:my-4 lg:max-w-md lg:max-h-[90vh] overflow-y-auto">
             <div className="p-4 md:p-6">
               <div className="flex items-center gap-3 mb-4">
@@ -328,12 +329,12 @@ export function ApprovalsTable({ orders, showViewAll = false }: ApprovalsTablePr
               </div>
             </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
 
       {/* Reject Modal with Reason */}
       {rejectingOrder && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        <ModalPortal open={Boolean(rejectingOrder)} onBackdropClick={() => { setRejectingOrder(null); setRejectReason(''); }} zIndex={50} backdropClassName="bg-black/70 backdrop-blur-sm">
           <div className="bg-white rounded-lg shadow-xl w-full mx-0 my-0 max-h-screen lg:mx-4 lg:my-4 lg:max-w-md lg:max-h-[90vh] overflow-y-auto">
             <div className="p-4 md:p-6">
               <div className="flex items-center gap-3 mb-4">
@@ -381,12 +382,12 @@ export function ApprovalsTable({ orders, showViewAll = false }: ApprovalsTablePr
               </div>
             </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
 
       {/* Edit Order Modal */}
       {editingOrder && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        <ModalPortal open={Boolean(editingOrder)} onBackdropClick={() => setEditingOrder(null)} zIndex={50} backdropClassName="bg-black/70 backdrop-blur-sm">
           <div className="bg-white rounded-lg shadow-xl w-full mx-0 my-0 max-h-screen lg:mx-4 lg:my-4 lg:max-w-lg lg:max-h-[90vh] overflow-y-auto">
             <div className="sticky top-0 bg-white border-b border-gray-200 p-4 flex items-center justify-between">
               <h3 className="text-lg font-bold text-gray-900">Edit Order</h3>
@@ -461,7 +462,7 @@ export function ApprovalsTable({ orders, showViewAll = false }: ApprovalsTablePr
               </div>
             </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
     </>
   );

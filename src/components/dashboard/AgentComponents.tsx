@@ -6,6 +6,7 @@ import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { getReceivablesByBranch, getReceivablesSummary } from '@/src/mock/collections';
 import { useAppContext } from '@/src/store/AppContext';
+import { ModalPortal } from '@/src/components/ui/ModalPortal';
 import {
   DollarSign,
   Clock,
@@ -195,7 +196,7 @@ function RecordPaymentModal({
   const [referenceNumber, setReferenceNumber] = useState('');
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+    <ModalPortal open onBackdropClick={onClose} zIndex={50} backdropClassName="bg-black/70">
       <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
         <div className="border-b border-gray-200 px-6 py-4 flex items-center justify-between">
           <h2 className="text-xl font-bold text-gray-900">Record Payment</h2>
@@ -272,6 +273,6 @@ function RecordPaymentModal({
           </Button>
         </div>
       </div>
-    </div>
+    </ModalPortal>
   );
 }

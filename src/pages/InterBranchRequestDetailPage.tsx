@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { createPortal } from 'react-dom';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAppContext } from '@/src/store/AppContext';
 import { useInterBranchRequestPermissions } from '@/src/lib/permissions/interBranchRequestPermissions';
@@ -15,6 +14,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Ca
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
 import { ModalPortal } from '@/src/components/ui/ModalPortal';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 import { ACTIVITY_LOG_PAGE_SIZE, TablePagination } from '@/src/components/ui/TablePagination';
 import { supabase } from '@/src/lib/supabase';
 import {
@@ -3192,19 +3192,18 @@ export function InterBranchRequestDetailPage() {
         </div>
       </ModalPortal>
 
-      {showCancelIbrModal &&
-        createPortal(
+      {showCancelIbrModal && (
+        <PortalModalOverlay
+          open={showCancelIbrModal}
+          onClose={() => { if (!saving) { setShowCancelIbrModal(false); setCancelIbrNote(''); } }}
+          zIndex={100}
+        >
           <div
-            className="fixed inset-0 z-[100] flex min-h-dvh w-full items-center justify-center overflow-y-auto bg-black/50 p-4"
+            className="my-auto w-full max-w-md space-y-4 rounded-xl bg-white p-6 shadow-xl"
             role="dialog"
             aria-modal="true"
             aria-labelledby="ibr-cancel-title"
-            onClick={() => !saving && setShowCancelIbrModal(false)}
           >
-            <div
-              className="my-auto w-full max-w-md space-y-4 rounded-xl bg-white p-6 shadow-xl"
-              onClick={(e) => e.stopPropagation()}
-            >
               <h2 id="ibr-cancel-title" className="text-lg font-semibold text-gray-900">
                 Cancel this inter-branch request?
               </h2>
@@ -3248,9 +3247,8 @@ export function InterBranchRequestDetailPage() {
                 </Button>
               </div>
             </div>
-          </div>,
-          document.body,
-        )}
+        </PortalModalOverlay>
+      )}
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 items-start">
         <Card>

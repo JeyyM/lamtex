@@ -3,6 +3,8 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/src/components/ui/Card';
 import { Badge } from '@/src/components/ui/Badge';
 import { Button } from '@/src/components/ui/Button';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
+import { ModalPortal } from '@/src/components/ui/ModalPortal';
 import { supabase } from '@/src/lib/supabase';
 import {
   buildOrderCancelledNotifyPayload,
@@ -5402,7 +5404,7 @@ export function OrderDetailPage() {
 
       {/* Product Selector Modal — same e-commerce style as CreateOrderModal */}
       {showProductModal && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-0 lg:p-4">
+        <PortalModalOverlay open={showProductModal} onClose={handleCloseProductModal} zIndex={50} mobileBottomSheet>
           <div className="bg-white w-full h-full max-h-screen overflow-hidden flex flex-col lg:rounded-lg lg:h-auto lg:max-w-5xl lg:max-h-[90vh]">
             {/* Header */}
             <div className="px-4 md:px-6 py-4 border-b border-gray-200 flex items-center justify-between">
@@ -5543,13 +5545,18 @@ export function OrderDetailPage() {
               <Button variant="outline" onClick={handleCloseProductModal}>Cancel</Button>
             </div>
           </div>
-        </div>
+        </PortalModalOverlay>
       )}
 
       {/* Product Detail Modal — e-commerce style, overlays the product browser */}
       {showProductModal && selectedProduct && selectedVariant && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[60] p-0 lg:p-4">
-          <div className="bg-white rounded-none lg:rounded-lg shadow-2xl w-full h-full lg:h-auto lg:max-w-4xl lg:max-h-[85vh] overflow-hidden flex flex-col">
+        <PortalModalOverlay
+          open={Boolean(selectedProduct && selectedVariant)}
+          onClose={() => { setSelectedProduct(null); setSelectedVariant(null); setVariantQtyInput('1'); setVariantPriceInput('0'); setVariantDiscounts([]); }}
+          zIndex={60}
+          mobileBottomSheet
+        >
+          <div className="bg-white rounded-none lg:rounded-lg shadow-2xl w-full h-full lg:h-auto lg:max-w-4xl lg:max-h-[85vh] overflow-hidden flex flex-col relative">
             <button onClick={() => { setSelectedProduct(null); setSelectedVariant(null); setVariantQtyInput('1'); setVariantPriceInput('0'); setVariantDiscounts([]); }}
               className="absolute top-4 right-4 z-20 p-2 bg-white rounded-full shadow-lg hover:bg-gray-100">
               <X className="w-5 h-5 text-gray-600" />
@@ -5770,13 +5777,13 @@ export function OrderDetailPage() {
               </div>
             </div>
           </div>
-        </div>
+        </PortalModalOverlay>
       )}
 
       {/* ── Approve Confirmation Modal ─────────────────────────────── */}
       {showApproveModal && perms.approvals && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => !approvalLoading && setShowApproveModal(false)}>
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden" onClick={(e) => e.stopPropagation()}>
+        <ModalPortal open={showApproveModal} onBackdropClick={() => { if (!approvalLoading) setShowApproveModal(false); }} zIndex={50} backdropClassName="bg-black/60">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
             <div className="px-6 py-5 border-b border-gray-100 flex items-center gap-3">
               <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0">
                 <CheckCircle2 className="w-5 h-5 text-green-600" />
@@ -5815,13 +5822,18 @@ export function OrderDetailPage() {
               </button>
             </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
 
       {/* ── Reject Confirmation Modal ──────────────────────────────── */}
       {showRejectModal && perms.approvals && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => { if (!approvalLoading) { setShowRejectModal(false); setRejectionReason(''); } }}>
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden" onClick={(e) => e.stopPropagation()}>
+        <ModalPortal
+          open={showRejectModal}
+          onBackdropClick={() => { if (!approvalLoading) { setShowRejectModal(false); setRejectionReason(''); } }}
+          zIndex={50}
+          backdropClassName="bg-black/60"
+        >
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
             <div className="px-6 py-5 border-b border-gray-100 flex items-center gap-3">
               <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
                 <XCircle className="w-5 h-5 text-red-600" />
@@ -5867,7 +5879,7 @@ export function OrderDetailPage() {
               </button>
             </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
 
       {/* Cancel Order Modal */}
@@ -5883,7 +5895,7 @@ export function OrderDetailPage() {
 
       {/* Invoice Generation Modal */}
       {showInvoiceModal && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+        <ModalPortal open={showInvoiceModal} onBackdropClick={() => setShowInvoiceModal(false)} zIndex={50} backdropClassName="bg-black/70">
           <div className="bg-white rounded-lg shadow-xl max-w-lg w-full">
             <div className="border-b border-gray-200 px-6 py-4 flex items-center justify-between">
               <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
@@ -5984,12 +5996,17 @@ export function OrderDetailPage() {
               </div>
             </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
 
       {/* Proof Upload Modal — image gallery (optimizer) + optional PDF */}
       {showProofModal && id && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+        <ModalPortal
+          open={showProofModal}
+          onBackdropClick={() => { setShowProofModal(false); setShowProofImageGallery(false); }}
+          zIndex={50}
+          backdropClassName="bg-black/70"
+        >
           <div className="bg-white rounded-lg shadow-xl max-w-xl w-full max-h-[90vh] overflow-y-auto">
             <div className="border-b border-gray-200 px-6 py-4 flex items-center justify-between">
               <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
@@ -6278,11 +6295,11 @@ export function OrderDetailPage() {
               </div>
             </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
 
       {showProofEditModal && editingProof && order && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+        <ModalPortal open={showProofEditModal} onBackdropClick={closeProofEditModal} zIndex={50} backdropClassName="bg-black/70">
           <div className="bg-white rounded-lg shadow-xl max-w-xl w-full max-h-[90vh] overflow-y-auto">
             <div className="border-b border-gray-200 px-6 py-4 flex items-center justify-between">
               <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
@@ -6402,7 +6419,7 @@ export function OrderDetailPage() {
               </div>
             </div>
           </div>
-        </div>
+        </ModalPortal>
       )}
 
       {showProofImageGallery && id && (

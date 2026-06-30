@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { createPortal } from 'react-dom';
 import { useParams, useNavigate, Link } from 'react-router-dom';
+import { PortalModalOverlay } from '@/src/components/ui/PortalModalOverlay';
 import { useAppContext } from '@/src/store/AppContext';
 import { useProductionRequestPermissions } from '@/src/lib/permissions/productionRequestPermissions';
 import { useInterBranchRequestPermissions } from '@/src/lib/permissions/interBranchRequestPermissions';
@@ -2170,18 +2170,9 @@ export function ProductionRequestDetailPage() {
         </div>
       </div>
 
-      {showOrderPicker &&
-        pr &&
-        createPortal(
-          <div
-            className="fixed inset-0 z-[100] flex min-h-[100dvh] w-full items-center justify-center bg-black/50 p-4"
-            role="presentation"
-            onClick={() => !saving && setShowOrderPicker(false)}
-          >
-          <div
-            className="bg-white rounded-lg shadow-xl max-w-2xl w-full p-5 space-y-4 max-h-[90vh] flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
+      {showOrderPicker && pr && (
+        <PortalModalOverlay open={showOrderPicker} onClose={() => { if (!saving) setShowOrderPicker(false); }} zIndex={100}>
+          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full p-5 space-y-4 max-h-[90vh] flex flex-col">
             <div className="flex items-center justify-between gap-2">
               <h3 className="font-semibold text-lg">Add sales order</h3>
               <button
@@ -2339,9 +2330,8 @@ export function ProductionRequestDetailPage() {
               </ul>
             )}
           </div>
-        </div>,
-        document.body,
-        )}
+        </PortalModalOverlay>
+      )}
 
       <Card>
         <CardHeader>
@@ -2416,46 +2406,29 @@ export function ProductionRequestDetailPage() {
         </CardContent>
       </Card>
 
-      {showAccept &&
-        createPortal(
-          <div
-            className="fixed inset-0 z-[100] flex min-h-[100dvh] w-full items-center justify-center bg-black/50 p-4"
-            role="presentation"
-            onClick={() => !saving && setShowAccept(false)}
-          >
-            <div
-              className="bg-white rounded-lg shadow-xl max-w-md w-full p-6 space-y-4"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h3 className="font-semibold text-lg">Accept this request?</h3>
-              <p className="text-sm text-gray-600">
-                The request will be marked accepted so the floor can start production when ready.
-              </p>
-              <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={() => setShowAccept(false)} disabled={saving}>
-                  Cancel
-                </Button>
-                <Button variant="primary" onClick={() => void handleAccept()} disabled={saving} className="gap-1">
-                  {saving && <Loader2 className="w-4 h-4 animate-spin" />}
-                  Accept
-                </Button>
-              </div>
+      {showAccept && (
+        <PortalModalOverlay open={showAccept} onClose={() => { if (!saving) setShowAccept(false); }} zIndex={100}>
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6 space-y-4">
+            <h3 className="font-semibold text-lg">Accept this request?</h3>
+            <p className="text-sm text-gray-600">
+              The request will be marked accepted so the floor can start production when ready.
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setShowAccept(false)} disabled={saving}>
+                Cancel
+              </Button>
+              <Button variant="primary" onClick={() => void handleAccept()} disabled={saving} className="gap-1">
+                {saving && <Loader2 className="w-4 h-4 animate-spin" />}
+                Accept
+              </Button>
             </div>
-          </div>,
-          document.body,
-        )}
+          </div>
+        </PortalModalOverlay>
+      )}
 
-      {showReject &&
-        createPortal(
-          <div
-            className="fixed inset-0 z-[100] flex min-h-[100dvh] w-full items-center justify-center bg-black/50 p-4"
-            role="presentation"
-            onClick={() => !saving && setShowReject(false)}
-          >
-            <div
-              className="bg-white rounded-lg shadow-xl max-w-md w-full p-6 space-y-4"
-              onClick={(e) => e.stopPropagation()}
-            >
+      {showReject && (
+        <PortalModalOverlay open={showReject} onClose={() => { if (!saving) setShowReject(false); }} zIndex={100}>
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6 space-y-4">
               <h3 className="font-semibold text-lg">Reject this request?</h3>
               <textarea
                 className="w-full border rounded-lg p-2 text-sm"
@@ -2479,26 +2452,21 @@ export function ProductionRequestDetailPage() {
                 </Button>
               </div>
             </div>
-          </div>,
-          document.body,
-        )}
+        </PortalModalOverlay>
+      )}
 
-      {showCancelPr &&
-        createPortal(
-          <div
-            className="fixed inset-0 z-[100] flex min-h-[100dvh] w-full items-center justify-center bg-black/50 p-4"
-            role="presentation"
-            onClick={() => {
-              if (!saving) {
-                setShowCancelPr(false);
-                setCancelPrNote('');
-              }
-            }}
-          >
-            <div
-              className="bg-white rounded-lg shadow-xl max-w-md w-full p-6 space-y-4"
-              onClick={(e) => e.stopPropagation()}
-            >
+      {showCancelPr && (
+        <PortalModalOverlay
+          open={showCancelPr}
+          onClose={() => {
+            if (!saving) {
+              setShowCancelPr(false);
+              setCancelPrNote('');
+            }
+          }}
+          zIndex={100}
+        >
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6 space-y-4">
               <h3 className="font-semibold text-lg">Cancel this production request?</h3>
               <p className="text-sm text-gray-600">
                 The request will be marked <span className="font-semibold">Cancelled</span>. This is recorded in the
@@ -2533,9 +2501,8 @@ export function ProductionRequestDetailPage() {
                 </Button>
               </div>
             </div>
-          </div>,
-          document.body,
-        )}
+        </PortalModalOverlay>
+      )}
 
       <RecordProductionModal
         isOpen={showRecordProduction && pr.status === 'In Progress'}
